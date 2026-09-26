@@ -399,6 +399,60 @@ func (s *Tasks) Get(ctx context.Context, id domain.ID) (domain.Task, error) {
 	return stored, nil
 }
 
+// UpdateNotes performs a REPLACE-ON-WRITE of the task's durable resume notes
+// (ARCHITECTURE §5 PUT /tasks/{id}/notes, MCP update_notes): the whole blob is
+// replaced by `notes` — no merge, no base-version check at this layer — and
+// ONE `noted` event is appended in the same unit of work. Because it IS a task
+// row mutation (version-bump policy), the write goes through the version-
+// guarded TaskRepository.Update path: version +1 and updated_at = now, no
+// other field touched. A missing task → domain.ErrNotFound; replacing with an
+// identical blob is a no-op that returns the current row without bumping or
+// emitting (same convention as Update's no-op case).
+func (s *Tasks) UpdateNotes(ctx context.Context, actor domain.Actor, id domain.ID, notes string) (domain.Task, error) {
+	a, err := normalizeActor(actor)
+	if err != nil {
+		return domain.Task{}, err
+	}
+
+	now := s.clock.Now()
+	var stored domain.Task
+	var r Repos
+	err = s.uow.Run(ctx, &r, func() error {
+		cur, gerr := r.Tasks.Get(ctx, id)
+		if gerr != nil {
+			return gerr // ErrNotFound for unknown tasks
+		}
+		if cur.Notes == notes {
+			stored = cur // replace-on-write of the same blob: nothing to write or record
+			return nil
+		}
+		next := cur
+		next.Notes = notes
+		next.Version = cur.Version // expected stored version for the optimistic guard
+		next.UpdatedAt = now
+		fresh, uerr := r.Tasks.Update(ctx, next) // stores version+1 + updated_at, returns the fresh row
+		if uerr != nil {
+			return uerr // includes *domain.ConflictError — propagate without events
+		}
+		ev := domain.Event{
+			ID:        s.idgen.NewID(),
+			ProjectID: &fresh.ProjectID,
+			TaskID:    &fresh.ID,
+			Actor:     a,
+			Kind:      domain.EventNoted,
+			Before:    compactJSON(map[string]string{"notes": cur.Notes}),
+			After:     compactJSON(map[string]string{"notes": notes}),
+			At:        now,
+		}
+		stored = fresh
+		return r.Events.Append(ctx, ev)
+	})
+	if err != nil {
+		return domain.Task{}, err
+	}
+	return stored, nil
+}
+
 // TaskDetail is the one-call resume payload (ARCHITECTURE §5 GET /tasks/{id}):
 // the full task row plus everything an agent needs to pick the work back up —
 // ordered acceptance criteria, a comment tail (newest first), all artifacts

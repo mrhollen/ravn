@@ -8,9 +8,11 @@ import (
 	"github.com/mrhollen/crowban/internal/domain"
 )
 
-// artifactRepo implements application.ArtifactRepository over SQLite. Slice 2B
-// lands the ListByTask read (the resume payload's evidence list); Add lands in
-// slice 2C. The `other` kind escape hatch is already in the schema (0002).
+// artifactRepo implements application.ArtifactRepository over SQLite.
+// Artifacts are append-only: Add stores the row exactly as given (IDs and
+// timestamps are minted/stamped by the use case — ADR) and ListByTask serves
+// the resume payload's evidence list. The `other` kind escape hatch is already
+// in the schema (0002).
 type artifactRepo struct {
 	q querier
 }
@@ -19,8 +21,24 @@ func newArtifactRepo(q querier) *artifactRepo { return &artifactRepo{q: q} }
 
 var _ application.ArtifactRepository = (*artifactRepo)(nil)
 
+// Add stores the artifact row exactly as given. The write is part of a child-
+// row mutation (ARCHITECTURE §4 version-bump policy): it must never touch the
+// parent task row's version or updated_at. Constraint failures — unknown task
+// (FK) or an out-of-set kind (CHECK) — surface as wrapped domain.ErrInvalid;
+// the use case validates both beforehand, so a violation here means concurrent
+// deletion of the parent between validation and insert.
 func (r *artifactRepo) Add(ctx context.Context, a domain.Artifact) error {
-	return notYet("artifact repository", "Add", "2C")
+	_, err := r.q.ExecContext(ctx,
+		`INSERT INTO artifact (`+artifactColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		string(a.ID), string(a.TaskID), string(a.Kind), a.Ref, a.Summary,
+		string(a.Actor.Type), a.Actor.Name, formatTS(a.CreatedAt))
+	if err != nil {
+		if isConstraintViolation(err) {
+			return fmt.Errorf("%w: artifact %s violates a constraint (unknown task or bad kind)", domain.ErrInvalid, a.ID)
+		}
+		return fmt.Errorf("insert artifact %s: %w", a.ID, err)
+	}
+	return nil
 }
 
 // artifactColumns is the single source of truth for SELECT column order — it

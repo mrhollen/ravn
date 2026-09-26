@@ -8,9 +8,10 @@ import (
 	"github.com/mrhollen/crowban/internal/domain"
 )
 
-// commentRepo implements application.CommentRepository over SQLite. Slice 2B
-// lands the ListByTask read (the resume payload's comment tail); Add lands in
-// slice 2C.
+// commentRepo implements application.CommentRepository over SQLite. Comments
+// are append-only: Add stores the row exactly as given (IDs and timestamps are
+// minted/stamped by the use case — ADR) and ListByTask serves the resume
+// payload's newest-first comment tail.
 type commentRepo struct {
 	q querier
 }
@@ -19,8 +20,24 @@ func newCommentRepo(q querier) *commentRepo { return &commentRepo{q: q} }
 
 var _ application.CommentRepository = (*commentRepo)(nil)
 
+// Add stores the comment row exactly as given. The write is part of a child-
+// row mutation (ARCHITECTURE §4 version-bump policy): it must never touch the
+// parent task row's version or updated_at. Constraint failures — unknown task
+// (FK) or an out-of-set kind (CHECK) — surface as wrapped domain.ErrInvalid;
+// the use case validates both beforehand, so a violation here means concurrent
+// deletion of the parent between validation and insert.
 func (r *commentRepo) Add(ctx context.Context, c domain.Comment) error {
-	return notYet("comment repository", "Add", "2C")
+	_, err := r.q.ExecContext(ctx,
+		`INSERT INTO comment (`+commentColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		string(c.ID), string(c.TaskID), string(c.Kind), c.Body,
+		string(c.Actor.Type), c.Actor.Name, formatTS(c.CreatedAt))
+	if err != nil {
+		if isConstraintViolation(err) {
+			return fmt.Errorf("%w: comment %s violates a constraint (unknown task or bad kind)", domain.ErrInvalid, c.ID)
+		}
+		return fmt.Errorf("insert comment %s: %w", c.ID, err)
+	}
+	return nil
 }
 
 // commentColumns is the single source of truth for SELECT column order — it

@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -333,8 +332,32 @@ func (f *fakeACs) ListByTask(_ context.Context, taskID domain.ID) ([]domain.Acce
 	return out, nil
 }
 
-func (f *fakeACs) SetDone(context.Context, domain.ID, int, bool, string, domain.Actor, time.Time) (domain.AcceptanceCriterion, error) {
-	return domain.AcceptanceCriterion{}, errors.New("fakeACs: SetDone lands in slice 2C")
+// SetDone mirrors the SQLite adapter's guarded toggle in memory: the pair is
+// addressed by (taskID, seq); checking stamps note/completion fields to the
+// given values, unchecking clears all three again. Unknown pair →
+// domain.ErrNotFound; the fresh row is returned.
+func (f *fakeACs) SetDone(_ context.Context, taskID domain.ID, seq int, done bool, note string, actor domain.Actor, now time.Time) (domain.AcceptanceCriterion, error) {
+	rows := f.byTask[taskID]
+	for i := range rows {
+		if rows[i].Seq != seq {
+			continue
+		}
+		c := &rows[i]
+		c.Done = done
+		if done {
+			c.Note = note
+			a := actor
+			t := now
+			c.CompletedBy = &a
+			c.CompletedAt = &t
+		} else {
+			c.Note = ""
+			c.CompletedBy = nil
+			c.CompletedAt = nil
+		}
+		return *c, nil
+	}
+	return domain.AcceptanceCriterion{}, domain.ErrNotFound
 }
 
 // fakeComments is an in-memory CommentRepository (append + newest-first tail).

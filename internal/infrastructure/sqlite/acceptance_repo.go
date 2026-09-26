@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,8 +12,8 @@ import (
 )
 
 // acceptanceCriterionRepo implements application.AcceptanceCriterionRepository
-// over SQLite. Slice 2B lands Create (needed by the Tasks.Create use case) and
-// ListByTask (the resume payload's AC checklist); SetDone lands in slice 2C.
+// over SQLite: Create (initial criteria for a fresh task), ListByTask (the
+// resume payload's AC checklist), and SetDone (the complete_ac toggle).
 type acceptanceCriterionRepo struct {
 	q querier
 }
@@ -69,8 +71,49 @@ func (r *acceptanceCriterionRepo) ListByTask(ctx context.Context, taskID domain.
 	return out, rows.Err()
 }
 
+// SetDone toggles the single criterion addressed by (taskID, seq) and records
+// who did it and when: checking stamps note/completed_by_type/
+// completed_by_name/completed_at to the given values; unchecking clears all
+// three completion fields again. An unknown pair → domain.ErrNotFound. Returns
+// the fresh row read back after the guarded write (house pattern — the UPDATE
+// carries no RETURNING in SQLite's portable usage here). The write is a child-
+// row mutation (ARCHITECTURE §4 version-bump policy): it never touches the
+// parent task row's version or updated_at.
 func (r *acceptanceCriterionRepo) SetDone(ctx context.Context, taskID domain.ID, seq int, done bool, note string, actor domain.Actor, now time.Time) (domain.AcceptanceCriterion, error) {
-	return domain.AcceptanceCriterion{}, notYet("acceptance criterion repository", "SetDone", "2C")
+	var (
+		noteArg any = "" // cleared again on uncheck
+		bType   any
+		bName   any
+		bAt     any
+	)
+	if done {
+		noteArg = note
+		bType = string(actor.Type)
+		bName = actor.Name
+		bAt = formatTS(now)
+	}
+	res, err := r.q.ExecContext(ctx, `
+		UPDATE acceptance_criterion SET done = ?, note = ?,
+			completed_by_type = ?, completed_by_name = ?, completed_at = ?
+		WHERE task_id = ? AND seq = ?`,
+		boolToInt(done), noteArg, bType, bName, bAt, string(taskID), seq)
+	if err != nil {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("toggle acceptance criterion for task %s seq %d: %w", taskID, seq, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("rows affected after toggling acceptance criterion for task %s seq %d: %w", taskID, seq, err)
+	}
+	if n == 0 { // the pair is keyed UNIQUE(task_id, seq) — 0 rows means it does not exist
+		return domain.AcceptanceCriterion{}, fmt.Errorf("%w: no acceptance criterion with seq %d on task %s", domain.ErrNotFound, seq, taskID)
+	}
+	row := r.q.QueryRowContext(ctx,
+		`SELECT `+acceptanceColumns+` FROM acceptance_criterion WHERE task_id = ? AND seq = ?`, string(taskID), seq)
+	c, err := scanAcceptanceCriterion(row) // re-read the stored result of the guarded write
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AcceptanceCriterion{}, domain.ErrNotFound // defensive: impossible inside one tx
+	}
+	return c, err
 }
 
 // scanAcceptanceCriterion maps one row (in acceptanceColumns order) to a
