@@ -21,9 +21,9 @@ func notYet(repo, method, slice string) error {
 	return fmt.Errorf("sqlite %s %s: %w (lands in slice %s)", repo, method, errNotImplemented, slice)
 }
 
-// taskRepo implements application.TaskRepository over SQLite. Slice 2B lands
-// the plain CRUD half (Create/Get/List/Update); the claim CAS trio
-// (Claim/Release/Heartbeat) stays stubbed until its own slice.
+// taskRepo implements application.TaskRepository over SQLite: the plain CRUD
+// half (Create/Get/List/Update, slice 2B) plus the atomic lease CAS trio
+// (Claim/Release/Heartbeat, slice 2C — ARCHITECTURE §4–5, ADR 2026-09-26).
 type taskRepo struct {
 	q querier
 }
@@ -163,17 +163,169 @@ func (r *taskRepo) Update(ctx context.Context, t domain.Task) (domain.Task, erro
 	return fresh, nil
 }
 
-// Claim/Release/Heartbeat — the atomic lease CAS trio (ARCHITECTURE §4).
+// Claim acquires or renews actor's lease atomically — the core of crowban's
+// duplicate-work prevention (ARCHITECTURE §4–5, ADR 2026-09-26). One single
+// UPDATE whose WHERE covers ALL winning conditions at once:
+//
+//	claimed_by_name IS NULL          → lease free (fresh claim)
+//	OR claim_expires_at < now        → any EXPIRED lease (takeover / zombie-heal, by anyone)
+//	OR claimed_by_name = actor       → actor's own ACTIVE lease (idempotent re-claim)
+//
+// …with RETURNING; exactly one racer per lease window can match the WHERE, and
+// under the single-connection pool (SetMaxOpenConns(1)) UPDATEs are fully
+// serialized, so concurrent claims resolve deterministically. A 0-row outcome
+// means a DIFFERENT live holder holds the lease: read the row back and return
+// *domain.ClaimConflictError{Holder, ExpiresAt} — the body is the loser's
+// recovery instruction. Each successful claim starts a NEW lease period:
+// claimed_at/claim_expires_at are re-stamped to now/now+ttl even on renewal
+// (the event log carries the full history). Status is forced to doing and the
+// version bumped; the durable assignee columns are deliberately untouched
+// (claim ≠ assignment). The actor NAME is the lease-holder key (MVP single
+// tenant, self-declared names); claimed_by_type is stored for display only.
 func (r *taskRepo) Claim(ctx context.Context, taskID domain.ID, actor domain.Actor, ttlSec int, now time.Time) (domain.Task, error) {
-	return domain.Task{}, notYet("task repository", "Claim", "the claim slice")
+	expiry := now.Add(time.Duration(ttlSec) * time.Second)
+	row := r.q.QueryRowContext(ctx, `
+		UPDATE task SET
+			claimed_by_type = ?, claimed_by_name = ?,
+			claimed_at = ?, claim_expires_at = ?, claim_ttl_sec = ?,
+			status = 'doing', version = version + 1, updated_at = ?
+		WHERE id = ?
+		  AND (claimed_by_name IS NULL
+		       OR claim_expires_at < ?
+		       OR claimed_by_name = ?)
+		RETURNING `+taskColumns,
+		string(actor.Type), actor.Name,
+		formatTS(now), formatTS(expiry), ttlSec,
+		formatTS(now),
+		string(taskID), formatTS(now), actor.Name)
+	t, err := scanTask(row)
+	if errors.Is(err, sql.ErrNoRows) { // CAS lost: a different live holder won
+		current, gerr := r.Get(ctx, taskID)
+		if gerr != nil {
+			return domain.Task{}, gerr // ErrNotFound if the row vanished entirely
+		}
+		if current.ClaimedBy == nil || current.ClaimExpiry == nil {
+			// Unreachable: a 0-row claim requires a non-expired different holder.
+			return domain.Task{}, fmt.Errorf("claim task %s: CAS matched no row but the stored lease is empty (internal invariant)", taskID)
+		}
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *current.ClaimedBy, ExpiresAt: *current.ClaimExpiry}
+	}
+	if err != nil {
+		return domain.Task{}, fmt.Errorf("claim task %s: %w", taskID, err)
+	}
+	return t, nil // the RETURNING row IS the stored result of the CAS
 }
 
+// Release clears the lease and moves status back to todo, bumping version. The
+// WHERE enforces holder-only release against an ACTIVE lease (name key +
+// claim_expires_at >= now); a foreign holder or an EXPIRED self-lease loses with
+// *domain.ClaimConflictError{Holder, ExpiresAt} and nothing is mutated. A task
+// with no lease at all is an idempotent no-op returning the fresh row (retry-
+// safe: re-releasing after a success must not error). The durable assignee
+// columns are never touched.
 func (r *taskRepo) Release(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time) (domain.Task, error) {
-	return domain.Task{}, notYet("task repository", "Release", "the claim slice")
+	res, err := r.q.ExecContext(ctx, `
+		UPDATE task SET
+			claimed_by_type = NULL, claimed_by_name = NULL,
+			claimed_at = NULL, claim_expires_at = NULL, claim_ttl_sec = NULL,
+			status = 'todo', version = version + 1, updated_at = ?
+		WHERE id = ? AND claimed_by_name = ? AND claim_expires_at >= ?`,
+		formatTS(now), string(taskID), actor.Name, formatTS(now))
+	if err != nil {
+		return domain.Task{}, fmt.Errorf("release task %s: %w", taskID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return domain.Task{}, fmt.Errorf("rows affected after release task %s: %w", taskID, err)
+	}
+	if n == 0 {
+		current, gerr := r.Get(ctx, taskID)
+		if gerr != nil {
+			return domain.Task{}, gerr // ErrNotFound if the row vanished entirely
+		}
+		if current.ClaimedBy == nil || current.ClaimExpiry == nil {
+			return current, nil // nothing to release: idempotent no-op, row untouched
+		}
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *current.ClaimedBy, ExpiresAt: *current.ClaimExpiry}
+	}
+	fresh, err := r.Get(ctx, taskID) // read back the stored result of the guarded write
+	if err != nil {
+		return domain.Task{}, fmt.Errorf("re-read task %s after release: %w", taskID, err)
+	}
+	return fresh, nil
 }
 
+// Heartbeat extends actor's ACTIVE lease to now + the STORED TTL (claim_ttl_sec).
+// Two statements: the read supplies the stored TTL and proves holder identity,
+// the guarded UPDATE re-checks `claimed_by_name = ? AND claim_expires_at >= ?`
+// so the extension can never apply to a lost or lapsed lease. Under the
+// single-connection pool the pair is serialized against every other writer (and
+// both run inside one tx when called through UnitOfWork), so no lease can move
+// between the read and the write. Deliberately does NOT bump version and does
+// NOT touch updated_at: a keep-alive is not a state change and must never cause
+// 409s against a working agent's stale read (ADR 2026-09-26). A foreign or
+// expired holder — or no lease at all (zero-value Holder on the error, meaning
+// "claim it first") — gets *domain.ClaimConflictError{Holder, ExpiresAt}.
+// Returns the fresh row; one call doubles as a health check.
 func (r *taskRepo) Heartbeat(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time) (domain.Task, error) {
-	return domain.Task{}, notYet("task repository", "Heartbeat", "the claim slice")
+	var (
+		ttl    *int
+		expiry *string
+		holder *string
+	)
+	err := r.q.QueryRowContext(ctx,
+		`SELECT claimed_by_name, claim_ttl_sec, claim_expires_at FROM task WHERE id = ?`,
+		string(taskID)).Scan(&holder, &ttl, &expiry)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Task{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.Task{}, fmt.Errorf("read lease for heartbeat on task %s: %w", taskID, err)
+	}
+	if holder == nil || ttl == nil { // row exists but carries no lease at all
+		return domain.Task{}, &domain.ClaimConflictError{Holder: domain.Actor{}, ExpiresAt: time.Time{}} // "claim it first"
+	}
+	newExpiry := formatTS(now.Add(time.Duration(*ttl) * time.Second))
+	res, uerr := r.q.ExecContext(ctx, `
+		UPDATE task SET claim_expires_at = ?
+		WHERE id = ? AND claimed_by_name = ? AND claim_expires_at >= ?`,
+		newExpiry, string(taskID), actor.Name, formatTS(now))
+	if uerr != nil {
+		return domain.Task{}, fmt.Errorf("heartbeat task %s: %w", taskID, uerr)
+	}
+	n, aerr := res.RowsAffected()
+	if aerr != nil {
+		return domain.Task{}, fmt.Errorf("rows affected after heartbeat on task %s: %w", taskID, aerr)
+	}
+	if n == 0 { // defensive: the read and write are serialized, so this cannot lose in practice
+		current, gerr := r.Get(ctx, taskID)
+		if gerr != nil {
+			return domain.Task{}, gerr
+		}
+		return domain.Task{}, &domain.ClaimConflictError{Holder: holderOf(current), ExpiresAt: expiryOf(current)}
+	}
+	fresh, err := r.Get(ctx, taskID) // return the stored row — it doubles as a health check
+	if err != nil {
+		return domain.Task{}, fmt.Errorf("re-read task %s after heartbeat: %w", taskID, err)
+	}
+	return fresh, nil
+}
+
+// holderOf / expiryOf render the lease of a stored task into the
+// ClaimConflictError fields, tolerating an absent lease (a zero-value Holder is
+// the "claim it first" signal on heartbeat).
+func holderOf(t domain.Task) domain.Actor {
+	if t.ClaimedBy != nil {
+		return *t.ClaimedBy
+	}
+	return domain.Actor{}
+}
+
+func expiryOf(t domain.Task) time.Time {
+	if t.ClaimExpiry != nil {
+		return *t.ClaimExpiry
+	}
+	return time.Time{}
 }
 
 // --- query building + scanning ----------------------------------------------------

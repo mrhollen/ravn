@@ -130,19 +130,27 @@ type TaskRepository interface {
 
 	// Claim atomically acquires or refreshes a lease on taskID for actor with
 	// a TTL of ttlSec seconds as of now: it succeeds when the lease is free,
-	// expired, or already held by actor (idempotent refresh — no spurious
-	// conflict). On success the row gets status=doing, assignee set if
-	// unassigned, lease fields set, and Version +1. Losers get
-	// *domain.ClaimConflictError{Holder, ExpiresAt}.
+	// expired (takeover / zombie-heal), or already held by actor (idempotent
+	// refresh — no spurious conflict). On success the row gets status=doing,
+	// lease fields re-stamped to now/now+ttlSec, and Version +1. The durable
+	// Assignee is NEVER touched (claimed_by is a separate ephemeral field;
+	// assignment stays in Update — ADR 2026-09-26). Losers get
+	// *domain.ClaimConflictError{Holder, ExpiresAt} with nothing mutated.
 	Claim(ctx context.Context, taskID domain.ID, actor domain.Actor, ttlSec int, now time.Time) (domain.Task, error)
 
 	// Release clears the lease and moves the task back to todo, bumping
-	// Version. Holder-only; a foreign holder gets *domain.ClaimConflictError.
+	// Version. Holder-only with an ACTIVE lease; a foreign or expired holder
+	// gets *domain.ClaimConflictError{Holder, ExpiresAt} with nothing mutated.
+	// A task with no lease at all is an idempotent no-op returning the fresh
+	// row (retry-safe). The durable Assignee is never touched.
 	Release(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time) (domain.Task, error)
 
 	// Heartbeat extends claim_expires_at by the stored claim TTL as of now.
-	// Holder-only; does NOT bump Version (child-row rule). Foreign or expired
-	// holders get *domain.ClaimConflictError.
+	// Holder-only with an ACTIVE lease; a foreign or expired holder — or no
+	// lease at all (zero-value Holder on the error) — gets
+	// *domain.ClaimConflictError{Holder, ExpiresAt}. Does NOT bump Version and
+	// does NOT touch updated_at: keep-alive is not a state change. Returns the
+	// fresh row (doubles as a health check).
 	Heartbeat(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time) (domain.Task, error)
 }
 

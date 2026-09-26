@@ -26,20 +26,42 @@ const (
 	maxEventLimit       = 100
 )
 
-// Tasks implements the task use cases: create, update, list, get, and the
-// one-call resume payload (GetDetail). It depends only on the ports in this
-// package; concrete wiring happens in the cmd/* composition roots.
+// Claim-lease TTL constants (slice 2C). DefaultClaimTTL applies when a caller
+// passes ttlSec = 0 to Claim; maxClaimTTL caps per-call overrides (clamped, not
+// rejected) so a misbehaving agent cannot pin a lease open-ended. The default
+// is overridable via Tasks.WithDefaultClaimTTL so tests can inject tiny TTLs.
+const (
+	DefaultClaimTTL = 900 * time.Second // 15 minutes — the documented claim default
+	maxClaimTTL     = 3600 * time.Second
+)
+
+// Tasks implements the task use cases: create, update, list, get, the one-call
+// resume payload (GetDetail), and the atomic TTL-lease lifecycle (Claim,
+// Release, Heartbeat). It depends only on the ports in this package; concrete
+// wiring happens in the cmd/* composition roots.
 type Tasks struct {
 	uow   UnitOfWork
 	clock Clock
 	idgen IDGenerator
+
+	// claimTTL is the default lease duration applied when Claim's ttlSec is 0.
+	claimTTL time.Duration
 }
 
 // NewTasks returns the Tasks use case bound to uow, clock, and idgen. Use
 // cases mint IDs and stamp timestamps before calling ports (ADR); adapters
-// store values exactly as given.
+// store values exactly as given. The default claim TTL is DefaultClaimTTL.
 func NewTasks(uow UnitOfWork, clock Clock, idgen IDGenerator) *Tasks {
-	return &Tasks{uow: uow, clock: clock, idgen: idgen}
+	return &Tasks{uow: uow, clock: clock, idgen: idgen, claimTTL: DefaultClaimTTL}
+}
+
+// WithDefaultClaimTTL returns a copy of s that applies ttl whenever Claim is
+// called with ttlSec = 0. Production wiring keeps the DefaultClaimTTL default;
+// tests use this to inject tiny TTLs without real time passing.
+func (s *Tasks) WithDefaultClaimTTL(ttl time.Duration) *Tasks {
+	c := *s
+	c.claimTTL = ttl
+	return &c
 }
 
 // TaskInput carries everything create_task needs (ARCHITECTURE §5 POST /tasks).
@@ -446,6 +468,202 @@ func (s *Tasks) GetDetail(ctx context.Context, id domain.ID, commentLimit, event
 		return TaskDetail{}, err
 	}
 	return d, nil
+}
+
+// Claim acquires — or idempotently renews — actor's TTL lease on the task in
+// ONE unit of work: the atomic CAS write (TaskRepository.Claim) plus exactly one
+// `claimed` event. Winning conditions (ARCHITECTURE §4–5, ADR 2026-09-26):
+// the lease is free, EXPIRED (takeover / zombie-heal), or already held by actor
+// (idempotent re-claim). Each win re-stamps claimed_at/claim_expires_at to
+// now/now+ttl, forces status→doing, and bumps version; the `claimed` event's
+// After JSON tags the outcome as "fresh", "takeover", or "renewal". Losing to a
+// DIFFERENT live holder propagates *domain.ClaimConflictError{Holder, ExpiresAt}
+// untouched — its body is the agent's recovery instruction ("wait until X, or
+// work another task") — and no event is appended (nothing was mutated). Claim
+// NEVER touches the durable Assignee: claimed_by is a separate ephemeral lease
+// field; assignment stays in Update (which emits `assigned`).
+//
+// ttlSec: 0 = DefaultClaimTTL (or the WithDefaultClaimTTL override), >max clamps
+// to max, <0 → domain.ErrInvalid.
+func (s *Tasks) Claim(ctx context.Context, actor domain.Actor, id domain.ID, ttlSec int) (domain.Task, error) {
+	a, err := normalizeActor(actor)
+	if err != nil {
+		return domain.Task{}, err
+	}
+	if ttlSec < 0 {
+		return domain.Task{}, fmt.Errorf("%w: claim ttl %d must be >= 0 seconds (0 = default)", domain.ErrInvalid, ttlSec)
+	}
+	ttl := s.claimTTL
+	if ttlSec > 0 {
+		ttl = time.Duration(ttlSec) * time.Second
+		if ttl > maxClaimTTL { // clamp oversized overrides, don't reject them
+			ttl = maxClaimTTL
+		}
+	}
+
+	now := s.clock.Now()
+	var stored domain.Task
+	var r Repos
+	err = s.uow.Run(ctx, &r, func() error {
+		cur, gerr := r.Tasks.Get(ctx, id) // pre-state for the event payload + outcome tag
+		if gerr != nil {
+			return gerr // ErrNotFound for unknown IDs; read and CAS share this one tx
+		}
+		outcome := claimOutcome(cur, a, now)
+		st, cerr := r.Tasks.Claim(ctx, id, a, int(ttl.Seconds()), now)
+		if cerr != nil {
+			return cerr // *domain.ClaimConflictError — propagate verbatim, no event (no mutation)
+		}
+		ev := domain.Event{
+			ID:        s.idgen.NewID(),
+			ProjectID: &st.ProjectID,
+			TaskID:    &st.ID,
+			Actor:     a,
+			Kind:      domain.EventClaimed, // the claimed event implies doing — no separate status-changed
+			Before: compactJSON(map[string]any{
+				"status": string(cur.Status),
+				"holder": actorJSON(cur.ClaimedBy),
+			}),
+			After: compactJSON(map[string]any{
+				"status":           string(st.Status),
+				"holder":           map[string]string{"type": string(a.Type), "name": a.Name},
+				"claim_expires_at": dueAtJSON(st.ClaimExpiry),
+				"ttl_sec":          int(ttl.Seconds()),
+				"claim":            outcome, // fresh | takeover | renewal
+			}),
+			At: now,
+		}
+		stored = st
+		return r.Events.Append(ctx, ev)
+	})
+	if err != nil {
+		return domain.Task{}, err
+	}
+	return stored, nil
+}
+
+// Release clears actor's lease and moves the task back to todo in ONE unit of
+// work: the holder-only CAS write (TaskRepository.Release) plus one `released`
+// event. Only the CURRENT active holder may release; a foreign holder — or an
+// expired self-lease — gets *domain.ClaimConflictError{Holder, ExpiresAt} with
+// nothing mutated (chosen over domain.ErrInvalid on purpose: this is a
+// coordination collision whose body carries the live holder + expiry as the
+// recovery instruction, not malformed input). Releasing a task with NO lease at
+// all is an idempotent no-op returning the fresh row (retry-safe), emitting no
+// event and bumping nothing. The note (if any) lands in the event summary, not
+// in the task row. The durable Assignee is untouched — like claim, release
+// deals only with the ephemeral lease.
+func (s *Tasks) Release(ctx context.Context, actor domain.Actor, id domain.ID, note string) (domain.Task, error) {
+	a, err := normalizeActor(actor)
+	if err != nil {
+		return domain.Task{}, err
+	}
+	note = strings.TrimSpace(note)
+
+	now := s.clock.Now()
+	var stored domain.Task
+	var r Repos
+	err = s.uow.Run(ctx, &r, func() error {
+		cur, gerr := r.Tasks.Get(ctx, id) // pre-state for the event payload
+		if gerr != nil {
+			return gerr
+		}
+		st, rerr := r.Tasks.Release(ctx, id, a, now)
+		if rerr != nil {
+			return rerr // *domain.ClaimConflictError — propagate verbatim, no event (no mutation)
+		}
+		if cur.ClaimedBy == nil || cur.ClaimExpiry == nil {
+			stored = st // no-op release of an unclaimed task: nothing to record
+			return nil
+		}
+		after := map[string]any{
+			"status": string(st.Status),
+			"holder": actorJSON(st.ClaimedBy), // null — the lease is cleared
+		}
+		if note != "" {
+			after["note"] = note
+		}
+		ev := domain.Event{
+			ID:        s.idgen.NewID(),
+			ProjectID: &st.ProjectID,
+			TaskID:    &st.ID,
+			Actor:     a,
+			Kind:      domain.EventReleased,
+			Before: compactJSON(map[string]any{
+				"status":           string(cur.Status),
+				"holder":           actorJSON(cur.ClaimedBy),
+				"claim_expires_at": dueAtJSON(cur.ClaimExpiry),
+			}),
+			After: compactJSON(after),
+			At:    now,
+		}
+		stored = st
+		return r.Events.Append(ctx, ev)
+	})
+	if err != nil {
+		return domain.Task{}, err
+	}
+	return stored, nil
+}
+
+// Heartbeat extends actor's ACTIVE lease to now + the STORED TTL and returns
+// the fresh row — one call doubles as a health check. Deliberately NO version
+// bump, NO updated_at change, and NO event: a keep-alive is not a state change,
+// must never cause 409s against a working agent's stale read (version-bump
+// policy), and would only be noise in the activity feed. Only the current
+// holder of an ACTIVE (unexpired) lease succeeds; a foreign holder or an expired
+// lease — including actor's own zombie lease — propagates
+// *domain.ClaimConflictError{Holder, ExpiresAt} untouched. A task with no lease
+// at all is also a conflict carrying a zero-value Holder: the recovery
+// instruction there is "claim it first".
+func (s *Tasks) Heartbeat(ctx context.Context, actor domain.Actor, id domain.ID) (domain.Task, error) {
+	a, err := normalizeActor(actor)
+	if err != nil {
+		return domain.Task{}, err
+	}
+
+	now := s.clock.Now()
+	var stored domain.Task
+	var r Repos
+	err = s.uow.Run(ctx, &r, func() error {
+		st, herr := r.Tasks.Heartbeat(ctx, id, a, now)
+		if herr != nil {
+			return herr // *domain.ClaimConflictError — propagate verbatim; never append events here
+		}
+		stored = st
+		return nil
+	})
+	if err != nil {
+		return domain.Task{}, err
+	}
+	return stored, nil
+}
+
+// sameLeaseHolder reports whether actor holds cur's current lease. The NAME is
+// the lease-holder key (MVP single-tenant, self-declared names — ADR 2026-09-26);
+// the stored claimed_by_type is display-only and may legitimately differ across
+// re-claims by the same named actor. This must stay in lockstep with the SQL
+// CAS's `claimed_by_name = ?` conditions — it is what keeps the fake adapter,
+// the real adapter, and the event classification agreeing on "who is home".
+func sameLeaseHolder(cur *domain.Task, actor domain.Actor) bool {
+	return cur.ClaimedBy != nil && cur.ClaimedBy.Name == actor.Name
+}
+
+// claimOutcome tags a successful claim for the `claimed` event summary (ADR
+// 2026-09-26): "fresh" when no prior holder exists; "renewal" when the same
+// named actor re-claimed its own ACTIVE lease (idempotent); "takeover" whenever
+// a prior lease had EXPIRED — zombie-heal by another actor or the previous
+// holder reclaiming their own lapsed lease alike. Classification reads cur at
+// the start of the same transaction as the CAS, so under serialized writes it
+// can never disagree with the winner the CAS actually elects.
+func claimOutcome(cur domain.Task, actor domain.Actor, now time.Time) string {
+	if cur.ClaimedBy == nil || cur.ClaimExpiry == nil {
+		return "fresh"
+	}
+	if !cur.ClaimExpiry.Before(now) && sameLeaseHolder(&cur, actor) { // active self-lease (name key)
+		return "renewal"
+	}
+	return "takeover"
 }
 
 // --- helpers shared by the task use cases ---------------------------------------

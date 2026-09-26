@@ -163,18 +163,91 @@ func (f *fakeTasks) Update(_ context.Context, t domain.Task) (domain.Task, error
 	return f.byID[t.ID], nil
 }
 
-// Claim/Release/Heartbeat have no use-case callers in this slice; the claim
-// slice's tests bring their own fixture behavior.
-func (f *fakeTasks) Claim(context.Context, domain.ID, domain.Actor, int, time.Time) (domain.Task, error) {
-	return domain.Task{}, errors.New("fakeTasks: Claim is not exercised by this slice")
+// Claim mirrors the SQLite adapter's CAS in memory: it wins when the lease is
+// free, EXPIRED (claim_expires_at < now — takeover by anyone), or already held
+// by actor with an ACTIVE lease (idempotent re-claim). A different live holder
+// loses with *domain.ClaimConflictError{Holder, ExpiresAt} and nothing changes.
+// Each win re-stamps claimed_at/claim_expires_at to now/now+ttl, forces
+// status=doing, and bumps version — the same invariants the SQL encodes. The
+// in-memory map is single-goroutine by construction (fakeUoW runs fn
+// synchronously), so this read-check-write is as atomic as the CAS for unit
+// tests; the racing-goroutines proof lives in the SQLite integration tests.
+func (f *fakeTasks) Claim(_ context.Context, id domain.ID, actor domain.Actor, ttlSec int, now time.Time) (domain.Task, error) {
+	cur, ok := f.byID[id]
+	if !ok {
+		return domain.Task{}, domain.ErrNotFound
+	}
+	switch {
+	case cur.ClaimedBy == nil || cur.ClaimExpiry == nil: // free
+	case cur.ClaimExpiry.Before(now): // expired → takeover (any claimant)
+	case sameLeaseHolder(&cur, actor): // active self-lease (NAME is the key) → idempotent re-claim
+	default:
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *cur.ClaimedBy, ExpiresAt: *cur.ClaimExpiry}
+	}
+	holder := actor
+	start := now
+	expiry := now.Add(time.Duration(ttlSec) * time.Second)
+	cur.Status = domain.StatusDoing
+	cur.ClaimedBy = &holder
+	cur.ClaimedAt = &start
+	cur.ClaimExpiry = &expiry
+	cur.ClaimTTLSeconds = ttlSec
+	cur.Version++
+	cur.UpdatedAt = start
+	f.byID[id] = cur
+	return cur, nil
 }
 
-func (f *fakeTasks) Release(context.Context, domain.ID, domain.Actor, time.Time) (domain.Task, error) {
-	return domain.Task{}, errors.New("fakeTasks: Release is not exercised by this slice")
+// Release mirrors the adapter's holder-only CAS in memory: it clears the lease
+// and moves status→todo (bumping version) ONLY when actor holds an ACTIVE
+// lease; a foreign or expired holder gets *domain.ClaimConflictError{Holder,
+// ExpiresAt}. A task with no lease at all is an idempotent no-op returning the
+// current row (mirrors the SQL's 0-rows → empty-holder branch).
+func (f *fakeTasks) Release(_ context.Context, id domain.ID, actor domain.Actor, now time.Time) (domain.Task, error) {
+	cur, ok := f.byID[id]
+	if !ok {
+		return domain.Task{}, domain.ErrNotFound
+	}
+	if cur.ClaimedBy == nil || cur.ClaimExpiry == nil {
+		return cur, nil // nothing to release: idempotent no-op, row untouched
+	}
+	active := !cur.ClaimExpiry.Before(now)
+	if !active || !sameLeaseHolder(&cur, actor) {
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *cur.ClaimedBy, ExpiresAt: *cur.ClaimExpiry}
+	}
+	start := now
+	cur.Status = domain.StatusTodo
+	cur.ClaimedBy = nil
+	cur.ClaimedAt = nil
+	cur.ClaimExpiry = nil
+	cur.ClaimTTLSeconds = 0
+	cur.Version++
+	cur.UpdatedAt = start
+	f.byID[id] = cur
+	return cur, nil
 }
 
-func (f *fakeTasks) Heartbeat(context.Context, domain.ID, domain.Actor, time.Time) (domain.Task, error) {
-	return domain.Task{}, errors.New("fakeTasks: Heartbeat is not exercised by this slice")
+// Heartbeat mirrors the adapter's guarded extension in memory: it extends
+// claim_expires_at to now + the STORED TTL only for the current holder of an
+// ACTIVE lease; a foreign or expired holder — or no lease at all (zero-value
+// Holder = "claim it first") — gets *domain.ClaimConflictError. Deliberately no
+// version bump and no UpdatedAt change: keep-alive is not a state change.
+func (f *fakeTasks) Heartbeat(_ context.Context, id domain.ID, actor domain.Actor, now time.Time) (domain.Task, error) {
+	cur, ok := f.byID[id]
+	if !ok {
+		return domain.Task{}, domain.ErrNotFound
+	}
+	if cur.ClaimedBy == nil || cur.ClaimExpiry == nil {
+		return domain.Task{}, &domain.ClaimConflictError{Holder: domain.Actor{}, ExpiresAt: time.Time{}}
+	}
+	active := !cur.ClaimExpiry.Before(now)
+	if !active || !sameLeaseHolder(&cur, actor) {
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *cur.ClaimedBy, ExpiresAt: *cur.ClaimExpiry}
+	}
+	expiry := now.Add(time.Duration(cur.ClaimTTLSeconds) * time.Second)
+	cur.ClaimExpiry = &expiry
+	f.byID[id] = cur // Version and UpdatedAt intentionally untouched
+	return cur, nil
 }
 
 // taskMatches mirrors sqlite's taskListWhere condition-by-condition.
