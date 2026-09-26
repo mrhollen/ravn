@@ -9,9 +9,10 @@ import (
 )
 
 // relationRepo implements application.RelationRepository over SQLite. Slice 2B
-// lands the ListByTask read (the resume payload's raw edge list — both
-// directions); Add/Remove land in slice 2D with the upsert keyed by
-// (task_id, other_task_id, kind).
+// landed the ListByTask read (the resume payload's raw edge list — both
+// directions); slice 2D2a lands Add (idempotent upsert keyed by
+// (task_id, other_task_id, kind), with the ≤1-parent partial-index violation
+// translated to domain.ErrParentConflict) and Remove (composite-key delete).
 type relationRepo struct {
 	q querier
 }
@@ -20,12 +21,63 @@ func newRelationRepo(q querier) *relationRepo { return &relationRepo{q: q} }
 
 var _ application.RelationRepository = (*relationRepo)(nil)
 
+// Add upserts the edge keyed by (task_id, other_task_id, kind): an identical
+// existing row is left untouched (original ID and created_at preserved) and
+// Add returns nil — the retry-safe no-op the port contract promises. The use
+// case validates existence, same-project, self-edges, and the one-parent rule
+// BEFORE calling; what this method still guards against:
+//
+//   - the ≤1-parent partial unique index (migration 0003): a kind='child' row
+//     whose task_id already has a DIFFERENT parent trips UNIQUE(task_id) WHERE
+//     kind='child' — mapped onto domain.ErrParentConflict. This is the
+//     backstop for a concurrent writer winning the race between the use case's
+//     pre-check and this upsert; under normal serialized operation the use case
+//     rejects such adds earlier with the same sentinel.
+//   - any other constraint failure (FK to a vanished task, CHECK) surfaces as
+//     wrapped domain.ErrInvalid — invalid input, not store trouble. The
+//     composite triple itself can never fail here: ON CONFLICT absorbs it.
 func (r *relationRepo) Add(ctx context.Context, rel domain.Relation) error {
-	return notYet("relation repository", "Add", "2D")
+	res, err := r.q.ExecContext(ctx,
+		`INSERT INTO relation (`+relationColumns+`) VALUES (?, ?, ?, ?, ?) `+
+			`ON CONFLICT(task_id, other_task_id, kind) DO NOTHING`,
+		string(rel.ID), string(rel.TaskID), string(rel.OtherTaskID), string(rel.Kind), formatTS(rel.CreatedAt))
+	if err != nil {
+		if isConstraintViolation(err) {
+			if rel.Kind == domain.RelationChild { // only the partial index can fire on a child row
+				return fmt.Errorf("%w: task %s already has a parent", domain.ErrParentConflict, rel.TaskID)
+			}
+			return fmt.Errorf("%w: relation %s violates a schema constraint", domain.ErrInvalid, rel.ID)
+		}
+		return fmt.Errorf("insert relation %s: %w", rel.ID, err)
+	}
+	if n, cerr := res.RowsAffected(); cerr != nil {
+		return fmt.Errorf("rows affected after insert relation %s: %w", rel.ID, cerr)
+	} else if n == 0 {
+		return nil // idempotent: the identical edge is already stored; row untouched
+	}
+	return nil
 }
 
+// Remove deletes exactly the edge keyed by (taskID, otherTaskID, kind) — the
+// same composite REST's DELETE uses; relation IDs are never part of the key.
+// A missing edge is domain.ErrNotFound (the caller-facing "nothing to remove"),
+// never a silent success: silently succeeding would hide a double-remove retry
+// that had already converged on the first pass.
 func (r *relationRepo) Remove(ctx context.Context, taskID, otherTaskID domain.ID, kind domain.RelationKind) error {
-	return notYet("relation repository", "Remove", "2D")
+	res, err := r.q.ExecContext(ctx,
+		`DELETE FROM relation WHERE task_id = ? AND other_task_id = ? AND kind = ?`,
+		string(taskID), string(otherTaskID), string(kind))
+	if err != nil {
+		return fmt.Errorf("delete relation (%s -> %s, %s): %w", taskID, otherTaskID, kind, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected after delete relation: %w", err)
+	}
+	if n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 // relationColumns is the single source of truth for SELECT column order — it

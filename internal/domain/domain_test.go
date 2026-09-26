@@ -117,4 +117,22 @@ func TestTaskHelpers(t *testing.T) {
 	}
 }
 
+func TestRelationKindValidVsStored(t *testing.T) {
+	// Every stored kind is also acceptable at the tool boundary…
+	for _, k := range []RelationKind{RelationChild, RelationBlockedBy, RelationDuplicateOf, RelationRelated} {
+		if !k.Valid() || !k.Stored() {
+			t.Errorf("%q: Valid=%v Stored=%v, want true/true", k, k.Valid(), k.Stored())
+		}
+	}
+	// …but 'parent' is valid only as INPUT: the use case normalizes it to an
+	// inverse child edge, so it must never be reported as storable.
+	if !RelationParent.Valid() || RelationParent.Stored() {
+		t.Errorf("parent: Valid=%v Stored=%v, want true/false (input alias, never persisted)",
+			RelationParent.Valid(), RelationParent.Stored())
+	}
+	if RelationKind("blocks").Valid() || RelationKind("").Stored() {
+		t.Error("unknown kinds must stay invalid / unstorable")
+	}
+}
+
 func timePtr(t time.Time) *time.Time { return &t }

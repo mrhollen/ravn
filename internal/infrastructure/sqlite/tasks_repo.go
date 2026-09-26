@@ -12,15 +12,6 @@ import (
 	"github.com/mrhollen/crowban/internal/domain"
 )
 
-// errNotImplemented marks the repository methods that are wired into
-// application.Repos but whose implementations land in a later slice. Every
-// stub method wraps it with the slice that ships the real behavior.
-var errNotImplemented = errors.New("sqlite adapter: not implemented yet")
-
-func notYet(repo, method, slice string) error {
-	return fmt.Errorf("sqlite %s %s: %w (lands in slice %s)", repo, method, errNotImplemented, slice)
-}
-
 // taskRepo implements application.TaskRepository over SQLite: the plain CRUD
 // half (Create/Get/List/Update, slice 2B) plus the atomic lease CAS trio
 // (Claim/Release/Heartbeat, slice 2C — ARCHITECTURE §4–5, ADR 2026-09-26).

@@ -105,16 +105,44 @@ func TestOpenAppliesMigrationsAndSeedsStatuses(t *testing.T) {
 		t.Errorf("foreign_keys = %d, want 1", fk)
 	}
 
-	// The runner recorded exactly the two migrations it applied (0001 + 0002).
+	// The runner recorded exactly the three migrations it applied
+	// (0001 + 0002 + 0003).
 	var count int
 	var filename string
 	if err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*), MIN(filename) FROM schema_migrations`).Scan(&count, &filename); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if count != 2 || filename != "migrations/0001_init.sql" {
-		t.Errorf("schema_migrations = (%d rows, MIN=%q), want (2, %q)",
+	if count != 3 || filename != "migrations/0001_init.sql" {
+		t.Errorf("schema_migrations = (%d rows, MIN=%q), want (3, %q)",
 			count, filename, "migrations/0001_init.sql")
+	}
+
+	// Slice 2D2a: the ≤1-parent partial unique index now targets the canonical
+	// 'child' storage direction (0003); the old kind='parent' guard from 0001
+	// stays as a no-op. Both indexes must exist, plus the composite triple
+	// unique (a table constraint, surfaced as an auto-index).
+	indexes := map[string]bool{}
+	istmts, err := db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'index'`)
+	if err != nil {
+		t.Fatalf("query sqlite_master indexes: %v", err)
+	}
+	for istmts.Next() {
+		var name string
+		if err := istmts.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		indexes[name] = true
+	}
+	istmts.Close()
+	for _, wantIndex := range []string{
+		"idx_one_parent",                // 0001, kind='parent' (legacy vocabulary; no-op under the locked model)
+		"idx_relation_one_parent_child", // 0003, kind='child' — the enforcing ≤1-parent guard
+		"idx_relation_target",           // 0001, incoming-edge lookups
+	} {
+		if !indexes[wantIndex] {
+			t.Errorf("index %q missing from schema", wantIndex)
+		}
 	}
 }
 
@@ -147,8 +175,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 {
-		t.Errorf("schema_migrations rows = %d after repeated runs, want 2 (one per migration)", count)
+	if count != 3 {
+		t.Errorf("schema_migrations rows = %d after repeated runs, want 3 (one per migration)", count)
 	}
 	var statuses int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM status`).Scan(&statuses); err != nil {

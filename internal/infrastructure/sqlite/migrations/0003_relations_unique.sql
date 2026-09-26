@@ -1,0 +1,23 @@
+-- 0003_relations_unique: ≤1-parent uniqueness under the canonical 'child'
+-- storage direction (slice 2D2a).
+--
+-- The relation row's composite idempotency key, UNIQUE(task_id, other_task_id,
+-- kind), already exists as a 0001 table constraint — that is what makes
+-- RelationRepository.Add an upsert (ON CONFLICT … DO NOTHING) and NO new
+-- constraint for it is added here.
+--
+-- What was missing: 0001's ≤1-parent guard, idx_one_parent, targets
+-- kind='parent' — the pre-canonicalization vocabulary. Under the locked model
+-- (ADR 2026-09-26, slice 2D2a) hierarchy edges are stored in ONE direction,
+-- kind='child' with task_id = child, other_task_id = parent, and no row ever
+-- persists kind='parent'; so idx_one_parent guards nothing. This migration
+-- adds the enforcing partial unique index on the stored direction: at most one
+-- 'child' edge may leave a given task, i.e. a task has at most ONE parent.
+-- Giving a task a second, different parent fails with UNIQUE-constraint
+-- violation (SQLITE_CONSTRAINT), which the repository translates to
+-- domain.ErrParentConflict.
+--
+-- 0001/0002 stay untouched (append-only log); idx_one_parent is left in place
+-- as a harmless no-op guard of the old vocabulary.
+
+CREATE UNIQUE INDEX idx_relation_one_parent_child ON relation(task_id) WHERE kind = 'child';

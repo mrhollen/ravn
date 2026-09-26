@@ -4,10 +4,9 @@
 // internal/infrastructure/** and are wired into these interfaces by the cmd/*
 // composition roots.
 //
-// Slices 2A–2D1 have landed the Projects, Tasks (incl. the claim-lease
-// lifecycle), Comments, Acceptance, and Artifacts use cases against these
-// ports; only the Relations use case still lands in a later slice and plugs
-// straight into the same signatures.
+// Slices 2A–2D2a have landed the Projects, Tasks (incl. the claim-lease
+// lifecycle), Comments, Acceptance, Artifacts, and Relations use cases against
+// these ports.
 package application
 
 import (

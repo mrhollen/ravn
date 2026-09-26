@@ -47,3 +47,16 @@ func (e *ClaimConflictError) Error() string {
 	return fmt.Sprintf("task claimed by %s %q until %s",
 		e.Holder.Type, e.Holder.Name, e.ExpiresAt.UTC().Format(time.RFC3339))
 }
+
+// ErrParentConflict is the ≤1-parent rule (ARCHITECTURE §5: "one-parent rule",
+// REST 409): a task that already has a parent — an existing stored kind='child'
+// edge out of it — is given a DIFFERENT one. It is the domain translation of
+// the UNIQUE(task_id) partial index on relation WHERE kind='child' (migration
+// 0003); the SQLite adapter maps that constraint violation onto this sentinel
+// when a concurrent writer wins the race between the use case's pre-check and
+// its upsert. Re-setting the SAME parent is NOT a conflict — that path is the
+// idempotent upsert no-op in RelationRepository.Add, which returns nil. Wrap it
+// with the existing parent so the error stays actionable:
+//
+//	fmt.Errorf("%w: task %s already has a parent (%s)", ErrParentConflict, ...)
+var ErrParentConflict = errors.New("task already has a parent")
