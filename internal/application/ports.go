@@ -28,6 +28,9 @@ import (
 //     *domain.ClaimConflictError (see internal/domain/errors.go).
 //   - All timestamps cross the storage boundary as RFC3339 UTC strings
 //     (ARCHITECTURE §4); adapters convert.
+//   - Event Before/After payloads are compact JSON built with encoding/json —
+//     pure data shaping, not I/O — so it is allowed alongside context/time/
+//     errors/fmt in use cases despite the narrow stdlib import list in §2.
 //   - Transactional note: every atomic group of writes (e.g. create_task's
 //     task row + initial criteria + relations, ARCHITECTURE §5) runs inside one
 //     UnitOfWork.Run (uow.go), which executes the work in a single database
