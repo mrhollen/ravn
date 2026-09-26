@@ -114,6 +114,39 @@ func (r *taskRepo) List(ctx context.Context, f application.TaskFilter) ([]domain
 	return out, total, rows.Err()
 }
 
+// BlockersOf returns the open blockers of taskID — the targets of its outgoing
+// blocked-by edges whose target is NOT done and NOT archived, in edge-creation
+// order (created_at ASC, id ASC tie-break). Only DIRECT blockers count; there
+// is no transitive closure in MVP. The predicate is the exact twin of
+// taskListWhere's UnblockedOnly guard, so GetDetail's Blocked flag flips at
+// exactly the moments List(UnblockedOnly) includes/excludes the task. Rows are
+// light summaries: id/title/status only — the rest of domain.Task stays zero.
+func (r *taskRepo) BlockersOf(ctx context.Context, taskID domain.ID) ([]domain.Task, error) {
+	rows, err := r.q.QueryContext(ctx,
+		`SELECT b.id, b.title, b.status FROM relation r `+
+			`JOIN task b ON b.id = r.other_task_id `+
+			`WHERE r.task_id = ? AND r.kind = 'blocked-by' AND b.status <> 'done' AND b.archived = 0 `+
+			`ORDER BY r.created_at ASC, b.id ASC`, string(taskID))
+	if err != nil {
+		return nil, fmt.Errorf("list blockers for task %s: %w", taskID, err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.Task, 0)
+	for rows.Next() {
+		var (
+			t      domain.Task
+			status string
+		)
+		if err := rows.Scan(&t.ID, &t.Title, &status); err != nil {
+			return nil, fmt.Errorf("scan blocker row for task %s: %w", taskID, err)
+		}
+		t.Status = domain.Status(status)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // Update performs the optimistic version-guarded write (ADR): it applies only
 // when the stored row's Version equals t.Version, stores t's fields with
 // Version = t.Version + 1, and returns the fresh row. Zero affected rows means
@@ -377,10 +410,13 @@ func taskListWhere(f application.TaskFilter) (string, []any) {
 		args = append(args, formatTS(*f.CompletedBefore))
 	}
 
-	// TODO(slice 2D): f.UnblockedOnly — relation-dependent filtering needs the
-	// relation table ("no outgoing blocked-by edge whose target is not done").
-	// Intentionally ignored until then: the port contract says adapters ignore
-	// it rather than fail.
+	if f.UnblockedOnly { // slice 2D2b: X is listed only when no unresolved blocker exists —
+		// an outgoing blocked-by edge whose target is not done and not archived.
+		// COUNT(*) and the row query share taskListWhere, so both apply it.
+		conds = append(conds,
+			`NOT EXISTS (SELECT 1 FROM relation r JOIN task b ON b.id = r.other_task_id `+
+				`WHERE r.task_id = task.id AND r.kind = 'blocked-by' AND b.status <> 'done' AND b.archived = 0)`)
+	}
 
 	return strings.Join(conds, " AND "), args
 }

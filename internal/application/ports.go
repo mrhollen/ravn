@@ -4,9 +4,10 @@
 // internal/infrastructure/** and are wired into these interfaces by the cmd/*
 // composition roots.
 //
-// Slices 2A–2D2a have landed the Projects, Tasks (incl. the claim-lease
+// Slices 2A–2D2b have landed the Projects, Tasks (incl. the claim-lease
 // lifecycle), Comments, Acceptance, Artifacts, and Relations use cases against
-// these ports.
+// these ports — plus the computed blocked/unblocked semantics of slice 2D2b
+// (TaskRepository.BlockersOf + TaskFilter.UnblockedOnly).
 package application
 
 import (
@@ -82,10 +83,13 @@ type TaskFilter struct {
 	// open tasks only, the REST default; true = archived tasks only.
 	Archived bool
 
-	// UnblockedOnly restricts to tasks with no open (non-done) blocked-by
-	// target. DEFERRED to slice 2D — relation-dependent filtering needs the
-	// relation repository and is intentionally not implemented yet; adapters
-	// must ignore it (with a TODO), not fail on it, until then.
+	// UnblockedOnly restricts to tasks that can actually be started: a task is
+	// EXCLUDED when it has an outgoing blocked-by edge whose target is not done
+	// and not archived (slice 2D2b). Only DIRECT blockers count — no transitive
+	// closure in MVP. The total returned by List reflects the SAME predicate as
+	// the rows, and the filter composes with every other field. "Unblocked"
+	// does not itself exclude done tasks; callers combine it with status
+	// filters for actionable open work.
 	UnblockedOnly bool
 
 	Q string // case-insensitive LIKE over title+description+notes
@@ -120,8 +124,19 @@ type TaskRepository interface {
 	Get(ctx context.Context, id domain.ID) (domain.Task, error)
 
 	// List returns summary rows matching f in canonical order plus the total
-	// number of tasks matching f before Limit/Offset are applied.
+	// number of tasks matching f before Limit/Offset are applied. When
+	// f.UnblockedOnly is set both the rows and the total honor it (same
+	// predicate — slice 2D2b).
 	List(ctx context.Context, f TaskFilter) ([]domain.Task, int64, error)
+
+	// BlockersOf returns taskID's OPEN blockers: the targets of its outgoing
+	// blocked-by edges whose target is not done and not archived (the exact
+	// predicate List's UnblockedOnly guard encodes), in edge-creation order.
+	// Only DIRECT blockers count — no transitive closure (MVP). A non-empty
+	// result means the task is blocked. Rows are light summaries: only ID,
+	// Title and Status are populated; every other field of domain.Task is
+	// zero.
+	BlockersOf(ctx context.Context, taskID domain.ID) ([]domain.Task, error)
 
 	// Update performs the version-guarded write above and returns the fresh
 	// row. It returns *domain.ConflictError (carrying the fresh row) when the

@@ -92,6 +92,10 @@ type fakeTasks struct {
 	// lastFilter records the most recent List filter so tests can assert the
 	// use case's clamping of Limit/Offset.
 	lastFilter TaskFilter
+	// rel gives relation-aware methods (List with UnblockedOnly, BlockersOf)
+	// access to the edge set; newFakeUoW wires it. Nil = no edges at all, so a
+	// standalone fake behaves exactly like an empty relation table.
+	rel *fakeRelations
 }
 
 func newFakeTasks() *fakeTasks { return &fakeTasks{byID: make(map[domain.ID]domain.Task)} }
@@ -115,16 +119,74 @@ func (f *fakeTasks) Get(_ context.Context, id domain.ID) (domain.Task, error) {
 	return t, nil
 }
 
-// List honors every implemented TaskFilter field, sorts canonically, and
-// applies Limit/Offset AFTER counting the total. UnblockedOnly is ignored —
-// same as the SQLite adapter until slice 2D (relations).
+// BlockersOf returns taskID's open blockers — the not-done, non-archived
+// targets of its outgoing blocked-by edges (direct only, like the adapter), in
+// edge-creation order. A standalone fake (rel == nil) reports no edges, like an
+// empty relation table. The full stored task is returned; use cases and tests
+// read it as a light summary (id/title/status).
+func (f *fakeTasks) BlockersOf(ctx context.Context, taskID domain.ID) ([]domain.Task, error) {
+	out := make([]domain.Task, 0)
+	if f.rel == nil {
+		return out, nil
+	}
+	edges, err := f.rel.ListByTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range edges {
+		if e.TaskID != taskID || e.Kind != domain.RelationBlockedBy { // outgoing blocked-by only
+			continue
+		}
+		target, ok := f.byID[e.OtherTaskID]
+		if !ok {
+			continue // dangling edge (the FK would prevent this in SQLite)
+		}
+		if target.Status == domain.StatusDone || target.Archived {
+			continue
+		}
+		out = append(out, target)
+	}
+	return out, nil
+}
+
+// hasOpenBlocker reports whether t carries an outgoing blocked-by edge whose
+// target is not done and not archived — the in-memory twin of SQLite's
+// UnblockedOnly NOT EXISTS guard (slice 2D2b). Note a task that IS somebody's
+// blocker but has no blockers of its own does NOT count as blocked.
+func (f *fakeTasks) hasOpenBlocker(t domain.Task) bool {
+	if f.rel == nil {
+		return false
+	}
+	for _, e := range f.rel.edges {
+		if e.TaskID != t.ID || e.Kind != domain.RelationBlockedBy {
+			continue
+		}
+		target, ok := f.byID[e.OtherTaskID]
+		if !ok {
+			continue
+		}
+		if target.Status != domain.StatusDone && !target.Archived {
+			return true
+		}
+	}
+	return false
+}
+
+// List honors every TaskFilter field (UnblockedOnly included — slice 2D2b, via
+// the edge set), sorts canonically, and applies Limit/Offset AFTER counting the
+// total. The UnblockedOnly check must happen here (not in taskMatches) because
+// it looks at relation edges, which only this struct can see through rel.
 func (f *fakeTasks) List(_ context.Context, flt TaskFilter) ([]domain.Task, int64, error) {
 	f.lastFilter = flt
 	matched := make([]domain.Task, 0, len(f.byID))
 	for _, t := range f.byID {
-		if taskMatches(t, flt) {
-			matched = append(matched, t)
+		if !taskMatches(t, flt) {
+			continue
 		}
+		if flt.UnblockedOnly && f.hasOpenBlocker(t) { // an unresolved blocker excludes it
+			continue
+		}
+		matched = append(matched, t)
 	}
 	sort.Slice(matched, func(i, j int) bool { return taskLess(matched[i], matched[j]) })
 
@@ -286,7 +348,8 @@ func taskMatches(t domain.Task, f TaskFilter) bool {
 	if f.CompletedBefore != nil && (t.CompletedAt == nil || !t.CompletedAt.Before(*f.CompletedBefore)) {
 		return false
 	}
-	// TODO(slice 2D): f.UnblockedOnly — relation-dependent; ignored like in sqlite.
+	// Note: f.UnblockedOnly is NOT checked here — it depends on relation edges,
+	// which only fakeTasks.List can see through its rel reference (slice 2D2b).
 	return true
 }
 
@@ -534,7 +597,7 @@ type fakeUoW struct {
 // ports get fresh in-memory fakes that tests can reach through the returned
 // struct's fields.
 func newFakeUoW(projects *fakeProjects, events *fakeEvents) *fakeUoW {
-	return &fakeUoW{
+	u := &fakeUoW{
 		projects:  projects,
 		tasks:     newFakeTasks(),
 		acs:       newFakeACs(),
@@ -543,6 +606,8 @@ func newFakeUoW(projects *fakeProjects, events *fakeEvents) *fakeUoW {
 		relations: newFakeRelations(),
 		events:    events,
 	}
+	u.tasks.rel = u.relations // relation-aware List (UnblockedOnly) + BlockersOf (slice 2D2b)
+	return u
 }
 
 func (u *fakeUoW) Run(_ context.Context, r *Repos, fn func() error) error {

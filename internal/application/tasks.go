@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mrhollen/crowban/internal/domain"
 )
@@ -24,6 +26,15 @@ const (
 	maxCommentLimit     = 50
 	defaultEventLimit   = 20
 	maxEventLimit       = 100
+
+	// Duplicate-candidate scan limits (FindDuplicateCandidates, slice 2D2b). A
+	// request for 0 asks for the default advisory set; requests above the list
+	// max are clamped to it. The in-Go scoring considers at most ONE page of the
+	// project's open tasks — no pagination: beyond that, an advisory ranking
+	// loses its value and Tier 2 can add FTS-backed matching (ARCHITECTURE §3).
+	defaultDuplicateLimit = 5
+	maxDuplicateLimit     = maxListLimit
+	scanDuplicateLimit    = maxListLimit
 )
 
 // Claim-lease TTL constants (slice 2C). DefaultClaimTTL applies when a caller
@@ -399,6 +410,91 @@ func (s *Tasks) Get(ctx context.Context, id domain.ID) (domain.Task, error) {
 	return stored, nil
 }
 
+// FindDuplicateCandidates is the advisory duplicate check behind create_task's
+// warnings[] (ARCHITECTURE §4 "duplicate warning on create", slice 2D2b). It
+// returns up to `limit` open (not done, not archived) tasks of projectID whose
+// titles look similar to `title`, most similar first. Matching is deliberately
+// simple and deterministic — NO new DB migration, NO FTS (Tier 2): the port's
+// existing List capability is used to fetch the project's open tasks, then a
+// lightweight in-Go scorer ranks them:
+//
+//  1. both titles are normalized (lowercased + trimmed);
+//  2. similarity scores 0–3 — 3: normalized-equal; 2: one normalized title
+//     contains the other (either direction); 1: at least half of the query's
+//     significant tokens (non-stopword alphanumeric runs) also occur in the
+//     candidate; 0: not returned;
+//  3. candidates rank score DESC, then ID ASC (deterministic), and are capped
+//     at `limit` (default 5 when limit <= 0).
+//
+// This is a NON-BLOCKING advisory read — it never fails a create; callers
+// surface hits as warnings ("possible_duplicate:<id>"). The scan is bounded to
+// one page (scanDuplicateLimit) of the project's open tasks, so in a project
+// with more than that many open tasks only the canonical-order head is
+// considered. The task just created for this title is NOT excluded here (this
+// method cannot know its ID): callers surfacing warnings for a fresh create
+// must drop the entry matching that task's own ID first — otherwise the new
+// row would warn about itself.
+func (s *Tasks) FindDuplicateCandidates(ctx context.Context, projectID domain.ID, title string, limit int) ([]domain.Task, error) {
+	if projectID.IsZero() {
+		return nil, fmt.Errorf("%w: project id is required", domain.ErrInvalid)
+	}
+	if limit <= 0 {
+		limit = defaultDuplicateLimit
+	} else if limit > maxDuplicateLimit {
+		limit = maxDuplicateLimit
+	}
+
+	qNorm := normalizeTitle(title)
+	qTokens := significantTokens(qNorm)
+
+	var scanned []domain.Task
+	var r Repos
+	err := s.uow.Run(ctx, &r, func() error {
+		f := TaskFilter{ProjectID: projectID, Limit: scanDuplicateLimit} // Archived=false (zero value): open rows only
+		rows, _, lerr := r.Tasks.List(ctx, f)
+		if lerr != nil {
+			return lerr
+		}
+		scanned = rows
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	type scored struct {
+		score int
+		task  domain.Task
+	}
+	cands := make([]scored, 0)
+	for _, t := range scanned {
+		if t.Status == domain.StatusDone || t.Archived { // "open" = not done/archived (ARCHITECTURE §4)
+			continue
+		}
+		candNorm := normalizeTitle(t.Title)
+		sc := titleSimilarity(qNorm, candNorm, qTokens, significantTokens(candNorm))
+		if sc > 0 {
+			cands = append(cands, scored{score: sc, task: t})
+		}
+	}
+
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].score != cands[j].score {
+			return cands[i].score > cands[j].score
+		}
+		return cands[i].task.ID < cands[j].task.ID // deterministic tie-break (ULIDs sort by creation time)
+	})
+	if len(cands) > limit {
+		cands = cands[:limit]
+	}
+
+	out := make([]domain.Task, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, c.task)
+	}
+	return out, nil
+}
+
 // UpdateNotes performs a REPLACE-ON-WRITE of the task's durable resume notes
 // (ARCHITECTURE §5 PUT /tasks/{id}/notes, MCP update_notes): the whole blob is
 // replaced by `notes` — no merge, no base-version check at this layer — and
@@ -457,20 +553,32 @@ func (s *Tasks) UpdateNotes(ctx context.Context, actor domain.Actor, id domain.I
 // the full task row plus everything an agent needs to pick the work back up —
 // ordered acceptance criteria, a comment tail (newest first), all artifacts
 // (oldest first), every relation edge touching the task in either direction
-// (raw edges; the computed "blocked" flag lands with relations in slice 2D),
-// and an event tail (newest first).
+// (raw edges), the computed "blocked" flag with its open blockers (slice 2D2b:
+// derived at read time from outgoing blocked-by edges, never stored), and an
+// event tail (newest first).
 type TaskDetail struct {
 	Task               domain.Task
 	AcceptanceCriteria []domain.AcceptanceCriterion
 	Comments           []domain.Comment
 	Artifacts          []domain.Artifact
 	Relations          []domain.Relation
-	Events             []domain.Event
+
+	// Blocked is true when the task has at least one open blocker — an
+	// outgoing blocked-by edge whose target is not done and not archived.
+	// Blockers is that set as light summaries (id/title/status), in
+	// edge-creation order; empty whenever Blocked is false.
+	Blocked  bool
+	Blockers []domain.Task
+
+	Events []domain.Event
 }
 
 // GetDetail assembles the resume payload in a single read-only unit of work.
 // commentLimit/eventLimit clamp to their documented ranges (0 = default: 10
 // comments / 20 events; max 50 / 100). Missing task → domain.ErrNotFound.
+// Blocked/Blockers are computed at read time from the task's outgoing
+// blocked-by edges (slice 2D2b) — the flag is never stored, so it flips the
+// moment a blocker completes or is archived.
 func (s *Tasks) GetDetail(ctx context.Context, id domain.ID, commentLimit, eventLimit int) (TaskDetail, error) {
 	if commentLimit <= 0 {
 		commentLimit = defaultCommentLimit
@@ -511,6 +619,12 @@ func (s *Tasks) GetDetail(ctx context.Context, id domain.ID, commentLimit, event
 			return err
 		}
 		d.Relations = rels
+		blks, err := r.Tasks.BlockersOf(ctx, id)
+		if err != nil {
+			return err
+		}
+		d.Blockers = blks
+		d.Blocked = len(blks) > 0 // computed at read time; never stored (ARCHITECTURE §4)
 		evs, err := r.Events.ListByTask(ctx, id, eventLimit, 0)
 		if err != nil {
 			return err
@@ -774,6 +888,82 @@ func actorEqual(a, b *domain.Actor) bool {
 		return a == nil && b == nil
 	}
 	return a.Type == b.Type && a.Name == b.Name
+}
+
+// duplicateStopwords carry no identity in a task title and are dropped before
+// token comparison. Punctuation is not a stopword — the tokenizer strips it
+// (tokens are alphanumeric runs).
+var duplicateStopwords = map[string]struct{}{
+	"a": {}, "an": {}, "and": {}, "as": {}, "are": {}, "at": {}, "be": {},
+	"by": {}, "for": {}, "from": {}, "in": {}, "is": {}, "it": {}, "on": {},
+	"or": {}, "the": {}, "to": {}, "was": {}, "with": {},
+}
+
+// normalizeTitle is the canonical comparison form for duplicate detection:
+// lowercased + trimmed (ARCHITECTURE §4's "normalized-equal title").
+func normalizeTitle(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// significantTokens splits a NORMALIZED title (normalizeTitle's output — it
+// must already be lowercase and trimmed) into alphanumeric runs, drops
+// stopwords, and returns the surviving set. Runs are split on any run of other
+// characters, so punctuation never leaks into a token ("auth!" → "auth").
+func significantTokens(normalizedTitle string) map[string]struct{} {
+	tokens := make(map[string]struct{})
+	var run []rune
+	flush := func() {
+		if len(run) > 0 {
+			token, r := string(run), []rune(nil)
+			run = r
+			if _, stop := duplicateStopwords[token]; !stop {
+				tokens[token] = struct{}{}
+			}
+		}
+	}
+	for _, c := range normalizedTitle {
+		if unicode.IsLetter(c) || unicode.IsDigit(c) {
+			run = append(run, c)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return tokens
+}
+
+// titleSimilarity ranks a candidate against a query on an integer scale (higher
+// = more similar; 0 = not a candidate). Both normalized forms are
+// normalizeTitle output:
+//
+//	3 — normalized-equal titles ("Refactor auth" vs " refactor auth ")
+//	2 — one normalized title contains the other, either direction
+//	   ("refactor auth" ⊂ "refactor authentication")
+//	1 — at least half of the query's significant tokens occur in the candidate
+//	   ("refactor auth!" vs "refactor authorization flow": both carry "refactor")
+//	0 — no containment and fewer than half the query's tokens shared
+func titleSimilarity(queryNorm, candNorm string, qTokens, cTokens map[string]struct{}) int {
+	if queryNorm == "" {
+		return 0 // nothing to match on
+	}
+	if candNorm == queryNorm {
+		return 3
+	}
+	if strings.Contains(candNorm, queryNorm) || strings.Contains(queryNorm, candNorm) {
+		return 2
+	}
+	if len(qTokens) > 0 {
+		shared := 0
+		for tok := range qTokens {
+			if _, ok := cTokens[tok]; ok {
+				shared++
+			}
+		}
+		if 2*shared >= len(qTokens) { // ≥ half of the query's significant tokens
+			return 1
+		}
+	}
+	return 0
 }
 
 // dueAtJSON renders an optional deadline for event payloads: RFC3339 or null.
