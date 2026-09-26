@@ -1,7 +1,8 @@
 // Command crowban-server is composition root 1 for crowban (ARCHITECTURE §2):
 // env/flag config → SQLite open + migrations → stdlib net/http ServeMux.
 //
-// This slice wires only what exists yet: the database and the HTTP server
+// This slice wires what exists yet: the database, the transactional seam
+// (SQLiteUnitOfWork) with the Projects use case on top, and the HTTP server
 // exposing GET /healthz (the exact contract from ARCHITECTURE §8) plus a
 // placeholder root. The REST API (internal/api), bearer-token auth, and the
 // built web UI land in later slices — CROWBAN_TOKEN is accepted here but not
@@ -23,6 +24,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mrhollen/crowban/internal/application"
+	"github.com/mrhollen/crowban/internal/infrastructure/clock"
+	"github.com/mrhollen/crowban/internal/infrastructure/idgen"
 	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
 )
 
@@ -56,6 +60,14 @@ func main() {
 			logger.Error("closing database", "err", err)
 		}
 	}()
+
+	// Slice 2A: the UnitOfWork seam and the Projects use case are composed so
+	// the application-layer composition is proven to compile and run. Slice 3
+	// mounts them behind /api/v1 routes; until then they exist for wiring only.
+	uow := sqlite.NewUnitOfWork(db)
+	projects := application.NewProjects(uow, clock.New(), idgen.New())
+	logger.Info("application layer wired", "uow", "sqlite", "use_cases", []string{"projects"})
+	_ = projects
 
 	srv := &http.Server{
 		Addr:              *addr,

@@ -28,11 +28,12 @@ import (
 //     *domain.ClaimConflictError (see internal/domain/errors.go).
 //   - All timestamps cross the storage boundary as RFC3339 UTC strings
 //     (ARCHITECTURE §4); adapters convert.
-//   - Transactional note: create_task must write the task row, its initial
-//     criteria, and its relations atomically (ARCHITECTURE §5). The exact seam
-//     for that is a later-slice decision (context-carried tx handle vs.
-//     composite repository methods); use cases must stay agnostic to whichever
-//     lands.
+//   - Transactional note: every atomic group of writes (e.g. create_task's
+//     task row + initial criteria + relations, ARCHITECTURE §5) runs inside one
+//     UnitOfWork.Run (uow.go), which executes the work in a single database
+//     transaction. RULE: every mutation's EventStore.Append happens in the SAME
+//     transaction as the write it records — data and event commit or roll back
+//     together. Use cases stay agnostic to how transactions are implemented.
 
 // Clock returns "now" for any operation that needs the current instant, so
 // use cases never call time.Now directly and tests can control time.
@@ -54,8 +55,9 @@ type IDGenerator interface {
 type ProjectRepository interface {
 	Create(ctx context.Context, p domain.Project) error
 	Get(ctx context.Context, id domain.ID) (domain.Project, error)
-	// List returns all projects in stable name ASC order. Per-status task
-	// counts are computed by use cases from TaskRepository, not here.
+	// List returns all projects ordered by created_at ASC (id ASC as
+	// deterministic tie-break). Per-status task counts are computed by use
+	// cases from TaskRepository, not here.
 	List(ctx context.Context) ([]domain.Project, error)
 	// Update renames and/or rewrites the description; it is not
 	// version-guarded (the project row has no version column).
@@ -130,9 +132,9 @@ type TaskRepository interface {
 	Heartbeat(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time) (domain.Task, error)
 }
 
-// AcceptanceRepository persists a task's ordered acceptance-criteria checklist.
-// Toggling never bumps the task version (child-row rule).
-type AcceptanceRepository interface {
+// AcceptanceCriterionRepository persists a task's ordered acceptance-criteria
+// checklist. Toggling never bumps the task version (child-row rule).
+type AcceptanceCriterionRepository interface {
 	// Create stores initial criteria for a freshly created task; the caller
 	// sets IDs and dense 1-based Seq values.
 	Create(ctx context.Context, criteria []domain.AcceptanceCriterion) error

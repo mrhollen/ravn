@@ -82,9 +82,9 @@ func TestKindsValid(t *testing.T) {
 	check("ArtifactKind", func(s string) bool { return ArtifactKind(s).Valid() },
 		[]string{
 			string(ArtifactLog), string(ArtifactScreenshot), string(ArtifactCommandOutput),
-			string(ArtifactTrace), string(ArtifactURL),
+			string(ArtifactTrace), string(ArtifactURL), string(ArtifactOther),
 		},
-		[]string{"other", "file", ""})
+		[]string{"file", ""})
 
 	check("RelationKind", func(s string) bool { return RelationKind(s).Valid() },
 		[]string{
