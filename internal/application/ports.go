@@ -4,9 +4,9 @@
 // internal/infrastructure/** and are wired into these interfaces by the cmd/*
 // composition roots.
 //
-// This slice defines the ports only; the use cases themselves (projects,
-// tasks, claim, comments, acceptance, artifacts, relations) land in later
-// slices and plug straight into these signatures.
+// Slices 2A/2B have landed the Projects and Tasks use cases against these
+// ports; the remaining ones (claim, comments, acceptance toggles, artifacts,
+// relations) land in later slices and plug straight into the same signatures.
 package application
 
 import (
@@ -78,7 +78,15 @@ type TaskFilter struct {
 	AssigneeType domain.ActorType // "" = any durable assignee type
 	AssigneeName string           // "" = any durable assignee name
 
-	UnblockedOnly bool // restrict to tasks with no open (non-done) blocked-by target
+	// Archived selects which archive state is listed: false (zero value) =
+	// open tasks only, the REST default; true = archived tasks only.
+	Archived bool
+
+	// UnblockedOnly restricts to tasks with no open (non-done) blocked-by
+	// target. DEFERRED to slice 2D — relation-dependent filtering needs the
+	// relation repository and is intentionally not implemented yet; adapters
+	// must ignore it (with a TODO), not fail on it, until then.
+	UnblockedOnly bool
 
 	Q string // case-insensitive LIKE over title+description+notes
 
@@ -101,9 +109,12 @@ type TaskFilter struct {
 //   - Claim/Release/Heartbeat encode the atomic lease CAS; losers and
 //     non-holders get *domain.ClaimConflictError carrying holder + expiry.
 type TaskRepository interface {
-	// Create stores a new task; t.Version must be 0 and CreatedAt/UpdatedAt
-	// set by the caller. Initial criteria/relations are written by their own
-	// ports in the same logical transaction (see package note).
+	// Create stores a new task exactly as given: IDs and timestamps are
+	// minted/stamped by the use case (ADR), which sets Version = 1 for fresh
+	// rows. The write is idempotent by unique ID — re-inserting an existing
+	// ID leaves the stored row untouched and returns nil, so agent retries
+	// cannot corrupt state. Initial criteria/relations are written by their
+	// own ports in the same logical transaction (see package note).
 	Create(ctx context.Context, t domain.Task) error
 
 	Get(ctx context.Context, id domain.ID) (domain.Task, error)

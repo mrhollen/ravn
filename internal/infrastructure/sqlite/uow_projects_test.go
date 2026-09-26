@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -168,8 +169,9 @@ func TestUnitOfWork_RollbackOnFNFError_CommitsNothing(t *testing.T) {
 }
 
 // TestUnitOfWork_ReposAreBoundToTransaction asserts the UoW hands fn
-// transaction-bound repositories: a stub repository error raised inside fn
-// surfaces and its writes do not persist even for the ports used directly.
+// transaction-bound repositories: every port is wired and a live call inside
+// fn (TaskRepository.Get on an unknown id — real since slice 2B) surfaces its
+// genuine domain error instead of a stub.
 func TestUnitOfWork_ReposAreBoundToTransaction(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -177,18 +179,27 @@ func TestUnitOfWork_ReposAreBoundToTransaction(t *testing.T) {
 
 	var r application.Repos
 	err := uow.Run(ctx, &r, func() error {
-		if r.Tasks == nil || r.ACs == nil || r.Comments == nil || r.Artifacts == nil || r.Relations == nil {
-			return errors.New("stub repositories not wired into Repos")
+		if r.Projects == nil || r.Tasks == nil || r.ACs == nil || r.Comments == nil ||
+			r.Artifacts == nil || r.Relations == nil || r.Events == nil {
+			return errors.New("repositories not wired into Repos")
 		}
-		_, gerr := r.Tasks.Get(ctx, "any-id") // stub: "implemented in 2B" error
-		return gerr
+		gerr := probeBoundRepo(r, ctx)
+		if gerr != nil {
+			return fmt.Errorf("live call inside Run failed: %w", gerr)
+		}
+		return nil
 	})
-	if err == nil {
-		t.Fatal("stub TaskRepository.Get returned nil, want its not-implemented error")
+	if err != nil {
+		t.Fatalf("Run with live repository calls: %v", err)
 	}
-	for _, frag := range []string{"not implemented yet", "2B"} {
-		if !strings.Contains(err.Error(), frag) {
-			t.Errorf("stub error %q missing %q", err, frag)
-		}
+}
+
+// probeBoundRepo makes one read-only call through a wired port from inside the
+// transaction and asserts its genuine result: an unknown task id must surface
+// as domain.ErrNotFound (proving the repo is bound to a live DB, not a stub).
+func probeBoundRepo(r application.Repos, ctx context.Context) error {
+	if _, gerr := r.Tasks.Get(ctx, "any-id"); !errors.Is(gerr, domain.ErrNotFound) {
+		return fmt.Errorf("TaskRepository.Get(unknown) = %v, want domain.ErrNotFound", gerr)
 	}
+	return nil
 }
