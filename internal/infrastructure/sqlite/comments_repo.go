@@ -76,6 +76,17 @@ func (r *commentRepo) ListByTask(ctx context.Context, taskID domain.ID, limit, o
 	return out, rows.Err()
 }
 
+// CountByTask returns the total comment count for a task (before paging) — the
+// `total` of the paged GET /tasks/{id}/comments envelope. The idx_comment_task
+// index covers the predicate, so this is an index-only scan.
+func (r *commentRepo) CountByTask(ctx context.Context, taskID domain.ID) (int64, error) {
+	var n int64
+	if err := r.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM comment WHERE task_id = ?`, string(taskID)).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count comments for task %s: %w", taskID, err)
+	}
+	return n, nil
+}
+
 // scanComment maps one row (in commentColumns order) to a domain.Comment.
 func scanComment(s scanner) (domain.Comment, error) {
 	var (

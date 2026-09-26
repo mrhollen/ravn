@@ -473,6 +473,11 @@ func (f *fakeComments) Add(_ context.Context, c domain.Comment) error {
 	return nil
 }
 
+// CountByTask returns the stored comment count for a task (before paging).
+func (f *fakeComments) CountByTask(_ context.Context, taskID domain.ID) (int64, error) {
+	return int64(len(f.byTask[taskID])), nil
+}
+
 // ListByTask returns up to limit comments newest first (created_at DESC,
 // insertion order as tie-break), skipping offset; limit <= 0 is unbounded.
 func (f *fakeComments) ListByTask(_ context.Context, taskID domain.ID, limit, offset int) ([]domain.Comment, error) {

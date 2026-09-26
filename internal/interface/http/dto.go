@@ -109,12 +109,31 @@ type acDTO struct {
 	CompletedAt *string   `json:"completed_at,omitempty"`
 }
 
+func toAC(c domain.AcceptanceCriterion) acDTO {
+	dto := acDTO{Seq: c.Seq, Text: c.Text, Done: c.Done, Note: c.Note, CompletedBy: toActor(c.CompletedBy)}
+	if c.CompletedAt != nil {
+		v := rfc3339(*c.CompletedAt)
+		dto.CompletedAt = &v
+	}
+	return dto
+}
+
 type commentDTO struct {
 	ID        string   `json:"id"`
 	Kind      string   `json:"kind"`
 	Body      string   `json:"body"`
 	Actor     actorDTO `json:"actor"`
 	CreatedAt string   `json:"created_at"`
+}
+
+func toComment(c domain.Comment) commentDTO {
+	return commentDTO{
+		ID:        c.ID.String(),
+		Kind:      string(c.Kind),
+		Body:      c.Body,
+		Actor:     actorDTO{Type: string(c.Actor.Type), Name: c.Actor.Name},
+		CreatedAt: rfc3339(c.CreatedAt),
+	}
 }
 
 type artifactDTO struct {
@@ -126,6 +145,17 @@ type artifactDTO struct {
 	CreatedAt string   `json:"created_at"`
 }
 
+func toArtifact(a domain.Artifact) artifactDTO {
+	return artifactDTO{
+		ID:        a.ID.String(),
+		Kind:      string(a.Kind),
+		Ref:       a.Ref,
+		Summary:   a.Summary,
+		Actor:     actorDTO{Type: string(a.Actor.Type), Name: a.Actor.Name},
+		CreatedAt: rfc3339(a.CreatedAt),
+	}
+}
+
 // relationDTO is a raw edge touching the task in either direction. The edge's
 // own id is intentionally omitted: relations are addressed on the wire by the
 // composite (task, other_task, kind), so agents never need to remember
@@ -135,6 +165,18 @@ type relationDTO struct {
 	OtherTaskID string `json:"other_task_id"`
 	Kind        string `json:"kind"`
 	CreatedAt   string `json:"created_at"`
+}
+
+// toRelation renders one stored edge. The kind is ALWAYS the stored (canonical)
+// kind — the 'parent' tool-boundary alias never appears in a persisted row, so
+// it never appears here either.
+func toRelation(r domain.Relation) relationDTO {
+	return relationDTO{
+		TaskID:      r.TaskID.String(),
+		OtherTaskID: r.OtherTaskID.String(),
+		Kind:        string(r.Kind),
+		CreatedAt:   rfc3339(r.CreatedAt),
+	}
 }
 
 // eventDTO is one activity-log entry; Before/After are the compact JSON
@@ -178,45 +220,22 @@ func toDetail(d application.TaskDetail) taskDetailDTO {
 
 	out.AcceptanceCriteria = make([]acDTO, 0, len(d.AcceptanceCriteria))
 	for _, c := range d.AcceptanceCriteria {
-		dto := acDTO{Seq: c.Seq, Text: c.Text, Done: c.Done, Note: c.Note, CompletedBy: toActor(c.CompletedBy)}
-		if c.CompletedAt != nil {
-			v := rfc3339(*c.CompletedAt)
-			dto.CompletedAt = &v
-		}
-		out.AcceptanceCriteria = append(out.AcceptanceCriteria, dto)
+		out.AcceptanceCriteria = append(out.AcceptanceCriteria, toAC(c))
 	}
 
 	out.Comments = make([]commentDTO, 0, len(d.Comments))
 	for _, c := range d.Comments {
-		out.Comments = append(out.Comments, commentDTO{
-			ID:        c.ID.String(),
-			Kind:      string(c.Kind),
-			Body:      c.Body,
-			Actor:     actorDTO{Type: string(c.Actor.Type), Name: c.Actor.Name},
-			CreatedAt: rfc3339(c.CreatedAt),
-		})
+		out.Comments = append(out.Comments, toComment(c))
 	}
 
 	out.Artifacts = make([]artifactDTO, 0, len(d.Artifacts))
 	for _, a := range d.Artifacts {
-		out.Artifacts = append(out.Artifacts, artifactDTO{
-			ID:        a.ID.String(),
-			Kind:      string(a.Kind),
-			Ref:       a.Ref,
-			Summary:   a.Summary,
-			Actor:     actorDTO{Type: string(a.Actor.Type), Name: a.Actor.Name},
-			CreatedAt: rfc3339(a.CreatedAt),
-		})
+		out.Artifacts = append(out.Artifacts, toArtifact(a))
 	}
 
 	out.Relations = make([]relationDTO, 0, len(d.Relations))
 	for _, r := range d.Relations {
-		out.Relations = append(out.Relations, relationDTO{
-			TaskID:      r.TaskID.String(),
-			OtherTaskID: r.OtherTaskID.String(),
-			Kind:        string(r.Kind),
-			CreatedAt:   rfc3339(r.CreatedAt),
-		})
+		out.Relations = append(out.Relations, toRelation(r))
 	}
 
 	out.Events = make([]eventDTO, 0, len(d.Events))
@@ -384,4 +403,82 @@ type updateTaskReq struct {
 	Assignee      *actorInput `json:"assignee"`
 	ClearAssignee bool        `json:"clear_assignee"`
 	Archived      *bool       `json:"archived"`
+}
+
+// --- slice 3b request bodies ------------------------------------------------------
+
+// claimReq is POST /tasks/{id}/claim. Actor required; TTLSec optional —
+// omitted/0 → server default (900s), negative → 400, values above the cap are
+// clamped to 3600 by the use case.
+type claimReq struct {
+	Actor  actorInput `json:"actor"`
+	TTLSec *int       `json:"ttl_sec"`
+}
+
+// releaseReq is POST /tasks/{id}/release. The optional note rides on the
+// released event payload (it does NOT become a comment).
+type releaseReq struct {
+	Actor actorInput `json:"actor"`
+	Note  string     `json:"note"`
+}
+
+// heartbeatReq is POST /tasks/{id}/heartbeat — keep-alive; the actor alone.
+type heartbeatReq struct {
+	Actor actorInput `json:"actor"`
+}
+
+// commentReq is POST /tasks/{id}/comments. Kind must be one of
+// progress|question|decision|handoff|note (else 400); Body is markdown and
+// must not be empty after trimming (else 400).
+type commentReq struct {
+	Actor actorInput `json:"actor"`
+	Kind  string     `json:"kind"`
+	Body  string     `json:"body"`
+}
+
+// notesReq is PUT /tasks/{id}/notes — whole-blob replace. NO version field:
+// the endpoint takes no caller-supplied base version (see handleUpdateNotes);
+// an interlocking concurrent write still surfaces as 409 from the use case's
+// internal read-then-write guard.
+type notesReq struct {
+	Actor actorInput `json:"actor"`
+	Notes string     `json:"notes"`
+}
+
+// acToggleReq is PATCH /tasks/{id}/acceptance-criteria/{seq}. Done sets/clears
+// the checkbox; Note optionally records why (stored on the criterion).
+type acToggleReq struct {
+	Actor actorInput `json:"actor"`
+	Done  bool       `json:"done"`
+	Note  string     `json:"note"`
+}
+
+// artifactReq is POST /tasks/{id}/artifacts. Kind must be one of
+// log|screenshot|command-output|trace|url|other (else 400); Ref is the URL or
+// filesystem path and must not be empty after trimming (else 400); Summary is
+// an optional one-liner.
+type artifactReq struct {
+	Actor   actorInput `json:"actor"`
+	Kind    string     `json:"kind"`
+	Ref     string     `json:"ref"`
+	Summary string     `json:"summary"`
+}
+
+// relateReq is POST /tasks/{id}/relations. Kind is any tool-boundary value —
+// child|parent|blocked-by|duplicate-of|related (else 400); the 'parent' alias
+// is normalized server-side to the inverse child edge. OtherID must name a
+// task of the SAME project (cross-project → 400) and may not equal {id}
+// (self-relation → 400).
+type relateReq struct {
+	Actor   actorInput `json:"actor"`
+	OtherID string     `json:"other_id"`
+	Kind    string     `json:"kind"`
+}
+
+// removeRelationReq is the body of DELETE /tasks/{id}/relations/{other_id}/
+// {kind}. The edge itself is keyed by the path; the body carries only the
+// actor, which is REQUIRED — a relation removal appends an event that must
+// record who removed it (400 when absent or invalid).
+type removeRelationReq struct {
+	Actor actorInput `json:"actor"`
 }

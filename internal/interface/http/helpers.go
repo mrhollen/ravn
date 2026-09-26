@@ -192,6 +192,33 @@ func parseTimeParam(v, name string) (*time.Time, error) {
 	return &t, nil
 }
 
+// parsePageParams translates the offset/limit query params of paged child-row
+// reads (GET /tasks/{id}/comments). Same policy as list_tasks: limit defaults
+// to 20 and is clamped to 100 (values above the cap are NOT an error); offset
+// defaults to 0. The returned values are the EFFECTIVE ones — echo them in the
+// response envelope like list_tasks does. Malformed input → domain.ErrInvalid
+// (→ 400).
+func parsePageParams(q urlValues) (limit, offset int, err error) {
+	limit = defaultListLimit
+	if v := q.Get("limit"); v != "" {
+		limit, err = strconv.Atoi(v)
+		if err != nil || limit <= 0 {
+			return 0, 0, fmt.Errorf("%w: limit must be a positive integer, got %q", domain.ErrInvalid, v)
+		}
+		if limit > maxListLimit {
+			limit = maxListLimit // clamped, not rejected (use-case contract)
+		}
+	}
+	offset = 0
+	if v := q.Get("offset"); v != "" {
+		offset, err = strconv.Atoi(v)
+		if err != nil || offset < 0 {
+			return 0, 0, fmt.Errorf("%w: offset must be a non-negative integer, got %q", domain.ErrInvalid, v)
+		}
+	}
+	return limit, offset, nil
+}
+
 // parseTailLimit parses the optional "tail" limits on detail reads
 // (comment_limit / event_limit). Absent or non-positive selects the use-case
 // default; values above the cap are clamped by the use case. Negative or

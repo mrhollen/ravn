@@ -7,7 +7,7 @@ const apiPrefix = "/api/v1"
 // RegisterRoutes mounts the REST surface on mux. Patterns use Go 1.22's
 // method+wildcard syntax, so the stdlib mux answers unknown methods with a
 // proper 405 (Allow header) for free. This is the single place to read the
-// whole slice-3a API:
+// whole API:
 //
 //	GET   /api/v1/projects              list projects + per-status open task counts
 //	POST  /api/v1/projects              create project → 201
@@ -18,6 +18,16 @@ const apiPrefix = "/api/v1"
 //	POST  /api/v1/tasks                 create task (+ACs) → 201 with possible_duplicates advisory
 //	GET   /api/v1/tasks/{id}            one-call resume payload (task+ACs+comments+artifacts+relations+events+blocked)
 //	PATCH /api/v1/tasks/{id}            version-guarded partial update → 200 fresh task; 409 with current_version + current task
+//	POST  /api/v1/tasks/{id}/claim      claim lease (CAS) → 200 fresh task doing; 409 claim conflict (holder+expiry)
+//	POST  /api/v1/tasks/{id}/release    release lease (holder-only) → 200 fresh task todo; 409 not the holder
+//	POST  /api/v1/tasks/{id}/heartbeat  extend lease (keep-alive, no version bump) → 200 fresh task; 409 conflict
+//	POST  /api/v1/tasks/{id}/comments   append typed comment → 201 comment
+//	GET   /api/v1/tasks/{id}/comments   paged thread newest first + total (UI extra)
+//	PUT   /api/v1/tasks/{id}/notes      replace notes blob (no base-version check) → 200 fresh task
+//	PATCH /api/v1/tasks/{id}/acceptance-criteria/{seq}   toggle one AC → 200 updated row; 404 unknown seq
+//	POST  /api/v1/tasks/{id}/artifacts  attach evidence → 201 artifact
+//	POST  /api/v1/tasks/{id}/relations  add edge (upsert) → 201 new / 200 re-add; 409 parent conflict
+//	DELETE /api/v1/tasks/{id}/relations/{other_id}/{kind}   remove edge → 204; 404 missing edge
 func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("GET "+apiPrefix+"/projects", app.handleListProjects)
 	mux.HandleFunc("POST "+apiPrefix+"/projects", app.handleCreateProject)
@@ -29,4 +39,15 @@ func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("POST "+apiPrefix+"/tasks", app.handleCreateTask)
 	mux.HandleFunc("GET "+apiPrefix+"/tasks/{id}", app.handleGetTask)
 	mux.HandleFunc("PATCH "+apiPrefix+"/tasks/{id}", app.handleUpdateTask)
+
+	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/claim", app.handleClaimTask)
+	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/release", app.handleReleaseTask)
+	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/heartbeat", app.handleHeartbeat)
+	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/comments", app.handleAddComment)
+	mux.HandleFunc("GET "+apiPrefix+"/tasks/{id}/comments", app.handleListComments)
+	mux.HandleFunc("PUT "+apiPrefix+"/tasks/{id}/notes", app.handleUpdateNotes)
+	mux.HandleFunc("PATCH "+apiPrefix+"/tasks/{id}/acceptance-criteria/{seq}", app.handleToggleAC)
+	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/artifacts", app.handleAttachArtifact)
+	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/relations", app.handleAddRelation)
+	mux.HandleFunc("DELETE "+apiPrefix+"/tasks/{id}/relations/{other_id}/{kind}", app.handleRemoveRelation)
 }

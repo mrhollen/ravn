@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mrhollen/crowban/internal/application"
@@ -587,6 +588,545 @@ func TestErrorMappingBasics(t *testing.T) {
 	e := mustDecode[errResp](t, body)
 	if e.Error != "invalid input" || e.Message == "" {
 		t.Fatalf("broken-JSON error = %+v, want invalid input with a message", e)
+	}
+}
+
+// getDetail fetches the resume payload (GET /tasks/{id}) — the canonical way
+// these tests verify child-row state that summary rows do not carry.
+func getDetail(t *testing.T, stk stack, id string) taskDetailDTO {
+	t.Helper()
+	code, b := doReq(t, stk.Handler, "GET", "/api/v1/tasks/"+id, nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /tasks/%s = %d, want 200 (body %s)", id, code, string(b))
+	}
+	return mustDecode[taskDetailDTO](t, b)
+}
+
+func TestClaimLifecycle(t *testing.T) {
+	stk := newStack(t)
+	p := createProject(t, stk, "Claims")
+	task := newTask(t, stk, p.ID, "claimable work") // version 1
+
+	// A claims → 200 fresh task: doing, version bumped, lease fields set.
+	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
+		"actor": actor("agent-a"),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("A claim = %d, want 200 (body %s)", code, string(body))
+	}
+	got := mustDecode[taskSummaryDTO](t, body)
+	if got.Status != "doing" || got.Version != 2 {
+		t.Fatalf("A claim → %+v, want doing at version 2", got)
+	}
+	if got.ClaimedBy == nil || got.ClaimedBy.Name != "agent-a" || got.ClaimExpiresAt == nil {
+		t.Fatalf("claim summary lease = holder %v expires %v, want agent-a + expiry", got.ClaimedBy, got.ClaimExpiresAt)
+	}
+
+	// get_task confirms the lease and that the DURABLE assignee is untouched.
+	d := getDetail(t, stk, task.ID)
+	if d.Status != "doing" || d.ClaimedBy == nil || d.ClaimedBy.Name != "agent-a" {
+		t.Fatalf("detail after claim = status %s holder %+v, want doing / agent-a", d.Status, d.ClaimedBy)
+	}
+	if d.Assignee != nil {
+		t.Fatalf("claim touched the durable assignee: %+v", d.Assignee)
+	}
+	if d.ClaimTTLSeconds != 900 { // ttl_sec omitted → server default
+		t.Fatalf("default claim ttl = %d, want 900", d.ClaimTTLSeconds)
+	}
+
+	// B claims → 409 claim conflict with holder=A and the expiry.
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
+		"actor": actor("agent-b"),
+	})
+	if code != http.StatusConflict {
+		t.Fatalf("B claim (held by A) = %d, want 409 (body %s)", code, string(body))
+	}
+	e := mustDecode[errResp](t, body)
+	if e.Error != "claim conflict" || e.Holder == nil || e.Holder.Name != "agent-a" || e.ExpiresAt == "" {
+		t.Fatalf("409 claim body = %+v, want error \"claim conflict\" holder agent-a with expiry", e)
+	}
+
+	// B heartbeats → 409 (not the active holder).
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/heartbeat", map[string]any{
+		"actor": actor("agent-b"),
+	})
+	if code != http.StatusConflict {
+		t.Fatalf("B heartbeat (not holder) = %d, want 409", code)
+	}
+
+	// A heartbeats → 200, still doing, NO version bump.
+	before := getDetail(t, stk, task.ID).Version
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/heartbeat", map[string]any{
+		"actor": actor("agent-a"),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("A heartbeat = %d, want 200 (body %s)", code, string(body))
+	}
+	got = mustDecode[taskSummaryDTO](t, body)
+	if got.Status != "doing" || got.Version != before {
+		t.Fatalf("heartbeat → %+v (was v%d), want still doing at version %d", got, before, before)
+	}
+
+	// B releases → 409 (holder-only).
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/release", map[string]any{
+		"actor": actor("agent-b"), "note": "not mine",
+	})
+	if code != http.StatusConflict {
+		t.Fatalf("B release (not holder) = %d, want 409", code)
+	}
+
+	// A releases → 200: todo, lease cleared, version bumped.
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/release", map[string]any{
+		"actor": actor("agent-a"), "note": "back to the pool",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("A release = %d, want 200 (body %s)", code, string(body))
+	}
+	got = mustDecode[taskSummaryDTO](t, body)
+	if got.Status != "todo" || got.ClaimedBy != nil || got.Version != 3 {
+		t.Fatalf("release → %+v, want todo unclaimed at version 3", got)
+	}
+	d = getDetail(t, stk, task.ID)
+	if d.Status != "todo" || d.ClaimedBy != nil {
+		t.Fatalf("detail after release = status %s holder %+v, want todo unclaimed", d.Status, d.ClaimedBy)
+	}
+
+	// B claims after the release → 200 with an explicit ttl_sec override.
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
+		"actor": actor("agent-b"), "ttl_sec": 60,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("B claim after release = %d, want 200 (body %s)", code, string(body))
+	}
+	got = mustDecode[taskSummaryDTO](t, body)
+	if got.Status != "doing" || got.ClaimedBy == nil || got.ClaimedBy.Name != "agent-b" {
+		t.Fatalf("B claim → %+v, want doing held by agent-b", got)
+	}
+	d = getDetail(t, stk, task.ID)
+	if d.ClaimTTLSeconds != 60 {
+		t.Fatalf("ttl_sec override not honored: stored ttl %d, want 60", d.ClaimTTLSeconds)
+	}
+
+	// Negative ttl → 400; unknown task → 404.
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
+		"actor": actor("agent-a"), "ttl_sec": -5,
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("claim with negative ttl = %d, want 400", code)
+	}
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/claim", map[string]any{
+		"actor": actor("agent-a"),
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("claim on unknown task = %d, want 404", code)
+	}
+}
+
+func TestCommentsAddListAndErrors(t *testing.T) {
+	stk := newStack(t)
+	p := createProject(t, stk, "Threads")
+	task := newTask(t, stk, p.ID, "discussed work")
+
+	kinds := []struct{ kind, body string }{
+		{"progress", "ran the build — green"},
+		{"question", "should we also update the docs?"},
+		{"decision", "using offset pagination for comments"},
+		{"handoff", "@bob picking this up next"},
+		{"note", "context: this is the MVP thread"},
+	}
+	for _, k := range kinds { // every valid kind → 201 fresh comment
+		code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/comments", map[string]any{
+			"actor": actor("ada"), "kind": k.kind, "body": k.body,
+		})
+		if code != http.StatusCreated {
+			t.Fatalf("POST /comments (%s) = %d, want 201 (body %s)", k.kind, code, string(body))
+		}
+		c := mustDecode[commentDTO](t, body)
+		if c.ID == "" || c.Kind != k.kind || c.Body != k.body || c.Actor.Name != "ada" || c.CreatedAt == "" {
+			t.Fatalf("201 comment = %+v, want kind %s body %q actor ada", c, k.kind, k.body)
+		}
+	}
+
+	type page struct {
+		Comments []commentDTO `json:"comments"`
+		Total    int64        `json:"total"`
+		Limit    int          `json:"limit"`
+		Offset   int          `json:"offset"`
+	}
+	decodePage := func(b []byte) page {
+		var pg page
+		if err := json.Unmarshal(b, &pg); err != nil {
+			t.Fatalf("decode comment list %q: %v", string(b), err)
+		}
+		return pg
+	}
+
+	// GET list: newest first + total (before paging) + effective limit/offset.
+	code, body := doReq(t, stk.Handler, "GET", "/api/v1/tasks/"+task.ID+"/comments?limit=3", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /comments = %d, want 200 (body %s)", code, string(body))
+	}
+	pg := decodePage(body)
+	if pg.Total != 5 || len(pg.Comments) != 3 || pg.Limit != 3 || pg.Offset != 0 {
+		t.Fatalf("comment page = total %d rows %d limit %d offset %d, want 5/3/3/0", pg.Total, len(pg.Comments), pg.Limit, pg.Offset)
+	}
+	for i, want := range []string{kinds[4].body, kinds[3].body, kinds[2].body} { // newest first
+		if pg.Comments[i].Body != want {
+			t.Fatalf("page[?limit=3] row %d = %q, want %q (newest first)", i, pg.Comments[i].Body, want)
+		}
+	}
+
+	code, body = doReq(t, stk.Handler, "GET", "/api/v1/tasks/"+task.ID+"/comments?limit=2&offset=3", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /comments offset = %d, want 200", code)
+	}
+	pg = decodePage(body)
+	if pg.Total != 5 || len(pg.Comments) != 2 || pg.Offset != 3 {
+		t.Fatalf("comment page offset=3 = total %d rows %d, want 5/2", pg.Total, len(pg.Comments))
+	}
+	if pg.Comments[0].Body != kinds[1].body || pg.Comments[1].Body != kinds[0].body {
+		t.Fatalf("page[limit=2&offset=3] = %+v, want the two oldest newest-first", pg.Comments)
+	}
+
+	// The same thread is reflected in get_task's comment tail (default limit 10).
+	d := getDetail(t, stk, task.ID)
+	if len(d.Comments) != 5 {
+		t.Fatalf("get_task comments = %d rows, want 5", len(d.Comments))
+	}
+	if d.Comments[0].Body != kinds[4].body || d.Comments[4].Body != kinds[0].body {
+		t.Fatalf("get_task comment tail order wrong: first %q last %q", d.Comments[0].Body, d.Comments[4].Body)
+	}
+
+	// Empty body → 400; bad kind → 400; unknown task → 404 (POST and GET).
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/comments", map[string]any{
+		"actor": actor("ada"), "kind": "note", "body": "   ",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("empty comment body = %d, want 400", code)
+	}
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/comments", map[string]any{
+		"actor": actor("ada"), "kind": "rant", "body": "x",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("bad comment kind = %d, want 400", code)
+	}
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/comments", map[string]any{
+		"actor": actor("ada"), "kind": "note", "body": "x",
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("comment on unknown task = %d, want 404", code)
+	}
+	code, _ = doReq(t, stk.Handler, "GET", "/api/v1/tasks/0734567890abcdefghij00000000/comments", nil)
+	if code != http.StatusNotFound {
+		t.Fatalf("list comments of unknown task = %d, want 404", code)
+	}
+}
+
+func TestNotesReplaceOnWrite(t *testing.T) {
+	stk := newStack(t)
+	p := createProject(t, stk, "Scratchpad")
+	task := newTask(t, stk, p.ID, "noted work") // version 1, empty notes
+
+	// PUT replaces the whole blob; NO base-version field in the body.
+	code, body := doReq(t, stk.Handler, "PUT", "/api/v1/tasks/"+task.ID+"/notes", map[string]any{
+		"actor": actor("ada"), "notes": "state of the world: migration half-done",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("PUT /notes = %d, want 200 (body %s)", code, string(body))
+	}
+	got := mustDecode[taskSummaryDTO](t, body)
+	if got.Version != 2 {
+		t.Fatalf("PUT /notes → version %d, want 2", got.Version)
+	}
+	d := getDetail(t, stk, task.ID)
+	if d.Notes != "state of the world: migration half-done" || d.Version != 2 {
+		t.Fatalf("detail notes = %q at v%d, want the new blob at v2", d.Notes, d.Version)
+	}
+
+	// A second change bumps again.
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/tasks/"+task.ID+"/notes", map[string]any{
+		"actor": actor("agent-b"), "notes": "takeover: rolling back now",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("2nd PUT /notes = %d, want 200 (body %s)", code, string(body))
+	}
+	got = mustDecode[taskSummaryDTO](t, body)
+	if got.Version != 3 {
+		t.Fatalf("2nd PUT /notes → version %d, want 3", got.Version)
+	}
+
+	// Identical content is a no-op: fresh row returned WITHOUT another bump.
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/tasks/"+task.ID+"/notes", map[string]any{
+		"actor": actor("agent-b"), "notes": "takeover: rolling back now",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("no-op PUT /notes = %d, want 200 (body %s)", code, string(body))
+	}
+	got = mustDecode[taskSummaryDTO](t, body)
+	if got.Version != 3 {
+		t.Fatalf("identical-content PUT bumped to v%d, want it to stay at 3", got.Version)
+	}
+
+	// Unknown task → 404.
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/tasks/0734567890abcdefghij00000000/notes", map[string]any{
+		"actor": actor("ada"), "notes": "x",
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("PUT /notes unknown task = %d, want 404", code)
+	}
+	e := mustDecode[errResp](t, body)
+	if e.Error != "not found" || e.Resource != "task" {
+		t.Fatalf("notes 404 body = %+v, want not found / task", e)
+	}
+}
+
+func TestAcceptanceToggleAndErrors(t *testing.T) {
+	stk := newStack(t)
+	p := createProject(t, stk, "Checklist")
+	task := makeTask(t, stk, p.ID, "checklisted work", map[string]any{
+		"acceptance_criteria": []string{"login works", "logout works"},
+	})
+
+	// Toggle seq 1 on → 200 with the updated criterion row.
+	code, body := doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/1", map[string]any{
+		"actor": actor("ada"), "done": true, "note": "manual test passed",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("PATCH ac 1 = %d, want 200 (body %s)", code, string(body))
+	}
+	ac := mustDecode[acDTO](t, body)
+	if ac.Seq != 1 || !ac.Done || ac.Note != "manual test passed" ||
+		ac.CompletedBy == nil || ac.CompletedBy.Name != "ada" || ac.CompletedAt == nil {
+		t.Fatalf("updated AC = %+v, want seq 1 done with note + completer", ac)
+	}
+
+	// Reflected in get_task; the sibling criterion is untouched.
+	d := getDetail(t, stk, task.ID)
+	if len(d.AcceptanceCriteria) != 2 || !d.AcceptanceCriteria[0].Done || d.AcceptanceCriteria[1].Done {
+		t.Fatalf("detail ACs = %+v, want [0] done and [1] not", d.AcceptanceCriteria)
+	}
+
+	// Uncheck clears the completion fields again.
+	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/1", map[string]any{
+		"actor": actor("ada"), "done": false,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("uncheck ac 1 = %d, want 200 (body %s)", code, string(body))
+	}
+	ac = mustDecode[acDTO](t, body)
+	if ac.Done || ac.CompletedBy != nil || ac.CompletedAt != nil {
+		t.Fatalf("unchecked AC = %+v, want done=false with cleared completion fields", ac)
+	}
+	d = getDetail(t, stk, task.ID)
+	if d.AcceptanceCriteria[0].Done {
+		t.Fatalf("get_task still shows seq 1 done after uncheck")
+	}
+
+	// Bad seq → 404 (unknown criterion); non-numeric/zero seq → 400; unknown task → 404.
+	code, _ = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/99", map[string]any{
+		"actor": actor("ada"), "done": true,
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("PATCH ac seq 99 = %d, want 404", code)
+	}
+	for _, bad := range []string{"abc", "0"} {
+		code, _ = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/"+bad, map[string]any{
+			"actor": actor("ada"), "done": true,
+		})
+		if code != http.StatusBadRequest {
+			t.Fatalf("PATCH ac seq %q = %d, want 400", bad, code)
+		}
+	}
+	code, _ = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/0734567890abcdefghij00000000/acceptance-criteria/1", map[string]any{
+		"actor": actor("ada"), "done": true,
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("PATCH ac on unknown task = %d, want 404", code)
+	}
+}
+
+func TestArtifactAttachAndErrors(t *testing.T) {
+	stk := newStack(t)
+	p := createProject(t, stk, "Evidence")
+	task := newTask(t, stk, p.ID, "evidenced work")
+
+	// Attach → 201 fresh artifact.
+	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/artifacts", map[string]any{
+		"actor":   actor("agent-a"),
+		"kind":    "url",
+		"ref":     "https://example.com/reports/2026-09-26/deploy.json",
+		"summary": "deploy report for the fix",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("POST /artifacts = %d, want 201 (body %s)", code, string(body))
+	}
+	art := mustDecode[artifactDTO](t, body)
+	if art.Kind != "url" || art.Ref == "" || art.Summary == "" || art.Actor.Name != "agent-a" || art.CreatedAt == "" {
+		t.Fatalf("201 artifact = %+v, want url kind with ref+summary", art)
+	}
+
+	// Reflected in get_task's artifacts.
+	d := getDetail(t, stk, task.ID)
+	if len(d.Artifacts) != 1 || d.Artifacts[0].Ref != art.Ref || d.Artifacts[0].Summary != art.Summary {
+		t.Fatalf("get_task artifacts = %+v, want the attached row", d.Artifacts)
+	}
+
+	// summary is optional.
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/artifacts", map[string]any{
+		"actor": actor("human-x"), "kind": "log", "ref": "/var/log/crowban/build-42.log",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("POST /artifacts (no summary) = %d, want 201 (body %s)", code, string(body))
+	}
+
+	// Bad kind → 400; empty ref → 400; unknown task → 404.
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/artifacts", map[string]any{
+		"actor": actor("agent-a"), "kind": "photo", "ref": "x",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("bad artifact kind = %d, want 400", code)
+	}
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/artifacts", map[string]any{
+		"actor": actor("agent-a"), "kind": "url", "ref": "   ",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("empty artifact ref = %d, want 400", code)
+	}
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/artifacts", map[string]any{
+		"actor": actor("agent-a"), "kind": "url", "ref": "x",
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("artifact on unknown task = %d, want 404", code)
+	}
+}
+
+func TestRelationsLifecycle(t *testing.T) {
+	stk := newStack(t)
+	p := createProject(t, stk, "Graph")
+	parent := newTask(t, stk, p.ID, "parent task")
+	child := newTask(t, stk, p.ID, "child task")
+	secondParent := newTask(t, stk, p.ID, "second parent")
+
+	// Add child → 201 with the STORED edge (task_id=child, other_task_id=parent).
+	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": parent.ID, "kind": "child",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("add child relation = %d, want 201 (body %s)", code, string(body))
+	}
+	rel := mustDecode[relationDTO](t, body)
+	if rel.TaskID != child.ID || rel.OtherTaskID != parent.ID || rel.Kind != "child" {
+		t.Fatalf("stored relation = %+v, want child→parent edge", rel)
+	}
+
+	// Reflected in get_task's relations.
+	d := getDetail(t, stk, child.ID)
+	if len(d.Relations) != 1 || d.Relations[0].TaskID != child.ID || d.Relations[0].OtherTaskID != parent.ID {
+		t.Fatalf("get_task relations = %+v, want the child edge", d.Relations)
+	}
+
+	// Re-adding the SAME edge → 200 (idempotent upsert), same stored row.
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": parent.ID, "kind": "child",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("re-add existing edge = %d, want 200 (body %s)", code, string(body))
+	}
+	if got := mustDecode[relationDTO](t, body); got.TaskID != child.ID || got.OtherTaskID != parent.ID {
+		t.Fatalf("upsert response = %+v, want the existing stored row", got)
+	}
+
+	// A SECOND different parent → 409 parent conflict.
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": secondParent.ID, "kind": "child",
+	})
+	if code != http.StatusConflict {
+		t.Fatalf("second parent = %d, want 409 (body %s)", code, string(body))
+	}
+	e := mustDecode[errResp](t, body)
+	if e.Error != "parent conflict" || !strings.Contains(e.Message, "already has a parent") {
+		t.Fatalf("409 parent-conflict body = %+v, want error \"parent conflict\" naming the existing parent", e)
+	}
+
+	// Self-relation → 400; invalid kind → 400; unknown task (either end) → 404.
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": child.ID, "kind": "related",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("self-relation = %d, want 400", code)
+	}
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": parent.ID, "kind": "depends-on",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("invalid relation kind = %d, want 400", code)
+	}
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": "0734567890abcdefghij00000000", "kind": "related",
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("relation to unknown task = %d, want 404", code)
+	}
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/relations", map[string]any{
+		"actor": actor("eve"), "other_id": child.ID, "kind": "related",
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("relation from unknown task = %d, want 404", code)
+	}
+
+	// Cross-project pair → 400.
+	p2 := createProject(t, stk, "Other Project")
+	outside := newTask(t, stk, p2.ID, "outside task")
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": outside.ID, "kind": "related",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("cross-project relation = %d, want 400", code)
+	}
+
+	// Remove → 204; the edge is gone from get_task.
+	code, body = doReq(t, stk.Handler, "DELETE",
+		"/api/v1/tasks/"+child.ID+"/relations/"+parent.ID+"/child",
+		map[string]any{"actor": actor("eve")})
+	if code != http.StatusNoContent {
+		t.Fatalf("remove relation = %d, want 204 (body %s)", code, string(body))
+	}
+	d = getDetail(t, stk, child.ID)
+	if len(d.Relations) != 0 {
+		t.Fatalf("relations after remove = %+v, want empty", d.Relations)
+	}
+
+	// With the first parent gone, the second parent may now be added.
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": secondParent.ID, "kind": "child",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("second parent after removal = %d, want 201", code)
+	}
+
+	// Removing a MISSING edge → 404 (the first-parent edge is gone).
+	code, _ = doReq(t, stk.Handler, "DELETE",
+		"/api/v1/tasks/"+child.ID+"/relations/"+parent.ID+"/child",
+		map[string]any{"actor": actor("eve")})
+	if code != http.StatusNotFound {
+		t.Fatalf("remove missing edge = %d, want 404", code)
+	}
+
+	// Removal requires the actor in the body (the removal event records who).
+	code, _ = doReq(t, stk.Handler, "DELETE",
+		"/api/v1/tasks/"+child.ID+"/relations/"+secondParent.ID+"/child", nil)
+	if code != http.StatusBadRequest {
+		t.Fatalf("remove without actor body = %d, want 400", code)
+	}
+	code, _ = doReq(t, stk.Handler, "DELETE",
+		"/api/v1/tasks/"+child.ID+"/relations/"+secondParent.ID+"/child",
+		map[string]any{"actor": actor("eve")})
+	if code != http.StatusNoContent {
+		t.Fatalf("remove with actor = %d, want 204", code)
+	}
+	d = getDetail(t, stk, child.ID)
+	if len(d.Relations) != 0 {
+		t.Fatalf("relations after final remove = %+v, want empty", d.Relations)
 	}
 }
 

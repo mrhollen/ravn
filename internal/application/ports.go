@@ -220,6 +220,9 @@ type CommentRepository interface {
 	// ListByTask returns up to limit comments newest first (created_at DESC),
 	// skipping offset. Use cases clamp limit (default 10, max 50).
 	ListByTask(ctx context.Context, taskID domain.ID, limit, offset int) ([]domain.Comment, error)
+	// CountByTask returns the total number of comments on taskID BEFORE any
+	// paging — the `total` of the paged GET /tasks/{id}/comments envelope.
+	CountByTask(ctx context.Context, taskID domain.ID) (int64, error)
 }
 
 // ArtifactRepository appends and reads a task's evidence attachments

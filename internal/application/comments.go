@@ -94,6 +94,47 @@ func (s *Comments) Add(ctx context.Context, actor domain.Actor, taskID domain.ID
 	return c, nil // adapters store values as-given; the comment is immutable after insert
 }
 
+// List pages a task's comment thread newest first (the UI-extra GET
+// /tasks/{id}/comments) and returns the total comment count BEFORE paging, so
+// clients can compute how many pages remain. limit/offset follow the list_tasks
+// pagination policy (default 20, clamped to 100; offset defaults to 0). The
+// read runs through the unit of work for uniformity with every other read and
+// is read-only: it appends no events and touches nothing. Unknown task →
+// domain.ErrNotFound.
+func (s *Comments) List(ctx context.Context, taskID domain.ID, limit, offset int) ([]domain.Comment, int64, error) {
+	if limit <= 0 {
+		limit = defaultListLimit
+	} else if limit > maxListLimit {
+		limit = maxListLimit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var rows []domain.Comment
+	var total int64
+	var r Repos
+	err := s.uow.Run(ctx, &r, func() error {
+		if _, gerr := r.Tasks.Get(ctx, taskID); gerr != nil {
+			return gerr // ErrNotFound for unknown tasks
+		}
+		cs, lerr := r.Comments.ListByTask(ctx, taskID, limit, offset)
+		if lerr != nil {
+			return lerr
+		}
+		n, nerr := r.Comments.CountByTask(ctx, taskID)
+		if nerr != nil {
+			return nerr
+		}
+		rows, total = cs, n
+		return nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
 // truncateEventBody shortens a comment body to at most n runes for event
 // payloads, appending an ellipsis when something was cut.
 func truncateEventBody(s string, n int) string {
