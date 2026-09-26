@@ -203,6 +203,30 @@ func (f *fakeTasks) List(_ context.Context, flt TaskFilter) ([]domain.Task, int6
 	return matched, total, nil
 }
 
+// OpenTaskCounts aggregates open tasks per (project, status), mirroring the
+// single grouped query in the sqlite adapter.
+func (f *fakeTasks) OpenTaskCounts(_ context.Context) ([]TaskCountRow, error) {
+	agg := make(map[domain.ID]map[domain.Status]int64)
+	for _, t := range f.byID {
+		if t.Archived { // open = non-archived only
+			continue
+		}
+		m := agg[t.ProjectID]
+		if m == nil {
+			m = make(map[domain.Status]int64)
+			agg[t.ProjectID] = m
+		}
+		m[t.Status]++
+	}
+	out := make([]TaskCountRow, 0, len(agg))
+	for pid, m := range agg {
+		for st, n := range m {
+			out = append(out, TaskCountRow{ProjectID: pid, Status: st, Count: n})
+		}
+	}
+	return out, nil
+}
+
 // Update is the optimistic guard in memory: stored Version must equal t.Version,
 // then the row is stored with Version+1; a stale writer gets ConflictError with
 // the current row (the use case's conflict-path unit tests rely on this).
@@ -323,6 +347,15 @@ func taskMatches(t domain.Task, f TaskFilter) bool {
 		return false
 	}
 	if f.AssigneeName != "" && (t.Assignee == nil || t.Assignee.Name != f.AssigneeName) {
+		return false
+	}
+	if f.Priority != nil && t.Priority != *f.Priority {
+		return false
+	}
+	if f.DueBefore != nil && (t.DueAt == nil || !t.DueAt.Before(*f.DueBefore)) { // due_at < before; undated never matches
+		return false
+	}
+	if f.DueAfter != nil && (t.DueAt == nil || t.DueAt.Before(*f.DueAfter)) { // due_at >= after; undated never matches
 		return false
 	}
 	if f.Archived != t.Archived { // false = open only (REST default); true = archived only

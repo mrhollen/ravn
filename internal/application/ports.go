@@ -79,6 +79,16 @@ type TaskFilter struct {
 	AssigneeType domain.ActorType // "" = any durable assignee type
 	AssigneeName string           // "" = any durable assignee name
 
+	// Priority matches tasks with exactly this priority (0–5). Pointer because
+	// 0 is both a valid priority and the zero value; nil = any priority.
+	Priority *domain.Priority
+
+	// DueBefore / DueAfter bound the deadline window on due_at: only tasks
+	// whose due_at is strictly before DueBefore / at-or-after DueAfter match.
+	// Tasks without a deadline never match either bound (SQL NULL semantics).
+	DueBefore *time.Time
+	DueAfter  *time.Time
+
 	// Archived selects which archive state is listed: false (zero value) =
 	// open tasks only, the REST default; true = archived tasks only.
 	Archived bool
@@ -101,6 +111,17 @@ type TaskFilter struct {
 
 	Limit  int // 0 = use the default (20); values above the max (100) are clamped by use cases
 	Offset int // row offset for pagination
+}
+
+// TaskCountRow is one (project, status) aggregate produced by
+// TaskRepository.OpenTaskCounts. It is a port-level result shape, not a
+// domain entity: nothing persists it — the Projects use case folds rows into
+// its per-project counts (ARCHITECTURE §5: GET /projects "rows + per-status
+// task counts").
+type TaskCountRow struct {
+	ProjectID domain.ID
+	Status    domain.Status
+	Count     int64
 }
 
 // TaskRepository persists tasks and their ephemeral claim leases. Concurrency
@@ -128,6 +149,13 @@ type TaskRepository interface {
 	// f.UnblockedOnly is set both the rows and the total honor it (same
 	// predicate — slice 2D2b).
 	List(ctx context.Context, f TaskFilter) ([]domain.Task, int64, error)
+
+	// OpenTaskCounts returns one row per (project, status) pair that has at
+	// least one open (non-archived) task, computed as ONE grouped query:
+	// SELECT project_id, status, COUNT(*) FROM task WHERE archived = 0
+	// GROUP BY project_id, status. Pairs with zero open tasks simply don't
+	// appear; callers fill zero counts for the remaining canonical statuses.
+	OpenTaskCounts(ctx context.Context) ([]TaskCountRow, error)
 
 	// BlockersOf returns taskID's OPEN blockers: the targets of its outgoing
 	// blocked-by edges whose target is not done and not archived (the exact

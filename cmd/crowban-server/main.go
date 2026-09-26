@@ -1,12 +1,13 @@
 // Command crowban-server is composition root 1 for crowban (ARCHITECTURE §2):
-// env/flag config → SQLite open + migrations → stdlib net/http ServeMux.
+// env/flag config → SQLite open + migrations → shared Clock/IDGenerator/
+// UnitOfWork → ALL use cases → the HTTP adapter (internal/interface/http) on
+// a stdlib net/http ServeMux.
 //
-// This slice wires what exists yet: the database, the transactional seam
-// (SQLiteUnitOfWork) with the Projects use case on top, and the HTTP server
-// exposing GET /healthz (the exact contract from ARCHITECTURE §8) plus a
-// placeholder root. The REST API (internal/api), bearer-token auth, and the
-// built web UI land in later slices — CROWBAN_TOKEN is accepted here but not
-// enforced yet.
+// This is the ONLY place that imports infrastructure; the http layer receives
+// ready-made use-case structs and never sees the database. Slice 3a routes
+// Projects + Task-core + the board snapshot; Comments/Artifacts/Acceptance/
+// Relations are already constructed so slice 3b only adds routes. CROWBAN_TOKEN
+// is accepted but not enforced until the auth middleware lands.
 package main
 
 import (
@@ -28,6 +29,7 @@ import (
 	"github.com/mrhollen/crowban/internal/infrastructure/clock"
 	"github.com/mrhollen/crowban/internal/infrastructure/idgen"
 	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
+	httpapi "github.com/mrhollen/crowban/internal/interface/http"
 )
 
 // version is stamped at build time: -ldflags "-X main.version=..." (see the
@@ -38,7 +40,7 @@ func main() {
 	var (
 		addr  = flag.String("addr", envOr("CROWBAN_ADDR", ":8080"), "listen address, e.g. :8080")
 		data  = flag.String("data", envOr("CROWBAN_DATA", "/data/crowban.db"), "path of the SQLite database file")
-		token = flag.String("token", os.Getenv("CROWBAN_TOKEN"), "bearer token; accepted but unused until the api layer lands")
+		token = flag.String("token", os.Getenv("CROWBAN_TOKEN"), "bearer token; accepted but unused until the auth middleware lands")
 	)
 	flag.Parse()
 
@@ -60,14 +62,6 @@ func main() {
 			logger.Error("closing database", "err", err)
 		}
 	}()
-
-	// Slice 2A: the UnitOfWork seam and the Projects use case are composed so
-	// the application-layer composition is proven to compile and run. Slice 3
-	// mounts them behind /api/v1 routes; until then they exist for wiring only.
-	uow := sqlite.NewUnitOfWork(db)
-	projects := application.NewProjects(uow, clock.New(), idgen.New())
-	logger.Info("application layer wired", "uow", "sqlite", "use_cases", []string{"projects"})
-	_ = projects
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -106,9 +100,29 @@ type healthResponse struct {
 }
 
 // newRouter builds the stdlib ServeMux with Go 1.22 method+wildcard patterns.
-// Later slices will add the /api/v1 routes (internal/api) here.
+// It composes the shared Clock/IDGenerator/UnitOfWork and every use case,
+// hands them to the HTTP adapter (internal/interface/http), and mounts the
+// /api/v1 routes alongside /healthz and the root placeholder.
 func newRouter(db *sql.DB) http.Handler {
 	mux := http.NewServeMux()
+
+	// Slice 3 composition: one shared transactional seam, clock, and idgen —
+	// every use case mints IDs and stamps timestamps before touching ports
+	// (ADR 2026-09-25). Comments/Artifacts/Acceptance/Relations are wired now
+	// even though slice 3b is what routes them.
+	uow := sqlite.NewUnitOfWork(db)
+	now := clock.New()
+	mint := idgen.New()
+
+	app := httpapi.NewApp(httpapi.Deps{
+		Projects:   application.NewProjects(uow, now, mint),
+		Tasks:      application.NewTasks(uow, now, mint),
+		Comments:   application.NewComments(uow, now, mint),
+		Artifacts:  application.NewArtifacts(uow, now, mint),
+		Acceptance: application.NewAcceptance(uow, now, mint),
+		Relations:  application.NewRelations(uow, now, mint),
+	})
+	httpapi.RegisterRoutes(mux, app)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		dbStatus := sqlite.Health(r.Context(), db)
@@ -137,7 +151,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	w.Write(body)
+	w.Write(body) //nolint:errcheck
 }
 
 // envOr returns the environment variable key if set and non-empty, else def.

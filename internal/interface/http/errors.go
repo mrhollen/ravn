@@ -1,0 +1,111 @@
+package httpapi
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+
+	"github.com/mrhollen/crowban/internal/domain"
+)
+
+// Error contract (locked in slice 3a — the MCP layer propagates these bodies
+// verbatim, so "message" doubles as the agent-readable recovery hint):
+//
+//	domain.ErrNotFound        → 404 {"error":"not found","resource":<type>,...}
+//	domain.ErrInvalid         → 400 {"error":"invalid input","message":<detail>}
+//	*domain.ConflictError     → 409 version conflict: the body carries
+//	                            "current_version" AND the fresh current task as a
+//	                            summary row under "current", so a stale caller can
+//	                            rebase without a separate read
+//	*domain.ClaimConflictError→ 409 {"error":"claim conflict","holder":{...},
+//	                            "expires_at":...} — holder + expiry ARE the
+//	                            recovery instruction ("wait until X, or work another
+//	                            task")
+//	domain.ErrParentConflict  → 409 {"error":"parent conflict",...}
+//	anything else             → 500 {"error":"internal"} (logged)
+//
+// Every /api/v1 response body is JSON — errors included.
+
+// writeAppError maps a use-case failure to its HTTP error envelope. resource
+// names the affected entity type ("project"/"task") for the 404/409 bodies;
+// id may be the zero ID when unknown (e.g. validation on create).
+// writeVersionConflict renders the 409 body for a stale expected version:
+// current_version plus the fresh current task as a summary row, so the caller
+// can rebase from the response alone. Shared by use-case *ConflictError (a
+// race inside the write) and the adapter's read-then-guard pre-check (§5
+// PATCH contract).
+func writeVersionConflict(w http.ResponseWriter, id domain.ID, cur domain.Task) {
+	writeJSONError(w, http.StatusConflict, map[string]any{
+		"error":           "version_conflict",
+		"resource":        "task",
+		"id":              string(id),
+		"current_version": cur.Version,
+		"updated_at":      rfc3339(cur.UpdatedAt),
+		"message": fmt.Sprintf(
+			"task %q is at version %d — re-read it and retry with that version",
+			string(id), cur.Version),
+		"current": toSummary(cur),
+	})
+}
+
+func writeAppError(w http.ResponseWriter, err error, resource string, id domain.ID) {
+	var conflict *domain.ConflictError
+	if errors.As(err, &conflict) {
+		writeVersionConflict(w, id, conflict.Current)
+		return
+	}
+
+	var claim *domain.ClaimConflictError
+	if errors.As(err, &claim) {
+		holder := actorDTO{Type: string(claim.Holder.Type)}
+		if claim.Holder.Name != "" {
+			holder.Name = claim.Holder.Name
+		}
+		writeJSONError(w, http.StatusConflict, map[string]any{
+			"error":      "claim conflict",
+			"resource":   resource,
+			"id":         string(id),
+			"holder":     holder,
+			"expires_at": rfc3339(claim.ExpiresAt),
+			"message": fmt.Sprintf(
+				"%q is held by %s (%s) until %s — wait for the lease to expire or work another task",
+				string(id), claim.Holder.Type, claim.Holder.Name, rfc3339(claim.ExpiresAt)),
+		})
+		return
+	}
+
+	if errors.Is(err, domain.ErrParentConflict) {
+		writeJSONError(w, http.StatusConflict, map[string]any{
+			"error":    "parent conflict",
+			"resource": resource,
+			"id":       string(id),
+			"message":  err.Error(),
+		})
+		return
+	}
+
+	if errors.Is(err, domain.ErrNotFound) {
+		writeJSONError(w, http.StatusNotFound, map[string]any{
+			"error":    "not found",
+			"resource": resource,
+			"id":       string(id),
+			"message":  fmt.Sprintf("%s %q does not exist — check the id (use the list endpoint)", resource, string(id)),
+		})
+		return
+	}
+
+	if errors.Is(err, domain.ErrInvalid) {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	slog.Error("unmapped error from application layer", "err", err, "resource", resource)
+	writeJSONError(w, http.StatusInternalServerError, map[string]any{
+		"error":   "internal",
+		"message": "unexpected server error",
+	})
+}

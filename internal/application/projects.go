@@ -105,6 +105,60 @@ func (s *Projects) List(ctx context.Context) ([]domain.Project, error) {
 	return out, nil
 }
 
+// ProjectRow pairs a project with its open task counts per canonical status
+// (the GET /projects row shape, ARCHITECTURE §5). Open = non-archived;
+// completed tasks count under "done". Every canonical status is always present
+// in OpenTasks, zero when empty.
+type ProjectRow struct {
+	Project   domain.Project
+	OpenTasks map[domain.Status]int64
+}
+
+// ListWithCounts returns every project (created_at ASC) with its per-status
+// open task counts. The snapshot is gathered in ONE unit of work so it is
+// internally consistent: projects come from ProjectRepository and the dense
+// (project, status) aggregates from TaskRepository.OpenTaskCounts — a single
+// grouped query over the task table, no N+1 fan-out per project.
+func (s *Projects) ListWithCounts(ctx context.Context) ([]ProjectRow, error) {
+	var projects []domain.Project
+	var rows []TaskCountRow
+	var r Repos
+	err := s.uow.Run(ctx, &r, func() error {
+		var err error
+		if projects, err = r.Projects.List(ctx); err != nil {
+			return err
+		}
+		rows, err = r.Tasks.OpenTaskCounts(ctx)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	byProject := make(map[domain.ID]map[domain.Status]int64, len(rows))
+	for _, row := range rows {
+		m := byProject[row.ProjectID]
+		if m == nil {
+			m = make(map[domain.Status]int64)
+			byProject[row.ProjectID] = m
+		}
+		m[row.Status] += row.Count
+	}
+
+	out := make([]ProjectRow, 0, len(projects))
+	for _, p := range projects {
+		counts := make(map[domain.Status]int64, len(domain.CanonicalStatuses()))
+		for _, st := range domain.CanonicalStatuses() {
+			counts[st] = 0 // always present, zero when empty (wire shape is fixed)
+		}
+		for st, n := range byProject[p.ID] {
+			counts[st] = n
+		}
+		out = append(out, ProjectRow{Project: p, OpenTasks: counts})
+	}
+	return out, nil
+}
+
 // Update applies a partial field change to an existing project and appends an
 // `updated` event in the same unit of work. Before/After JSON carry only the
 // changed fields. Unknown id → domain.ErrNotFound; no fields set or empty new

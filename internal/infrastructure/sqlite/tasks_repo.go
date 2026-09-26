@@ -352,6 +352,39 @@ func expiryOf(t domain.Task) time.Time {
 	return time.Time{}
 }
 
+// OpenTaskCounts computes per-(project, status) open task counts in ONE grouped
+// query (ARCHITECTURE §5: GET /projects rows carry per-status counts — keep it
+// a single scan of the task table, no N+1 fan-out per project). Only
+// non-archived tasks are counted; pairs with zero open tasks simply don't
+// appear — callers fill in zero counts for the missing canonical statuses.
+func (r *taskRepo) OpenTaskCounts(ctx context.Context) ([]application.TaskCountRow, error) {
+	rows, err := r.q.QueryContext(ctx, `
+		SELECT project_id, status, COUNT(*)
+		FROM task
+		WHERE archived = 0
+		GROUP BY project_id, status`)
+	if err != nil {
+		return nil, fmt.Errorf("count open tasks by status: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]application.TaskCountRow, 0)
+	for rows.Next() {
+		var (
+			row application.TaskCountRow
+			pid string
+			st  string
+		)
+		if err := rows.Scan(&pid, &st, &row.Count); err != nil {
+			return nil, fmt.Errorf("scan open task counts: %w", err)
+		}
+		row.ProjectID = domain.ID(pid)
+		row.Status = domain.Status(st)
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // --- query building + scanning ----------------------------------------------------
 
 // taskListWhere renders TaskFilter's conditions as a WHERE clause fragment and
@@ -383,6 +416,20 @@ func taskListWhere(f application.TaskFilter) (string, []any) {
 		conds = append(conds, "archived = 1")
 	default: // false = open tasks only (REST default)
 		conds = append(conds, "archived = 0")
+	}
+
+	if f.Priority != nil {
+		conds = append(conds, "priority = ?")
+		args = append(args, int(*f.Priority))
+	}
+	if f.DueBefore != nil {
+		// Undated tasks never match: in SQL, NULL < x is NULL (not true).
+		conds = append(conds, "due_at < ?")
+		args = append(args, formatTS(*f.DueBefore))
+	}
+	if f.DueAfter != nil {
+		conds = append(conds, "due_at >= ?")
+		args = append(args, formatTS(*f.DueAfter))
 	}
 
 	if f.Q != "" {
