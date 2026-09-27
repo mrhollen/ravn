@@ -199,7 +199,12 @@ export function crowbanApp() {
 
     // ------------------------------------------------------------ project settings
     showProjectSettings: false,
-    projectSettingsForm: { name: "", description: "" },
+    projectSettingsForm: {
+      name: "",
+      description: "",
+      opencode_server_url: "",
+      opencode_directory: "",
+    },
     projectSettingsBusy: false,
 
     async openProjectSettings(): Promise<void> {
@@ -209,6 +214,8 @@ export function crowbanApp() {
         this.projectSettingsForm = {
           name: p.name,
           description: p.description ?? "",
+          opencode_server_url: p.opencode_server_url ?? "",
+          opencode_directory: p.opencode_directory ?? "",
         };
       }
       this.showProjectSettings = true;
@@ -217,6 +224,8 @@ export function crowbanApp() {
         this.projectSettingsForm = {
           name: full.name,
           description: full.description ?? "",
+          opencode_server_url: full.opencode_server_url ?? "",
+          opencode_directory: full.opencode_directory ?? "",
         };
       } catch {
         /* keep current list info */
@@ -236,6 +245,8 @@ export function crowbanApp() {
           actor: this.actor(),
           name,
           description: this.projectSettingsForm.description.trim() || undefined,
+          opencode_server_url: this.projectSettingsForm.opencode_server_url.trim() || undefined,
+          opencode_directory: this.projectSettingsForm.opencode_directory.trim() || undefined,
         });
         await this.loadProjects();
         this.showProjectSettings = false;
@@ -700,7 +711,29 @@ export function crowbanApp() {
       this.newAcText = "";
       this.totalComments = 0;
       this.loadingOlderComments = false;
+      this.startingOpenCode = false;
       this.detailOpen = false;
+    },
+
+    // ---------------------------------------------------------------- opencode
+    startingOpenCode: false,
+
+    async startTaskInOpenCode(): Promise<void> {
+      const d = this.detail;
+      if (!d || this.startingOpenCode) return;
+      this.startingOpenCode = true;
+      try {
+        const res = await api.startOpenCode(d.id);
+        this.toast("OpenCode session started");
+        if (typeof window !== "undefined" && res.session_url) {
+          window.open(res.session_url, "_blank");
+        }
+        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.startingOpenCode = false;
+      }
     },
 
     /** Fetch GET /tasks/{id} (full resume payload, comment tail 50) and apply it.

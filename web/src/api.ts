@@ -22,6 +22,7 @@ import type {
   NotesReq,
   Project,
   RelationRow,
+  StartOpenCodeResponse,
   TaskDetail,
   TaskSummary,
   UpdateProjectReq,
@@ -275,6 +276,11 @@ export const api = {
     const body: ArtifactReq = { actor, kind, ref };
     if (summary) body.summary = summary;
     return post<ArtifactRow>(`/tasks/${taskId}/artifacts`, body);
+  },
+
+  // --- opencode autonomous integration --------------------------------------
+  startOpenCode(taskId: string): Promise<StartOpenCodeResponse> {
+    return post<StartOpenCodeResponse>(`/tasks/${taskId}/opencode/start`, {});
   },
 
   // --- collaboration endpoints (agents use these via MCP; the UI is read-only

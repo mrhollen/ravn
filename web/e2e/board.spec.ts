@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import fs from 'fs';
+import http from 'http';
 import net from 'net';
 import os from 'os';
 import path from 'path';
@@ -1111,6 +1112,141 @@ test.describe('Web E2E test suite', () => {
       return app.sseBackoffMs;
     });
     expect(resetBackoff).toBe(2000);
+  });
+
+  test('OpenCode autonomous agent integration: project settings and task start launcher', async ({
+    page,
+  }) => {
+    // 1. Start a mock OpenCode server on a free port
+    const mockPort = await getFreePort();
+    let sessionCreated = false;
+    let promptDispatched = false;
+
+    const mockOpenCodeServer = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url?.startsWith('/session') && !req.url.includes('/prompt_async')) {
+        sessionCreated = true;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: 'mock-opencode-session-456' }));
+        return;
+      }
+      if (req.method === 'POST' && req.url?.includes('/prompt_async')) {
+        promptDispatched = true;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'dispatched' }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve) => mockOpenCodeServer.listen(mockPort, '127.0.0.1', resolve));
+
+    try {
+      // 2. Create a project and task via API
+      const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actor: { name: 'admin', type: 'human' },
+          name: 'OpenCode Test Project',
+        }),
+      });
+      const proj = await projRes.json();
+
+      const taskRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actor: { name: 'admin', type: 'human' },
+          project_id: proj.id,
+          title: 'Implement Payment Gateway',
+          description: 'Needs integration with Stripe API',
+          acceptance_criteria: ['Stripe webhook handled', 'Checkout session created'],
+        }),
+      });
+      const { task } = await taskRes.json();
+
+      await page.goto(`${serverUrl}`);
+      const projectSelect = page.locator('select').first();
+      await projectSelect.selectOption(proj.id);
+
+      // -----------------------------------------------------------------------
+      // AC 1: Project settings modal allows configuring OpenCode Server URL & dir
+      // -----------------------------------------------------------------------
+      const settingsBtn = page.getByRole('button', { name: 'Project settings' });
+      await expect(settingsBtn).toBeVisible();
+      await settingsBtn.click();
+
+      const serverUrlInput = page.getByPlaceholder('http://localhost:4444');
+      const dirInput = page.getByPlaceholder('/home/hollen/Code/...');
+      await expect(serverUrlInput).toBeVisible();
+      await expect(dirInput).toBeVisible();
+
+      await serverUrlInput.fill(`http://127.0.0.1:${mockPort}`);
+      await dirInput.fill('/tmp/mock-opencode-worktree');
+
+      await page.getByRole('button', { name: 'Save changes' }).click();
+      await expect(serverUrlInput).not.toBeVisible();
+
+      // Reopen to verify settings persisted
+      await settingsBtn.click();
+      await expect(serverUrlInput).toHaveValue(`http://127.0.0.1:${mockPort}`);
+      await expect(dirInput).toHaveValue('/tmp/mock-opencode-worktree');
+      await page.getByRole('button', { name: 'Cancel' }).click();
+
+      // -----------------------------------------------------------------------
+      // AC 2: Task detail drawer renders 'Start Task in OpenCode' button
+      // -----------------------------------------------------------------------
+      const taskCard = page.locator('h3', { hasText: 'Implement Payment Gateway' });
+      await taskCard.click();
+
+      const drawer = page.locator('aside');
+      await expect(drawer).toBeVisible();
+
+      const startOpenCodeBtn = drawer.locator('[data-testid="start-opencode-btn"]');
+      await expect(startOpenCodeBtn).toBeVisible();
+      await expect(startOpenCodeBtn).toContainText('Start Task in OpenCode');
+
+      // -----------------------------------------------------------------------
+      // AC 3: Clicking button launches session, confirms, attaches link & opens tab
+      // -----------------------------------------------------------------------
+      // Intercept window.open
+      await page.evaluate(() => {
+        (window as any).__openedUrls = [];
+        window.open = (url: string) => {
+          (window as any).__openedUrls.push(url);
+          return null;
+        };
+      });
+
+      await startOpenCodeBtn.click();
+
+      // Feedback toast appears
+      const toast = page.locator('text=OpenCode session started');
+      await expect(toast).toBeVisible({ timeout: 5000 });
+
+      // Verify mock server received the requests
+      expect(sessionCreated).toBe(true);
+      expect(promptDispatched).toBe(true);
+
+      // Verify window.open was called with the session URL
+      const openedUrls = await page.evaluate(() => (window as any).__openedUrls);
+      expect(openedUrls).toHaveLength(1);
+      expect(openedUrls[0]).toBe(`http://127.0.0.1:${mockPort}/session/mock-opencode-session-456`);
+
+      // Verify session URL artifact appears in detail drawer
+      await expect(drawer.locator('a', { hasText: 'mock-opencode-session-456' })).toBeVisible({ timeout: 5000 });
+      await expect(drawer.locator('text=OpenCode autonomous session')).toBeVisible();
+
+      // Verify task claim reflects opencode
+      await expect(drawer.getByText('Claimed', { exact: true })).toBeVisible();
+      await expect(drawer.locator('text=Held by opencode')).toBeVisible();
+
+      // Close drawer
+      await drawer.locator('button[aria-label="Close"]').first().click();
+    } finally {
+      await new Promise<void>((resolve) => mockOpenCodeServer.close(() => resolve()));
+    }
   });
 });
 

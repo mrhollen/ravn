@@ -79,6 +79,8 @@ export interface Project {
   id: string;
   name: string;
   description?: string;
+  opencode_server_url?: string;
+  opencode_directory?: string;
   created_at: string;
   updated_at: string;
 }
@@ -223,6 +225,13 @@ export interface UpdateProjectReq {
   actor: ActorInput;
   name?: string;
   description?: string;
+  opencode_server_url?: string;
+  opencode_directory?: string;
+}
+
+export interface StartOpenCodeResponse {
+  session_id: string;
+  session_url: string;
 }
 
 export interface CreateTaskReq {
