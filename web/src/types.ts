@@ -132,6 +132,13 @@ export interface CommentRow {
   created_at: string;
 }
 
+export interface ListCommentsResponse {
+  comments: CommentRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface ArtifactRow {
   id: string;
   kind: ArtifactKind;

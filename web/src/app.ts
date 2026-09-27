@@ -14,6 +14,7 @@ import type {
   ArtifactKind,
   Board,
   CommentKind,
+  CommentRow,
   ListTasksParams,
   ProjectWithCounts,
   RelationRow,
@@ -425,7 +426,10 @@ export function crowbanApp() {
       if (document.hidden || !this.selectedProjectId) return;
       await this.loadProjects(true);
       await this.loadBoard(true);
-      if (this.detailOpen && this.detail) await this.refreshDetail(true);
+      if (this.detailOpen && this.detail) {
+        await this.refreshDetail(true);
+        void this.initComments(this.detail.id);
+      }
     },
 
     // ---------------------------------------------------------------- new task
@@ -526,7 +530,10 @@ export function crowbanApp() {
       this.detailId = id;
       this.detail = null;
       this.editingTask = false;
+      this.totalComments = 0;
+      this.loadingOlderComments = false;
       await this.refreshDetail(false);
+      void this.initComments(id);
     },
 
     closeDetail(): void {
@@ -534,6 +541,8 @@ export function crowbanApp() {
       this.editingAcSeq = 0;
       this.editingAcText = "";
       this.newAcText = "";
+      this.totalComments = 0;
+      this.loadingOlderComments = false;
       this.detailOpen = false;
     },
 
@@ -553,7 +562,25 @@ export function crowbanApp() {
     },
 
     applyDetail(t: TaskDetail): void {
+      const existingComments = (this.detail && this.detail.id === t.id) ? this.detail.comments : [];
+      const map = new Map<string, CommentRow>();
+      for (const c of existingComments) {
+        map.set(c.id, c);
+      }
+      for (const c of t.comments) {
+        map.set(c.id, c);
+      }
+      const sorted = Array.from(map.values()).sort((a, b) => {
+        const ta = Date.parse(a.created_at);
+        const tb = Date.parse(b.created_at);
+        if (ta !== tb) return ta - tb;
+        return a.id.localeCompare(b.id);
+      });
+      t.comments = sorted;
       this.detail = t;
+      if (t.comments.length > this.totalComments) {
+        this.totalComments = t.comments.length;
+      }
       this.assigneeInputName = t.assignee?.name ?? "";
       this.assigneeInputType = (t.assignee?.type as "human" | "agent") || "human";
       // Learn the blocked state for card badges (the board diff is authoritative
@@ -1101,6 +1128,69 @@ export function crowbanApp() {
     // ----------------------------------------------------------------- comments
     commentForm: { kind: "progress" as CommentKind, body: "" },
     postingComment: false,
+    loadingOlderComments: false,
+    totalComments: 0,
+
+    hasMoreOlderComments(): boolean {
+      return !!this.detail && this.totalComments > this.detail.comments.length;
+    },
+
+    olderCommentsRemaining(): number {
+      return Math.max(0, this.totalComments - (this.detail?.comments.length ?? 0));
+    },
+
+    async initComments(id: string): Promise<void> {
+      try {
+        const res = await api.listComments(id, { limit: 50, offset: 0 });
+        if (this.detail && this.detail.id === id) {
+          this.totalComments = res.total;
+          this.mergeComments(res.comments);
+        }
+      } catch {
+        /* non-fatal */
+      }
+    },
+
+    mergeComments(incoming: CommentRow[]): void {
+      if (!this.detail) return;
+      const map = new Map<string, CommentRow>();
+      for (const c of this.detail.comments) {
+        map.set(c.id, c);
+      }
+      for (const c of incoming) {
+        map.set(c.id, c);
+      }
+      const sorted = Array.from(map.values()).sort((a, b) => {
+        const ta = Date.parse(a.created_at);
+        const tb = Date.parse(b.created_at);
+        if (ta !== tb) return ta - tb;
+        return a.id.localeCompare(b.id);
+      });
+      this.detail.comments = sorted;
+      if (this.detail.comments.length > this.totalComments) {
+        this.totalComments = this.detail.comments.length;
+      }
+    },
+
+    async loadOlderComments(): Promise<void> {
+      const d = this.detail;
+      if (!d || this.loadingOlderComments) return;
+      this.loadingOlderComments = true;
+      try {
+        const res = await api.listComments(d.id, {
+          offset: d.comments.length,
+          limit: 50,
+        });
+        this.totalComments = res.total;
+        if (this.detail && this.detail.id === d.id) {
+          this.mergeComments(res.comments);
+        }
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.loadingOlderComments = false;
+      }
+    },
 
     /** Append a typed comment (no task version bump). Appends are NOT
      *  idempotent — on network error we don't auto-retry. */
@@ -1116,7 +1206,10 @@ export function crowbanApp() {
           body,
         });
         const d = this.detail;
-        if (d && d.id === t.id) this.detail = { ...d, comments: [c, ...d.comments] };
+        if (d && d.id === t.id) {
+          this.mergeComments([c]);
+          this.totalComments = Math.max(this.totalComments + 1, d.comments.length);
+        }
         this.commentForm.body = "";
       } catch (e) {
         this.toast(errMsg(e), "error");

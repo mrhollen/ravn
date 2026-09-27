@@ -263,6 +263,14 @@ export const api = {
     return post<CommentRow>(`/tasks/${taskId}/comments`, req);
   },
 
+  listComments(taskId: string, opts?: { limit?: number; offset?: number }): Promise<{ comments: CommentRow[]; total: number }> {
+    const qs = new URLSearchParams();
+    if (opts?.limit !== undefined) qs.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) qs.set("offset", String(opts.offset));
+    const s = qs.toString();
+    return request<{ comments: CommentRow[]; total: number }>(`/tasks/${taskId}/comments${s ? `?${s}` : ""}`);
+  },
+
   addArtifact(taskId: string, kind: ArtifactKind, ref: string, summary: string | undefined, actor: ActorInput): Promise<ArtifactRow> {
     const body: ArtifactReq = { actor, kind, ref };
     if (summary) body.summary = summary;

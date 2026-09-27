@@ -777,5 +777,154 @@ test.describe('Web E2E test suite', () => {
     // Close drawer
     await drawer.locator('button[aria-label="Close"]').first().click();
   });
+
+  test('full comment thread loading, pagination, chronological ordering, and live poll updates', async ({
+    page,
+  }) => {
+    // -------------------------------------------------------------------------
+    // Seed project and task with 55 comments via API
+    // -------------------------------------------------------------------------
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Thread Pagination Project',
+        description: 'Testing comment thread loading and live updates',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    const taskRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Task with 55 Comments',
+        priority: 1,
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(taskRes.ok).toBe(true);
+    const task = (await taskRes.json()).task;
+
+    // Seed 55 comments
+    for (let i = 1; i <= 55; i++) {
+      const pad = String(i).padStart(2, '0');
+      const isAgent = i % 2 === 0;
+      const res = await fetch(`${serverUrl}/api/v1/tasks/${task.id}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actor: {
+            name: isAgent ? `agent-${pad}` : `human-${pad}`,
+            type: isAgent ? 'agent' : 'human',
+          },
+          kind: i === 1 ? 'decision' : i % 2 === 0 ? 'progress' : 'note',
+          body: `Comment body ${pad} of 55`,
+        }),
+      });
+      expect(res.ok).toBe(true);
+    }
+
+    // -------------------------------------------------------------------------
+    // AC 1 & 2: Open drawer - verify default tail (50), count, order, badges
+    // -------------------------------------------------------------------------
+    await page.goto(serverUrl);
+    const projectSelect = page.locator('select').first();
+    await projectSelect.selectOption(project.id);
+
+    const taskCard = page.locator('div[role="button"]', { hasText: 'Task with 55 Comments' });
+    await expect(taskCard).toBeVisible();
+    await taskCard.click();
+
+    const drawer = page.locator('aside');
+    await expect(drawer.getByRole('heading', { name: 'Task with 55 Comments' })).toBeVisible();
+
+    // Verify counter shows "(50 of 55)"
+    await expect(drawer.getByText('(50 of 55)')).toBeVisible();
+
+    // Verify "Load older comments (5 remaining)" button is exposed
+    const loadOlderBtn = drawer.getByRole('button', {
+      name: 'Load older comments (5 remaining)',
+    });
+    await expect(loadOlderBtn).toBeVisible();
+
+    // Verify 50 comments rendered
+    const articles = drawer.locator('article');
+    await expect(articles).toHaveCount(50);
+
+    // Oldest of the 50 loaded is comment 06, newest is comment 55
+    await expect(articles.first()).toContainText('Comment body 06 of 55');
+    await expect(articles.first()).toContainText('agent-06');
+    await expect(articles.first().locator('span', { hasText: 'agent' })).toBeVisible();
+    await expect(articles.first().locator('span', { hasText: 'progress' })).toBeVisible();
+
+    await expect(articles.last()).toContainText('Comment body 55 of 55');
+    await expect(articles.last()).toContainText('human-55');
+    await expect(articles.last().locator('span', { hasText: 'note' })).toBeVisible();
+
+    // Comment 01 is not yet loaded
+    await expect(drawer.locator('article', { hasText: 'Comment body 01 of 55' })).not.toBeVisible();
+
+    // -------------------------------------------------------------------------
+    // AC 1: Click "Load older comments" -> loads remaining 5 older comments
+    // -------------------------------------------------------------------------
+    await loadOlderBtn.click();
+
+    // Button disappears once all comments are loaded
+    await expect(loadOlderBtn).not.toBeVisible();
+    await expect(drawer.getByText('(55)')).toBeVisible();
+    await expect(articles).toHaveCount(55);
+
+    // Now comment 01 is at the top (oldest), chronological order maintained
+    await expect(articles.first()).toContainText('Comment body 01 of 55');
+    await expect(articles.first()).toContainText('decision');
+    await expect(articles.last()).toContainText('Comment body 55 of 55');
+
+    // -------------------------------------------------------------------------
+    // Post new comment via UI -> renders immediately at bottom
+    // -------------------------------------------------------------------------
+    const commentInput = drawer.getByPlaceholder('Markdown… posted as a typed comment');
+    await commentInput.fill('Comment body 56 posted from UI');
+    await drawer.getByRole('button', { name: 'Post comment' }).click();
+
+    await expect(articles).toHaveCount(56);
+    await expect(articles.last()).toContainText('Comment body 56 posted from UI');
+
+    // -------------------------------------------------------------------------
+    // AC 3: Live updates via background poll without full page reload
+    // -------------------------------------------------------------------------
+    // Add comment 57 externally via API
+    const extCommentRes = await fetch(`${serverUrl}/api/v1/tasks/${task.id}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor: { name: 'external-bot', type: 'agent' },
+        kind: 'handoff',
+        body: 'Comment body 57 posted externally via API',
+      }),
+    });
+    expect(extCommentRes.ok).toBe(true);
+
+    // Trigger pollTick in the running Alpine app
+    await page.evaluate(async () => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      await app.pollTick();
+    });
+
+    // Verify comment 57 appears at the bottom without full page reload
+    await expect(articles).toHaveCount(57);
+    await expect(articles.last()).toContainText('Comment body 57 posted externally via API');
+    await expect(articles.last()).toContainText('external-bot');
+    await expect(articles.last().locator('span', { hasText: 'handoff' })).toBeVisible();
+
+    // Verify oldest comments (e.g. comment 01) are still intact at the top
+    await expect(articles.first()).toContainText('Comment body 01 of 55');
+
+    // Close drawer
+    await drawer.locator('button[aria-label="Close"]').first().click();
+  });
 });
 
