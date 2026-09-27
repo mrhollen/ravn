@@ -281,7 +281,7 @@ Claim-CAS over HTTP: no locks held across the round-trip; the race resolves in a
 ## 6. MCP container design
 
 - **SDK:** `github.com/mark3labs/mcp-go` v1.x (verified current API, §3).
-- **Transport: Streamable HTTP, stateless.** MCP spec's streamable-HTTP transport (replaced the older SSE transport): clients POST JSON-RPC to one endpoint; responses are `application/json` or an SSE stream. We run **stateless** (`server.WithStateLess(true)`): the SDK keeps no session map, every request is self-contained — which is exactly what makes the container stateless and trivially restartable/scaleable. No GET SSE listener is needed from our side; the handler answers POSTs (and returns 405 for the optional server-push GET per spec when stateless).
+- **Transports: stateless Streamable HTTP + legacy SSE.** Primary is the MCP spec's streamable-HTTP transport (replaced the older SSE transport): clients POST JSON-RPC to one endpoint; responses are `application/json` or an SSE stream. We run **stateless** (`server.WithStateLess(true)`): the SDK keeps no session map, every request is self-contained — which is exactly what makes the container stateless and trivially restartable/scaleable. Alongside it, a legacy **SSE server** (`server.NewSSEServer`) covers clients that only speak the pre-streamable protocol (they open the session with an HTTP GET — e.g. Antigravity's remote MCP, which otherwise hangs: "still connecting", tools never register). Routes: `GET /mcp` → SSE stream (dual-mode at the canonical URL), `POST /mcp` → stateless Streamable HTTP, `GET /sse` → SSE stream (canonical legacy endpoint), `POST /message?sessionId=…` → JSON-RPC into that session. One caveat for wrappers: any middleware that wraps `http.ResponseWriter` must re-expose `Flush()` or the SDK's flusher assertion fails with 500 "Streaming unsupported".
 - **Wiring (`cmd/crowban-mcp/main.go`):**
 
 ```go
@@ -294,15 +294,22 @@ streamable := mcpserver.NewStreamableHTTPServer(mcpsrv,
     mcpserver.WithStateLess(true),
     mcpserver.WithEndpointPath("/mcp"),
 )
+sse := mcpserver.NewSSEServer(mcpsrv,        // legacy SSE transport, same tool registry
+    mcpserver.WithKeepAlive(true),           // periodic pings keep idle streams through proxies
+    mcpserver.WithSSEDisableLocalhostProtection(true),
+)
 mux := http.NewServeMux()
-mux.Handle("/mcp", streamable)              // implements http.Handler
+mux.HandleFunc("GET /mcp", sse.SSEHandler().ServeHTTP)  // dual-mode: GET = SSE, POST/other fall through
+mux.Handle("/mcp", streamable)              // stateless Streamable HTTP (POST JSON-RPC)
+mux.Handle("/sse", sse.SSEHandler())         // canonical legacy SSE endpoint
+mux.Handle("/message", sse.MessageHandler()) // JSON-RPC into the session advertised by `endpoint`
 mux.HandleFunc("GET /healthz", healthz)     // pings main server's /healthz through the client; 503 if upstream down
 http.ListenAndServe(addr, withLogging(mux))
 ```
 
 - **Tool registration pattern (`mcp/tools.go`):** each tool = `mcp.NewTool(name, mcp.WithDescription(<written for small LLMs>), <typed property builders: WithString+Required, WithNumber, WithEnum(...), WithObject/WithArray where needed>)` + handler `func(ctx, mcp.CallToolRequest) (*mcp.CallToolResult, error)`. Handlers are one-liners around the client: parse args (`request.RequireString(...)`) → call REST → on success `mcp.NewToolResultText(compactJSON)`; on REST error return `mcp.NewToolResultError(text)` where text = **the REST error body verbatim** (its `message` already contains the recovery hint). Never fabricate success.
 - **Config (env, compose-injected):** `-addr`/`MCP_ADDR` (def `:9080`), `CROWBAN_API_URL` (def `http://crowban-server:8080`; the compose service DNS name), `CROWBAN_TOKEN` (optional; forwarded as `Authorization: Bearer <token>` on every upstream call when set), `CROWBAN_AGENT_NAME` (def `agent`; the fallback actor NAME when a call omits `actor`). No config file, no state, no other env.
-- **Docker exposure:** host 9311 → container :9080 (`CROWBAN_MCP_PORT`); clients point at `http://<host>:9311/mcp`. Note the SDK's DNS-rebinding guard: loopback-sourced requests with a non-localhost `Host` header get 403 — via Docker port forwarding this does not trigger (source isn't loopback in-container); escape hatch `WithDisableLocalhostProtection(true)` if host-side clients misbehave.
+- **Docker exposure:** host 9311 → container :9080 (`CROWBAN_MCP_PORT`); clients point at `http://<host>:9311/mcp` (Streamable HTTP, or SSE on GET), and legacy-SSE-only clients at `http://<host>:9311/sse`. Note the SDK's DNS-rebinding guard: loopback-sourced requests with a non-localhost `Host` header get 403 — via Docker port forwarding this does not trigger (source isn't loopback in-container); escape hatch `WithDisableLocalhostProtection(true)` if host-side clients misbehave.
 - **Idempotency / error conventions:** no client-supplied idempotency keys in MVP (accepted risk, §10). Instead: semantics are retry-safe where it matters — re-claim by same actor refreshes (200), `relate_tasks` upserts (200), version-guarded updates fail loudly with 409 rather than double-applying. Appends (comments/artifacts) are NOT idempotent; a post-timeout retry may duplicate — documented in tool descriptions ("check the comment tail before re-posting after an error").
 - **Error propagation table:** REST 401/403 → `isError` "auth failed — check CROWBAN_API_TOKEN"; 404 → not-found text verbatim; 409 → body verbatim (conflict details ARE the instructions); 422 → validation error verbatim; connection failure → "crowban-server unreachable at <url> — is it running?".
 

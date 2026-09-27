@@ -8,7 +8,7 @@ arguments.
 ## What it is
 
 `crowban-mcp` is a **stateless Streamable-HTTP MCP server** that adapts the
-crowban REST API into MCP tools. One endpoint:
+crowban REST API into MCP tools. Primary endpoint:
 
 ```
 http://<host>:9311/mcp
@@ -17,6 +17,18 @@ http://<host>:9311/mcp
 Stateless means every request is self-contained: there are no sessions to
 resume, so the client can be restarted or load-balanced freely. The same host
 also serves `GET /healthz` (upstream liveness; used by compose healthchecks).
+
+For clients that only speak the legacy **SSE transport** (they open the session
+with an HTTP GET — e.g. Antigravity's remote MCP), use:
+
+```
+http://<host>:9311/sse
+```
+
+`/sse` opens the event stream (its `endpoint` event advertises `/message?sessionId=…`
+for the JSON-RPC POSTs). The canonical URL is dual-mode too: a GET to `/mcp`
+opens an SSE stream, while POSTs still speak Streamable-HTTP — so a single
+configured URL works for both transport classes.
 
 ## Pointing an MCP client at it
 

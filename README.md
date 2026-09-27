@@ -27,7 +27,7 @@ crowban is an MCP-first KanBan tool where AI coding agents are the primary users
 
 - **Onion layering**: domain (stdlib only) → application (ports defined here) → infrastructure (SQLite driver, ULID) → api (REST adapter) → mcp (MCP adapter).
 - **Pure-Go SQLite**: No CGO via modernc.org/sqlite; fully static binaries with CGO_ENABLED=0.
-- **Streamable-HTTP MCP**: Via mark3labs/mcp-go v1.x over stdlib net/http in stateless mode.
+- **MCP (dual transport)**: Stateless Streamable-HTTP via mark3labs/mcp-go v1.x over stdlib net/http, plus legacy SSE (`/sse`, and `GET /mcp`) for clients that open the session with an HTTP GET (e.g. Antigravity).
 - **Frontend**: Vite + TypeScript + Tailwind CSS v4 + Alpine.js, built at image-build time and served by the Go binary.
 - **See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for full technical details.
 

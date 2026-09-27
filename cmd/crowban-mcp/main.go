@@ -1,6 +1,7 @@
 // crowban-mcp exposes the crowban REST API as MCP tools over stateless
-// Streamable HTTP (docs/ARCHITECTURE.md §6). It is a pure protocol adapter —
-// no SQLite, no use cases: env config → apiclient → MCP server → http.Server.
+// Streamable HTTP plus legacy SSE for GET-only clients (docs/ARCHITECTURE.md §6).
+// It is a pure protocol adapter — no SQLite, no use cases: env config →
+// apiclient → MCP server → http.Server.
 package main
 
 import (
@@ -53,8 +54,23 @@ func main() {
 		mcpsrv.WithDisableLocalhostProtection(true),
 	)
 
+	// Legacy SSE transport for clients that only speak the pre-streamable MCP
+	// protocol (e.g. Antigravity's remote-MCP integration, which opens its
+	// session with an HTTP GET). It shares the same MCPServer/tool registry:
+	//   GET  /mcp     → open an SSE event stream (dual-mode at the canonical URL)
+	//   GET  /sse     → open an SSE event stream (canonical legacy endpoint)
+	//   POST /message → JSON-RPC into the session advertised by the `endpoint` event
+	sse := mcpsrv.NewSSEServer(mcs,
+		mcpsrv.WithKeepAlive(true),
+		mcpsrv.WithKeepAliveInterval(30*time.Second),   // ping keeps idle streams through proxies
+		mcpsrv.WithSSEDisableLocalhostProtection(true), // same LAN-local rationale as the streamable server above
+	)
+
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /mcp", sse.SSEHandler().ServeHTTP) // dual-mode: GET = SSE, POST/other = below
 	mux.Handle("/mcp", streamable)
+	mux.Handle("/sse", sse.SSEHandler())
+	mux.Handle("/message", sse.MessageHandler())
 	mux.HandleFunc("GET /healthz", mcp.HealthzHandler(client))
 
 	srv := &http.Server{
@@ -122,4 +138,12 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Flush forwards to the wrapped writer when it supports streaming, so
+// SSE handlers can assert http.Flusher on this wrapper.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
