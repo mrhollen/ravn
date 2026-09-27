@@ -57,6 +57,29 @@
         </button>
 
         <div class="ml-auto flex flex-wrap items-center gap-x-5 gap-y-2">
+          <!-- realtime SSE live status indicator -->
+          <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none"
+               @click="connectSse()"
+               :class="{
+                 'text-emerald-700': sseStatus === 'connected',
+                 'text-amber-700': sseStatus === 'connecting',
+                 'text-zinc-500': sseStatus === 'disconnected'
+               }"
+               :title="sseStatus === 'connected' ? 'Live' : (sseStatus === 'connecting' ? 'Reconnecting…' : (polling ? 'Polling (fallback)' : 'Disconnected'))"
+               data-testid="live-indicator"
+          >
+            <span class="relative flex h-2 w-2">
+              <span x-show="sseStatus === 'connected'" class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+              <span class="relative inline-flex h-2 w-2 rounded-full"
+                    :class="{
+                      'bg-emerald-500': sseStatus === 'connected',
+                      'bg-amber-500': sseStatus === 'connecting',
+                      'bg-zinc-400': sseStatus === 'disconnected'
+                    }"></span>
+            </span>
+            <span x-text="sseStatus === 'connected' ? 'Live' : (sseStatus === 'connecting' ? 'Reconnecting' : (polling ? 'Polling' : 'Offline'))"></span>
+          </div>
+
           <label class="flex cursor-pointer items-center gap-2 text-sm text-zinc-600" title="Re-fetches the board every 15 seconds">
             <input type="checkbox" x-model="polling" @change="pollingChanged()"
                    class="h-4 w-4 rounded border-zinc-300 accent-zinc-900" />

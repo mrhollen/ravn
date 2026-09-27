@@ -926,5 +926,191 @@ test.describe('Web E2E test suite', () => {
     // Close drawer
     await drawer.locator('button[aria-label="Close"]').first().click();
   });
+
+  test('realtime SSE event stream updates board, detail drawer live, and handles reconnect backoff', async ({
+    page,
+  }) => {
+    // 1. Create a project via API
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor: { name: 'admin', type: 'human' },
+        name: 'Realtime SSE Project',
+      }),
+    });
+    const proj = await projRes.json();
+
+    await page.goto(`${serverUrl}`);
+    const projectSelect = page.locator('select').first();
+    await projectSelect.selectOption(proj.id);
+
+    // Verify live status indicator is connected
+    const liveIndicator = page.locator('[data-testid="live-indicator"]');
+    await expect(liveIndicator).toBeVisible();
+    await expect(liveIndicator).toContainText('Live');
+    await expect(liveIndicator).toHaveAttribute('title', 'Live');
+
+    // -------------------------------------------------------------------------
+    // AC 1: Realtime card / column updates without waiting for poll interval
+    // -------------------------------------------------------------------------
+    // Create task externally via API
+    const createRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor: { name: 'agent-worker', type: 'agent' },
+        project_id: proj.id,
+        title: 'Task Created via API for SSE',
+        priority: 1,
+      }),
+    });
+    expect(createRes.ok).toBe(true);
+    const { task } = await createRes.json();
+
+    // Without polling tick or page reload, card appears in To Do column
+    const todoCol = page.locator('section', { has: page.getByRole('heading', { name: 'To Do' }) });
+    const doingCol = page.locator('section', { has: page.getByRole('heading', { name: 'Doing' }) });
+    const doneCol = page.locator('section', { has: page.getByRole('heading', { name: 'Done' }) });
+
+    const taskCard = todoCol.locator('h3', { hasText: 'Task Created via API for SSE' });
+    await expect(taskCard).toBeVisible({ timeout: 5000 });
+
+    // Move task externally to doing via API
+    const moveRes = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor: { name: 'agent-worker', type: 'agent' },
+        version: task.version,
+        status: 'doing',
+      }),
+    });
+    expect(moveRes.ok).toBe(true);
+    const moved = await moveRes.json();
+
+    // Card moves into Doing column in real time
+    const doingCard = doingCol.locator('h3', { hasText: 'Task Created via API for SSE' });
+    await expect(doingCard).toBeVisible({ timeout: 5000 });
+    await expect(todoCol.locator('h3', { hasText: 'Task Created via API for SSE' })).not.toBeVisible();
+
+    // -------------------------------------------------------------------------
+    // AC 2: Open detail drawer reflects comments, status, claims live
+    // -------------------------------------------------------------------------
+    // Click card to open detail drawer
+    await doingCard.click();
+    const drawer = page.locator('aside');
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole('heading', { level: 2 }).first()).toContainText('Task Created via API for SSE');
+
+    // External agent claims the task via API
+    const claimRes = await fetch(`${serverUrl}/api/v1/tasks/${task.id}/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor: { name: 'agent-worker', type: 'agent' },
+      }),
+    });
+    expect(claimRes.ok).toBe(true);
+    const claimed = await claimRes.json();
+
+    // Drawer reflects claim live
+    await expect(drawer.locator('text=Claimed')).toBeVisible({ timeout: 5000 });
+    await expect(drawer.locator('text=Held by agent-worker')).toBeVisible();
+
+    // External agent posts a comment via API
+    const commentRes = await fetch(`${serverUrl}/api/v1/tasks/${task.id}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor: { name: 'reviewer-agent', type: 'agent' },
+        kind: 'progress',
+        body: 'Realtime SSE comment arrived!',
+      }),
+    });
+    expect(commentRes.ok).toBe(true);
+
+    // Drawer displays comment live
+    await expect(drawer.locator('text=Realtime SSE comment arrived!')).toBeVisible({ timeout: 5000 });
+    await expect(drawer.getByText('reviewer-agent', { exact: true })).toBeVisible();
+
+    // External agent moves task to done via API
+    const finishRes = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor: { name: 'agent-worker', type: 'agent' },
+        version: claimed.version,
+        status: 'done',
+      }),
+    });
+    expect(finishRes.ok).toBe(true);
+
+    // Drawer status button reflects "Done" as active
+    const doneBtn = drawer.getByRole('button', { name: 'Done' });
+    await expect(doneBtn).toHaveAttribute('aria-pressed', 'true', { timeout: 5000 });
+
+    // Close drawer
+    await drawer.locator('button[aria-label="Close"]').first().click();
+
+    // -------------------------------------------------------------------------
+    // AC 3: Reconnection with backoff & timer polling fallback
+    // -------------------------------------------------------------------------
+    // Disconnect SSE intentionally via app method and verify backoff progression
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.handleSseDisconnect();
+    });
+
+    await expect(liveIndicator).toContainText('Reconnecting');
+    const backoff1 = await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      return app.sseBackoffMs;
+    });
+    expect(backoff1).toBe(4000); // 2000 -> 4000
+
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.handleSseDisconnect();
+    });
+    const backoff2 = await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      return app.sseBackoffMs;
+    });
+    expect(backoff2).toBe(8000); // 4000 -> 8000
+
+    // Verify polling fallback works even while SSE is disconnected
+    // Create another task via API while disconnected
+    const fallbackCreateRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor: { name: 'agent-worker', type: 'agent' },
+        project_id: proj.id,
+        title: 'Task Created During Disconnected State',
+        priority: 2,
+      }),
+    });
+    expect(fallbackCreateRes.ok).toBe(true);
+
+    // Trigger timer pollTick fallback
+    await page.evaluate(async () => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      await app.pollTick();
+    });
+
+    // Verify board updated via pollTick fallback
+    const fallbackCard = todoCol.locator('h3', { hasText: 'Task Created During Disconnected State' });
+    await expect(fallbackCard).toBeVisible({ timeout: 5000 });
+
+    // Trigger manual reconnect
+    await liveIndicator.click();
+    await expect(liveIndicator).toContainText('Live', { timeout: 5000 });
+    const resetBackoff = await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      return app.sseBackoffMs;
+    });
+    expect(resetBackoff).toBe(2000);
+  });
 });
 

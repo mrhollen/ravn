@@ -166,6 +166,20 @@ export interface EventRow {
   at: string;
 }
 
+export type SseConnectionStatus = "connected" | "connecting" | "disconnected";
+
+/** Realtime event payload streamed over SSE (GET /projects/{id}/events). */
+export interface RealtimeEventPayload {
+  event_id?: string;
+  project_id?: string;
+  task_id?: string;
+  kind: string;
+  status?: string;
+  actor?: ActorRef;
+  timestamp: string;
+}
+
+
 /** GET /tasks/{id} — the one-call resume payload (summary fields flattened in). */
 export interface TaskDetail extends TaskSummary {
   project_id: string;

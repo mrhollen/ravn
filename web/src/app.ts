@@ -17,7 +17,9 @@ import type {
   CommentRow,
   ListTasksParams,
   ProjectWithCounts,
+  RealtimeEventPayload,
   RelationRow,
+  SseConnectionStatus,
   Status,
   TaskDetail,
   TaskSummary,
@@ -45,6 +47,25 @@ const LS_ACTOR = "crowban.actor";
 const LS_PROJECT = "crowban.project";
 const POLL_MS = 15_000;
 const MD_CACHE_MAX = 500;
+
+const SSE_EVENT_KINDS = [
+  "message",
+  "created",
+  "updated",
+  "status-changed",
+  "claimed",
+  "released",
+  "heartbeat",
+  "assigned",
+  "noted",
+  "commented",
+  "ac-toggled",
+  "artifact-added",
+  "relation-changed",
+  "ac-added",
+  "ac-updated",
+  "ac-removed",
+];
 
 export interface Toast {
   id: number;
@@ -105,6 +126,7 @@ export function crowbanApp() {
       this.authToken = api.getAuthToken();
       this.showAuthModal = false;
       this.loadError = "";
+      if (this.selectedProjectId) this.connectSse();
       void this.loadProjects().then(() => {
         if (this.selectedProjectId) void this.loadBoard();
       });
@@ -116,6 +138,7 @@ export function crowbanApp() {
       this.tokenInput = "";
       this.showAuthModal = false;
       this.loadError = "";
+      if (this.selectedProjectId) this.connectSse();
       void this.loadProjects().then(() => {
         if (this.selectedProjectId) void this.loadBoard();
       });
@@ -165,6 +188,7 @@ export function crowbanApp() {
         try {
           localStorage.setItem(LS_PROJECT, p.id);
         } catch { /* ignore */ }
+        this.connectSse();
         await this.loadBoard();
       } catch (e) {
         this.toast(errMsg(e), "error");
@@ -357,6 +381,7 @@ export function crowbanApp() {
         localStorage.setItem(LS_PROJECT, this.selectedProjectId);
       } catch { /* ignore */ }
       this.board = null;
+      this.connectSse();
       void this.loadBoard();
     },
 
@@ -397,6 +422,138 @@ export function crowbanApp() {
         );
       } catch {
         /* keep whatever we had — advisory feature only */
+      }
+    },
+
+    // ------------------------------------------------------------ realtime SSE
+    sse: null as EventSource | null,
+    sseStatus: "disconnected" as SseConnectionStatus,
+    sseBackoffMs: 2000,
+    sseReconnectTimer: 0 as number,
+
+    connectSse(): void {
+      this.disconnectSse(false);
+
+      if (typeof window === "undefined" || typeof EventSource === "undefined") {
+        return;
+      }
+
+      if (!this.selectedProjectId) {
+        this.sseStatus = "disconnected";
+        return;
+      }
+
+      this.sseStatus = "connecting";
+
+      const token = this.authToken || api.getAuthToken();
+      const url = `/api/v1/projects/${encodeURIComponent(this.selectedProjectId)}/events${
+        token ? `?token=${encodeURIComponent(token)}` : ""
+      }`;
+
+      let es: EventSource;
+      try {
+        es = new EventSource(url);
+      } catch {
+        this.handleSseDisconnect();
+        return;
+      }
+
+      this.sse = es;
+
+      es.onopen = () => {
+        if (this.sse === es) {
+          this.sseStatus = "connected";
+          this.sseBackoffMs = 2000;
+        }
+      };
+
+      const onEvent = (e: MessageEvent) => {
+        if (this.sse !== es) return;
+        this.handleSseEvent(e);
+      };
+
+      for (const kind of SSE_EVENT_KINDS) {
+        es.addEventListener(kind, onEvent);
+      }
+      es.onmessage = onEvent;
+
+      es.onerror = () => {
+        if (this.sse !== es) return;
+        this.handleSseDisconnect();
+      };
+    },
+
+    handleSseEvent(e: MessageEvent): void {
+      try {
+        if (!e.data) return;
+        const data: RealtimeEventPayload = JSON.parse(e.data);
+
+        // Project scoping check
+        if (data.project_id && data.project_id !== this.selectedProjectId) {
+          return;
+        }
+
+        // Immediately reload board silently so column counts and card positions update without latency
+        void this.loadBoard(true);
+        void this.loadProjects(true);
+
+        // If the task detail drawer is currently open for the event's task_id,
+        // re-fetch the task detail in-place (api.getTask(data.task_id)) to show
+        // new comments, notes, claims, and status changes instantly.
+        if (
+          data.task_id &&
+          this.detailOpen &&
+          (this.detailId === data.task_id || this.detail?.id === data.task_id)
+        ) {
+          void this.refreshDetail(true, data.task_id).then(() => {
+            if (this.detail && this.detail.id === data.task_id) {
+              void this.initComments(data.task_id);
+            }
+          });
+        }
+      } catch {
+        /* malformed SSE payload — non-fatal */
+      }
+    },
+
+    handleSseDisconnect(): void {
+      if (this.sse) {
+        this.sse.close();
+        this.sse = null;
+      }
+      this.sseStatus = "connecting";
+
+      if (this.sseReconnectTimer) {
+        window.clearTimeout(this.sseReconnectTimer);
+        this.sseReconnectTimer = 0;
+      }
+
+      const delay = this.sseBackoffMs;
+      // Exponential backoff: 2s, 4s, 8s, up to 16s
+      this.sseBackoffMs = Math.min(this.sseBackoffMs * 2, 16000);
+
+      this.sseReconnectTimer = window.setTimeout(() => {
+        this.sseReconnectTimer = 0;
+        if (this.selectedProjectId) {
+          this.connectSse();
+        } else {
+          this.sseStatus = "disconnected";
+        }
+      }, delay);
+    },
+
+    disconnectSse(resetBackoff = true): void {
+      if (this.sseReconnectTimer) {
+        window.clearTimeout(this.sseReconnectTimer);
+        this.sseReconnectTimer = 0;
+      }
+      if (this.sse) {
+        this.sse.close();
+        this.sse = null;
+      }
+      if (resetBackoff) {
+        this.sseBackoffMs = 2000;
+        this.sseStatus = "disconnected";
       }
     },
 
@@ -548,8 +705,8 @@ export function crowbanApp() {
 
     /** Fetch GET /tasks/{id} (full resume payload, comment tail 50) and apply it.
      *  An in-progress notes edit (notesDirty) is NEVER clobbered by a refresh. */
-    async refreshDetail(silent = false): Promise<boolean> {
-      const id = this.detailId ?? this.detail?.id;
+    async refreshDetail(silent = false, idToFetch?: string): Promise<boolean> {
+      const id = idToFetch ?? this.detailId ?? this.detail?.id;
       if (!id) return false;
       try {
         const t = await api.getTask(id, { commentLimit: 50 });
@@ -1494,6 +1651,11 @@ export function crowbanApp() {
 
     // ---------------------------------------------------------------------- init
     async init(): Promise<void> {
+      if (typeof window !== "undefined") {
+        window.addEventListener("beforeunload", () => {
+          this.disconnectSse(true);
+        });
+      }
       await this.loadProjects();
       const known = this.projects.some((p) => p.id === this.selectedProjectId);
       if (!known || !this.selectedProjectId) {
@@ -1504,6 +1666,7 @@ export function crowbanApp() {
           localStorage.setItem(LS_PROJECT, this.selectedProjectId);
         } catch { /* ignore */ }
         await this.loadBoard();
+        this.connectSse();
       } else {
         // No projects yet — invite creating one.
         this.showNewProject = true;
