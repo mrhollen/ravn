@@ -272,3 +272,25 @@ func TestIsAPIRoute(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthMiddleware_QueryParamToken(t *testing.T) {
+	const secret = "query-token-123"
+	stk := newAuthTestStack(t, secret)
+
+	// Valid token in query param succeeds without Authorization header
+	req := httptest.NewRequest("GET", "http://crowban.test/api/v1/projects?token="+secret, nil)
+	res := httptest.NewRecorder()
+	stk.Handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/projects?token=... = %d, want 200", res.Code)
+	}
+
+	// Invalid token in query param fails with 401
+	req = httptest.NewRequest("GET", "http://crowban.test/api/v1/projects?token=wrong", nil)
+	res = httptest.NewRecorder()
+	stk.Handler.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/v1/projects?token=wrong = %d, want 401", res.Code)
+	}
+}
+

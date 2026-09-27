@@ -60,6 +60,56 @@ export class ApiError extends Error {
   static isParentConflict(e: unknown): boolean {
     return e instanceof ApiError && e.status === 409 && e.body.error === "parent conflict";
   }
+
+  static isUnauthorized(e: unknown): boolean {
+    return e instanceof ApiError && e.status === 401;
+  }
+}
+
+export const LS_TOKEN = "crowban_token";
+
+/** Retrieves the auth token from URL ?token= or localStorage. */
+export function getAuthToken(): string {
+  if (typeof window !== "undefined") {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const urlToken = params.get("token");
+      if (urlToken) {
+        setAuthToken(urlToken);
+        params.delete("token");
+        const newQuery = params.toString();
+        const newUrl =
+          window.location.pathname +
+          (newQuery ? `?${newQuery}` : "") +
+          window.location.hash;
+        window.history.replaceState({}, "", newUrl);
+        return urlToken;
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      return localStorage.getItem(LS_TOKEN) || "";
+    } catch {
+      /* private mode */
+    }
+  }
+  return "";
+}
+
+/** Stores or clears the auth token in localStorage. */
+export function setAuthToken(token: string): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    const trimmed = token.trim();
+    if (!trimmed) {
+      localStorage.removeItem(LS_TOKEN);
+    } else {
+      localStorage.setItem(LS_TOKEN, trimmed);
+    }
+  } catch {
+    /* private mode */
+  }
 }
 
 /** Extracts a human-readable message from any thrown value. */
@@ -74,11 +124,17 @@ export function errMsg(e: unknown): string {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...((init?.headers as Record<string, string>) ?? {}),
+  };
   let res: Response;
   try {
     res = await fetch(`${BASE}${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      headers,
     });
   } catch (e) {
     if (e instanceof TypeError) throw e; // rethrown as-is by errMsg()
@@ -202,4 +258,8 @@ export const api = {
   heartbeatTask(id: string, actor: ActorInput): Promise<TaskSummary> {
     return post<TaskSummary>(`/tasks/${id}/heartbeat`, { actor });
   },
+
+  getAuthToken,
+  setAuthToken,
 };
+

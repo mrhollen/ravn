@@ -63,6 +63,15 @@
             <input type="text" x-model="actorName" @change="saveActor()" placeholder="you" autocomplete="off"
                    class="field w-32" />
           </label>
+          <button type="button" @click="openAuthModal()"
+                  class="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium shadow-sm transition-colors"
+                  :class="authToken ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100'"
+                  :title="authToken ? 'Auth token configured. Click to edit.' : 'No auth token set. Click to configure.'">
+            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+            </svg>
+            <span x-text="authToken ? 'Token: set' : 'Token: none'"></span>
+          </button>
         </div>
       </header>
 
@@ -109,7 +118,10 @@
              class="mx-auto mt-16 max-w-md rounded-xl border border-red-200 bg-white p-6 text-center shadow-sm">
           <p class="text-sm font-semibold text-red-700">Could not load the board</p>
           <p class="mt-1 break-words text-xs text-zinc-500" x-text="loadError"></p>
-          <button type="button" @click="loadBoard()" class="btn-primary mt-4">Retry</button>
+          <div class="mt-4 flex justify-center gap-2">
+            <button type="button" @click="loadBoard()" class="btn-primary">Retry</button>
+            <button type="button" @click="openAuthModal()" class="btn-ghost">Set auth token</button>
+          </div>
         </div>
 
         <!-- no projects at all -->
@@ -205,6 +217,56 @@
           </div>
         </template>
       </main>
+
+      <!-- ========================================================== auth token modal -->
+      <div x-show="showAuthModal" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="showAuthModal = false">
+        <div class="mx-auto mt-16 w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl">
+          <header class="flex items-center justify-between pb-3 border-b border-zinc-100">
+            <div class="flex items-center gap-2.5">
+              <span class="rounded-lg bg-indigo-50 p-2 text-indigo-600">
+                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                </svg>
+              </span>
+              <div>
+                <h2 class="text-base font-semibold text-zinc-900">API Authentication Token</h2>
+                <p class="text-xs text-zinc-500">Configure credentials for production servers</p>
+              </div>
+            </div>
+            <button type="button" @click="showAuthModal = false" class="text-zinc-400 hover:text-zinc-600">
+              <span class="text-lg leading-none">&times;</span>
+            </button>
+          </header>
+
+          <form @submit.prevent="saveAuthToken()" class="mt-4 flex flex-col gap-4">
+            <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700">
+              Bearer Token
+              <input type="password" x-model="tokenInput" placeholder="Enter CROWBAN_TOKEN..."
+                     class="field font-mono text-xs w-full" autofocus />
+            </label>
+
+            <p class="text-[11px] text-zinc-500 leading-relaxed">
+              If the server was started with <code>CROWBAN_TOKEN</code>, enter it here. It is saved in your browser's <code>localStorage</code>.
+              You can also pass it in the URL as <code>?token=your_token</code> to authenticate automatically.
+            </p>
+
+            <div class="flex items-center justify-between pt-2">
+              <button type="button" @click="clearAuthToken()" x-show="authToken"
+                      class="text-xs text-red-600 hover:underline">
+                Clear token
+              </button>
+              <div class="flex gap-2 ml-auto">
+                <button type="button" @click="showAuthModal = false" class="btn-ghost text-xs">
+                  Cancel
+                </button>
+                <button type="submit" class="btn-primary text-xs">
+                  Save token
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
 
       <!-- ========================================================== new task -->
       <div x-show="showNewTask" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/30 p-4" @click.self="closeNewTask()">

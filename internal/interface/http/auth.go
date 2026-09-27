@@ -35,11 +35,14 @@ func AuthMiddleware(expectedToken string) func(http.Handler) http.Handler {
 
 			auth := r.Header.Get("Authorization")
 			if !validBearerToken(auth, expectedToken) {
-				writeJSONError(w, http.StatusUnauthorized, map[string]any{
-					"error":   "unauthorized",
-					"message": "missing or invalid auth token",
-				})
-				return
+				qToken := r.URL.Query().Get("token")
+				if qToken == "" || subtle.ConstantTimeCompare([]byte(qToken), []byte(expectedToken)) != 1 {
+					writeJSONError(w, http.StatusUnauthorized, map[string]any{
+						"error":   "unauthorized",
+						"message": "missing or invalid auth token",
+					})
+					return
+				}
 			}
 
 			next.ServeHTTP(w, r)

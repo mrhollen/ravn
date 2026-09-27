@@ -86,6 +86,37 @@ export function crowbanApp() {
       }, 6500);
     },
 
+    // ------------------------------------------------------------------ auth token
+    authToken: api.getAuthToken(),
+    showAuthModal: false,
+    tokenInput: "",
+
+    openAuthModal(): void {
+      this.tokenInput = this.authToken;
+      this.showAuthModal = true;
+    },
+
+    saveAuthToken(): void {
+      api.setAuthToken(this.tokenInput);
+      this.authToken = api.getAuthToken();
+      this.showAuthModal = false;
+      this.loadError = "";
+      void this.loadProjects().then(() => {
+        if (this.selectedProjectId) void this.loadBoard();
+      });
+    },
+
+    clearAuthToken(): void {
+      api.setAuthToken("");
+      this.authToken = "";
+      this.tokenInput = "";
+      this.showAuthModal = false;
+      this.loadError = "";
+      void this.loadProjects().then(() => {
+        if (this.selectedProjectId) void this.loadBoard();
+      });
+    },
+
     // ---------------------------------------------------------------- projects
     projects: [] as ProjectWithCounts[],
     loadError: "",
@@ -97,6 +128,9 @@ export function crowbanApp() {
         if (!silent) this.loadError = "";
       } catch (e) {
         if (!silent) this.loadError = errMsg(e);
+        if (ApiError.isUnauthorized(e)) {
+          this.openAuthModal();
+        }
       }
     },
 
@@ -175,6 +209,9 @@ export function crowbanApp() {
         await this.refreshBlockedSet(b);
       } catch (e) {
         if (!silent) this.loadError = errMsg(e);
+        if (ApiError.isUnauthorized(e)) {
+          this.openAuthModal();
+        }
       }
     },
 
@@ -804,7 +841,8 @@ export function crowbanApp() {
 
     /** Escape key: close the top-most overlay or cancel edit mode. */
     dismissTop(): void {
-      if (this.editingTask) this.cancelEditing();
+      if (this.showAuthModal) this.showAuthModal = false;
+      else if (this.editingTask) this.cancelEditing();
       else if (this.detailOpen) this.closeDetail();
       else if (this.showNewTask) this.closeNewTask();
       else if (this.showNewProject) this.showNewProject = false;
