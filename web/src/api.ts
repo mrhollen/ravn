@@ -24,6 +24,7 @@ import type {
   RelationRow,
   TaskDetail,
   TaskSummary,
+  UpdateProjectReq,
   UpdateTaskReq,
 } from "./types";
 
@@ -177,6 +178,14 @@ export const api = {
 
   createProject(req: CreateProjectReq): Promise<Project> {
     return post<Project>("/projects", req);
+  },
+
+  getProject(id: string): Promise<Project> {
+    return request<Project>(`/projects/${id}`);
+  },
+
+  updateProject(id: string, req: UpdateProjectReq): Promise<Project> {
+    return put<Project>(`/projects/${id}`, req);
   },
 
   /** Whole-project board snapshot in one round-trip. */

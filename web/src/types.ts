@@ -198,6 +198,12 @@ export interface CreateProjectReq {
   description?: string; // markdown
 }
 
+export interface UpdateProjectReq {
+  actor: ActorInput;
+  name?: string;
+  description?: string;
+}
+
 export interface CreateTaskReq {
   actor: ActorInput;
   title: string; // required

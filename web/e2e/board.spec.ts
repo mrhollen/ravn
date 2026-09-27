@@ -428,5 +428,220 @@ test.describe('Web E2E test suite', () => {
     await expect(drawer.getByText('No relations')).toBeVisible();
     await closeBtn.click();
   });
+
+  test('project settings modal, durable assignee picker with distinct chip, and board filters', async ({
+    page,
+  }) => {
+    // -------------------------------------------------------------------------
+    // Seed project with tasks
+    // -------------------------------------------------------------------------
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Settings & Filter Project',
+        description: 'Testing project settings and filters',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    // Task 1: P0, assigned to alice, overdue
+    const t1Res = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Alpha Critical Task',
+        priority: 0,
+        assignee: { name: 'alice', type: 'human' },
+        due_at: '2020-01-01T00:00:00Z',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(t1Res.ok).toBe(true);
+
+    // Task 2: P3, assigned to bob, due future
+    const t2Res = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Beta Normal Task',
+        priority: 3,
+        assignee: { name: 'bob', type: 'agent' },
+        due_at: '2099-01-01T00:00:00Z',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(t2Res.ok).toBe(true);
+
+    // Task 3: P4, unassigned
+    const t3Res = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Gamma Low Task',
+        priority: 4,
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(t3Res.ok).toBe(true);
+
+    // Load UI and select the project
+    await page.goto(serverUrl);
+    const projectSelect = page.locator('select').first();
+    await projectSelect.selectOption(project.id);
+    await expect(page.locator('h3', { hasText: 'Alpha Critical Task' })).toBeVisible();
+
+    // -------------------------------------------------------------------------
+    // AC 1: Project settings modal / edit
+    // -------------------------------------------------------------------------
+    const settingsBtn = page.locator('button[aria-label="Project settings"]');
+    await expect(settingsBtn).toBeVisible();
+    await settingsBtn.click();
+
+    // Check modal opens with existing name
+    const nameInput = page.getByPlaceholder('Project name');
+    await expect(nameInput).toBeVisible();
+    await expect(nameInput).toHaveValue('Settings & Filter Project');
+
+    // Update name and description
+    await nameInput.fill('Renamed Project E2E');
+    await page.getByPlaceholder('Project description…').fill('Updated project description');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+
+    // Toast and selector update
+    await expect(page.getByText('Project updated')).toBeVisible();
+    await expect(projectSelect).toContainText('Renamed Project E2E');
+
+    // Reload page and verify persisted
+    await page.reload();
+    await expect(projectSelect).toHaveValue(project.id);
+    await expect(projectSelect).toContainText('Renamed Project E2E');
+
+    // -------------------------------------------------------------------------
+    // AC 2: Assignee selector & durable owner chip distinct from claimer
+    // -------------------------------------------------------------------------
+    // Verify Task 1 has distinct amber Owner chip on card
+    const card1 = page.locator('div[role="button"]', { hasText: 'Alpha Critical Task' });
+    const ownerChip1 = card1.locator('span.bg-amber-50');
+    await expect(ownerChip1).toBeVisible();
+    await expect(ownerChip1).toContainText('alice');
+
+    // Open detail drawer for Task 3 (unassigned)
+    const card3 = page.locator('div[role="button"]', { hasText: 'Gamma Low Task' });
+    await card3.click();
+    const drawer = page.locator('aside');
+    await expect(drawer.getByRole('heading', { name: 'Gamma Low Task' })).toBeVisible();
+    await expect(drawer.getByText('Unassigned')).toBeVisible();
+
+    // Set assignee via inline drawer picker
+    const assigneeInput = drawer.getByPlaceholder('Assignee name (e.g. alice, agent-1)');
+    await assigneeInput.fill('charlie-human');
+    await drawer.getByRole('button', { name: 'Assign' }).click();
+    await expect(page.getByText('Assigned to charlie-human')).toBeVisible();
+    await expect(drawer.locator('span', { hasText: 'Owner' }).first()).toBeVisible();
+    await expect(drawer.getByText('charlie-human').first()).toBeVisible();
+
+    // Now claim the task to verify ephemeral claim lease is distinct from durable owner
+    await drawer.getByRole('button', { name: 'Claim', exact: true }).click();
+    await expect(page.getByText('Claimed task as')).toBeVisible();
+    await expect(drawer.getByText('Claimed', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('Owner', { exact: true }).first()).toBeVisible();
+
+    // Close drawer and verify card shows both owner and claimer distinctly
+    const closeBtn = drawer.locator('button[aria-label="Close"]').first();
+    await closeBtn.click();
+    const card3Updated = page.locator('div[role="button"]', { hasText: 'Gamma Low Task' });
+    await expect(card3Updated.locator('span.bg-amber-50')).toContainText('charlie-human');
+
+    // Reopen drawer, clear assignee
+    await card3Updated.click();
+    await drawer.getByRole('button', { name: 'Clear' }).click();
+    await expect(page.getByText('Assignee cleared')).toBeVisible();
+    await expect(drawer.getByText('Unassigned')).toBeVisible();
+    await closeBtn.click();
+    await expect(card3Updated.locator('span.bg-amber-50')).not.toBeVisible();
+
+    // -------------------------------------------------------------------------
+    // AC 3: Board filters live filtering
+    // -------------------------------------------------------------------------
+    // Search filter
+    const searchInput = page.getByPlaceholder('Filter title or ID…');
+    await searchInput.fill('Alpha');
+    await expect(page.locator('h3', { hasText: 'Alpha Critical Task' })).toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Beta Normal Task' })).not.toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Gamma Low Task' })).not.toBeVisible();
+
+    // Clear search using reset button
+    const resetBtn = page.getByRole('button', { name: 'Reset filters' });
+    await resetBtn.click();
+    await expect(page.locator('h3', { hasText: 'Beta Normal Task' })).toBeVisible();
+
+    // Priority filter (P0)
+    const prioritySelect = page.locator('select[x-model="filterPriority"]');
+    await prioritySelect.selectOption('0');
+    await expect(page.locator('h3', { hasText: 'Alpha Critical Task' })).toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Beta Normal Task' })).not.toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Gamma Low Task' })).not.toBeVisible();
+
+    // Reset priority
+    await prioritySelect.selectOption('');
+    await expect(page.locator('h3', { hasText: 'Beta Normal Task' })).toBeVisible();
+
+    // Assignee filter: 'bob'
+    const assigneeFilter = page.locator('select[x-model="filterAssignee"]');
+    await assigneeFilter.selectOption('bob');
+    await expect(page.locator('h3', { hasText: 'Beta Normal Task' })).toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Alpha Critical Task' })).not.toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Gamma Low Task' })).not.toBeVisible();
+
+    // Assignee filter: 'unassigned'
+    await assigneeFilter.selectOption('unassigned');
+    await expect(page.locator('h3', { hasText: 'Gamma Low Task' })).toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Alpha Critical Task' })).not.toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Beta Normal Task' })).not.toBeVisible();
+
+    // Due filter: 'overdue'
+    await assigneeFilter.selectOption('');
+    const dueSelect = page.locator('select[x-model="filterDue"]');
+    await dueSelect.selectOption('overdue');
+    await expect(page.locator('h3', { hasText: 'Alpha Critical Task' })).toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Beta Normal Task' })).not.toBeVisible();
+
+    // Reset all filters
+    await resetBtn.click();
+    await expect(page.locator('h3', { hasText: 'Alpha Critical Task' })).toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Beta Normal Task' })).toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Gamma Low Task' })).toBeVisible();
+
+    // -------------------------------------------------------------------------
+    // Create task with assignee & Edit task assignee
+    // -------------------------------------------------------------------------
+    const newTaskBtn = page.getByRole('button', { name: '+ New task' });
+    await newTaskBtn.click();
+    await page.getByPlaceholder('Fix login bug').fill('Delta Assigned Task');
+    await page.locator('input[x-model="newTask.assigneeName"]').fill('diana-agent');
+    await page.locator('select[x-model="newTask.assigneeType"]').selectOption('agent');
+    await page.getByRole('button', { name: 'Create task' }).click();
+
+    const deltaCard = page.locator('div[role="button"]', { hasText: 'Delta Assigned Task' });
+    await expect(deltaCard).toBeVisible();
+    await expect(deltaCard.locator('span.bg-amber-50')).toContainText('diana-agent');
+
+    // Edit task assignee via drawer edit mode
+    await deltaCard.click();
+    await drawer.getByRole('button', { name: 'Edit' }).first().click();
+    await page.locator('input[x-model="editDraft.assigneeName"]').fill('elena-human');
+    await page.locator('select[x-model="editDraft.assigneeType"]').selectOption('human');
+    await drawer.getByRole('button', { name: 'Save', exact: true }).click();
+
+    await expect(drawer.getByText('elena-human').first()).toBeVisible();
+    await closeBtn.click();
+    await expect(deltaCard.locator('span.bg-amber-50')).toContainText('elena-human');
+  });
 });
 

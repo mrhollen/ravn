@@ -14,6 +14,7 @@ import type {
   ArtifactKind,
   Board,
   CommentKind,
+  ListTasksParams,
   ProjectWithCounts,
   RelationRow,
   Status,
@@ -171,6 +172,56 @@ export function crowbanApp() {
       }
     },
 
+    // ------------------------------------------------------------ project settings
+    showProjectSettings: false,
+    projectSettingsForm: { name: "", description: "" },
+    projectSettingsBusy: false,
+
+    async openProjectSettings(): Promise<void> {
+      if (!this.selectedProjectId) return;
+      const p = this.projects.find((x) => x.id === this.selectedProjectId);
+      if (p) {
+        this.projectSettingsForm = {
+          name: p.name,
+          description: p.description ?? "",
+        };
+      }
+      this.showProjectSettings = true;
+      try {
+        const full = await api.getProject(this.selectedProjectId);
+        this.projectSettingsForm = {
+          name: full.name,
+          description: full.description ?? "",
+        };
+      } catch {
+        /* keep current list info */
+      }
+    },
+
+    closeProjectSettings(): void {
+      this.showProjectSettings = false;
+    },
+
+    async saveProjectSettings(): Promise<void> {
+      const name = this.projectSettingsForm.name.trim();
+      if (!this.selectedProjectId || !name || this.projectSettingsBusy) return;
+      this.projectSettingsBusy = true;
+      try {
+        await api.updateProject(this.selectedProjectId, {
+          actor: this.actor(),
+          name,
+          description: this.projectSettingsForm.description.trim() || undefined,
+        });
+        await this.loadProjects();
+        this.showProjectSettings = false;
+        this.toast("Project updated");
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.projectSettingsBusy = false;
+      }
+    },
+
     // ------------------------------------------------------------------- board
     selectedProjectId: (typeof localStorage !== "undefined" ? localStorage.getItem(LS_PROJECT) : "") ?? "",
     board: null as Board | null,
@@ -185,13 +236,119 @@ export function crowbanApp() {
       return this.blockedIds.has(id) || !!this.knownBlocked[id];
     },
 
+    // ------------------------------------------------------------------ filters
+    filterPriority: "" as string,
+    filterAssignee: "" as string,
+    filterUnblocked: false,
+    filterDue: "" as string,
+    filterSearch: "",
+
+    availableAssignees(): string[] {
+      const b = this.board;
+      if (!b) return [];
+      const set = new Set<string>();
+      for (const s of STATUSES) {
+        for (const t of b.tasks[s] ?? []) {
+          if (t.assignee?.name) {
+            set.add(t.assignee.name);
+          }
+        }
+      }
+      return Array.from(set).sort();
+    },
+
+    hasActiveFilters(): boolean {
+      return (
+        this.filterPriority !== "" ||
+        this.filterAssignee !== "" ||
+        this.filterUnblocked ||
+        this.filterDue !== "" ||
+        this.filterSearch.trim() !== ""
+      );
+    },
+
+    clearFilters(): void {
+      this.filterPriority = "";
+      this.filterAssignee = "";
+      this.filterUnblocked = false;
+      this.filterDue = "";
+      this.filterSearch = "";
+    },
+
+    listTasksParams(): ListTasksParams {
+      const p: ListTasksParams = { project_id: this.selectedProjectId };
+      if (this.filterPriority !== "") p.priority = Number(this.filterPriority);
+      if (this.filterAssignee && this.filterAssignee !== "unassigned") {
+        p.assignee_name = this.filterAssignee;
+      }
+      if (this.filterUnblocked) p.unblocked = true;
+      if (this.filterDue === "overdue") {
+        p.due_before = new Date().toISOString();
+      } else if (this.filterDue === "today") {
+        const end = new Date();
+        end.setHours(23, 59, 59, 999);
+        p.due_before = end.toISOString();
+      } else if (this.filterDue === "week") {
+        const end = new Date();
+        end.setDate(end.getDate() + 7);
+        end.setHours(23, 59, 59, 999);
+        p.due_before = end.toISOString();
+      }
+      if (this.filterSearch.trim()) {
+        p.search = this.filterSearch.trim();
+      }
+      return p;
+    },
+
     columns(): { status: Status; label: string; tasks: TaskSummary[] }[] {
       const b = this.board;
-      return STATUSES.map((s) => ({
-        status: s,
-        label: STATUS_LABEL[s],
-        tasks: b ? b.tasks[s] ?? [] : [],
-      }));
+      return STATUSES.map((s) => {
+        let tasks = b ? b.tasks[s] ?? [] : [];
+        if (this.filterPriority !== "") {
+          const p = Number(this.filterPriority);
+          tasks = tasks.filter((t) => t.priority === p);
+        }
+        if (this.filterAssignee === "unassigned") {
+          tasks = tasks.filter((t) => !t.assignee || !t.assignee.name);
+        } else if (this.filterAssignee !== "") {
+          const name = this.filterAssignee.toLowerCase();
+          tasks = tasks.filter((t) => t.assignee?.name.toLowerCase() === name);
+        }
+        if (this.filterUnblocked) {
+          tasks = tasks.filter((t) => !this.isBlocked(t.id));
+        }
+        if (this.filterDue === "overdue") {
+          tasks = tasks.filter((t) => isOverdue(t));
+        } else if (this.filterDue === "today") {
+          const end = new Date();
+          end.setHours(23, 59, 59, 999);
+          tasks = tasks.filter((t) => {
+            if (!t.due_at || t.status === "done") return false;
+            const ms = Date.parse(t.due_at);
+            return !Number.isNaN(ms) && ms <= end.getTime();
+          });
+        } else if (this.filterDue === "week") {
+          const end = new Date();
+          end.setDate(end.getDate() + 7);
+          end.setHours(23, 59, 59, 999);
+          tasks = tasks.filter((t) => {
+            if (!t.due_at || t.status === "done") return false;
+            const ms = Date.parse(t.due_at);
+            return !Number.isNaN(ms) && ms <= end.getTime();
+          });
+        }
+        const q = this.filterSearch.trim().toLowerCase();
+        if (q) {
+          tasks = tasks.filter(
+            (t) => t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q),
+          );
+        }
+        return {
+          status: s,
+          label: STATUS_LABEL[s],
+          tasks,
+        };
+      });
     },
 
     selectProject(): void {
@@ -274,14 +431,30 @@ export function crowbanApp() {
     // ---------------------------------------------------------------- new task
     showNewTask: false,
     newTaskTarget: "todo" as Status,
-    newTask: { title: "", description: "", priority: 0, due: "", acs: "" },
+    newTask: {
+      title: "",
+      description: "",
+      priority: 0,
+      due: "",
+      acs: "",
+      assigneeName: "",
+      assigneeType: "human" as "human" | "agent",
+    },
     taskBusy: false,
     /** possible_duplicates advisory from the last create — shown non-blockingly. */
     duplicates: [] as TaskSummary[],
 
     openNewTask(status: Status = "todo"): void {
       this.newTaskTarget = status;
-      this.newTask = { title: "", description: "", priority: 0, due: "", acs: "" };
+      this.newTask = {
+        title: "",
+        description: "",
+        priority: 0,
+        due: "",
+        acs: "",
+        assigneeName: "",
+        assigneeType: "human",
+      };
       this.duplicates = [];
       this.showNewTask = true;
     },
@@ -301,6 +474,7 @@ export function crowbanApp() {
       this.taskBusy = true;
       let created: TaskSummary | null = null;
       try {
+        const assigneeName = this.newTask.assigneeName.trim();
         const res = await api.createTask({
           actor: this.actor(),
           title,
@@ -308,6 +482,7 @@ export function crowbanApp() {
           project_id: this.selectedProjectId,
           priority: this.newTask.priority,
           due_at: dateInputToIso(this.newTask.due),
+          assignee: assigneeName ? { name: assigneeName, type: this.newTask.assigneeType } : undefined,
           acceptance_criteria: splitLines(this.newTask.acs),
         });
         created = res.task;
@@ -376,6 +551,8 @@ export function crowbanApp() {
 
     applyDetail(t: TaskDetail): void {
       this.detail = t;
+      this.assigneeInputName = t.assignee?.name ?? "";
+      this.assigneeInputType = (t.assignee?.type as "human" | "agent") || "human";
       // Learn the blocked state for card badges (the board diff is authoritative
       // on poll; details fill in between polls and cover >100-task projects).
       const kb = { ...this.knownBlocked };
@@ -383,6 +560,81 @@ export function crowbanApp() {
       else delete kb[t.id];
       this.knownBlocked = kb;
       if (!this.notesDirty) this.notesDraft = t.notes;
+    },
+
+    // ------------------------------------------------------------ assignee
+    assigneeInputName: "",
+    assigneeInputType: "human" as "human" | "agent",
+    assigneeBusy: false,
+
+    async saveAssignee(): Promise<void> {
+      const d = this.detail;
+      if (!d || this.assigneeBusy) return;
+      const name = this.assigneeInputName.trim();
+      const type = this.assigneeInputType || "human";
+      await this.updateAssignee(name, type);
+    },
+
+    async clearAssignee(): Promise<void> {
+      this.assigneeInputName = "";
+      await this.updateAssignee("", "human");
+    },
+
+    async updateAssignee(name: string, type: "human" | "agent" = "human"): Promise<void> {
+      const d = this.detail;
+      if (!d || this.assigneeBusy) return;
+      this.assigneeBusy = true;
+      const trimmed = name.trim();
+      const req: UpdateTaskReq = {
+        actor: this.actor(),
+        version: d.version,
+      };
+      if (trimmed) {
+        req.assignee = { name: trimmed, type };
+      } else {
+        req.clear_assignee = true;
+      }
+      try {
+        const updated = await api.updateTask(d.id, req);
+        if (this.detail && this.detail.id === d.id) {
+          this.detail.assignee = updated.assignee;
+          this.detail.version = updated.version;
+          this.detail.updated_at = updated.updated_at;
+          this.assigneeInputName = updated.assignee?.name ?? "";
+          this.assigneeInputType = (updated.assignee?.type as "human" | "agent") || "human";
+        }
+        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+        this.toast(trimmed ? `Assigned to ${trimmed}` : "Assignee cleared");
+      } catch (e) {
+        if (ApiError.isVersionConflict(e)) {
+          try {
+            const fresh = await api.getTask(d.id);
+            this.applyDetail(fresh);
+            const retryReq: UpdateTaskReq = {
+              actor: this.actor(),
+              version: fresh.version,
+              assignee: trimmed ? { name: trimmed, type } : undefined,
+              clear_assignee: !trimmed,
+            };
+            const updated = await api.updateTask(d.id, retryReq);
+            if (this.detail && this.detail.id === d.id) {
+              this.detail.assignee = updated.assignee;
+              this.detail.version = updated.version;
+              this.detail.updated_at = updated.updated_at;
+              this.assigneeInputName = updated.assignee?.name ?? "";
+              this.assigneeInputType = (updated.assignee?.type as "human" | "agent") || "human";
+            }
+            await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+            this.toast(trimmed ? `Assigned to ${trimmed}` : "Assignee cleared");
+          } catch (e2) {
+            this.toast(errMsg(e2), "error");
+          }
+        } else {
+          this.toast(errMsg(e), "error");
+        }
+      } finally {
+        this.assigneeBusy = false;
+      }
     },
 
     // ------------------------------------------------------------ task edit
@@ -393,6 +645,8 @@ export function crowbanApp() {
       description: "",
       priority: 0,
       due: "",
+      assigneeName: "",
+      assigneeType: "human" as "human" | "agent",
     },
 
     startEditing(): void {
@@ -403,6 +657,8 @@ export function crowbanApp() {
         description: t.description ?? "",
         priority: t.priority ?? 0,
         due: t.due_at ? t.due_at.slice(0, 10) : "",
+        assigneeName: t.assignee?.name ?? "",
+        assigneeType: (t.assignee?.type as "human" | "agent") || "human",
       };
       this.editingTask = true;
     },
@@ -432,6 +688,16 @@ export function crowbanApp() {
         req.clear_due = true;
       }
 
+      const assigneeName = this.editDraft.assigneeName.trim();
+      if (assigneeName) {
+        req.assignee = {
+          name: assigneeName,
+          type: this.editDraft.assigneeType || "human",
+        };
+      } else if (t.assignee) {
+        req.clear_assignee = true;
+      }
+
       try {
         await api.updateTask(t.id, req);
         this.editingTask = false;
@@ -445,6 +711,10 @@ export function crowbanApp() {
             const retryReq: UpdateTaskReq = {
               ...req,
               version: fresh.version,
+              assignee: assigneeName
+                ? { name: assigneeName, type: this.editDraft.assigneeType || "human" }
+                : undefined,
+              clear_assignee: !assigneeName && !!fresh.assignee,
             };
             await api.updateTask(t.id, retryReq);
             this.editingTask = false;
@@ -1001,6 +1271,7 @@ export function crowbanApp() {
     /** Escape key: close the top-most overlay or cancel edit mode. */
     dismissTop(): void {
       if (this.showAuthModal) this.showAuthModal = false;
+      else if (this.showProjectSettings) this.showProjectSettings = false;
       else if (this.editingTask) this.cancelEditing();
       else if (this.detailOpen) this.closeDetail();
       else if (this.showNewTask) this.closeNewTask();
