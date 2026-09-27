@@ -33,17 +33,25 @@ crowban is an MCP-first KanBan tool where AI coding agents are the primary users
 
 ## Quick start
 
-Assume a Makefile with targets `up`, `down`, `logs`, `build`, `test`, `smoke`:
+Requires Docker (with compose). Copy the env template only if you want to change defaults:
 
 ```bash
-make up                    # starts crowban-server (:8080) + crowban-mcp (:9080) in Docker
-make smoke                 # end-to-end check
+cp .env.example .env       # optional — every variable has a default
+make up                    # builds both images, starts crowban-server (:8080) + crowban-mcp (:9080) detached
+make smoke                 # hits both /healthz + GET /api/v1/projects, prints PASS/FAIL
+make logs                  # stream both containers' logs
+make down                  # stop and remove containers (keeps the SQLite volume)
 ```
 
 - **UI**: http://localhost:8080
+- **API**: http://localhost:8080/api/v1 — full contract in [docs/API.md](docs/API.md)
 - **MCP endpoint**: http://localhost:9080/mcp
 
-**Optional auth**: Set `CROWBAN_TOKEN` in your environment. Auth is off by default for single-tenant local use.
+**Port overrides.** Host-side published ports are env-overridable (`CROWBAN_SERVER_PORT`, default `8080`; `CROWBAN_MCP_PORT`, default `9080`). The containers always listen on 8080/9080 *internally* — only the host mapping changes, so the MCP→server upstream URL stays stable. If another process already owns :8080, set `CROWBAN_SERVER_PORT=18080` in `.env` (do **not** kill what's there) and run `make up`; point UI/clients at http://localhost:18080.
+
+**Optional auth.** Set `CROWBAN_TOKEN` in your environment or `.env` to require a bearer token on API calls; the MCP container forwards it automatically. Auth is off by default for single-tenant local use.
+
+**Persistence.** The SQLite database lives in the named Docker volume `crowban-data` (mounted at `/data`) and survives rebuilds and `make down`. Backups = a consistent copy of that volume (stop the container first, or use SQLite's `.backup`).
 
 ## MCP client config
 

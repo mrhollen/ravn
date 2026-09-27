@@ -1,0 +1,58 @@
+# crowban — compose stack (slice 6, ARCHITECTURE §8).
+#
+# One Dockerfile, two build targets (see Dockerfile stage comments). The
+# SQLite database lives in the named volume `crowban-data` so it survives
+# container rebuilds/restarts; keep that volume on a local disk — never bind
+# mount it from NFS/CIFS (WAL misbehaves there).
+#
+# Host-side ports are overridable via .env (copied from .env.example) or the
+# environment — compose interpolates ${VAR:-default} automatically:
+#   CROWBAN_SERVER_PORT  default 8080   (crowban-server publishes :8080 inside)
+#   CROWBAN_MCP_PORT     default 9080   (crowban-mcp    publishes :9080 inside)
+# Containers ALWAYS listen on 8080/9080 internally; only the host mapping
+# changes, which keeps the MCP container's upstream URL stable.
+
+services:
+  crowban-server:
+    build:
+      context: .
+      target: server-runtime
+    ports:
+      - "${CROWBAN_SERVER_PORT:-8080}:8080"
+    environment:
+      CROWBAN_ADDR: ":8080"
+      CROWBAN_DATA: "/data/crowban.db"
+      CROWBAN_STATIC_DIR: "/app/public" # UI is baked into the image (web-build stage)
+      CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
+    volumes:
+      - crowban-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s # first boot runs SQL migrations
+      retries: 3
+
+  crowban-mcp:
+    build:
+      context: .
+      target: mcp-runtime
+    ports:
+      - "${CROWBAN_MCP_PORT:-9080}:9080"
+    environment:
+      MCP_ADDR: ":9080"
+      CROWBAN_API_URL: "http://crowban-server:8080" # compose service DNS — no IPs, no host assumptions
+      CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}" # forwarded as Bearer to the API when set
+      CROWBAN_AGENT_NAME: "${CROWBAN_AGENT_NAME:-agent}" # actor stamped when a tool call omits one
+    depends_on:
+      crowban-server:
+        condition: service_healthy # mcp /healthz proxies upstream, so it only turns healthy once the server (and its DB) do
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9080/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  crowban-data:

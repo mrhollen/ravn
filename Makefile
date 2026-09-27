@@ -1,6 +1,6 @@
-# crowban — Makefile (slice 1: Go skeleton only).
-# The docker-compose targets below are stubs until the Dockerfile and
-# docker-compose.yml land in a later slice.
+# crowban — Makefile. Slice 6: docker-first deployment (Dockerfile with two
+# build targets + docker-compose.yml). Host-side ports are overridable via
+# CROWBAN_SERVER_PORT / CROWBAN_MCP_PORT (.env or environment); see .env.example.
 
 GO      ?= go
 BIN_DIR := bin
@@ -17,7 +17,7 @@ vet: ## go vet + gofmt check (gofmt -l must print nothing)
 	@unformatted=$$(gofmt -l .); if [ -n "$$unformatted" ]; then echo "gofmt needed on:"; echo "$$unformatted"; exit 1; fi
 	go vet ./...
 
-build: ## compile binaries into bin/ (server now; mcp lands in a later slice)
+build: ## compile both static binaries into bin/ (crowban-server, crowban-mcp)
 	CGO_ENABLED=0 $(GO) build -trimpath -o $(BIN_DIR)/crowban-server ./cmd/crowban-server
 	@if [ -d cmd/crowban-mcp ]; then \
 		echo "building crowban-mcp"; \
@@ -32,14 +32,14 @@ test: ## run all Go tests
 ui: ## build the web UI into web/dist (served by crowban-server via CROWBAN_STATIC_DIR)
 	cd web && npm ci && npm run build
 
-up: ## docker compose up --build -d [STUB]
-	@echo "docker wiring lands in a later slice (no Dockerfile / docker-compose.yml yet)"
+up: ## build both images and start crowban-server + crowban-mcp detached
+	docker compose up --build -d
 
-down: ## docker compose down [STUB]
-	@echo "docker wiring lands in a later slice (no Dockerfile / docker-compose.yml yet)"
+down: ## stop and remove containers (keeps the crowban-data volume)
+	docker compose down
 
-logs: ## docker compose logs -f [STUB]
-	@echo "docker wiring lands in a later slice (no Dockerfile / docker-compose.yml yet)"
+logs: ## stream logs from both containers
+	docker compose logs -f
 
-smoke: ## end-to-end curl smoke test [STUB]
-	@echo "smoke test lands with the api layer in a later slice"
+smoke: ## curl both /healthz + GET /api/v1/projects on the overridable host ports
+	@sh scripts/smoke.sh

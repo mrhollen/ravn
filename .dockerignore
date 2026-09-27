@@ -1,0 +1,40 @@
+# crowban build context (slice 6).
+# Everything excluded here must NOT be needed by the Dockerfile stages.
+# Note: web/package-lock.json stays IN the context — npm ci requires it.
+
+# --- VCS / local state -------------------------------------------------------
+.git
+.gitignore
+.env
+
+# --- Go build & test artifacts -----------------------------------------------
+bin/
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# --- SQLite data (local dev DBs; containers get a fresh named volume) --------
+data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# --- Node: dependencies + local build output ---------------------------------
+# web/dist is rebuilt INSIDE the image by the web-build stage, so excluding it
+# here keeps the context lean and never breaks the build.
+node_modules
+web/node_modules
+web/dist
+
+# --- Docs / non-essential files (smaller context, faster COPY .) --------------
+docs/
+LICENSE
+README.md
+*.md
+
+# --- Editor -------------------------------------------------------------------
+.idea
+.vscode
