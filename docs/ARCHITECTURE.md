@@ -281,7 +281,7 @@ Claim-CAS over HTTP: no locks held across the round-trip; the race resolves in a
 ## 6. MCP container design
 
 - **SDK:** `github.com/mark3labs/mcp-go` v1.x (verified current API, §3).
-- **Transports: stateless Streamable HTTP + legacy SSE.** Primary is the MCP spec's streamable-HTTP transport (replaced the older SSE transport): clients POST JSON-RPC to one endpoint; responses are `application/json` or an SSE stream. We run **stateless** (`server.WithStateLess(true)`): the SDK keeps no session map, every request is self-contained — which is exactly what makes the container stateless and trivially restartable/scaleable. Alongside it, a legacy **SSE server** (`server.NewSSEServer`) covers clients that only speak the pre-streamable protocol (they open the session with an HTTP GET — e.g. Antigravity's remote MCP, which otherwise hangs: "still connecting", tools never register). Routes: `GET /mcp` → SSE stream (dual-mode at the canonical URL), `POST /mcp` → stateless Streamable HTTP, `GET /sse` → SSE stream (canonical legacy endpoint), `POST /message?sessionId=…` → JSON-RPC into that session. One caveat for wrappers: any middleware that wraps `http.ResponseWriter` must re-expose `Flush()` or the SDK's flusher assertion fails with 500 "Streaming unsupported".
+- **Transports: stateless Streamable HTTP + legacy SSE.** Primary is the MCP spec's streamable-HTTP transport (replaced the older SSE transport): clients POST JSON-RPC to one endpoint; responses are `application/json` or an SSE stream. We run **stateless** (`server.WithStateLess(true)`): the SDK keeps no session map, every request is self-contained — which is exactly what makes the container stateless and trivially restartable/scaleable. The streamable server natively handles `POST /mcp` (calls and notifications) and `GET /mcp` (streaming notifications). Alongside it, a legacy **SSE server** (`server.NewSSEServer`) covers clients that only speak the pre-streamable protocol via `GET /sse` and `POST /message`. One caveat for wrappers: any middleware that wraps `http.ResponseWriter` must re-expose `Flush()` or the SDK's flusher assertion fails with 405/500 "Streaming unsupported".
 - **Wiring (`cmd/crowban-mcp/main.go`):**
 
 ```go
@@ -299,12 +299,11 @@ sse := mcpserver.NewSSEServer(mcpsrv,        // legacy SSE transport, same tool 
     mcpserver.WithSSEDisableLocalhostProtection(true),
 )
 mux := http.NewServeMux()
-mux.HandleFunc("GET /mcp", sse.SSEHandler().ServeHTTP)  // dual-mode: GET = SSE, POST/other fall through
-mux.Handle("/mcp", streamable)              // stateless Streamable HTTP (POST JSON-RPC)
+mux.Handle("/mcp", streamable)              // Streamable HTTP (POST calls/notifs, GET stream)
 mux.Handle("/sse", sse.SSEHandler())         // canonical legacy SSE endpoint
-mux.Handle("/message", sse.MessageHandler()) // JSON-RPC into the session advertised by `endpoint`
+mux.Handle("/message", messageHandlerWithSessionFallback(sse.MessageHandler())) // JSON-RPC into legacy session
 mux.HandleFunc("GET /healthz", healthz)     // pings main server's /healthz through the client; 503 if upstream down
-http.ListenAndServe(addr, withLogging(mux))
+http.ListenAndServe(addr, withLogging(logger, mux))
 ```
 
 - **Tool registration pattern (`mcp/tools.go`):** each tool = `mcp.NewTool(name, mcp.WithDescription(<written for small LLMs>), <typed property builders: WithString+Required, WithNumber, WithEnum(...), WithObject/WithArray where needed>)` + handler `func(ctx, mcp.CallToolRequest) (*mcp.CallToolResult, error)`. Handlers are one-liners around the client: parse args (`request.RequireString(...)`) → call REST → on success `mcp.NewToolResultText(compactJSON)`; on REST error return `mcp.NewToolResultError(text)` where text = **the REST error body verbatim** (its `message` already contains the recovery hint). Never fabricate success.

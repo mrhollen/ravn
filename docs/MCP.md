@@ -19,16 +19,21 @@ resume, so the client can be restarted or load-balanced freely. The same host
 also serves `GET /healthz` (upstream liveness; used by compose healthchecks).
 
 For clients that only speak the legacy **SSE transport** (they open the session
-with an HTTP GET — e.g. Antigravity's remote MCP), use:
+with an HTTP GET to an SSE endpoint):
 
 ```
 http://<host>:9311/sse
 ```
 
-`/sse` opens the event stream (its `endpoint` event advertises `/message?sessionId=…`
-for the JSON-RPC POSTs). The canonical URL is dual-mode too: a GET to `/mcp`
-opens an SSE stream, while POSTs still speak Streamable-HTTP — so a single
-configured URL works for both transport classes.
+`/sse` opens the legacy SSE event stream (its `endpoint` event advertises `/message?sessionId=…`
+for the JSON-RPC POSTs, with session ID fallback if sent in headers).
+Streamable HTTP clients (including Antigravity and modern MCP clients) connect directly to:
+
+```
+http://<host>:9311/mcp
+```
+
+`/mcp` natively handles both Streamable HTTP POST calls and GET SSE notification streams.
 
 ## Pointing an MCP client at it
 

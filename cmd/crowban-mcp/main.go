@@ -55,9 +55,8 @@ func main() {
 	)
 
 	// Legacy SSE transport for clients that only speak the pre-streamable MCP
-	// protocol (e.g. Antigravity's remote-MCP integration, which opens its
-	// session with an HTTP GET). It shares the same MCPServer/tool registry:
-	//   GET  /mcp     → open an SSE event stream (dual-mode at the canonical URL)
+	// protocol (opening the session with an HTTP GET to /sse). It shares the same
+	// MCPServer/tool registry:
 	//   GET  /sse     → open an SSE event stream (canonical legacy endpoint)
 	//   POST /message → JSON-RPC into the session advertised by the `endpoint` event
 	sse := mcpsrv.NewSSEServer(mcs,
@@ -67,10 +66,9 @@ func main() {
 	)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /mcp", sse.SSEHandler().ServeHTTP) // dual-mode: GET = SSE, POST/other = below
-	mux.Handle("/mcp", streamable)
+	mux.Handle("/mcp", streamable) // streamable handles both POST (requests/notifs) and GET (listening stream)
 	mux.Handle("/sse", sse.SSEHandler())
-	mux.Handle("/message", sse.MessageHandler())
+	mux.Handle("/message", messageHandlerWithSessionFallback(sse.MessageHandler()))
 	mux.HandleFunc("GET /healthz", mcp.HealthzHandler(client))
 
 	srv := &http.Server{
@@ -117,6 +115,9 @@ func envOr(key, def string) string {
 // suppressed so compose healthchecks don't drown the log; everything else logs
 // method, path, status and duration.
 func withLogging(logger *slog.Logger, next http.Handler) http.Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -146,4 +147,24 @@ func (r *statusRecorder) Flush() {
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// messageHandlerWithSessionFallback ensures that if a client forwards sessionId
+// via Mcp-Session-Id header or session_id query param instead of sessionId query param,
+// it is mapped into the query param so mark3labs SSEServer accepts it.
+func messageHandlerWithSessionFallback(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("sessionId") == "" {
+			if sid := r.Header.Get("Mcp-Session-Id"); sid != "" {
+				q := r.URL.Query()
+				q.Set("sessionId", sid)
+				r.URL.RawQuery = q.Encode()
+			} else if sid := r.URL.Query().Get("session_id"); sid != "" {
+				q := r.URL.Query()
+				q.Set("sessionId", sid)
+				r.URL.RawQuery = q.Encode()
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
