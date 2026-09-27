@@ -5,7 +5,7 @@
 GO      ?= go
 BIN_DIR := bin
 
-.PHONY: help fmt vet build test up down logs smoke
+.PHONY: help fmt vet build test ui up down logs smoke
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-8s %s\n", $$1, $$2}'
@@ -28,6 +28,9 @@ build: ## compile binaries into bin/ (server now; mcp lands in a later slice)
 
 test: ## run all Go tests
 	CGO_ENABLED=0 $(GO) test ./... -count=1
+
+ui: ## build the web UI into web/dist (served by crowban-server via CROWBAN_STATIC_DIR)
+	cd web && npm ci && npm run build
 
 up: ## docker compose up --build -d [STUB]
 	@echo "docker wiring lands in a later slice (no Dockerfile / docker-compose.yml yet)"

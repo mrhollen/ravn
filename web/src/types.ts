@@ -1,0 +1,293 @@
+// Wire-contract types for the crowban REST API (docs/API.md is the source of
+// truth; these mirror internal/interface/http/dto.go). Optional fields are
+// OMITTED on the wire when unset — never null.
+
+export type Status = "todo" | "doing" | "done";
+export const STATUSES: readonly Status[] = ["todo", "doing", "done"];
+
+export const STATUS_LABEL: Record<Status, string> = {
+  todo: "To Do",
+  doing: "Doing",
+  done: "Done",
+};
+
+export type CommentKind =
+  | "progress"
+  | "question"
+  | "decision"
+  | "handoff"
+  | "note";
+export const COMMENT_KINDS: readonly CommentKind[] = [
+  "progress",
+  "question",
+  "decision",
+  "handoff",
+  "note",
+];
+
+export type ArtifactKind =
+  | "log"
+  | "screenshot"
+  | "command-output"
+  | "trace"
+  | "url"
+  | "other";
+export const ARTIFACT_KINDS: readonly ArtifactKind[] = [
+  "log",
+  "screenshot",
+  "command-output",
+  "trace",
+  "url",
+  "other",
+];
+
+// Stored relation kinds on the wire. The tool-boundary alias "parent" never
+// appears in a persisted row (stored as the inverse child edge).
+export type RelationKind = "child" | "blocked-by" | "duplicate-of" | "related";
+
+/** Actor reference as embedded in rows. `name` can be "" for special holders
+ *  (e.g. a no-lease claim-conflict holder `{ "type": "" }`). */
+export interface ActorRef {
+  type: string;
+  name: string;
+}
+
+/** The self-declared actor every mutation body carries. `type` is optional
+ *  and defaults to "human" server-side. */
+export interface ActorInput {
+  name: string;
+  type?: "human" | "agent";
+}
+
+// --- row shapes -------------------------------------------------------------
+
+export interface StatusCounts {
+  todo: number;
+  doing: number;
+  done: number;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** GET /projects row: project + per-status OPEN task counts. */
+export interface ProjectWithCounts extends Project {
+  task_counts: StatusCounts;
+}
+
+export interface ListProjectsResponse {
+  projects: ProjectWithCounts[];
+  total: number;
+}
+
+/** Compact task row returned by every list/board/create/update response. */
+export interface TaskSummary {
+  id: string;
+  title: string;
+  status: Status;
+  priority: number; // 0 (highest) – 5 (lowest)
+  due_at?: string; // RFC3339, omitted when unset
+  assignee?: ActorRef; // durable owner, omitted when unset
+  claimed_by?: ActorRef; // ephemeral lease holder, omitted when unclaimed
+  claim_expires_at?: string; // omitted while unclaimed
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BlockerRef {
+  id: string;
+  title: string;
+  status: Status;
+}
+
+/** Acceptance criterion (seq is 1-based). */
+export interface AcRow {
+  seq: number;
+  text: string;
+  done: boolean;
+  note?: string;
+  completed_by?: ActorRef;
+  completed_at?: string;
+}
+
+export interface CommentRow {
+  id: string;
+  kind: CommentKind;
+  body: string; // markdown
+  actor: ActorRef;
+  created_at: string;
+}
+
+export interface ArtifactRow {
+  id: string;
+  kind: ArtifactKind;
+  ref: string; // URL or filesystem path
+  summary?: string;
+  actor: ActorRef;
+  created_at: string;
+}
+
+/** A raw edge touching a task in either direction (no edge id on the wire). */
+export interface RelationRow {
+  task_id: string;
+  other_task_id: string;
+  kind: RelationKind;
+  created_at: string;
+}
+
+/** Activity-log entry; before/after are compact JSON strings, omitted when empty. */
+export interface EventRow {
+  id: string;
+  kind: string; // created|updated|status-changed|claimed|released|heartbeat|assigned|noted|commented|ac-toggled|artifact-added|relation-changed
+  actor: ActorRef;
+  before?: string;
+  after?: string;
+  at: string;
+}
+
+/** GET /tasks/{id} — the one-call resume payload (summary fields flattened in). */
+export interface TaskDetail extends TaskSummary {
+  project_id: string;
+  description: string; // markdown
+  notes: string; // durable resume scratchpad
+  archived: boolean;
+  blocked: boolean; // derived at read time from open blocked-by edges
+  blockers: BlockerRef[]; // [] when none — never null
+  claimed_at?: string; // omitted while unclaimed
+  claim_ttl_seconds?: number; // omitted/0 while unclaimed
+  completed_at?: string;
+  acceptance_criteria: AcRow[]; // [] when none
+  comments: CommentRow[]; // newest first (tail)
+  artifacts: ArtifactRow[]; // oldest first
+  relations: RelationRow[]; // edges touching this task, either direction
+  events: EventRow[]; // newest first (tail)
+}
+
+/** GET /projects/{id}/board — whole project in one round-trip. */
+export interface Board {
+  project_id: string;
+  counts: StatusCounts;
+  tasks: Record<Status, TaskSummary[]>; // all three keys always present ([] when empty)
+}
+
+/** POST /tasks → 201 body: fresh row + advisory duplicate candidates. */
+export interface CreateTaskResponse {
+  task: TaskSummary;
+  possible_duplicates: TaskSummary[]; // [] when none — advisory only
+}
+
+// --- request bodies ----------------------------------------------------------
+
+export interface CreateProjectReq {
+  actor: ActorInput;
+  name: string; // required
+  description?: string; // markdown
+}
+
+export interface CreateTaskReq {
+  actor: ActorInput;
+  title: string; // required
+  description?: string; // markdown
+  project_id: string; // required; must exist
+  priority?: number; // 0–5, default 0
+  due_at?: string; // RFC3339
+  assignee?: ActorInput;
+  acceptance_criteria?: string[]; // become seq 1..n
+}
+
+export interface UpdateTaskReq {
+  actor: ActorInput;
+  version: number; // REQUIRED — stored version last read; stale → 409
+  title?: string | null;
+  description?: string | null;
+  status?: Status;
+  priority?: number; // 0–5
+  due_at?: string; // RFC3339 to set…
+  clear_due?: boolean; // …or clear the deadline
+  assignee?: ActorInput; // durable ownership…
+  clear_assignee?: boolean; // …or clear it
+  archived?: boolean;
+}
+
+export interface NotesReq {
+  actor: ActorInput;
+  notes: string; // whole-blob replace; NO version field in the request
+}
+
+export interface AcToggleReq {
+  actor: ActorInput;
+  done: boolean;
+  note?: string;
+}
+
+export interface CommentReq {
+  actor: ActorInput;
+  kind: CommentKind;
+  body: string; // markdown, non-empty after trim
+}
+
+export interface ArtifactReq {
+  actor: ActorInput;
+  kind: ArtifactKind;
+  ref: string; // URL or path, non-empty after trim
+  summary?: string;
+}
+
+// --- list_tasks (subset of filters the UI uses) -------------------------------
+
+export interface ListTasksParams {
+  project_id?: string;
+  status?: Status;
+  assignee_name?: string;
+  unblocked?: boolean; // true = keep only tasks with no open blocker
+  search?: string;
+  priority?: number;
+  due_before?: string;
+  created_after?: string;
+  limit?: number; // default 20, max 100 (clamped)
+  offset?: number; // default 0
+}
+
+export interface ListTasksResponse {
+  tasks: TaskSummary[];
+  total: number; // matching rows before paging
+  limit: number; // effective after clamping
+  offset: number;
+}
+
+// --- error bodies --------------------------------------------------------------
+
+/** Base shape of every /api/v1/* error body. `message` is the agent-readable
+ *  recovery instruction — surface it verbatim in the UI. */
+export interface ApiErrorBody {
+  error: string; // "invalid input" | "not found" | "version_conflict" | "claim conflict" | "parent conflict" | "internal"
+  message?: string;
+  resource?: string; // "task" | "project"
+  id?: string;
+}
+
+/** 409 version_conflict — carries everything needed to rebase without a read. */
+export interface VersionConflictBody extends ApiErrorBody {
+  error: "version_conflict";
+  current_version: number;
+  updated_at?: string;
+  current: TaskSummary; // fresh task summary row
+}
+
+/** 409 claim conflict — holder + expiry ARE the recovery instruction. */
+export interface ClaimConflictBody extends ApiErrorBody {
+  error: "claim conflict";
+  holder: ActorRef; // { type: "" } when there is no lease at all
+  expires_at?: string;
+}
+
+/** 409 parent conflict — a task may have at most one parent. */
+export interface ParentConflictBody extends ApiErrorBody {
+  error: "parent conflict";
+}

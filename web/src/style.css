@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/* Alpine: hide [x-cloak] elements until the app boots (prevents attribute flash). */
+[x-cloak] {
+  display: none !important;
+}
+
+/* --- small component classes used by index.html ------------------------ */
+
+@layer components {
+  .btn-primary {
+    @apply rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-ghost {
+    @apply rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .field {
+    @apply w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm shadow-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400;
+  }
+
+  .section-title {
+    @apply mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500;
+  }
+
+  /* Rendered markdown (descriptions, notes, comments). */
+  .md-body {
+    @apply text-sm leading-relaxed text-zinc-700;
+  }
+  .md-body p {
+    @apply my-1.5;
+  }
+  .md-body h1,
+  .md-body h2,
+  .md-body h3,
+  .md-body h4 {
+    @apply mb-1 mt-3 font-semibold text-zinc-900 first:mt-0;
+  }
+  .md-body ul {
+    @apply my-1.5 list-disc pl-5;
+  }
+  .md-body ol {
+    @apply my-1.5 list-decimal pl-5;
+  }
+  .md-body code {
+    @apply rounded bg-zinc-100 px-1 py-0.5 font-mono text-[0.85em] text-zinc-800;
+  }
+  .md-body pre {
+    @apply my-2 overflow-x-auto rounded-lg bg-zinc-900 p-3 text-xs leading-relaxed text-zinc-100;
+  }
+  .md-body pre code {
+    @apply bg-transparent p-0 text-inherit;
+  }
+  .md-body a {
+    @apply text-sky-700 underline decoration-sky-300 hover:decoration-sky-500;
+  }
+  .md-body blockquote {
+    @apply my-1.5 border-l-2 border-zinc-300 pl-3 italic text-zinc-500;
+  }
+  .md-body table {
+    @apply my-2 w-full border-collapse text-xs;
+  }
+  .md-body th,
+  .md-body td {
+    @apply border border-zinc-200 px-2 py-1 text-left;
+  }
+  .md-body hr {
+    @apply my-3 border-zinc-200;
+  }
+}
