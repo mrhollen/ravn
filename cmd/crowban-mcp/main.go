@@ -5,13 +5,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -73,7 +77,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           withLogging(logger, mux),
+		Handler:           withLogging(logger, withModernMCPCompat(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -168,3 +172,44 @@ func messageHandlerWithSessionFallback(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// withModernMCPCompat ensures that incoming requests carrying Mcp-Protocol-Version
+// header have the corresponding _meta protocolVersion populated in params if missing,
+// so strict mark3labs/mcp-go modern validation does not reject client notifications
+// (such as notifications/roots/list_changed from modelcontextprotocol/go_sdk) with 400.
+func withModernMCPCompat(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			protoVer := r.Header.Get("Mcp-Protocol-Version")
+			if protoVer != "" && r.Body != nil {
+				bodyBytes, err := io.ReadAll(r.Body)
+				if err == nil && len(bodyBytes) > 0 {
+					var raw map[string]any
+					if err := json.Unmarshal(bodyBytes, &raw); err == nil {
+						params, _ := raw["params"].(map[string]any)
+						if params == nil {
+							params = make(map[string]any)
+							raw["params"] = params
+						}
+						meta, _ := params["_meta"].(map[string]any)
+						if meta == nil {
+							meta = make(map[string]any)
+							params["_meta"] = meta
+						}
+						if _, ok := meta["io.modelcontextprotocol/protocolVersion"]; !ok {
+							meta["io.modelcontextprotocol/protocolVersion"] = protoVer
+							if modified, err := json.Marshal(raw); err == nil {
+								bodyBytes = modified
+							}
+						}
+					}
+					r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+					r.ContentLength = int64(len(bodyBytes))
+					r.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+

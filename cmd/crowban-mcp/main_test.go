@@ -99,7 +99,7 @@ func TestMuxRouting_StreamableAndSSE(t *testing.T) {
 	mux.Handle("/sse", sse.SSEHandler())
 	mux.Handle("/message", messageHandlerWithSessionFallback(sse.MessageHandler()))
 
-	ts := httptest.NewServer(withLogging(nil, mux))
+	ts := httptest.NewServer(withLogging(nil, withModernMCPCompat(mux)))
 	defer ts.Close()
 
 	// 1. POST /mcp handles initialize
@@ -124,7 +124,22 @@ func TestMuxRouting_StreamableAndSSE(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// 3. GET /mcp provides listening streamable SSE stream (does not return legacy endpoint event)
+	// 3. POST /mcp with Mcp-Protocol-Version: 2026-07-28 header and NO _meta in body
+	// (exactly what modelcontextprotocol/go_sdk sends) is accepted via withModernMCPCompat
+	reqModern, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", strings.NewReader(notifPayload))
+	reqModern.Header.Set("Content-Type", "application/json")
+	reqModern.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+	reqModern.Header.Set("Mcp-Method", "notifications/roots/list_changed")
+	respModern, err := http.DefaultClient.Do(reqModern)
+	if err != nil {
+		t.Fatalf("POST /mcp modern notification failed: %v", err)
+	}
+	if respModern.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected POST /mcp modern notification to return 202 Accepted, got %d", respModern.StatusCode)
+	}
+	respModern.Body.Close()
+
+	// 4. GET /mcp provides listening streamable SSE stream (does not return legacy endpoint event)
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/mcp", nil)
