@@ -45,6 +45,8 @@ make logs                  # stream both containers' logs
 make down                  # stop and remove containers (keeps the SQLite volume)
 ```
 
+Older `docker-compose` (v1.x, Compose schema v3.3) can't parse the modern file — run `docker-compose -f docker-compose-v3.3.yml up --build` instead.
+
 - **UI**: http://localhost:8080
 - **API**: http://localhost:8080/api/v1 — full contract in [docs/API.md](docs/API.md)
 - **MCP endpoint**: http://localhost:9080/mcp (onboarding for agents: [docs/MCP.md](docs/MCP.md))

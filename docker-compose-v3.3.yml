@@ -1,0 +1,71 @@
+# crowban — LEGACY compose file for OLDER standalone docker-compose (v1.x,
+# Compose schema v3.3). Mirrors docker-compose.yml; modern tooling should use
+# that file — this one exists only because ancient docker-compose binaries
+# reject long-form `depends_on` with `condition: service_healthy`.
+#
+# Behavioral deltas vs docker-compose.yml (intentional, minimal):
+#   1. Startup ordering is BEST-EFFORT. v3.3 has no condition-based
+#      depends_on, so crowban-mcp may start before crowban-server is
+#      healthy. That is safe: the MCP service's /healthz proxies the
+#      upstream server (503 until ready, then 200), so it self-heals as
+#      soon as the server comes up. The healthcheck blocks below are kept
+#      for observability (`docker ps` state + `make smoke`) only.
+#   2. build.target requires BuildKit — use DOCKER_BUILDKIT=1 (standard in
+#      modern setups; very old ones need it set explicitly):
+#        DOCKER_BUILDKIT=1 docker-compose -f docker-compose-v3.3.yml up --build
+#      If BuildKit truly cannot be used, an operator could pin pre-built
+#      images instead of build.target (not done here).
+#
+# Everything else — service names, ports, environment blocks, the
+# crowban-data named volume and its /data mount — is byte-equivalent to
+# docker-compose.yml.
+#
+# Run:
+#   docker-compose -f docker-compose-v3.3.yml up --build
+#   CROWBAN_SERVER_PORT=18080 CROWBAN_MCP_PORT=19080 docker-compose -f docker-compose-v3.3.yml up --build   # if 8080/9080 busy (NEVER kill an existing process on a host port)
+
+version: "3.3"
+
+services:
+  crowban-server:
+    build:
+      context: .
+      target: server-runtime
+    ports:
+      - "${CROWBAN_SERVER_PORT:-8080}:8080"
+    environment:
+      CROWBAN_ADDR: ":8080"
+      CROWBAN_DATA: "/data/crowban.db"
+      CROWBAN_STATIC_DIR: "/app/public" # UI is baked into the image (web-build stage)
+      CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
+    volumes:
+      - crowban-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s # first boot runs SQL migrations
+      retries: 3
+
+  crowban-mcp:
+    build:
+      context: .
+      target: mcp-runtime
+    ports:
+      - "${CROWBAN_MCP_PORT:-9080}:9080"
+    environment:
+      MCP_ADDR: ":9080"
+      CROWBAN_API_URL: "http://crowban-server:8080" # compose service DNS — no IPs, no host assumptions
+      CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}" # forwarded as Bearer to the API when set
+      CROWBAN_AGENT_NAME: "${CROWBAN_AGENT_NAME:-agent}" # actor stamped when a tool call omits one
+    depends_on:
+      - crowban-server # short form: v3.3 cannot gate on service_healthy (best-effort ordering; mcp self-heals, see header)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9080/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  crowban-data:
