@@ -7,7 +7,9 @@
 // ready-made use-case structs and never sees the database. Slice 3a routes
 // Projects + Task-core + the board snapshot; Comments/Artifacts/Acceptance/
 // Relations are already constructed so slice 3b only adds routes. CROWBAN_TOKEN
-// is accepted but not enforced until the auth middleware lands.
+// is accepted but not enforced until the auth middleware lands. Slice 5a
+// serves the built web UI from CROWBAN_STATIC_DIR (stdlib fs, SPA fallback);
+// a missing dist degrades to the placeholder root instead of failing to boot.
 package main
 
 import (
@@ -17,10 +19,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -38,16 +42,18 @@ var version = "dev"
 
 func main() {
 	var (
-		addr  = flag.String("addr", envOr("CROWBAN_ADDR", ":8080"), "listen address, e.g. :8080")
-		data  = flag.String("data", envOr("CROWBAN_DATA", "/data/crowban.db"), "path of the SQLite database file")
-		token = flag.String("token", os.Getenv("CROWBAN_TOKEN"), "bearer token; accepted but unused until the auth middleware lands")
+		addr   = flag.String("addr", envOr("CROWBAN_ADDR", ":8080"), "listen address, e.g. :8080")
+		data   = flag.String("data", envOr("CROWBAN_DATA", "/data/crowban.db"), "path of the SQLite database file")
+		token  = flag.String("token", os.Getenv("CROWBAN_TOKEN"), "bearer token; accepted but unused until the auth middleware lands")
+		static = flag.String("static", envOr("CROWBAN_STATIC_DIR", "./web/dist"),
+			"directory holding the built web UI (Vite dist); placeholder root is served when it has no index.html")
 	)
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 	logger.Info("crowban-server starting",
-		"version", version, "addr", *addr, "data", *data, "token_set", *token != "")
+		"version", version, "addr", *addr, "data", *data, "token_set", *token != "", "static_dir", *static)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -65,7 +71,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newRouter(db),
+		Handler:           newRouter(db, *static),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -102,8 +108,13 @@ type healthResponse struct {
 // newRouter builds the stdlib ServeMux with Go 1.22 method+wildcard patterns.
 // It composes the shared Clock/IDGenerator/UnitOfWork and every use case,
 // hands them to the HTTP adapter (internal/interface/http), and mounts the
-// /api/v1 routes alongside /healthz and the root placeholder.
-func newRouter(db *sql.DB) http.Handler {
+// /api/v1 routes alongside /healthz and — when staticDir holds a built UI
+// (an index.html) — the static assets at "/" with an SPA fallback. The API
+// and healthz patterns are exact paths, therefore MORE SPECIFIC than the
+// "GET /" catch-all; Go 1.22 mux resolution always prefers the specific one
+// regardless of registration order, so static serving can never shadow them
+// (proved by TestStaticServingDoesNotShadowAPIAndHealthz).
+func newRouter(db *sql.DB, staticDir string) http.Handler {
 	mux := http.NewServeMux()
 
 	// Slice 3 composition: one shared transactional seam, clock, and idgen —
@@ -135,12 +146,63 @@ func newRouter(db *sql.DB) http.Handler {
 		writeJSON(w, code, res)
 	})
 
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintln(w, "crowban server ok — UI ships later (static serving lands in a later slice)")
-	})
+	if hasIndexHTML(staticDir) {
+		// Slice 5a (ARCHITECTURE §7): the Go binary serves the Vite build with
+		// stdlib only — no web container. "GET /" is the least specific pattern
+		// on this mux, so it only ever sees GET/HEAD requests that no API or
+		// healthz pattern claimed.
+		public := os.DirFS(staticDir)
+		mux.Handle("GET /", spaFallback(public))
+		slog.Info("serving built web UI", "static_dir", staticDir)
+	} else {
+		// Graceful degradation (backend-only run, no built UI): keep the
+		// placeholder root; never fail to boot.
+		slog.Warn("no index.html in static dir; serving placeholder root instead of the web UI", "static_dir", staticDir)
+		mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			fmt.Fprintln(w, "crowban server ok — API is up; no built web UI found (set CROWBAN_STATIC_DIR to a Vite dist)")
+		})
+	}
 
 	return mux
+}
+
+// hasIndexHTML reports whether dir exists and directly contains an index.html
+// file — the marker that a built web UI is present to serve.
+func hasIndexHTML(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, "index.html"))
+	return err == nil && !info.IsDir()
+}
+
+// spaFallback serves the built web UI from static via stdlib (FileServerFS).
+// A GET/HEAD whose path maps to a real file or directory is served as-is; any
+// other request that is NOT under /api or /healthz falls back to index.html
+// so client-side routing deep links work. Paths under /api and /healthz that
+// still reach this handler are unknown routes — 404, never index.html (the
+// real patterns for them are more specific than "GET /" and win first).
+//
+// The fallback rewrites the path to "/" rather than "/index.html": FileServer
+// itself redirects any request whose path ends in "/index.html" to "./" (see
+// serveFile in net/http/fs.go), which would loop on deep links. Serving the
+// dist root is how FileServer delivers index.html anyway — 200, no redirect.
+func spaFallback(static fs.FS) http.Handler {
+	fileServer := http.FileServerFS(static)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := fs.Stat(static, strings.TrimPrefix(r.URL.Path, "/")); err == nil {
+			fileServer.ServeHTTP(w, r) // real file or directory: served as-is
+			return
+		}
+		p := r.URL.Path
+		if p == "/api" || strings.HasPrefix(p, "/api/") || p == "/healthz" || strings.HasPrefix(p, "/healthz/") {
+			http.NotFound(w, r)
+			return
+		}
+		spa := r.Clone(r.Context())
+		u := *spa.URL
+		u.Path = "/" // no file here: serve the dist index and let the app route client-side
+		spa.URL = &u
+		fileServer.ServeHTTP(w, spa)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
