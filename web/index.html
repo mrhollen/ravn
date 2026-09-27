@@ -651,24 +651,65 @@
                      x-text="'(' + acDoneCount() + '/' + (detail ? detail.acceptance_criteria.length : 0) + ')'"></span></h3>
                   <ul class="flex flex-col gap-1.5">
                     <template x-for="ac in detail.acceptance_criteria" :key="ac.seq">
-                      <li class="flex items-start gap-2.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm">
-                        <input type="checkbox" :checked="ac.done" @change="toggleAc(ac)" :disabled="acBusySeq !== 0"
-                               class="mt-0.5 h-4 w-4 rounded border-zinc-300 accent-emerald-600"
-                               :aria-label="'Mark done: ' + ac.text" />
-                        <div class="min-w-0">
-                          <p class="break-words text-sm" :class="ac.done ? 'text-zinc-400 line-through' : 'text-zinc-800'"
-                             x-text="ac.text"></p>
-                          <template x-if="ac.done && ac.completed_by">
-                            <p class="mt-0.5 text-[11px] text-emerald-700" x-text="completedLabel(ac)"></p>
-                          </template>
-                          <p x-show="ac.note" x-cloak class="mt-0.5 break-words text-[11px] italic text-zinc-500"
-                             x-text="ac.note"></p>
+                      <li class="rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm transition">
+                        <!-- view mode -->
+                        <div x-show="editingAcSeq !== ac.seq" class="flex items-start gap-2.5">
+                          <input type="checkbox" :checked="ac.done" @change="toggleAc(ac)" :disabled="acBusySeq !== 0"
+                                 class="mt-0.5 h-4 w-4 rounded border-zinc-300 accent-emerald-600 shrink-0"
+                                 :aria-label="'Mark done: ' + ac.text" />
+                          <div class="min-w-0 flex-1">
+                            <p class="break-words text-sm" :class="ac.done ? 'text-zinc-400 line-through' : 'text-zinc-800'"
+                               x-text="ac.text"></p>
+                            <template x-if="ac.done && ac.completed_by">
+                              <p class="mt-0.5 text-[11px] text-emerald-700" x-text="completedLabel(ac)"></p>
+                            </template>
+                            <p x-show="ac.note" x-cloak class="mt-0.5 break-words text-[11px] italic text-zinc-500"
+                               x-text="ac.note"></p>
+                          </div>
+                          <div class="flex items-center gap-1 shrink-0">
+                            <button type="button" @click="startEditingAc(ac)"
+                                    :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0"
+                                    class="rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 font-medium"
+                                    title="Edit criterion" aria-label="Edit criterion">
+                              Edit
+                            </button>
+                            <button type="button" @click="deleteAc(ac.seq)"
+                                    :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0"
+                                    class="rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-red-600 font-medium"
+                                    title="Delete criterion" :aria-label="'Delete criterion ' + ac.seq">
+                              ✕
+                            </button>
+                          </div>
                         </div>
+
+                        <!-- inline edit mode -->
+                        <form x-show="editingAcSeq === ac.seq" x-cloak @submit.prevent="saveAcEdit(ac.seq)" class="flex flex-col gap-2">
+                          <textarea x-model="editingAcText" rows="2" class="field w-full text-xs"
+                                    placeholder="Acceptance criterion text…" required></textarea>
+                          <div class="flex items-center justify-end gap-2">
+                            <button type="button" @click="cancelEditingAc()" :disabled="savingAcSeq !== 0"
+                                    class="btn-ghost text-xs py-1 px-2.5">
+                              Cancel
+                            </button>
+                            <button type="submit" :disabled="savingAcSeq !== 0 || !editingAcText.trim()"
+                                    class="btn-primary text-xs py-1 px-3"
+                                    x-text="savingAcSeq === ac.seq ? 'Saving…' : 'Save'"></button>
+                          </div>
+                        </form>
                       </li>
                     </template>
                   </ul>
                   <p x-show="(detail ? detail.acceptance_criteria.length : 0) === 0" x-cloak
                      class="text-sm italic text-zinc-400">None defined.</p>
+
+                  <!-- add acceptance criterion form -->
+                  <form @submit.prevent="addAc()" class="mt-2.5 flex items-center gap-2">
+                    <input type="text" x-model="newAcText" placeholder="Add acceptance criterion…"
+                           class="field flex-1 text-xs py-1.5" />
+                    <button type="submit" :disabled="addingAc || !newAcText.trim()" class="btn-primary text-xs py-1.5 px-3 shrink-0">
+                      <span x-text="addingAc ? 'Adding…' : '+ Add criterion'"></span>
+                    </button>
+                  </form>
                 </section>
 
                 <!-- comments -->

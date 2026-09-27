@@ -531,6 +531,9 @@ export function crowbanApp() {
 
     closeDetail(): void {
       this.editingTask = false;
+      this.editingAcSeq = 0;
+      this.editingAcText = "";
+      this.newAcText = "";
       this.detailOpen = false;
     },
 
@@ -974,6 +977,12 @@ export function crowbanApp() {
 
     // -------------------------------------------------------- acceptance crits
     acBusySeq: 0,
+    newAcText: "",
+    addingAc: false,
+    editingAcSeq: 0,
+    editingAcText: "",
+    savingAcSeq: 0,
+    deletingAcSeq: 0,
 
     /** Toggle one criterion; the 200 response carries the updated AC row. */
     async toggleAc(ac: AcRow): Promise<void> {
@@ -995,6 +1004,87 @@ export function crowbanApp() {
         this.toast(errMsg(e), "error");
       } finally {
         this.acBusySeq = 0;
+      }
+    },
+
+    async addAc(): Promise<void> {
+      const t = this.detail;
+      const text = this.newAcText.trim();
+      if (!t || !text || this.addingAc) return;
+      this.addingAc = true;
+      try {
+        const fresh = await api.addAc(t.id, text, this.actor());
+        const d = this.detail;
+        if (d && d.id === t.id) {
+          this.detail = {
+            ...d,
+            acceptance_criteria: [...d.acceptance_criteria, fresh],
+          };
+        }
+        this.newAcText = "";
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.addingAc = false;
+      }
+    },
+
+    startEditingAc(ac: AcRow): void {
+      this.editingAcSeq = ac.seq;
+      this.editingAcText = ac.text;
+    },
+
+    cancelEditingAc(): void {
+      this.editingAcSeq = 0;
+      this.editingAcText = "";
+    },
+
+    async saveAcEdit(seq: number): Promise<void> {
+      const t = this.detail;
+      const text = this.editingAcText.trim();
+      if (!t || !text || this.savingAcSeq !== 0) return;
+      this.savingAcSeq = seq;
+      try {
+        const updated = await api.editAcText(t.id, seq, text, this.actor());
+        const d = this.detail;
+        if (d && d.id === t.id) {
+          this.detail = {
+            ...d,
+            acceptance_criteria: d.acceptance_criteria.map((x) =>
+              x.seq === seq ? updated : x,
+            ),
+          };
+        }
+        this.editingAcSeq = 0;
+        this.editingAcText = "";
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.savingAcSeq = 0;
+      }
+    },
+
+    async deleteAc(seq: number): Promise<void> {
+      const t = this.detail;
+      if (!t || this.deletingAcSeq !== 0) return;
+      this.deletingAcSeq = seq;
+      try {
+        await api.deleteAc(t.id, seq, this.actor());
+        const d = this.detail;
+        if (d && d.id === t.id) {
+          this.detail = {
+            ...d,
+            acceptance_criteria: d.acceptance_criteria.filter((x) => x.seq !== seq),
+          };
+        }
+        if (this.editingAcSeq === seq) {
+          this.cancelEditingAc();
+        }
+        this.toast("Acceptance criterion removed");
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.deletingAcSeq = 0;
       }
     },
 
@@ -1272,6 +1362,7 @@ export function crowbanApp() {
     dismissTop(): void {
       if (this.showAuthModal) this.showAuthModal = false;
       else if (this.showProjectSettings) this.showProjectSettings = false;
+      else if (this.editingAcSeq !== 0) this.cancelEditingAc();
       else if (this.editingTask) this.cancelEditing();
       else if (this.detailOpen) this.closeDetail();
       else if (this.showNewTask) this.closeNewTask();

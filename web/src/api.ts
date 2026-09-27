@@ -241,6 +241,24 @@ export const api = {
     });
   },
 
+  addAc(taskId: string, text: string, actor: ActorInput): Promise<AcRow> {
+    return post<AcRow>(`/tasks/${taskId}/acceptance-criteria`, { actor, text });
+  },
+
+  editAcText(taskId: string, seq: number, text: string, actor: ActorInput): Promise<AcRow> {
+    return request<AcRow>(`/tasks/${taskId}/acceptance-criteria/${seq}`, {
+      method: "PATCH",
+      body: JSON.stringify({ actor, text }),
+    });
+  },
+
+  deleteAc(taskId: string, seq: number, actor: ActorInput): Promise<void> {
+    return request<void>(`/tasks/${taskId}/acceptance-criteria/${seq}`, {
+      method: "DELETE",
+      body: JSON.stringify({ actor }),
+    });
+  },
+
   addComment(taskId: string, req: CommentReq): Promise<CommentRow> {
     return post<CommentRow>(`/tasks/${taskId}/comments`, req);
   },

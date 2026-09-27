@@ -240,6 +240,20 @@ export interface AcToggleReq {
   note?: string;
 }
 
+export interface AcCreateReq {
+  actor: ActorInput;
+  text: string;
+}
+
+export interface AcEditReq {
+  actor: ActorInput;
+  text: string;
+}
+
+export interface AcDeleteReq {
+  actor: ActorInput;
+}
+
 export interface CommentReq {
   actor: ActorInput;
   kind: CommentKind;

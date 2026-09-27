@@ -643,5 +643,139 @@ test.describe('Web E2E test suite', () => {
     await closeBtn.click();
     await expect(deltaCard.locator('span.bg-amber-50')).toContainText('elena-human');
   });
+
+  test('acceptance criteria management: add, inline edit, delete, and toggle', async ({ page }) => {
+    // -------------------------------------------------------------------------
+    // Seed project and task with 1 initial AC
+    // -------------------------------------------------------------------------
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'AC Management Project',
+        description: 'Testing AC add, edit, delete, and toggle',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    const taskRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Task with ACs',
+        priority: 2,
+        acceptance_criteria: ['Initial criterion 1'],
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(taskRes.ok).toBe(true);
+    const task = (await taskRes.json()).task;
+
+    // Load UI and open the task detail drawer
+    await page.goto(serverUrl);
+    const projectSelect = page.locator('select').first();
+    await projectSelect.selectOption(project.id);
+
+    const taskCard = page.locator('div[role="button"]', { hasText: 'Task with ACs' });
+    await expect(taskCard).toBeVisible();
+    await taskCard.click();
+
+    const drawer = page.locator('aside');
+    await expect(drawer.getByRole('heading', { name: 'Task with ACs' })).toBeVisible();
+    await expect(drawer.getByText('Initial criterion 1')).toBeVisible();
+
+    // -------------------------------------------------------------------------
+    // AC 1: Add new AC row to existing task (appears with next seq)
+    // -------------------------------------------------------------------------
+    const addInput = drawer.getByPlaceholder('Add acceptance criterion…');
+    await addInput.fill('Second criterion added via UI');
+    await drawer.getByRole('button', { name: '+ Add criterion' }).click();
+
+    // Verify it appears in the UI
+    await expect(drawer.getByText('Second criterion added via UI')).toBeVisible();
+    await expect(addInput).toHaveValue('');
+
+    // Verify in backend get_task
+    const getRes1 = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`);
+    expect(getRes1.ok).toBe(true);
+    const taskDetail1 = await getRes1.json();
+    expect(taskDetail1.acceptance_criteria).toHaveLength(2);
+    expect(taskDetail1.acceptance_criteria[1].seq).toBe(2);
+    expect(taskDetail1.acceptance_criteria[1].text).toBe('Second criterion added via UI');
+    expect(taskDetail1.acceptance_criteria[1].done).toBe(false);
+
+    // -------------------------------------------------------------------------
+    // AC 2: Edit AC row text
+    // -------------------------------------------------------------------------
+    const ac2Item = drawer.locator('li', { hasText: 'Second criterion added via UI' });
+    await ac2Item.getByRole('button', { name: 'Edit' }).click();
+
+    const editTextarea = ac2Item.locator('textarea');
+    await expect(editTextarea).toBeVisible();
+    await expect(editTextarea).toHaveValue('Second criterion added via UI');
+
+    await editTextarea.fill('Second criterion edited and reworded');
+    await ac2Item.getByRole('button', { name: 'Save', exact: true }).click();
+
+    // Verify UI reflects edited text
+    await expect(drawer.getByText('Second criterion edited and reworded')).toBeVisible();
+    await expect(drawer.getByText('Second criterion added via UI')).not.toBeVisible();
+
+    // Verify backend get_task persists edited text
+    const getRes2 = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`);
+    const taskDetail2 = await getRes2.json();
+    expect(taskDetail2.acceptance_criteria[1].text).toBe('Second criterion edited and reworded');
+
+    // -------------------------------------------------------------------------
+    // AC 3: Toggling done still works for new/edited rows with completed_by/at tracked
+    // -------------------------------------------------------------------------
+    const ac2UpdatedItem = drawer.locator('li', { hasText: 'Second criterion edited and reworded' });
+    const ac2Checkbox = ac2UpdatedItem.locator('input[type="checkbox"]');
+    await expect(ac2Checkbox).not.toBeChecked();
+
+    await ac2Checkbox.click();
+    await expect(ac2Checkbox).toBeChecked();
+
+    // Verify backend get_task has done=true and completed_by tracked
+    const getRes3 = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`);
+    const taskDetail3 = await getRes3.json();
+    expect(taskDetail3.acceptance_criteria[1].done).toBe(true);
+    expect(taskDetail3.acceptance_criteria[1].completed_by).toBeDefined();
+    expect(taskDetail3.acceptance_criteria[1].completed_at).toBeDefined();
+
+    // Uncheck and verify cleared
+    await ac2Checkbox.click();
+    await expect(ac2Checkbox).not.toBeChecked();
+    const getRes4 = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`);
+    const taskDetail4 = await getRes4.json();
+    expect(taskDetail4.acceptance_criteria[1].done).toBe(false);
+    expect(taskDetail4.acceptance_criteria[1].completed_by).toBeUndefined();
+
+    // -------------------------------------------------------------------------
+    // AC 2: Delete AC row
+    // -------------------------------------------------------------------------
+    // Add a 3rd AC to delete
+    await addInput.fill('Third criterion to delete');
+    await drawer.getByRole('button', { name: '+ Add criterion' }).click();
+    await expect(drawer.getByText('Third criterion to delete')).toBeVisible();
+
+    const ac3Item = drawer.locator('li', { hasText: 'Third criterion to delete' });
+    await ac3Item.locator('button[title="Delete criterion"]').click();
+
+    await expect(page.getByText('Acceptance criterion removed')).toBeVisible();
+    await expect(drawer.getByText('Third criterion to delete')).not.toBeVisible();
+
+    // Verify backend get_task no longer has criterion 3
+    const getRes5 = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`);
+    const taskDetail5 = await getRes5.json();
+    expect(taskDetail5.acceptance_criteria).toHaveLength(2);
+    expect(taskDetail5.acceptance_criteria.map((x: any) => x.seq)).toEqual([1, 2]);
+
+    // Close drawer
+    await drawer.locator('button[aria-label="Close"]').first().click();
+  });
 });
 
