@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -481,4 +482,60 @@ type relateReq struct {
 // record who removed it (400 when absent or invalid).
 type removeRelationReq struct {
 	Actor actorInput `json:"actor"`
+}
+
+// --- realtime events ---------------------------------------------------------
+
+// realtimeEventDTO is the compact payload streamed over SSE to subscribers.
+// It carries task_id, kind, status, timestamp, and metadata so UI clients
+// can immediately update their views or patch locally without full polling.
+type realtimeEventDTO struct {
+	EventID   string    `json:"event_id,omitempty"`
+	ProjectID string    `json:"project_id,omitempty"`
+	TaskID    string    `json:"task_id,omitempty"`
+	Kind      string    `json:"kind"`
+	Status    string    `json:"status,omitempty"`
+	Actor     *actorDTO `json:"actor,omitempty"`
+	Timestamp string    `json:"timestamp"`
+}
+
+func toRealtimeEventDTO(e domain.Event) realtimeEventDTO {
+	dto := realtimeEventDTO{
+		EventID:   string(e.ID),
+		Kind:      string(e.Kind),
+		Timestamp: rfc3339(e.At),
+	}
+	if e.ProjectID != nil {
+		dto.ProjectID = string(*e.ProjectID)
+	}
+	if e.TaskID != nil {
+		dto.TaskID = string(*e.TaskID)
+	}
+	if e.Actor.Name != "" || e.Actor.Type != "" {
+		dto.Actor = toActor(&e.Actor)
+	}
+	dto.Status = extractEventStatus(e)
+	return dto
+}
+
+func extractEventStatus(e domain.Event) string {
+	if e.After != "" {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(e.After), &m); err == nil {
+			if s, ok := m["status"].(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	switch e.Kind {
+	case domain.EventClaimed:
+		return "doing"
+	case domain.EventReleased:
+		return "todo"
+	case domain.EventCreated:
+		if e.TaskID != nil {
+			return "todo"
+		}
+	}
+	return ""
 }

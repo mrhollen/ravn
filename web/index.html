@@ -263,22 +263,68 @@
 
           <template x-if="detail">
             <div class="h-full overflow-y-auto">
-              <!-- header -->
-              <div class="border-b border-zinc-100 px-5 py-4">
+              <!-- header (view mode) -->
+              <div x-show="!editingTask" class="border-b border-zinc-100 px-5 py-4">
                 <div class="flex items-start justify-between gap-3">
                   <h2 class="min-w-0 break-words text-lg font-semibold leading-snug" x-text="detail.title"></h2>
-                  <button type="button" @click="closeDetail()" aria-label="Close"
-                          class="shrink-0 text-xl leading-none text-zinc-400 hover:text-zinc-600">&times;</button>
+                  <div class="flex shrink-0 items-center gap-2">
+                    <button type="button" @click="startEditing()" class="btn-ghost px-2.5 py-1 text-xs font-medium">Edit</button>
+                    <button type="button" @click="closeDetail()" aria-label="Close"
+                            class="text-xl leading-none text-zinc-400 hover:text-zinc-600">&times;</button>
+                  </div>
                 </div>
                 <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
                   <span class="rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1"
                         :class="priorityClass(detail.priority)" x-text="'P' + detail.priority"></span>
+                  <span x-show="detail.due_at" x-cloak class="inline-flex items-center gap-1"
+                        :class="isOverdue(detail) ? 'font-semibold text-red-600' : ''">
+                    Due <time :title="detail.due_at" x-text="dueLabel(detail.due_at)"></time>
+                  </span>
                   <span title="Optimistic-concurrency version — writes are guarded by it">v<span x-text="detail.version"></span></span>
                   <code class="rounded bg-zinc-100 px-1 py-0.5 text-[10px]" :title="detail.id" x-text="shortId(detail.id)"></code>
                   <span>updated</span>
                   <time :title="detail.updated_at" x-text="relTime(detail.updated_at)"></time>
                 </div>
               </div>
+
+              <!-- edit form (edit mode) -->
+              <form x-show="editingTask" x-cloak @submit.prevent="saveTaskEdit()" class="border-b border-zinc-200 bg-zinc-50/70 p-5">
+                <div class="flex items-center justify-between pb-3 border-b border-zinc-200">
+                  <h3 class="text-sm font-semibold text-zinc-800">Edit task details</h3>
+                  <div class="flex items-center gap-2">
+                    <button type="button" @click="cancelEditing()" :disabled="savingEdit" class="btn-ghost px-2.5 py-1 text-xs">Cancel</button>
+                    <button type="submit" :disabled="savingEdit || !editDraft.title.trim()" class="btn-primary px-3 py-1 text-xs"
+                            x-text="savingEdit ? 'Saving…' : 'Save'"></button>
+                    <button type="button" @click="closeDetail()" aria-label="Close"
+                            class="ml-1 text-xl leading-none text-zinc-400 hover:text-zinc-600">&times;</button>
+                  </div>
+                </div>
+                <div class="flex flex-col gap-3 pt-3">
+                  <label class="flex flex-col text-xs font-medium text-zinc-500">
+                    Title *
+                    <input x-model="editDraft.title" class="field mt-1 text-sm font-medium" placeholder="Task title" required />
+                  </label>
+                  <div class="grid grid-cols-2 gap-3">
+                    <label class="flex flex-col text-xs font-medium text-zinc-500">
+                      Priority
+                      <select x-model.number="editDraft.priority" class="field mt-1 text-xs">
+                        <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
+                          <option :value="p" x-text="'P' + p + ' — ' + priorityName(p)"></option>
+                        </template>
+                      </select>
+                    </label>
+                    <label class="flex flex-col text-xs font-medium text-zinc-500">
+                      Due date
+                      <input type="date" x-model="editDraft.due" class="field mt-1 text-xs" />
+                    </label>
+                  </div>
+                  <label class="flex flex-col text-xs font-medium text-zinc-500">
+                    Description (markdown)
+                    <textarea x-model="editDraft.description" rows="5" class="field mt-1 font-mono text-xs"
+                              placeholder="Markdown description…"></textarea>
+                  </label>
+                </div>
+              </form>
 
               <div class="flex flex-col gap-5 px-5 py-4">
                 <!-- status -->
@@ -320,10 +366,13 @@
                 </div>
 
                 <!-- description -->
-                <section>
-                  <h3 class="section-title">Description</h3>
-                  <div class="md-body" x-show="detail.description" x-html="md(detail.description)"></div>
-                  <p x-show="!detail.description" x-cloak class="text-sm italic text-zinc-400">No description.</p>
+                <section x-show="!editingTask">
+                  <div class="flex items-center justify-between mb-1">
+                    <h3 class="section-title mb-0">Description</h3>
+                    <button type="button" @click="startEditing()" class="text-xs font-medium text-zinc-500 hover:text-zinc-800">Edit</button>
+                  </div>
+                  <div class="md-body mt-1" x-show="detail.description" x-html="md(detail.description)"></div>
+                  <p x-show="!detail.description" x-cloak class="mt-1 text-sm italic text-zinc-400">No description.</p>
                 </section>
 
                 <!-- notes -->

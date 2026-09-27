@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/mrhollen/crowban/internal/application"
+	"github.com/mrhollen/crowban/internal/domain"
 )
 
 // SQLiteUnitOfWork implements application.UnitOfWork over a single SQLite
@@ -18,16 +19,46 @@ import (
 // transaction serializes everything behind it — at crowban's QPS that is the
 // intended single-writer behavior, not a bug.
 type SQLiteUnitOfWork struct {
-	db *sql.DB
+	db        *sql.DB
+	publisher application.EventPublisher
+}
+
+// UOWOption configures a SQLiteUnitOfWork instance.
+type UOWOption func(*SQLiteUnitOfWork)
+
+// WithPublisher attaches an application.EventPublisher to the unit of work.
+// Any domain events appended during a transaction are broadcast to the publisher
+// immediately after the transaction commits successfully.
+func WithPublisher(pub application.EventPublisher) UOWOption {
+	return func(u *SQLiteUnitOfWork) {
+		u.publisher = pub
+	}
 }
 
 // NewUnitOfWork returns an application.UnitOfWork bound to db (already open and
 // migrated; see Open).
-func NewUnitOfWork(db *sql.DB) *SQLiteUnitOfWork {
-	return &SQLiteUnitOfWork{db: db}
+func NewUnitOfWork(db *sql.DB, opts ...UOWOption) *SQLiteUnitOfWork {
+	u := &SQLiteUnitOfWork{db: db}
+	for _, opt := range opts {
+		opt(u)
+	}
+	return u
 }
 
 var _ application.UnitOfWork = (*SQLiteUnitOfWork)(nil)
+
+type eventStoreRecordingWrapper struct {
+	application.EventStore
+	onAppend func(domain.Event)
+}
+
+func (w *eventStoreRecordingWrapper) Append(ctx context.Context, e domain.Event) error {
+	if err := w.EventStore.Append(ctx, e); err != nil {
+		return err
+	}
+	w.onAppend(e)
+	return nil
+}
 
 // Run implements application.UnitOfWork. The same pattern applies to every
 // field of r: implementations must replace it with a transaction-bound
@@ -45,13 +76,30 @@ func (u *SQLiteUnitOfWork) Run(ctx context.Context, r *application.Repos, fn fun
 	r.Comments = newCommentRepo(tx)
 	r.Artifacts = newArtifactRepo(tx)
 	r.Relations = newRelationRepo(tx)
-	r.Events = newEventStore(tx)
+
+	var committedEvents []domain.Event
+	eventStore := newEventStore(tx)
+	if u.publisher != nil {
+		r.Events = &eventStoreRecordingWrapper{
+			EventStore: eventStore,
+			onAppend: func(e domain.Event) {
+				committedEvents = append(committedEvents, e)
+			},
+		}
+	} else {
+		r.Events = eventStore
+	}
 
 	err = fn()
 	if err == nil {
 		if cerr := tx.Commit(); cerr != nil {
 			_ = tx.Rollback() // best effort; a failed commit has already killed the tx state we care about
 			return fmt.Errorf("commit: %w", cerr)
+		}
+		if u.publisher != nil && len(committedEvents) > 0 {
+			for _, e := range committedEvents {
+				u.publisher.Publish(e)
+			}
 		}
 		return nil
 	}

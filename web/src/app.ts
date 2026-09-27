@@ -18,6 +18,7 @@ import type {
   Status,
   TaskDetail,
   TaskSummary,
+  UpdateTaskReq,
 } from "./types";
 import { STATUSES, STATUS_LABEL } from "./types";
 import {
@@ -310,10 +311,12 @@ export function crowbanApp() {
       this.detailOpen = true;
       this.detailId = id;
       this.detail = null;
+      this.editingTask = false;
       await this.refreshDetail(false);
     },
 
     closeDetail(): void {
+      this.editingTask = false;
       this.detailOpen = false;
     },
 
@@ -341,6 +344,88 @@ export function crowbanApp() {
       else delete kb[t.id];
       this.knownBlocked = kb;
       if (!this.notesDirty) this.notesDraft = t.notes;
+    },
+
+    // ------------------------------------------------------------ task edit
+    editingTask: false,
+    savingEdit: false,
+    editDraft: {
+      title: "",
+      description: "",
+      priority: 0,
+      due: "",
+    },
+
+    startEditing(): void {
+      const t = this.detail;
+      if (!t) return;
+      this.editDraft = {
+        title: t.title ?? "",
+        description: t.description ?? "",
+        priority: t.priority ?? 0,
+        due: t.due_at ? t.due_at.slice(0, 10) : "",
+      };
+      this.editingTask = true;
+    },
+
+    cancelEditing(): void {
+      this.editingTask = false;
+    },
+
+    async saveTaskEdit(): Promise<void> {
+      const t = this.detail;
+      const title = this.editDraft.title.trim();
+      if (!t || !title || this.savingEdit) return;
+
+      this.savingEdit = true;
+      const req: UpdateTaskReq = {
+        actor: this.actor(),
+        version: t.version,
+        title,
+        description: this.editDraft.description.trim(),
+        priority: this.editDraft.priority,
+      };
+
+      const dueIso = dateInputToIso(this.editDraft.due);
+      if (dueIso) {
+        req.due_at = dueIso;
+      } else if (t.due_at) {
+        req.clear_due = true;
+      }
+
+      try {
+        await api.updateTask(t.id, req);
+        this.editingTask = false;
+        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+      } catch (e) {
+        if (ApiError.isVersionConflict(e)) {
+          try {
+            const fresh = await api.getTask(t.id, { commentLimit: 50 });
+            this.applyDetail(fresh);
+            // Re-apply once using fresh version while preserving user's editDraft
+            const retryReq: UpdateTaskReq = {
+              ...req,
+              version: fresh.version,
+            };
+            await api.updateTask(t.id, retryReq);
+            this.editingTask = false;
+            await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+            this.toast("Changed elsewhere — retried with the fresh version.", "info");
+          } catch (e2) {
+            await this.refreshDetail(true).catch(() => undefined);
+            // Stay in edit mode with editDraft preserved across conflict
+            if (ApiError.isVersionConflict(e2)) {
+              this.toast("Changed elsewhere — refreshed (your edit was not applied).", "info");
+            } else {
+              this.toast(errMsg(e2), "error");
+            }
+          }
+        } else {
+          this.toast(errMsg(e), "error");
+        }
+      } finally {
+        this.savingEdit = false;
+      }
     },
 
     // -------------------------------------------------------- drag and drop
@@ -717,9 +802,10 @@ export function crowbanApp() {
       return shortId(id);
     },
 
-    /** Escape key: close the top-most overlay (detail → task form → project form). */
+    /** Escape key: close the top-most overlay or cancel edit mode. */
     dismissTop(): void {
-      if (this.detailOpen) this.closeDetail();
+      if (this.editingTask) this.cancelEditing();
+      else if (this.detailOpen) this.closeDetail();
       else if (this.showNewTask) this.closeNewTask();
       else if (this.showNewProject) this.showNewProject = false;
     },

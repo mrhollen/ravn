@@ -265,3 +265,21 @@ type EventStore interface {
 	// (ts DESC), skipping offset.
 	ListByProject(ctx context.Context, projectID domain.ID, limit, offset int) ([]domain.Event, error)
 }
+
+// EventPublisher receives committed domain events for fan-out.
+type EventPublisher interface {
+	Publish(e domain.Event)
+}
+
+// EventSubscriber provides subscription channels for streaming domain events.
+type EventSubscriber interface {
+	// Subscribe returns a channel receiving events scoped to projectID (or all
+	// projects if projectID is empty), along with a cancel function for cleanup.
+	Subscribe(projectID domain.ID) (events <-chan domain.Event, cancel func())
+}
+
+// EventBroker coordinates in-memory event publishing and subscriptions.
+type EventBroker interface {
+	EventPublisher
+	EventSubscriber
+}

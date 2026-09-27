@@ -47,6 +47,7 @@ func main() {
 	mcs := mcpsrv.NewMCPServer("crowban", version, mcp.ServerOptions()...)
 	mcp.RegisterTools(mcs, client, defaultActor)
 	mcp.RegisterPrompts(mcs, client, defaultActor)
+	mcp.RegisterResources(mcs, client)
 
 	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
 		mcpsrv.WithStateLess(true), // no session state: every request is self-contained — restartable/scaleable

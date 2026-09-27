@@ -14,6 +14,8 @@ const apiPrefix = "/api/v1"
 //	GET   /api/v1/projects/{id}         get project (404 when unknown)
 //	PUT   /api/v1/projects/{id}         update name/description
 //	GET   /api/v1/projects/{id}/board   whole-project board snapshot (UI extra)
+//	GET   /api/v1/projects/{id}/events  realtime SSE event stream scoped to project
+//	GET   /api/v1/events                realtime SSE event stream scoped to ?project_id=
 //	GET   /api/v1/tasks                 list task summaries: filters + offset/limit pagination + total
 //	POST  /api/v1/tasks                 create task (+ACs) → 201 with possible_duplicates advisory
 //	GET   /api/v1/tasks/{id}            one-call resume payload (task+ACs+comments+artifacts+relations+events+blocked)
@@ -34,6 +36,8 @@ func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}", app.handleGetProject)
 	mux.HandleFunc("PUT "+apiPrefix+"/projects/{id}", app.handleUpdateProject)
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/board", app.handleBoard)
+	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/events", app.handleProjectEvents)
+	mux.HandleFunc("GET "+apiPrefix+"/events", app.handleEvents)
 
 	mux.HandleFunc("GET "+apiPrefix+"/tasks", app.handleListTasks)
 	mux.HandleFunc("POST "+apiPrefix+"/tasks", app.handleCreateTask)

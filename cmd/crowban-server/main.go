@@ -32,6 +32,7 @@ import (
 	"github.com/mrhollen/crowban/internal/application"
 	"github.com/mrhollen/crowban/internal/infrastructure/clock"
 	"github.com/mrhollen/crowban/internal/infrastructure/idgen"
+	"github.com/mrhollen/crowban/internal/infrastructure/pubsub"
 	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
 	httpapi "github.com/mrhollen/crowban/internal/interface/http"
 )
@@ -121,7 +122,8 @@ func newRouter(db *sql.DB, staticDir, token string) http.Handler {
 	// every use case mints IDs and stamps timestamps before touching ports
 	// (ADR 2026-09-25). Comments/Artifacts/Acceptance/Relations are wired now
 	// even though slice 3b is what routes them.
-	uow := sqlite.NewUnitOfWork(db)
+	broker := pubsub.NewBroker()
+	uow := sqlite.NewUnitOfWork(db, sqlite.WithPublisher(broker))
 	now := clock.New()
 	mint := idgen.New()
 
@@ -132,6 +134,7 @@ func newRouter(db *sql.DB, staticDir, token string) http.Handler {
 		Artifacts:  application.NewArtifacts(uow, now, mint),
 		Acceptance: application.NewAcceptance(uow, now, mint),
 		Relations:  application.NewRelations(uow, now, mint),
+		Broker:     broker,
 	})
 	httpapi.RegisterRoutes(mux, app)
 

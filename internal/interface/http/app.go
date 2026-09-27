@@ -25,6 +25,16 @@ type Deps struct {
 	Artifacts  *application.Artifacts  // routed in slice 3b
 	Acceptance *application.Acceptance // routed in slice 3b
 	Relations  *application.Relations  // routed in slice 3b
+	Broker     application.EventBroker // realtime pub-sub for SSE events
+}
+
+type noopBroker struct{}
+
+func (noopBroker) Publish(domain.Event) {}
+func (noopBroker) Subscribe(domain.ID) (<-chan domain.Event, func()) {
+	ch := make(chan domain.Event)
+	close(ch)
+	return ch, func() {}
 }
 
 // App is the stateless HTTP adapter: handlers only read its fields, all
@@ -40,6 +50,9 @@ func NewApp(d Deps) *App {
 	if d.Projects == nil || d.Tasks == nil || d.Comments == nil ||
 		d.Artifacts == nil || d.Acceptance == nil || d.Relations == nil {
 		panic("httpapi.NewApp: all use cases must be provided")
+	}
+	if d.Broker == nil {
+		d.Broker = noopBroker{}
 	}
 	return &App{Deps: d}
 }

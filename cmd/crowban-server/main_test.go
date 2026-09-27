@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
 )
@@ -329,5 +332,121 @@ func TestAuthUnsetLeavesAPIUnauthenticated(t *testing.T) {
 	code, body = reqWithAuth(t, "POST", srv.URL+"/api/v1/projects", "", createPayload)
 	if code != http.StatusCreated {
 		t.Fatalf("POST /api/v1/projects status = %d, want 201 (body %s)", code, body)
+	}
+}
+
+func TestRouterRealtimeEventsEndToEnd(t *testing.T) {
+	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-dist"), ""))
+	t.Cleanup(srv.Close)
+
+	// 1. Create a project
+	code, body := reqWithAuth(t, "POST", srv.URL+"/api/v1/projects", "",
+		`{"actor":{"type":"human","name":"ada"},"name":"SSE Live Project"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/projects = %d (%s)", code, body)
+	}
+	var proj struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(body), &proj); err != nil {
+		t.Fatalf("unmarshal project: %v", err)
+	}
+
+	// 2. Connect client to SSE stream
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/projects/"+proj.ID+"/events", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("connect to SSE: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET /events status = %d, want 200", res.StatusCode)
+	}
+	if ct := res.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	reader := bufio.NewReader(res.Body)
+
+	// 3. Create a task in the project
+	taskPayload := fmt.Sprintf(`{"actor":{"type":"agent","name":"bot"},"project_id":"%s","title":"SSE Task 1"}`, proj.ID)
+	code, body = reqWithAuth(t, "POST", srv.URL+"/api/v1/tasks", "", taskPayload)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/tasks = %d (%s)", code, body)
+	}
+	var taskRes struct {
+		Task struct {
+			ID string `json:"id"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal([]byte(body), &taskRes); err != nil {
+		t.Fatalf("unmarshal task: %v", err)
+	}
+
+	// 4. Read SSE event from stream
+	type sseRes struct {
+		event string
+		data  string
+		err   error
+	}
+	ch := make(chan sseRes, 1)
+	go func() {
+		var curEvent, curData string
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				ch <- sseRes{err: err}
+				return
+			}
+			line = strings.TrimRight(line, "\r\n")
+			if line == "" {
+				if curEvent != "" || curData != "" {
+					ch <- sseRes{event: curEvent, data: curData}
+					return
+				}
+				continue
+			}
+			if strings.HasPrefix(line, "event: ") {
+				curEvent = strings.TrimPrefix(line, "event: ")
+			} else if strings.HasPrefix(line, "data: ") {
+				curData = strings.TrimPrefix(line, "data: ")
+			}
+		}
+	}()
+
+	select {
+	case result := <-ch:
+		if result.err != nil {
+			t.Fatalf("read SSE event: %v", result.err)
+		}
+		if result.event != "created" {
+			t.Errorf("event = %q, want created", result.event)
+		}
+		var payload struct {
+			TaskID string `json:"task_id"`
+			Kind   string `json:"kind"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(result.data), &payload); err != nil {
+			t.Fatalf("unmarshal event data: %v (raw %q)", err, result.data)
+		}
+		if payload.TaskID != taskRes.Task.ID {
+			t.Errorf("TaskID = %q, want %q", payload.TaskID, taskRes.Task.ID)
+		}
+		if payload.Kind != "created" {
+			t.Errorf("Kind = %q, want created", payload.Kind)
+		}
+		if payload.Status != "todo" {
+			t.Errorf("Status = %q, want todo", payload.Status)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for realtime SSE event")
 	}
 }
