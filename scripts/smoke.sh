@@ -1,14 +1,20 @@
 #!/bin/sh
-# crowban compose smoke test (slice 6).
+# crowban smoke test (slice 6).
 #
-# Hits both /healthz endpoints plus one real API route on the overridable
-# HOST-side ports — the same variables docker-compose.yml interpolates:
+# Expected setup: the full stack is up — normally via `make up` (Docker
+# compose, which interpolates these same port variables). The script just
+# needs reachable HTTP endpoints, so it ALSO works against direct-binary
+# servers started by hand (see README "Direct binaries (development)"):
+# point CROWBAN_SERVER_PORT / CROWBAN_MCP_PORT at whatever ports you ran
+# crowban-server / crowban-mcp on.
+#
+# Ports: the overridable HOST-side variables docker-compose.yml interpolates —
 #   CROWBAN_SERVER_PORT (default 8080), CROWBAN_MCP_PORT (default 9080).
 # When CROWBAN_TOKEN is set, requests carry it as a Bearer header.
 # Exits non-zero on any failure so it can gate deploys/CI.
 #
-#   make smoke
-#   CROWBAN_SERVER_PORT=18080 CROWBAN_MCP_PORT=19080 make smoke
+#   make up && make smoke                                        # Docker mode
+#   CROWBAN_SERVER_PORT=18432 CROWBAN_MCP_PORT=19432 make smoke  # direct binaries on custom ports
 
 set -u
 
