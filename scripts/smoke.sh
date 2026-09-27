@@ -9,7 +9,7 @@
 # crowban-server / crowban-mcp on.
 #
 # Ports: the overridable HOST-side variables docker-compose.yml interpolates —
-#   CROWBAN_SERVER_PORT (default 8080), CROWBAN_MCP_PORT (default 9080).
+#   CROWBAN_SERVER_PORT (default 3311), CROWBAN_MCP_PORT (default 9311).
 # When CROWBAN_TOKEN is set, requests carry it as a Bearer header.
 # Exits non-zero on any failure so it can gate deploys/CI.
 #
@@ -18,8 +18,8 @@
 
 set -u
 
-SERVER_BASE="http://127.0.0.1:${CROWBAN_SERVER_PORT:-8080}"
-MCP_BASE="http://127.0.0.1:${CROWBAN_MCP_PORT:-9080}"
+SERVER_BASE="http://127.0.0.1:${CROWBAN_SERVER_PORT:-3311}"
+MCP_BASE="http://127.0.0.1:${CROWBAN_MCP_PORT:-9311}"
 TOKEN="${CROWBAN_TOKEN:-}"
 
 BODY=$(mktemp) || exit 1

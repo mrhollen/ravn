@@ -302,7 +302,7 @@ http.ListenAndServe(addr, withLogging(mux))
 
 - **Tool registration pattern (`mcp/tools.go`):** each tool = `mcp.NewTool(name, mcp.WithDescription(<written for small LLMs>), <typed property builders: WithString+Required, WithNumber, WithEnum(...), WithObject/WithArray where needed>)` + handler `func(ctx, mcp.CallToolRequest) (*mcp.CallToolResult, error)`. Handlers are one-liners around the client: parse args (`request.RequireString(...)`) → call REST → on success `mcp.NewToolResultText(compactJSON)`; on REST error return `mcp.NewToolResultError(text)` where text = **the REST error body verbatim** (its `message` already contains the recovery hint). Never fabricate success.
 - **Config (env, compose-injected):** `-addr`/`MCP_ADDR` (def `:9080`), `CROWBAN_API_URL` (def `http://crowban-server:8080`; the compose service DNS name), `CROWBAN_TOKEN` (optional; forwarded as `Authorization: Bearer <token>` on every upstream call when set), `CROWBAN_AGENT_NAME` (def `agent`; the fallback actor NAME when a call omits `actor`). No config file, no state, no other env.
-- **Docker exposure:** port 9080→9080; clients point at `http://<host>:9080/mcp`. Note the SDK's DNS-rebinding guard: loopback-sourced requests with a non-localhost `Host` header get 403 — via Docker port forwarding this does not trigger (source isn't loopback in-container); escape hatch `WithDisableLocalhostProtection(true)` if host-side clients misbehave.
+- **Docker exposure:** host 9311 → container :9080 (`CROWBAN_MCP_PORT`); clients point at `http://<host>:9311/mcp`. Note the SDK's DNS-rebinding guard: loopback-sourced requests with a non-localhost `Host` header get 403 — via Docker port forwarding this does not trigger (source isn't loopback in-container); escape hatch `WithDisableLocalhostProtection(true)` if host-side clients misbehave.
 - **Idempotency / error conventions:** no client-supplied idempotency keys in MVP (accepted risk, §10). Instead: semantics are retry-safe where it matters — re-claim by same actor refreshes (200), `relate_tasks` upserts (200), version-guarded updates fail loudly with 409 rather than double-applying. Appends (comments/artifacts) are NOT idempotent; a post-timeout retry may duplicate — documented in tool descriptions ("check the comment tail before re-posting after an error").
 - **Error propagation table:** REST 401/403 → `isError` "auth failed — check CROWBAN_API_TOKEN"; 404 → not-found text verbatim; 409 → body verbatim (conflict details ARE the instructions); 422 → validation error verbatim; connection failure → "crowban-server unreachable at <url> — is it running?".
 
@@ -387,7 +387,7 @@ ENTRYPOINT ["crowban-mcp"]
 services:
   crowban-server:
     build: { context: ., target: server-runtime }
-    ports: ["8080:8080"]
+    ports: ["${CROWBAN_SERVER_PORT:-3311}:8080"]
     environment:
       CROWBAN_ADDR: ":8080"
       CROWBAN_DATA: "/data/crowban.db"
@@ -396,7 +396,7 @@ services:
 
   crowban-mcp:
     build: { context: ., target: mcp-runtime }
-    ports: ["9080:9080"]
+    ports: ["${CROWBAN_MCP_PORT:-9311}:9080"]
     environment:
       MCP_ADDR: ":9080"
       CROWBAN_API_URL: "http://crowban-server:8080"   # compose service DNS — no IPs, no host assumptions
@@ -443,7 +443,7 @@ docs
 | `api` (httptest over real temp SQLite) | happy path per each of the 14 mapped routes + UI extras; 401 without token; 404 shape; **409 version_conflict body carries `current.version`; claim 409 carries holder+expiry**; healthz with/without DB | one end-to-end slice covering REST contract + status-code semantics (the MCP layer's input contract) |
 | `mcp` (stub client) | each of the 14 tools → assert exact method/path/body emitted; REST 409 body arrives verbatim as `isError` text; success bodies are compact JSON | proves the 14-tool surface and error propagation without Docker |
 
-**Makefile targets:** `help`, `fmt` (`gofmt -w . && go run golang.org/x/tools/cmd/goimports@latest -w .` optional — keep plain gofmt), `vet` (`go vet ./...` + `gofmt -l .` must be empty), `build` (both binaries → `bin/`), `ui` (npm ci + vite build), `test` (`go test ./... -count=1`), `up` (`docker compose up --build -d`), `logs` (`docker compose logs -f`), `down` (`docker compose down`), `smoke` (curl script: healthz → create project → create task → claim as agent-a → duplicate claim expect 409 → comment → update with stale version expect 409; plus one MCP `initialize`+`tools/list` POST to :9080/mcp).
+**Makefile targets:** `help`, `fmt` (`gofmt -w . && go run golang.org/x/tools/cmd/goimports@latest -w .` optional — keep plain gofmt), `vet` (`go vet ./...` + `gofmt -l .` must be empty), `build` (both binaries → `bin/`), `ui` (npm ci + vite build), `test` (`go test ./... -count=1`), `up` (`docker compose up --build -d`), `logs` (`docker compose logs -f`), `down` (`docker compose down`), `smoke` (curl script: healthz → create project → create task → claim as agent-a → duplicate claim expect 409 → comment → update with stale version expect 409; plus one MCP `initialize`+`tools/list` POST to the MCP host port /mcp, ${CROWBAN_MCP_PORT:-9311}).
 
 Ordering advice for devs: domain → application(+fakes) → sqlite → api → mcp, testing each layer before moving out — the onion makes this sequence natural.
 

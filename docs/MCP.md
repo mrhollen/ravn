@@ -11,7 +11,7 @@ arguments.
 crowban REST API into MCP tools. One endpoint:
 
 ```
-http://<host>:9080/mcp
+http://<host>:9311/mcp
 ```
 
 Stateless means every request is self-contained: there are no sessions to
@@ -36,13 +36,13 @@ Example MCP client config (Streamable-HTTP transport):
   "mcpServers": {
     "crowban": {
       "type": "http",
-      "url": "http://192.168.1.50:9080/mcp"
+      "url": "http://192.168.1.50:9311/mcp"
     }
   }
 }
 ```
 
-(Include the `/mcp` path in the URL. Healthcheck: `curl http://192.168.1.50:9080/healthz`.)
+(Include the `/mcp` path in the URL. Healthcheck: `curl http://192.168.1.50:9311/healthz`. Replace 9311 with your `CROWBAN_MCP_PORT` if you overrode it.)
 
 ## The actor convention
 

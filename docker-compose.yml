@@ -7,8 +7,8 @@
 #
 # Host-side ports are overridable via .env (copied from .env.example) or the
 # environment — compose interpolates ${VAR:-default} automatically:
-#   CROWBAN_SERVER_PORT  default 8080   (crowban-server publishes :8080 inside)
-#   CROWBAN_MCP_PORT     default 9080   (crowban-mcp    publishes :9080 inside)
+#   CROWBAN_SERVER_PORT  default 3311   (crowban-server publishes :8080 inside)
+#   CROWBAN_MCP_PORT     default 9311   (crowban-mcp    publishes :9080 inside)
 # Containers ALWAYS listen on 8080/9080 internally; only the host mapping
 # changes, which keeps the MCP container's upstream URL stable.
 
@@ -18,7 +18,7 @@ services:
       context: .
       target: server-runtime
     ports:
-      - "${CROWBAN_SERVER_PORT:-8080}:8080"
+      - "${CROWBAN_SERVER_PORT:-3311}:8080"
     environment:
       CROWBAN_ADDR: ":8080"
       CROWBAN_DATA: "/data/crowban.db"
@@ -38,7 +38,7 @@ services:
       context: .
       target: mcp-runtime
     ports:
-      - "${CROWBAN_MCP_PORT:-9080}:9080"
+      - "${CROWBAN_MCP_PORT:-9311}:9080"
     environment:
       MCP_ADDR: ":9080"
       CROWBAN_API_URL: "http://crowban-server:8080" # compose service DNS — no IPs, no host assumptions

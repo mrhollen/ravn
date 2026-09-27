@@ -39,7 +39,7 @@ Requires Docker (with compose). Copy the env template only if you want to change
 
 ```bash
 cp .env.example .env       # optional — every variable has a default
-make up                    # builds both images, starts crowban-server (:8080) + crowban-mcp (:9080) detached
+make up                    # builds both images, starts crowban-server (:3311) + crowban-mcp (:9311) detached
 make smoke                 # hits both /healthz + GET /api/v1/projects, prints PASS/FAIL
 make logs                  # stream both containers' logs
 make down                  # stop and remove containers (keeps the SQLite volume)
@@ -47,11 +47,11 @@ make down                  # stop and remove containers (keeps the SQLite volume
 
 Older `docker-compose` (v1.x, Compose schema v3.3) can't parse the modern file — run `docker-compose -f docker-compose-v3.3.yml up --build` instead.
 
-- **UI**: http://localhost:8080
-- **API**: http://localhost:8080/api/v1 — full contract in [docs/API.md](docs/API.md)
-- **MCP endpoint**: http://localhost:9080/mcp (onboarding for agents: [docs/MCP.md](docs/MCP.md))
+- **UI**: http://localhost:3311
+- **API**: http://localhost:3311/api/v1 — full contract in [docs/API.md](docs/API.md)
+- **MCP endpoint**: http://localhost:9311/mcp (onboarding for agents: [docs/MCP.md](docs/MCP.md))
 
-**Port overrides.** Host-side published ports are env-overridable (`CROWBAN_SERVER_PORT`, default `8080`; `CROWBAN_MCP_PORT`, default `9080`). The containers always listen on 8080/9080 *internally* — only the host mapping changes, so the MCP→server upstream URL stays stable. If another process already owns :8080, set `CROWBAN_SERVER_PORT=18080` in `.env` (do **not** kill what's there) and run `make up`; point UI/clients at http://localhost:18080.
+**Port overrides.** Host-side published ports are env-overridable (`CROWBAN_SERVER_PORT`, default `3311`; `CROWBAN_MCP_PORT`, default `9311`). The containers always listen on 8080/9080 *internally* — only the host mapping changes, so the MCP→server upstream URL stays stable. If another process already owns the port you want, set e.g. `CROWBAN_SERVER_PORT=18080` in `.env` (do **not** kill what's there) and run `make up`; point UI/clients at http://localhost:18080.
 
 **Persistence.** The SQLite database lives in the named Docker volume `crowban-data` (mounted at `/data`) and survives rebuilds and `make down`. Backups = a consistent copy of that volume (stop the container first, or use SQLite's `.backup`).
 
@@ -63,11 +63,11 @@ No Docker needed — build both statically and run them yourself:
 make build                 # → bin/crowban-server + bin/crowban-mcp (pure-Go, static)
 make ui                    # → web/dist (the built Vite UI)
 
-./bin/crowban-server -addr=:8080 -data=./crowban.db -static=./web/dist &
-CROWBAN_API_URL=http://localhost:8080 ./bin/crowban-mcp -addr=:9080 &
+./bin/crowban-server -addr=:3311 -data=./crowban.db -static=./web/dist &
+CROWBAN_API_URL=http://localhost:3311 ./bin/crowban-mcp -addr=:9311 &
 ```
 
-`-addr`, `-data`, `-token`, `-static` are the server flags; the MCP binary takes `-addr` plus env `CROWBAN_API_URL` (where the server lives), `CROWBAN_AGENT_NAME` (fallback actor name for calls that omit `actor`), and optional `CROWBAN_TOKEN` (forwarded upstream as a Bearer token). Verify with `curl http://localhost:8080/healthz` and `curl http://localhost:9080/healthz`.
+`-addr`, `-data`, `-token`, `-static` are the server flags; the MCP binary takes `-addr` plus env `CROWBAN_API_URL` (where the server lives), `CROWBAN_AGENT_NAME` (fallback actor name for calls that omit `actor`), and optional `CROWBAN_TOKEN` (forwarded upstream as a Bearer token). Verify with `curl http://localhost:3311/healthz` and `curl http://localhost:9311/healthz`.
 
 **Optional auth.** Set `CROWBAN_TOKEN` in your environment or `.env`; the MCP container forwards it on every upstream call. Auth enforcement on the server itself is a planned addition (see [docs/ROADMAP.md](docs/ROADMAP.md)) — for now the token is accepted but not yet required.
 
@@ -79,7 +79,7 @@ An MCP client would point at the server over HTTP like this:
 {
   "mcpServers": {
     "crowban": {
-      "url": "http://localhost:9080/mcp",
+      "url": "http://localhost:9311/mcp",
       "authentication": {
         "type": "httpHeader",
         "headers": {
