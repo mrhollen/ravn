@@ -198,7 +198,9 @@ type TaskRepository interface {
 }
 
 // AcceptanceCriterionRepository persists a task's ordered acceptance-criteria
-// checklist. Toggling never bumps the task version (child-row rule).
+// checklist. Every mutation here is child-row: none of them bumps the parent
+// task version. Seq values are MONOTONIC — appends mint max(seq)+1, deletes
+// leave gaps; surviving seqs are never renumbered.
 type AcceptanceCriterionRepository interface {
 	// Create stores initial criteria for a freshly created task; the caller
 	// sets IDs and dense 1-based Seq values.
@@ -211,6 +213,21 @@ type AcceptanceCriterionRepository interface {
 	// who did it and when; completion fields are cleared again when done is
 	// false. Returns the fresh row; unknown (taskID, seq) → domain.ErrNotFound.
 	SetDone(ctx context.Context, taskID domain.ID, seq int, done bool, note string, actor domain.Actor, now time.Time) (domain.AcceptanceCriterion, error)
+
+	// Add stores ONE pre-minted criterion (ID and next Seq set by the use
+	// case). Constraint failures — duplicate (task_id, seq) or an unknown task
+	// (FK) — surface as a wrapped domain.ErrInvalid.
+	Add(ctx context.Context, c domain.AcceptanceCriterion) error
+
+	// UpdateText rewords exactly the criterion at (taskID, seq); done/note/
+	// completion fields are untouched. Returns the fresh row; unknown pair →
+	// domain.ErrNotFound.
+	UpdateText(ctx context.Context, taskID domain.ID, seq int, text string) (domain.AcceptanceCriterion, error)
+
+	// Delete removes exactly the criterion at (taskID, seq) and returns the
+	// DELETED row so the caller can carry it on an event payload. Surviving
+	// rows keep their seq values (gaps stay). Unknown pair → domain.ErrNotFound.
+	Delete(ctx context.Context, taskID domain.ID, seq int) (domain.AcceptanceCriterion, error)
 }
 
 // CommentRepository appends and reads a task's comment thread. Comments are

@@ -13,7 +13,8 @@ import (
 
 // acceptanceCriterionRepo implements application.AcceptanceCriterionRepository
 // over SQLite: Create (initial criteria for a fresh task), ListByTask (the
-// resume payload's AC checklist), and SetDone (the complete_ac toggle).
+// resume payload's AC checklist), SetDone (the complete_ac toggle), and the
+// post-create editing trio Add / UpdateText / Delete.
 type acceptanceCriterionRepo struct {
 	q querier
 }
@@ -114,6 +115,83 @@ func (r *acceptanceCriterionRepo) SetDone(ctx context.Context, taskID domain.ID,
 		return domain.AcceptanceCriterion{}, domain.ErrNotFound // defensive: impossible inside one tx
 	}
 	return c, err
+}
+
+// Add stores one pre-minted criterion (ID + next Seq set by the use case) —
+// the post-create append. The caller runs this inside the same unit of work as
+// the event it appends. Constraint failures — duplicate (task_id, seq) or an
+// unknown task (FK) — surface as a wrapped domain.ErrInvalid; every other
+// driver error is returned unwrapped for logging at the edge.
+func (r *acceptanceCriterionRepo) Add(ctx context.Context, c domain.AcceptanceCriterion) error {
+	_, err := r.q.ExecContext(ctx,
+		`INSERT INTO acceptance_criterion (`+acceptanceColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		string(c.ID), string(c.TaskID), c.Seq, c.Text, boolToInt(c.Done), c.Note,
+		actorTypeOrNil(c.CompletedBy), actorNameOrNil(c.CompletedBy), tsOrNil(c.CompletedAt))
+	if err != nil {
+		if isConstraintViolation(err) {
+			return fmt.Errorf("%w: acceptance criterion for task %s seq %d violates a constraint", domain.ErrInvalid, c.TaskID, c.Seq)
+		}
+		return fmt.Errorf("insert acceptance criterion %s: %w", c.ID, err)
+	}
+	return nil
+}
+
+// UpdateText rewords exactly the criterion at (taskID, seq); done/note and the
+// completion fields are untouched. 0 rows affected means the pair does not
+// exist (keyed UNIQUE(task_id, seq)) → domain.ErrNotFound. Like SetDone it
+// returns the fresh row read back after the guarded write; no parent task row
+// is touched (child-row rule).
+func (r *acceptanceCriterionRepo) UpdateText(ctx context.Context, taskID domain.ID, seq int, text string) (domain.AcceptanceCriterion, error) {
+	res, err := r.q.ExecContext(ctx,
+		`UPDATE acceptance_criterion SET text = ? WHERE task_id = ? AND seq = ?`,
+		text, string(taskID), seq)
+	if err != nil {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("update text of acceptance criterion for task %s seq %d: %w", taskID, seq, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("rows affected after rewording acceptance criterion for task %s seq %d: %w", taskID, seq, err)
+	}
+	if n == 0 {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("%w: no acceptance criterion with seq %d on task %s", domain.ErrNotFound, seq, taskID)
+	}
+	row := r.q.QueryRowContext(ctx,
+		`SELECT `+acceptanceColumns+` FROM acceptance_criterion WHERE task_id = ? AND seq = ?`, string(taskID), seq)
+	c, err := scanAcceptanceCriterion(row) // re-read the stored result of the guarded write
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AcceptanceCriterion{}, domain.ErrNotFound // defensive: impossible inside one tx
+	}
+	return c, err
+}
+
+// Delete removes exactly the criterion at (taskID, seq) and returns the DELETED
+// row (its before-state rides on the caller's event payload). The read and the
+// delete run in the caller's transaction, so no row can vanish between them.
+// 0 rows deleted after a successful read is impossible inside one tx; it
+// surfaces as ErrNotFound defensively. Surviving seqs are never renumbered.
+func (r *acceptanceCriterionRepo) Delete(ctx context.Context, taskID domain.ID, seq int) (domain.AcceptanceCriterion, error) {
+	row := r.q.QueryRowContext(ctx,
+		`SELECT `+acceptanceColumns+` FROM acceptance_criterion WHERE task_id = ? AND seq = ?`, string(taskID), seq)
+	c, err := scanAcceptanceCriterion(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("%w: no acceptance criterion with seq %d on task %s", domain.ErrNotFound, seq, taskID)
+	}
+	if err != nil {
+		return domain.AcceptanceCriterion{}, err
+	}
+	res, err := r.q.ExecContext(ctx,
+		`DELETE FROM acceptance_criterion WHERE task_id = ? AND seq = ?`, string(taskID), seq)
+	if err != nil {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("delete acceptance criterion for task %s seq %d: %w", taskID, seq, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("rows affected after deleting acceptance criterion for task %s seq %d: %w", taskID, seq, err)
+	}
+	if n == 0 { // defensive: the row was just read in this same tx
+		return domain.AcceptanceCriterion{}, domain.ErrNotFound
+	}
+	return c, nil
 }
 
 // scanAcceptanceCriterion maps one row (in acceptanceColumns order) to a

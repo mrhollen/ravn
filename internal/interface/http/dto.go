@@ -446,12 +446,33 @@ type notesReq struct {
 	Notes string     `json:"notes"`
 }
 
-// acToggleReq is PATCH /tasks/{id}/acceptance-criteria/{seq}. Done sets/clears
-// the checkbox; Note optionally records why (stored on the criterion).
+// acToggleReq is PATCH /tasks/{id}/acceptance-criteria/{seq}. Two shapes share
+// the endpoint: Done (bool) sets/clears the checkbox, with Note optionally
+// recording why — the original complete_ac form; or Text (*string) rewords the
+// criterion, in which case it takes precedence and Done/Note are ignored.
+// "text" is a *string so its ABSENCE (pure toggle) is distinguishable from an
+// explicit empty string (400 — a criterion needs words).
 type acToggleReq struct {
 	Actor actorInput `json:"actor"`
 	Done  bool       `json:"done"`
 	Note  string     `json:"note"`
+	Text  *string    `json:"text,omitempty"`
+}
+
+// acCreateReq is POST /tasks/{id}/acceptance-criteria. Text is the criterion's
+// markdown wording and must be non-empty after trimming (else 400). The seq is
+// minted server-side as max(seq)+1 — callers never choose it.
+type acCreateReq struct {
+	Actor actorInput `json:"actor"`
+	Text  string     `json:"text"`
+}
+
+// acRemoveReq is the body of DELETE /tasks/{id}/acceptance-criteria/{seq}. The
+// seq rides on the path; the body carries only the actor, which is REQUIRED —
+// a removal appends an event that must record who removed it (400 when absent
+// or invalid).
+type acRemoveReq struct {
+	Actor actorInput `json:"actor"`
 }
 
 // artifactReq is POST /tasks/{id}/artifacts. Kind must be one of

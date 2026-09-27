@@ -402,7 +402,8 @@ func taskLess(a, b domain.Task) bool {
 	return a.CreatedAt.Before(b.CreatedAt)
 }
 
-// fakeACs is an in-memory AcceptanceCriterionRepository (create + read).
+// fakeACs is an in-memory AcceptanceCriterionRepository: the creation/initial-
+// checklist path plus the post-create editing trio (Add / UpdateText / Delete).
 type fakeACs struct {
 	byTask map[domain.ID][]domain.AcceptanceCriterion
 }
@@ -452,6 +453,46 @@ func (f *fakeACs) SetDone(_ context.Context, taskID domain.ID, seq int, done boo
 			c.CompletedAt = nil
 		}
 		return *c, nil
+	}
+	return domain.AcceptanceCriterion{}, domain.ErrNotFound
+}
+
+// Add mirrors the SQLite adapter's post-create append: stores the criterion as
+// given (ID/Seq minted by the use case). No constraint checks in memory — the
+// real duplicate/FK semantics live in the sqlite package.
+func (f *fakeACs) Add(_ context.Context, c domain.AcceptanceCriterion) error {
+	f.byTask[c.TaskID] = append(f.byTask[c.TaskID], c)
+	return nil
+}
+
+// UpdateText mirrors the SQLite adapter's guarded reword: only the text field
+// changes; done/note/completion fields are untouched. Unknown pair →
+// domain.ErrNotFound; the fresh row is returned.
+func (f *fakeACs) UpdateText(_ context.Context, taskID domain.ID, seq int, text string) (domain.AcceptanceCriterion, error) {
+	rows := f.byTask[taskID]
+	for i := range rows {
+		if rows[i].Seq != seq {
+			continue
+		}
+		c := &rows[i]
+		c.Text = text
+		return *c, nil
+	}
+	return domain.AcceptanceCriterion{}, domain.ErrNotFound
+}
+
+// Delete mirrors the SQLite adapter: removes exactly the (taskID, seq) row and
+// returns the DELETED row (its before-state rides on the caller's event).
+// Surviving rows keep their seqs (gaps stay). Unknown pair → domain.ErrNotFound.
+func (f *fakeACs) Delete(_ context.Context, taskID domain.ID, seq int) (domain.AcceptanceCriterion, error) {
+	rows := f.byTask[taskID]
+	for i := range rows {
+		if rows[i].Seq != seq {
+			continue
+		}
+		removed := rows[i]
+		f.byTask[taskID] = append(rows[:i], rows[i+1:]...)
+		return removed, nil
 	}
 	return domain.AcceptanceCriterion{}, domain.ErrNotFound
 }

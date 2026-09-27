@@ -945,6 +945,106 @@ func TestAcceptanceToggleAndErrors(t *testing.T) {
 	}
 }
 
+func TestAcceptanceCriteriaEditingEndpoints(t *testing.T) {
+	stk := newStack(t)
+	p := createProject(t, stk, "AC editing")
+	task := makeTask(t, stk, p.ID, "edited checklist", map[string]any{
+		"acceptance_criteria": []string{"login works", "logout works"},
+	})
+
+	// POST appends at the next seq → 201 with the fresh row.
+	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/acceptance-criteria", map[string]any{
+		"actor": actor("ada"), "text": "reset works",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("POST ac = %d, want 201 (body %s)", code, string(body))
+	}
+	ac := mustDecode[acDTO](t, body)
+	if ac.Seq != 3 || ac.Text != "reset works" || ac.Done {
+		t.Fatalf("appended AC = %+v, want seq 3 'reset works' not done", ac)
+	}
+
+	// Whitespace-only text → 400; unknown task → 404.
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/acceptance-criteria", map[string]any{
+		"actor": actor("ada"), "text": "   ",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("POST ac empty text = %d, want 400 (body %s)", code, string(body))
+	}
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/acceptance-criteria", map[string]any{
+		"actor": actor("ada"), "text": "x",
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("POST ac unknown task = %d, want 404 (body %s)", code, string(body))
+	}
+
+	// PATCH with "text" rewords the criterion → 200 updated row; toggle state untouched.
+	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/2", map[string]any{
+		"actor": actor("ada"), "text": "logout works (hardened)",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("PATCH ac text = %d, want 200 (body %s)", code, string(body))
+	}
+	ac = mustDecode[acDTO](t, body)
+	if ac.Seq != 2 || ac.Text != "logout works (hardened)" || ac.Done {
+		t.Fatalf("reworded AC = %+v, want seq 2 reworded, still not done", ac)
+	}
+
+	// A toggle on the same seq still works after a reword (no state corruption).
+	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/2", map[string]any{
+		"actor": actor("ada"), "done": true,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("PATCH ac toggle after reword = %d, want 200 (body %s)", code, string(body))
+	}
+
+	// DELETE with an actor body → 204; the row is gone and surviving seqs keep theirs.
+	code, _ = doReq(t, stk.Handler, "DELETE", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/3", map[string]any{
+		"actor": actor("ada"),
+	})
+	if code != http.StatusNoContent {
+		t.Fatalf("DELETE ac 3 = %d, want 204", code)
+	}
+	d := getDetail(t, stk, task.ID)
+	if len(d.AcceptanceCriteria) != 2 || d.AcceptanceCriteria[1].Seq != 2 {
+		t.Fatalf("detail ACs after delete = %+v, want 2 rows, seq 2 KEEPS its number", d.AcceptanceCriteria)
+	}
+
+	// DELETE without a body → 400 (the event needs an actor); unknown seq → 404.
+	code, _ = doReq(t, stk.Handler, "DELETE", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/2", nil)
+	if code != http.StatusBadRequest {
+		t.Fatalf("DELETE ac no body = %d, want 400 (actor required)", code)
+	}
+	code, _ = doReq(t, stk.Handler, "DELETE", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/99", map[string]any{
+		"actor": actor("ada"),
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("DELETE ac unknown seq = %d, want 404", code)
+	}
+
+	// get_task still exposes the reworded row and its done state.
+	d = getDetail(t, stk, task.ID)
+	if d.AcceptanceCriteria[1].Text != "logout works (hardened)" || !d.AcceptanceCriteria[1].Done {
+		t.Fatalf("final AC seq 2 = %+v, want reworded + done", d.AcceptanceCriteria[1])
+	}
+	evKinds := make([]string, 0, len(d.Events))
+	for _, e := range d.Events {
+		evKinds = append(evKinds, e.Kind)
+	}
+	for _, wantKind := range []string{"ac-added", "ac-updated", "ac-toggled", "ac-removed"} {
+		found := false
+		for _, k := range evKinds {
+			if k == wantKind {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("detail events missing %q (saw %v)", wantKind, evKinds)
+		}
+	}
+}
+
 func TestArtifactAttachAndErrors(t *testing.T) {
 	stk := newStack(t)
 	p := createProject(t, stk, "Evidence")

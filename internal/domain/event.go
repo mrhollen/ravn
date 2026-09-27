@@ -39,6 +39,12 @@ const (
 	EventACToggled       EventKind = "ac-toggled"       // an acceptance criterion was checked/unchecked
 	EventArtifactAdded   EventKind = "artifact-added"   // an evidence artifact was attached
 	EventRelationChanged EventKind = "relation-changed" // a relation edge was added or removed
+
+	// AC-editing kinds (post-create checklist management): adds re-append in
+	// this position so earlier kinds keep their stable indices.
+	EventACAdded   EventKind = "ac-added"   // an acceptance criterion row was appended
+	EventACUpdated EventKind = "ac-updated" // an acceptance criterion's text was reworded
+	EventACRemoved EventKind = "ac-removed" // an acceptance criterion row was deleted
 )
 
 // AllEventKinds lists every canonical event kind, in stable order, for tests
@@ -56,6 +62,9 @@ var AllEventKinds = []EventKind{
 	EventACToggled,
 	EventArtifactAdded,
 	EventRelationChanged,
+	EventACAdded,
+	EventACUpdated,
+	EventACRemoved,
 }
 
 // Valid reports whether k is one of the canonical event kinds. Use cases must

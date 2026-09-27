@@ -319,6 +319,217 @@ func TestAcceptanceToggleAC_UnknownSeqOrTask(t *testing.T) {
 	}
 }
 
+// --- acceptance-criteria editing (post-create) --------------------------------
+
+func TestAcceptanceAddAC_AppendsAtNextSeqEmitsEventWithoutBumpingTaskVersion(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := seedTaskWithACs(t, svc) // seq 1 and 2 exist
+	baseVersion, baseUpdated := task.Version, task.UpdatedAt
+	acs := NewAcceptance(uow, fc, &fakeIDGen{})
+
+	fc.SetNow(fc.now.Add(3 * time.Minute))
+	got, err := acs.AddAC(ctx, testAgent, task.ID, "Third check")
+	if err != nil {
+		t.Fatalf("AddAC: %v", err)
+	}
+	if got.Seq != 3 || got.Text != "Third check" || got.TaskID != task.ID || got.Done || got.ID == "" {
+		t.Errorf("fresh AC = %+v, want seq 3 not-done on %s with a minted ID", got, task.ID)
+	}
+
+	// Child-row rule: the parent task row is untouched.
+	fresh, gerr := svc.Get(ctx, task.ID)
+	if gerr != nil {
+		t.Fatalf("Get after AddAC: %v", gerr)
+	}
+	if fresh.Version != baseVersion || !fresh.UpdatedAt.Equal(baseUpdated) {
+		t.Errorf("after AC add: version = %d (want %d), updated_at = %s (want %s)",
+			fresh.Version, baseVersion, fresh.UpdatedAt, baseUpdated)
+	}
+
+	evs := eventsOfKind(uow, domain.EventACAdded)
+	if len(evs) != 1 {
+		t.Fatalf("ac-added events = %d, want exactly 1", len(evs))
+	}
+	ev := evs[0]
+	if ev.Actor != testAgent || ev.TaskID == nil || *ev.TaskID != task.ID {
+		t.Errorf("event = (actor %+v task %v), want agent-a on %s", ev.Actor, ev.TaskID, task.ID)
+	}
+	if ev.Before != "" {
+		t.Errorf("Before %q must be empty (an append has no before-state)", ev.Before)
+	}
+	if !strings.Contains(ev.After, `"seq":3`) || !strings.Contains(ev.After, `"text":"Third check"`) {
+		t.Errorf("After %q must carry seq 3 and the new text", ev.After)
+	}
+}
+
+func TestAcceptanceAddAC_Validation(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := seedTaskWithACs(t, svc)
+	acs := NewAcceptance(uow, fc, &fakeIDGen{})
+
+	if _, err := acs.AddAC(ctx, testAgent, task.ID, "   "); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("whitespace text → err = %v, want ErrInvalid", err)
+	}
+	if _, err := acs.AddAC(ctx, testAgent, domain.ID("no-such-task"), "x"); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("unknown task → err = %v, want ErrNotFound", err)
+	}
+
+	rows, _ := uow.acs.ListByTask(ctx, task.ID)
+	if len(rows) != 2 {
+		t.Fatalf("failed add wrote state: AC rows = %d, want the original 2", len(rows))
+	}
+	if evs := eventsOfKind(uow, domain.EventACAdded); len(evs) != 0 {
+		t.Errorf("failed adds emitted %d ac-added events, want 0", len(evs))
+	}
+}
+
+func TestAcceptanceEditACText_UpdatesTextWithBeforeAfterWithoutBumpingTaskVersion(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := seedTaskWithACs(t, svc)
+	baseVersion, baseUpdated := task.Version, task.UpdatedAt
+	acs := NewAcceptance(uow, fc, &fakeIDGen{})
+
+	fc.SetNow(fc.now.Add(4 * time.Minute))
+	got, err := acs.EditACText(ctx, testAgent, task.ID, 1, "First check (hardened)")
+	if err != nil {
+		t.Fatalf("EditACText: %v", err)
+	}
+	if got.Seq != 1 || got.Text != "First check (hardened)" {
+		t.Errorf("fresh AC = %+v, want seq 1 reworded", got)
+	}
+
+	fresh, gerr := svc.Get(ctx, task.ID)
+	if gerr != nil {
+		t.Fatalf("Get after EditACText: %v", gerr)
+	}
+	if fresh.Version != baseVersion || !fresh.UpdatedAt.Equal(baseUpdated) {
+		t.Errorf("after AC edit: version = %d (want %d), updated_at = %s (want %s)",
+			fresh.Version, baseVersion, fresh.UpdatedAt, baseUpdated)
+	}
+
+	evs := eventsOfKind(uow, domain.EventACUpdated)
+	if len(evs) != 1 {
+		t.Fatalf("ac-updated events = %d, want exactly 1", len(evs))
+	}
+	ev := evs[0]
+	if !strings.Contains(ev.Before, `"seq":1`) || !strings.Contains(ev.Before, `"text":"First check"`) {
+		t.Errorf("Before %q must carry the OLD text", ev.Before)
+	}
+	if !strings.Contains(ev.After, `"seq":1`) || !strings.Contains(ev.After, `"text":"First check (hardened)"`) {
+		t.Errorf("After %q must carry the NEW text", ev.After)
+	}
+}
+
+func TestAcceptanceEditACText_IdenticalTextIsNoOp(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := seedTaskWithACs(t, svc)
+	acs := NewAcceptance(uow, fc, &fakeIDGen{})
+
+	got, err := acs.EditACText(ctx, testAgent, task.ID, 2, "Second check") // the stored text again
+	if err != nil {
+		t.Fatalf("EditACText no-op: %v", err)
+	}
+	if got.Seq != 2 || got.Text != "Second check" {
+		t.Errorf("no-op edit returned %+v, want the unchanged row", got)
+	}
+	if evs := eventsOfKind(uow, domain.EventACUpdated); len(evs) != 0 {
+		t.Errorf("identical reword emitted %d ac-updated events, want 0", len(evs))
+	}
+}
+
+func TestAcceptanceEditACText_UnknownSeqOrTaskAndValidation(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := seedTaskWithACs(t, svc)
+	acs := NewAcceptance(uow, fc, &fakeIDGen{})
+
+	if _, err := acs.EditACText(ctx, testAgent, task.ID, 99, "x"); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("unknown seq → err = %v, want ErrNotFound", err)
+	}
+	if _, err := acs.EditACText(ctx, testAgent, domain.ID("no-such-task"), 1, "x"); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("unknown task → err = %v, want ErrNotFound", err)
+	}
+	if _, err := acs.EditACText(ctx, testAgent, task.ID, 1, "   "); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("whitespace text → err = %v, want ErrInvalid", err)
+	}
+
+	rows, _ := uow.acs.ListByTask(ctx, task.ID)
+	if len(rows) != 2 || rows[0].Text != "First check" {
+		t.Errorf("failed edits mutated state: %+v", rows)
+	}
+}
+
+func TestAcceptanceRemoveAC_DeletesLeavesGapAndEmitsEventWithoutBumpingTaskVersion(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := seedTaskWithACs(t, svc) // seq 1 and 2 exist
+	baseVersion, baseUpdated := task.Version, task.UpdatedAt
+	acs := NewAcceptance(uow, fc, &fakeIDGen{})
+
+	fc.SetNow(fc.now.Add(6 * time.Minute))
+	if err := acs.RemoveAC(ctx, testAgent, task.ID, 1); err != nil {
+		t.Fatalf("RemoveAC: %v", err)
+	}
+
+	rows, lerr := uow.acs.ListByTask(ctx, task.ID)
+	if lerr != nil {
+		t.Fatalf("ListByTask after remove: %v", lerr)
+	}
+	if len(rows) != 1 || rows[0].Seq != 2 || rows[0].Text != "Second check" {
+		t.Errorf("remaining ACs = %+v, want [seq 2] KEEPS ITS SEQ (gaps stay)", rows)
+	}
+
+	fresh, gerr := svc.Get(ctx, task.ID)
+	if gerr != nil {
+		t.Fatalf("Get after RemoveAC: %v", gerr)
+	}
+	if fresh.Version != baseVersion || !fresh.UpdatedAt.Equal(baseUpdated) {
+		t.Errorf("after AC remove: version = %d (want %d), updated_at = %s (want %s)",
+			fresh.Version, baseVersion, fresh.UpdatedAt, baseUpdated)
+	}
+
+	evs := eventsOfKind(uow, domain.EventACRemoved)
+	if len(evs) != 1 {
+		t.Fatalf("ac-removed events = %d, want exactly 1", len(evs))
+	}
+	ev := evs[0]
+	if ev.Actor != testAgent || ev.TaskID == nil || *ev.TaskID != task.ID {
+		t.Errorf("event = (actor %+v task %v), want agent-a on %s", ev.Actor, ev.TaskID, task.ID)
+	}
+	if !strings.Contains(ev.Before, `"seq":1`) || !strings.Contains(ev.Before, `"text":"First check"`) {
+		t.Errorf("Before %q must carry the DELETED seq + text", ev.Before)
+	}
+	if ev.After != "" {
+		t.Errorf("After %q must be empty (the row is gone)", ev.After)
+	}
+}
+
+func TestAcceptanceRemoveAC_UnknownSeqOrTask(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := seedTaskWithACs(t, svc)
+	acs := NewAcceptance(uow, fc, &fakeIDGen{})
+
+	if err := acs.RemoveAC(ctx, testAgent, task.ID, 99); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("unknown seq → err = %v, want ErrNotFound", err)
+	}
+	if err := acs.RemoveAC(ctx, testAgent, domain.ID("no-such-task"), 1); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("unknown task → err = %v, want ErrNotFound", err)
+	}
+
+	rows, _ := uow.acs.ListByTask(ctx, task.ID)
+	if len(rows) != 2 {
+		t.Errorf("failed removes wrote state: AC rows = %d, want the original 2", len(rows))
+	}
+	if evs := eventsOfKind(uow, domain.EventACRemoved); len(evs) != 0 {
+		t.Errorf("failed removes emitted %d ac-removed events, want 0", len(evs))
+	}
+}
+
 // --- artifacts -------------------------------------------------------------------
 
 func TestArtifactsAttach_AllKindsStoreArtifactAndAppendEventWithoutBumpingTaskVersion(t *testing.T) {

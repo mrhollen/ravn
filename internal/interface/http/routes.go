@@ -26,7 +26,9 @@ const apiPrefix = "/api/v1"
 //	POST  /api/v1/tasks/{id}/comments   append typed comment → 201 comment
 //	GET   /api/v1/tasks/{id}/comments   paged thread newest first + total (UI extra)
 //	PUT   /api/v1/tasks/{id}/notes      replace notes blob (no base-version check) → 200 fresh task
-//	PATCH /api/v1/tasks/{id}/acceptance-criteria/{seq}   toggle one AC → 200 updated row; 404 unknown seq
+//	POST  /api/v1/tasks/{id}/acceptance-criteria           append a new AC at next seq → 201 row; 400 empty text
+//	PATCH /api/v1/tasks/{id}/acceptance-criteria/{seq}   toggle one AC, or reword it via "text" → 200 updated row; 404 unknown seq
+//	DELETE /api/v1/tasks/{id}/acceptance-criteria/{seq}  remove one AC (actor required) → 204; 404 unknown task/seq
 //	POST  /api/v1/tasks/{id}/artifacts  attach evidence → 201 artifact
 //	POST  /api/v1/tasks/{id}/relations  add edge (upsert) → 201 new / 200 re-add; 409 parent conflict
 //	DELETE /api/v1/tasks/{id}/relations/{other_id}/{kind}   remove edge → 204; 404 missing edge
@@ -50,7 +52,9 @@ func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/comments", app.handleAddComment)
 	mux.HandleFunc("GET "+apiPrefix+"/tasks/{id}/comments", app.handleListComments)
 	mux.HandleFunc("PUT "+apiPrefix+"/tasks/{id}/notes", app.handleUpdateNotes)
+	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/acceptance-criteria", app.handleAddAC)
 	mux.HandleFunc("PATCH "+apiPrefix+"/tasks/{id}/acceptance-criteria/{seq}", app.handleToggleAC)
+	mux.HandleFunc("DELETE "+apiPrefix+"/tasks/{id}/acceptance-criteria/{seq}", app.handleRemoveAC)
 	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/artifacts", app.handleAttachArtifact)
 	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/relations", app.handleAddRelation)
 	mux.HandleFunc("DELETE "+apiPrefix+"/tasks/{id}/relations/{other_id}/{kind}", app.handleRemoveRelation)

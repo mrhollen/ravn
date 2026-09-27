@@ -46,7 +46,7 @@ All Tier 1 items are built, tested, and verified end-to-end (live E2E smoke: bot
 - **Realtime updates / websockets** — the UI refreshes on interaction; there is no push channel.
 - **Auth enforcement in production** — `CROWBAN_TOKEN` is accepted and forwarded by the MCP layer but the server does not yet 401 on missing tokens (Tier 2, "Agent identity & auth").
 - **Project edit in UI** — `PUT /projects/{id}` exists in the API; the web UI creates projects but does not rename/edit them.
-- **Post-create AC editing** — acceptance criteria text is fixed at task creation; afterwards only done-toggle + completion note (`PATCH …/acceptance-criteria/{seq}`). No adding/removing/rewording.
+- **AC management in UI** — the API supports post-create checklist editing (append via `POST …/acceptance-criteria`, reword via `PATCH` with `text`, remove via `DELETE`; seqs stay monotonic), but the web board still only renders + toggles criteria; add/edit/remove controls are tracked separately.
 - **Relations & claims in UI** — relation edges and claim/release/heartbeat are API + MCP tools; the web board does not surface them.
 - **MCP prompts/resources** — tools only (Tier 2).
 

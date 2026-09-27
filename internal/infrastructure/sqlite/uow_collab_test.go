@@ -263,6 +263,100 @@ func TestCollab_UpdateNotesReplacesBumpsVersionAndEmitsNoted(t *testing.T) {
 	}
 }
 
+// TestCollab_AcEditingRoundTripProvesSeqStabilityOnRealSQL covers the
+// post-create editing trio end to end: append at seq 2, reword it, delete it —
+// then prove via GetDetail that only the original criterion remains WITH ITS
+// ORIGINAL SEQ (no renumbering), that all three event rows committed alongside
+// their data in their transactions, and that the task row's version and
+// updated_at were never touched.
+func TestCollab_AcEditingRoundTripProvesSeqStabilityOnRealSQL(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	tasks, projects, _, acs, _ := newCollabEnv(t, db)
+	p := mustCreateProject(t, ctx, projects)
+	task, err := tasks.Create(ctx, testActor, application.TaskInput{
+		Title: "Edit me", ProjectID: p.ID, ACs: []string{"Original check"},
+	})
+	if err != nil {
+		t.Fatalf("Create task: %v", err)
+	}
+	baseVersion, baseUpdated := task.Version, task.UpdatedAt
+
+	added, err := acs.AddAC(ctx, testActor, task.ID, "Added later")
+	if err != nil {
+		t.Fatalf("AddAC: %v", err)
+	}
+	if added.Seq != 2 || added.Text != "Added later" {
+		t.Fatalf("added AC = %+v, want seq 2 'Added later'", added)
+	}
+
+	edited, err := acs.EditACText(ctx, testActor, task.ID, 2, "Added later (hardened)")
+	if err != nil {
+		t.Fatalf("EditACText: %v", err)
+	}
+	if edited.Seq != 2 || edited.Text != "Added later (hardened)" {
+		t.Fatalf("edited AC = %+v, want seq 2 reworded", edited)
+	}
+
+	// Identical reword is a no-op: fresh row, no new event.
+	if _, err := acs.EditACText(ctx, testActor, task.ID, 2, "Added later (hardened)"); err != nil {
+		t.Fatalf("EditACText no-op: %v", err)
+	}
+
+	if err := acs.RemoveAC(ctx, testActor, task.ID, 2); err != nil {
+		t.Fatalf("RemoveAC: %v", err)
+	}
+
+	detail, err := tasks.GetDetail(ctx, task.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("GetDetail: %v", err)
+	}
+	if len(detail.AcceptanceCriteria) != 1 {
+		t.Fatalf("ACs = %d rows, want only the original (1)", len(detail.AcceptanceCriteria))
+	}
+	ac := detail.AcceptanceCriteria[0]
+	if ac.Seq != 1 || ac.Text != "Original check" {
+		t.Errorf("surviving AC = %+v, want seq 1 'Original check' (its ORIGINAL seq — gaps stay)", ac)
+	}
+
+	if detail.Task.Version != baseVersion || !detail.Task.UpdatedAt.Equal(baseUpdated) {
+		t.Errorf("after AC editing: version = %d (want %d), updated_at = %s (want %s)",
+			detail.Task.Version, baseVersion, detail.Task.UpdatedAt, baseUpdated)
+	}
+
+	want := map[domain.EventKind]string{
+		domain.EventACAdded:   `"seq":2`,
+		domain.EventACUpdated: `"text":"Added later"`, // Before carries the old text
+		domain.EventACRemoved: `"seq":2`,
+	}
+	for i, k := range detailEventKinds(t, detail) {
+		wantFrag, ok := want[k]
+		if !ok {
+			continue
+		}
+		ev := detail.Events[i]
+		if ev.Actor != testActor || ev.TaskID == nil || *ev.TaskID != task.ID {
+			t.Errorf("%s event actor/ids = (%+v %v), want agent-a on %s", k, ev.Actor, ev.TaskID, task.ID)
+		}
+		if !strings.Contains(ev.Before+ev.After, wantFrag) {
+			t.Errorf("%s event payload = (%q → %q), want to carry %s", k, ev.Before, ev.After, wantFrag)
+		}
+		delete(want, k)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing AC-editing events in the detail tail: %v (kinds seen: %v)", want, detailEventKinds(t, detail))
+	}
+
+	// The no-op reword emitted NO extra ac-updated row.
+	var updated int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM event WHERE kind = 'ac-updated'`).Scan(&updated); err != nil {
+		t.Fatalf("count ac-updated: %v", err)
+	}
+	if updated != 1 {
+		t.Errorf("ac-updated events = %d, want exactly 1 (identical reword is a no-op)", updated)
+	}
+}
+
 // TestCollab_FailedChildRowWriteCommitsNothing proves the transactional seam on
 // real SQL: a child-row write whose parent task does not exists errors out and
 // leaves NO orphan event row behind (data + event commit or roll back together).

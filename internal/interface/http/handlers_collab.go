@@ -208,16 +208,10 @@ func (a *App) handleUpdateNotes(w http.ResponseWriter, r *http.Request) {
 
 // --- acceptance criteria --------------------------------------------------------------
 
-// handleToggleAC → PATCH /api/v1/tasks/{id}/acceptance-criteria/{seq}. Sets or
-// clears the 1-based criterion seq (path value; non-positive/non-numeric →
-// 400). Child-row rule: no task version bump. 200 with the updated criterion
-// row; unknown task OR unknown seq → 404.
-func (a *App) handleToggleAC(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
+// parseACSeq extracts the {seq} path parameter of an acceptance-criteria route.
+// Non-numeric or non-positive → 400 (a checklist row is addressed by a 1-based
+// integer; anything else is malformed input, not a lookup miss).
+func parseACSeq(w http.ResponseWriter, r *http.Request) (int, bool) {
 	rawSeq := r.PathValue("seq")
 	seq, err := strconv.Atoi(rawSeq)
 	if err != nil || seq < 1 {
@@ -225,6 +219,25 @@ func (a *App) handleToggleAC(w http.ResponseWriter, r *http.Request) {
 			"error":   "invalid input",
 			"message": fmt.Sprintf("acceptance-criteria seq must be a positive integer, got %q", rawSeq),
 		})
+		return 0, false
+	}
+	return seq, true
+}
+
+// handleToggleAC → PATCH /api/v1/tasks/{id}/acceptance-criteria/{seq}. Two
+// shapes share the endpoint: the complete_ac toggle (done + optional note) and
+// a text reword — when "text" is present it takes precedence and done/note are
+// ignored. Child-row rule: no task version bump either way. 200 with the
+// updated criterion row; unknown task OR unknown seq → 404; empty/absent actor
+// or whitespace-only text → 400.
+func (a *App) handleToggleAC(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	seq, ok := parseACSeq(w, r)
+	if !ok {
 		return
 	}
 	var req acToggleReq
@@ -236,12 +249,101 @@ func (a *App) handleToggleAC(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	c, err := a.Acceptance.ToggleAC(ctx, actor, id, seq, req.Done, req.Note)
+	var c domain.AcceptanceCriterion
+	if req.Text != nil { // reword takes precedence over the toggle fields
+		c, err = a.Acceptance.EditACText(ctx, actor, id, seq, *req.Text)
+	} else {
+		c, err = a.Acceptance.ToggleAC(ctx, actor, id, seq, req.Done, req.Note)
+	}
 	if err != nil {
-		writeAppError(w, err, "task", id) // unknown task or seq → 404
+		writeAppError(w, err, "task", id) // unknown task or seq → 404; empty text → 400
 		return
 	}
 	writeJSON(w, http.StatusOK, toAC(c))
+}
+
+// handleAddAC → POST /api/v1/tasks/{id}/acceptance-criteria. Appends a new
+// criterion at seq max(seq)+1 (monotonic; callers never choose the seq). Child-
+// row rule: no task version bump; one `ac-added` event in the same tx. 201 with
+// the fresh row; whitespace-only text or bad actor → 400; unknown task → 404.
+func (a *App) handleAddAC(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req acCreateReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	actor, err := req.Actor.toDomain()
+	if err != nil {
+		writeAppError(w, err, "task", id)
+		return
+	}
+	c, err := a.Acceptance.AddAC(ctx, actor, id, req.Text)
+	if err != nil {
+		writeAppError(w, err, "task", id) // empty text → 400; unknown task → 404
+		return
+	}
+	writeJSON(w, http.StatusCreated, toAC(c))
+}
+
+// handleRemoveAC → DELETE /api/v1/tasks/{id}/acceptance-criteria/{seq}. Removes
+// exactly the criterion at the 1-based seq (path value; non-positive/non-numeric
+// → 400). The body is optional JSON but MUST carry a valid actor: a removal
+// appends an `ac-removed` event that records WHO removed it, so no-body/empty-
+// actor → 400 rather than a fabricated identity in the audit log. 204 on
+// success (the deleted seq + text ride on the event's Before payload); unknown
+// task or seq → 404. Surviving criteria keep their seqs — no renumbering.
+func (a *App) handleRemoveAC(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	seq, ok := parseACSeq(w, r)
+	if !ok {
+		return
+	}
+	var rawBody []byte
+	if r.Body != nil {
+		var err error
+		rawBody, err = io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, map[string]any{
+				"error":   "invalid input",
+				"message": "unreadable request body: " + err.Error(),
+			})
+			return
+		}
+	}
+	var req acRemoveReq
+	if len(rawBody) == 0 {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": `actor is required for AC removal: send a JSON body with {"actor":{"name":"..."}}`,
+		})
+		return
+	}
+	if err := json.Unmarshal(rawBody, &req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": "malformed JSON body: " + err.Error(),
+		})
+		return
+	}
+	actor, err := req.Actor.toDomain()
+	if err != nil {
+		writeAppError(w, err, "task", id)
+		return
+	}
+
+	if err := a.Acceptance.RemoveAC(ctx, actor, id, seq); err != nil {
+		writeAppError(w, err, "task", id) // unknown task or seq → 404
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- artifacts -----------------------------------------------------------------------

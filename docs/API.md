@@ -226,7 +226,9 @@ extras (the web frontend uses them directly).
 | `POST /tasks/{id}/comments`           | append a typed comment → 201                             | `add_comment` |
 | `GET  /tasks/{id}/comments`           | paged comment thread + total (UI)                        | — |
 | `PUT  /tasks/{id}/notes`              | replace the notes blob                                   | `update_notes` |
-| `PATCH /tasks/{id}/acceptance-criteria/{seq}` | toggle one AC (1-based seq)                  | `complete_ac` |
+| `POST /tasks/{id}/acceptance-criteria`            | append a new AC at next seq → 201          | — (UI) |
+| `PATCH /tasks/{id}/acceptance-criteria/{seq}`     | toggle one AC, or reword it via `text`    | `complete_ac` |
+| `DELETE /tasks/{id}/acceptance-criteria/{seq}`    | remove one AC → 204 (actor required)      | — (UI) |
 | `POST /tasks/{id}/artifacts`          | attach evidence → 201                                    | `attach_artifact` |
 | `POST   /tasks/{id}/relations`        | add a relation edge (upsert)                             | `relate_tasks` (add) |
 | `DELETE /tasks/{id}/relations/{other_id}/{kind}` | remove a relation edge                | `relate_tasks` (remove) |
@@ -498,21 +500,56 @@ re-read before every edit would only add round-trips. Consequences to know:
 `200` with the fresh summary row (notes are visible via `get_task`). Unknown
 task → `404`.
 
-### PATCH /tasks/{id}/acceptance-criteria/{seq} → `complete_ac`
+### PATCH /tasks/{id}/acceptance-criteria/{seq} → `complete_ac` (+ text edit)
 
 `{seq}` is the **1-based** criterion sequence in the URL. Non-numeric or < 1 →
 `400`; unknown task **or** unknown seq → `404`.
 
+Two shapes share the endpoint:
+
 ```json
+// toggle (complete_ac): done sets/clears the checkbox, note records why
 { "actor": { "name": "ada" }, "done": true, "note": "manual test passed" }
+
+// reword: "text" takes precedence — done/note are ignored in that case
+{ "actor": { "name": "ada" }, "text": "login works (hardened)" }
 ```
 
 Setting `done: true` records `completed_by`/`completed_at`; setting it back to
-`false` clears both (uncheck is free). Child-row mutation: no task version
-bump. `200` with the updated AC row:
+`false` clears both (uncheck is free). Rewording updates only the text (the
+checkbox and completion fields are untouched); a reword to the IDENTICAL text
+is a no-op — fresh row returned, no event. Both are child-row mutations: no
+task version bump. `200` with the updated AC row:
 
 ```json
 { "seq": 1, "text": "login works", "done": true, "note": "manual test passed", "completed_by": { "type": "human", "name": "ada" }, "completed_at": "2026-09-26T15:40:12Z" }
+```
+
+### POST /tasks/{id}/acceptance-criteria (UI)
+
+Appends a new criterion to an existing task. The seq is minted server-side as
+**max(seq)+1** — callers never choose it, and surviving seqs are never
+renumbered (deletes leave gaps). `text` must be non-empty after trimming
+(`400` otherwise); unknown task → `404`. Child-row mutation: one `ac-added`
+event in the same transaction, no version bump. `201` with the fresh AC row:
+
+```json
+{ "actor": { "name": "ada" }, "text": "reset works" }
+// → 201
+{ "seq": 3, "text": "reset works", "done": false }
+```
+
+### DELETE /tasks/{id}/acceptance-criteria/{seq} (UI)
+
+Removes exactly the criterion at the **1-based** `{seq}`. The body is optional
+JSON but MUST carry a valid `actor` — a removal appends an `ac-removed` event
+that records WHO removed it, so no-body/empty-actor → `400`. The deleted
+criterion's seq + text ride on the event's `before` payload. Surviving criteria
+keep their seq values — **no renumbering** (gaps stay). Unknown task or seq →
+`404`. No version bump. `204` with no body:
+
+```json
+{ "actor": { "name": "ada" } }
 ```
 
 ### POST /tasks/{id}/artifacts → `attach_artifact`
