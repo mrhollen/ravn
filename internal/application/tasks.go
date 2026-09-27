@@ -117,11 +117,11 @@ type TaskUpdateInput struct {
 // the task row (status=todo, version=1), its initial acceptance criteria, and
 // ONE `created` event — all inside a single unit of work. Empty title or a
 // missing/unknown project → domain.ErrInvalid; nothing is written on failure.
-//
-// TODO(slice 2D): duplicate-title warning for open tasks in the same project
-// (advisory warnings[] on the response, never an error).
-// TODO(slice 2D): parent / blocked-by / related edges at create time — they
-// will be written through r.Relations inside this same Run.
+// Duplicate-title candidates are surfaced as a non-blocking
+// `possible_duplicates` advisory on create (see FindDuplicateCandidates).
+// Parent / blocked-by / related edges are managed via the separate relations
+// use case (POST|DELETE /tasks/{id}/relations, `relate_tasks`) and are
+// intentionally not part of the create payload (docs/API.md).
 func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (domain.Task, error) {
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
