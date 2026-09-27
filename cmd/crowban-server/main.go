@@ -46,15 +46,20 @@ func main() {
 		addr   = flag.String("addr", envOr("CROWBAN_ADDR", ":8080"), "listen address, e.g. :8080")
 		data   = flag.String("data", envOr("CROWBAN_DATA", "/data/crowban.db"), "path of the SQLite database file")
 		token  = flag.String("token", os.Getenv("CROWBAN_TOKEN"), "bearer token gating /api/v1 routes; empty disables auth (dev default)")
-		static = flag.String("static", envOr("CROWBAN_STATIC_DIR", "./web/dist"),
+		static   = flag.String("static", envOr("CROWBAN_STATIC_DIR", "./web/dist"),
 			"directory holding the built web UI (Vite dist); placeholder root is served when it has no index.html")
+		logLevel = flag.String("log-level", envOr("LOG_LEVEL", envOr("CROWBAN_LOG_LEVEL", "info")),
+			"log level: debug, info, warn, error")
 	)
 	flag.Parse()
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	lvl := parseLogLevel(*logLevel)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: lvl,
+	}))
 	slog.SetDefault(logger)
 	logger.Info("crowban-server starting",
-		"version", version, "addr", *addr, "data", *data, "token_set", *token != "", "static_dir", *static)
+		"version", version, "addr", *addr, "data", *data, "token_set", *token != "", "static_dir", *static, "log_level", lvl.String())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -127,6 +132,13 @@ func newRouter(db *sql.DB, staticDir, token string) http.Handler {
 	now := clock.New()
 	mint := idgen.New()
 
+	metrics := httpapi.NewMetrics()
+	if db != nil {
+		metrics.SetTaskStatsFunc(func(ctx context.Context) (map[string]int64, int64, error) {
+			return sqlite.CollectTaskMetrics(ctx, db, time.Now())
+		})
+	}
+
 	app := httpapi.NewApp(httpapi.Deps{
 		Projects:   application.NewProjects(uow, now, mint),
 		Tasks:      application.NewTasks(uow, now, mint),
@@ -137,6 +149,9 @@ func newRouter(db *sql.DB, staticDir, token string) http.Handler {
 		Broker:     broker,
 	})
 	httpapi.RegisterRoutes(mux, app)
+
+	mux.Handle("GET /metrics", metrics.Handler())
+	mux.Handle("GET /api/v1/metrics", metrics.Handler())
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		dbStatus := sqlite.Health(r.Context(), db)
@@ -167,7 +182,7 @@ func newRouter(db *sql.DB, staticDir, token string) http.Handler {
 		})
 	}
 
-	return httpapi.AuthMiddleware(token)(mux)
+	return metrics.Middleware(httpapi.AuthMiddleware(token)(mux))
 }
 
 // hasIndexHTML reports whether dir exists and directly contains an index.html
@@ -180,8 +195,8 @@ func hasIndexHTML(dir string) bool {
 // spaFallback serves the built web UI from static via stdlib (FileServerFS).
 // A GET/HEAD whose path maps to a real file or directory is served as-is; any
 // other request that is NOT under /api or /healthz falls back to index.html
-// so client-side routing deep links work. Paths under /api and /healthz that
-// still reach this handler are unknown routes — 404, never index.html (the
+// so client-side routing deep links work. Paths under /api, /healthz, or /metrics
+// that still reach this handler are unknown routes — 404, never index.html (the
 // real patterns for them are more specific than "GET /" and win first).
 //
 // The fallback rewrites the path to "/" rather than "/index.html": FileServer
@@ -196,7 +211,7 @@ func spaFallback(static fs.FS) http.Handler {
 			return
 		}
 		p := r.URL.Path
-		if p == "/api" || strings.HasPrefix(p, "/api/") || p == "/healthz" || strings.HasPrefix(p, "/healthz/") {
+		if p == "/api" || strings.HasPrefix(p, "/api/") || p == "/healthz" || strings.HasPrefix(p, "/healthz/") || p == "/metrics" || strings.HasPrefix(p, "/metrics/") {
 			http.NotFound(w, r)
 			return
 		}
@@ -206,6 +221,24 @@ func spaFallback(static fs.FS) http.Handler {
 		spa.URL = &u
 		fileServer.ServeHTTP(w, spa)
 	})
+}
+
+// parseLogLevel parses a log level string into a slog.Level.
+// Supported values (case-insensitive): debug, info, warn, error.
+// Defaults to slog.LevelInfo on unrecognized input.
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -450,3 +452,215 @@ func TestRouterRealtimeEventsEndToEnd(t *testing.T) {
 		t.Fatal("timed out waiting for realtime SSE event")
 	}
 }
+
+func TestParseLogLevel(t *testing.T) {
+	tests := []struct {
+		input string
+		want  slog.Level
+	}{
+		{"debug", slog.LevelDebug},
+		{"DEBUG", slog.LevelDebug},
+		{"Debug", slog.LevelDebug},
+		{"info", slog.LevelInfo},
+		{"INFO", slog.LevelInfo},
+		{"warn", slog.LevelWarn},
+		{"WARN", slog.LevelWarn},
+		{"warning", slog.LevelWarn},
+		{"WARNING", slog.LevelWarn},
+		{"error", slog.LevelError},
+		{"ERROR", slog.LevelError},
+		{"unknown", slog.LevelInfo},
+		{"", slog.LevelInfo},
+		{"  debug  ", slog.LevelDebug},
+	}
+
+	for _, tc := range tests {
+		got := parseLogLevel(tc.input)
+		if got != tc.want {
+			t.Errorf("parseLogLevel(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestLogLevelFiltering(t *testing.T) {
+	var buf bytes.Buffer
+	lvl := parseLogLevel("warn")
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: lvl}))
+
+	logger.Debug("debug message")
+	logger.Info("info message")
+	logger.Warn("warn message")
+	logger.Error("error message")
+
+	out := buf.String()
+	if strings.Contains(out, "debug message") {
+		t.Errorf("expected debug message to be filtered out at warn level, got: %s", out)
+	}
+	if strings.Contains(out, "info message") {
+		t.Errorf("expected info message to be filtered out at warn level, got: %s", out)
+	}
+	if !strings.Contains(out, "warn message") {
+		t.Errorf("expected warn message to be logged, got: %s", out)
+	}
+	if !strings.Contains(out, "error message") {
+		t.Errorf("expected error message to be logged, got: %s", out)
+	}
+}
+
+func TestMetricsEndpointInRouter(t *testing.T) {
+	srv := startTestServer(t)
+
+	// 1. Initial /metrics request returns Prometheus format by default
+	code, body := get(t, srv.URL+"/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("GET /metrics status = %d, want 200 (body %s)", code, body)
+	}
+	if !strings.Contains(body, "# HELP http_requests_total") {
+		t.Errorf("GET /metrics body missing http_requests_total HELP: %s", body)
+	}
+
+	// 2. Perform a request to /healthz (status 200) and an unknown project (status 404)
+	get(t, srv.URL+"/healthz")
+	get(t, srv.URL+"/api/v1/projects/01M3J000000000000000000000")
+
+	// 3. Request /metrics?format=json and verify counters
+	code, body = get(t, srv.URL+"/metrics?format=json")
+	if code != http.StatusOK {
+		t.Fatalf("GET /metrics?format=json status = %d, want 200 (body %s)", code, body)
+	}
+	var snap struct {
+		HTTPRequestsTotal    uint64            `json:"http_requests_total"`
+		HTTPRequestsInFlight int64             `json:"http_requests_in_flight"`
+		HTTPRequestsByStatus map[string]uint64 `json:"http_requests_by_status"`
+		HTTPRequestsByMethod map[string]uint64 `json:"http_requests_by_method"`
+		UptimeSeconds        float64           `json:"uptime_seconds"`
+	}
+	if err := json.Unmarshal([]byte(body), &snap); err != nil {
+		t.Fatalf("unmarshal /metrics?format=json: %v — body: %s", err, body)
+	}
+
+	if snap.HTTPRequestsTotal < 3 {
+		t.Errorf("HTTPRequestsTotal = %d, want >= 3", snap.HTTPRequestsTotal)
+	}
+	if snap.HTTPRequestsByStatus["200"] == 0 {
+		t.Errorf("HTTPRequestsByStatus[200] = 0, want > 0")
+	}
+	if snap.HTTPRequestsByStatus["404"] == 0 {
+		t.Errorf("HTTPRequestsByStatus[404] = 0, want > 0")
+	}
+
+	// 4. Verify /api/v1/metrics returns JSON by default
+	code, body = get(t, srv.URL+"/api/v1/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/v1/metrics status = %d, want 200 (body %s)", code, body)
+	}
+	var apiSnap struct {
+		HTTPRequestsTotal uint64 `json:"http_requests_total"`
+	}
+	if err := json.Unmarshal([]byte(body), &apiSnap); err != nil {
+		t.Fatalf("unmarshal /api/v1/metrics: %v — body: %s", err, body)
+	}
+}
+
+func TestMetricsTaskCountsAndActiveClaims(t *testing.T) {
+	db := newTestDB(t)
+	srv := httptest.NewServer(newRouter(db, filepath.Join(t.TempDir(), "no-dist"), ""))
+	t.Cleanup(srv.Close)
+
+	// Create a project
+	code, body := reqWithAuth(t, "POST", srv.URL+"/api/v1/projects", "",
+		`{"actor":{"type":"human","name":"ada"},"name":"Metrics Observability Project"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/projects = %d (%s)", code, body)
+	}
+	var proj struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(body), &proj); err != nil {
+		t.Fatalf("unmarshal project: %v", err)
+	}
+
+	// Create task 1
+	code, _ = reqWithAuth(t, "POST", srv.URL+"/api/v1/tasks", "",
+		fmt.Sprintf(`{"actor":{"type":"agent","name":"bot"},"project_id":"%s","title":"Task 1"}`, proj.ID))
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/tasks = %d", code)
+	}
+
+	// Create task 2 and claim it
+	code, body = reqWithAuth(t, "POST", srv.URL+"/api/v1/tasks", "",
+		fmt.Sprintf(`{"actor":{"type":"agent","name":"bot"},"project_id":"%s","title":"Task 2"}`, proj.ID))
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/tasks = %d", code)
+	}
+	var taskRes struct {
+		Task struct {
+			ID string `json:"id"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal([]byte(body), &taskRes); err != nil {
+		t.Fatalf("unmarshal task: %v", err)
+	}
+
+	code, _ = reqWithAuth(t, "POST", srv.URL+"/api/v1/tasks/"+taskRes.Task.ID+"/claim", "",
+		`{"actor":{"type":"agent","name":"bot"},"ttl_seconds":3600}`)
+	if code != http.StatusOK {
+		t.Fatalf("claim task: %d", code)
+	}
+
+	// Query /metrics?format=json
+	code, body = get(t, srv.URL+"/metrics?format=json")
+	if code != http.StatusOK {
+		t.Fatalf("GET /metrics = %d", code)
+	}
+
+	var snap struct {
+		TasksByStatus map[string]int64 `json:"tasks_by_status"`
+		ActiveClaims  *int64           `json:"active_claims"`
+	}
+	if err := json.Unmarshal([]byte(body), &snap); err != nil {
+		t.Fatalf("unmarshal metrics: %v (%s)", err, body)
+	}
+
+	if snap.TasksByStatus["todo"] != 1 {
+		t.Errorf("tasks_by_status[todo] = %d, want 1", snap.TasksByStatus["todo"])
+	}
+	if snap.TasksByStatus["doing"] != 1 {
+		t.Errorf("tasks_by_status[doing] = %d, want 1", snap.TasksByStatus["doing"])
+	}
+	if snap.ActiveClaims == nil || *snap.ActiveClaims != 1 {
+		t.Errorf("active_claims = %v, want 1", snap.ActiveClaims)
+	}
+}
+
+func TestStaticServingDoesNotShadowMetrics(t *testing.T) {
+	srv := startStaticTestServer(t)
+
+	// GET /metrics should return Prometheus metrics, NOT index.html
+	code, body := get(t, srv.URL+"/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("GET /metrics status = %d, want 200", code)
+	}
+	if strings.Contains(body, "crowban UI") {
+		t.Errorf("GET /metrics returned the SPA index: %q", body)
+	}
+	if !strings.Contains(body, "http_requests_total") {
+		t.Errorf("GET /metrics body missing http_requests_total: %q", body)
+	}
+
+	// GET /api/v1/metrics should return JSON, NOT index.html
+	code, body = get(t, srv.URL+"/api/v1/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/v1/metrics status = %d, want 200", code)
+	}
+	if strings.Contains(body, "crowban UI") {
+		t.Errorf("GET /api/v1/metrics returned the SPA index: %q", body)
+	}
+	var snap struct {
+		HTTPRequestsTotal uint64 `json:"http_requests_total"`
+	}
+	if err := json.Unmarshal([]byte(body), &snap); err != nil {
+		t.Fatalf("GET /api/v1/metrics returned invalid JSON: %v (%s)", err, body)
+	}
+}
+
