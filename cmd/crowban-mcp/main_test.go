@@ -82,6 +82,7 @@ func TestMuxRouting_StreamableAndSSE(t *testing.T) {
 
 	mcs := mcpsrv.NewMCPServer("crowban", "test", mcp.ServerOptions()...)
 	mcp.RegisterTools(mcs, client, defaultActor)
+	mcp.RegisterPrompts(mcs, client, defaultActor)
 
 	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
 		mcpsrv.WithStateLess(true),
@@ -168,4 +169,15 @@ func TestMuxRouting_StreamableAndSSE(t *testing.T) {
 			t.Fatalf("expected GET /sse to return 200 OK, got %d", respSSE.StatusCode)
 		}
 	}
+
+	// 5. POST /mcp handles prompts/list
+	promptListPayload := `{"jsonrpc":"2.0","id":5,"method":"prompts/list"}`
+	respPrompt, err := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader(promptListPayload))
+	if err != nil {
+		t.Fatalf("POST /mcp prompts/list failed: %v", err)
+	}
+	if respPrompt.StatusCode != http.StatusOK {
+		t.Fatalf("expected POST /mcp prompts/list to return 200, got %d", respPrompt.StatusCode)
+	}
+	respPrompt.Body.Close()
 }

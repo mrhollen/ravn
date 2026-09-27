@@ -347,8 +347,12 @@ var wantToolNames = []string{
 }
 
 func startMCPStack(t *testing.T, upstreamURL string) *httptest.Server {
+	return startMCPStackWithToken(t, upstreamURL, "secret-token")
+}
+
+func startMCPStackWithToken(t *testing.T, upstreamURL, token string) *httptest.Server {
 	t.Helper()
-	api := apiclient.New(upstreamURL, "secret-token")
+	api := apiclient.New(upstreamURL, token)
 	mcs := mcpsrv.NewMCPServer("crowban", "test-version", ServerOptions()...)
 	RegisterTools(mcs, api, apiclient.Actor{Type: "agent", Name: "default-agent"})
 	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
@@ -1038,5 +1042,60 @@ func TestHealthzProxiesUpstream(t *testing.T) {
 	}()
 	if code != http.StatusServiceUnavailable {
 		t.Errorf("unreachable upstream → /healthz = %d, want 503", code)
+	}
+}
+
+func TestMCPTokenForwardingEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	const expectedToken = "prod-auth-token-999"
+
+	// Mock upstream requiring expectedToken with the API.md error shape
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+expectedToken {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"unauthorized","message":"missing or invalid auth token"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(mockProjectsBody))
+	}))
+	t.Cleanup(upstream.Close)
+
+	// 1. MCP stack with matching token succeeds end-to-end
+	mcpGood := startMCPStackWithToken(t, upstream.URL, expectedToken)
+	clientGood := dial(t, mcpGood.URL, ctx)
+	resGood := callTool(t, clientGood, ctx, "list_projects", nil)
+	if resGood.IsError {
+		t.Fatalf("expected success with correct token, got error: %s", firstText(t, resGood))
+	}
+	goodText := firstText(t, resGood)
+	if !strings.Contains(goodText, "Website Redesign") {
+		t.Errorf("list_projects result = %q, want it to contain 'Website Redesign'", goodText)
+	}
+
+	// 2. MCP stack with wrong token fails with 401 unauthorized
+	mcpBad := startMCPStackWithToken(t, upstream.URL, "wrong-token")
+	clientBad := dial(t, mcpBad.URL, ctx)
+	resBad := callTool(t, clientBad, ctx, "list_projects", nil)
+	if !resBad.IsError {
+		t.Fatalf("expected error with wrong token, got success: %+v", resBad)
+	}
+	badText := firstText(t, resBad)
+	if !strings.Contains(badText, "unauthorized") {
+		t.Errorf("expected unauthorized in error response, got %q", badText)
+	}
+
+	// 3. MCP stack with empty token fails with 401 unauthorized
+	mcpEmpty := startMCPStackWithToken(t, upstream.URL, "")
+	clientEmpty := dial(t, mcpEmpty.URL, ctx)
+	resEmpty := callTool(t, clientEmpty, ctx, "list_projects", nil)
+	if !resEmpty.IsError {
+		t.Fatalf("expected error with empty token, got success: %+v", resEmpty)
+	}
+	emptyText := firstText(t, resEmpty)
+	if !strings.Contains(emptyText, "unauthorized") {
+		t.Errorf("expected unauthorized in error response, got %q", emptyText)
 	}
 }

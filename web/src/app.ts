@@ -343,32 +343,188 @@ export function crowbanApp() {
       if (!this.notesDirty) this.notesDraft = t.notes;
     },
 
-    /** Version-guarded status move. On 409 version_conflict: re-read the task,
-     *  re-apply the SAME intent once with the fresh version; a second conflict
-     *  just refreshes and says so (per docs/API.md error contract). */
-    async moveStatus(status: Status): Promise<void> {
-      const t = this.detail;
-      if (!t || this.busyStatus || t.status === status) return;
-      this.busyStatus = t.id;
+    // -------------------------------------------------------- drag and drop
+    draggedTaskId: null as string | null,
+    draggedFromStatus: null as Status | null,
+    dragOverStatus: null as Status | null,
+    isDragging: false,
+
+    onDragStart(e: DragEvent, task: TaskSummary, fromStatus: Status): void {
+      if (this.busyStatus === task.id) {
+        e.preventDefault();
+        return;
+      }
+      this.isDragging = true;
+      this.draggedTaskId = task.id;
+      this.draggedFromStatus = fromStatus;
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", task.id);
+      }
+    },
+
+    onDragEnd(): void {
+      this.draggedTaskId = null;
+      this.draggedFromStatus = null;
+      this.dragOverStatus = null;
+      window.setTimeout(() => {
+        this.isDragging = false;
+      }, 50);
+    },
+
+    onDragOver(e: DragEvent, status: Status): void {
+      if (!this.draggedTaskId) return;
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "move";
+      }
+      if (this.dragOverStatus !== status) {
+        this.dragOverStatus = status;
+      }
+    },
+
+    onDragLeave(e: DragEvent, status: Status): void {
+      const currentTarget = e.currentTarget as HTMLElement | null;
+      const relatedTarget = e.relatedTarget as Node | null;
+      if (currentTarget && relatedTarget && currentTarget.contains(relatedTarget)) {
+        return;
+      }
+      if (this.dragOverStatus === status) {
+        this.dragOverStatus = null;
+      }
+    },
+
+    async onDrop(e: DragEvent, targetStatus: Status): Promise<void> {
+      e.preventDefault();
+      const taskId = this.draggedTaskId || e.dataTransfer?.getData("text/plain");
+      const fromStatus = this.draggedFromStatus;
+      this.dragOverStatus = null;
+      this.draggedTaskId = null;
+      this.draggedFromStatus = null;
+      window.setTimeout(() => {
+        this.isDragging = false;
+      }, 50);
+
+      if (!taskId || !fromStatus || fromStatus === targetStatus) {
+        return;
+      }
+      await this.moveTaskStatus(taskId, targetStatus);
+    },
+
+    handleCardClick(id: string): void {
+      if (this.isDragging) return;
+      void this.openTask(id);
+    },
+
+    /** Optimistically move a task to targetStatus, then persist with PATCH.
+     *  Reuses the 409 re-read + re-apply-once logic.
+     *  Rolls back the optimistic board move on failure so no orphan/ghost cards remain. */
+    async moveTaskStatus(taskId: string, targetStatus: Status, initialVersion?: number): Promise<void> {
+      if (this.busyStatus) return;
+
+      // Locate task in current board columns or open detail
+      let currentStatus: Status | null = null;
+      let taskSummary: TaskSummary | null = null;
+      if (this.board) {
+        for (const s of STATUSES) {
+          const found = this.board.tasks[s]?.find((t) => t.id === taskId);
+          if (found) {
+            currentStatus = s;
+            taskSummary = found;
+            break;
+          }
+        }
+      }
+      if (!taskSummary && this.detail && this.detail.id === taskId) {
+        taskSummary = this.detail;
+        currentStatus = this.detail.status;
+      }
+
+      if (!taskSummary || !currentStatus || currentStatus === targetStatus) {
+        return;
+      }
+
+      const versionToUse = initialVersion ?? taskSummary.version;
+
+      // 1. Snapshot board state for rollback
+      const prevBoardTasks: Record<Status, TaskSummary[]> | null = this.board
+        ? {
+            todo: [...this.board.tasks.todo],
+            doing: [...this.board.tasks.doing],
+            done: [...this.board.tasks.done],
+          }
+        : null;
+      const prevBoardCounts = this.board ? { ...this.board.counts } : null;
+      const prevDetailStatus = this.detail && this.detail.id === taskId ? this.detail.status : null;
+
+      const rollback = () => {
+        if (this.board && prevBoardTasks && prevBoardCounts) {
+          this.board.tasks = prevBoardTasks;
+          this.board.counts = prevBoardCounts;
+        }
+        if (this.detail && this.detail.id === taskId && prevDetailStatus !== null) {
+          this.detail.status = prevDetailStatus;
+        }
+      };
+
+      // 2. Optimistic update
+      if (this.board) {
+        this.board.tasks[currentStatus] = this.board.tasks[currentStatus].filter((t) => t.id !== taskId);
+        const movedTask: TaskSummary = { ...taskSummary, status: targetStatus };
+        this.board.tasks[targetStatus] = [...this.board.tasks[targetStatus], movedTask];
+        if (this.board.counts[currentStatus] > 0) {
+          this.board.counts[currentStatus]--;
+        }
+        this.board.counts[targetStatus]++;
+      }
+
+      if (this.detail && this.detail.id === taskId) {
+        this.detail.status = targetStatus;
+      }
+
+      this.busyStatus = taskId;
+
       try {
-        await api.updateTask(t.id, { actor: this.actor(), version: t.version, status });
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+        const updated = await api.updateTask(taskId, {
+          actor: this.actor(),
+          version: versionToUse,
+          status: targetStatus,
+        });
+        if (this.board) {
+          const inBoard = this.board.tasks[targetStatus]?.find((t) => t.id === taskId);
+          if (inBoard) {
+            Object.assign(inBoard, updated);
+          }
+        }
+        await Promise.all([
+          this.detail && this.detail.id === taskId ? this.refreshDetail(true) : Promise.resolve(),
+          this.loadBoard(true),
+        ]);
       } catch (e) {
         if (ApiError.isVersionConflict(e)) {
           try {
-            const fresh = await api.getTask(t.id, { commentLimit: 50 });
-            this.applyDetail(fresh);
-            if (fresh.status !== status) {
-              await api.updateTask(t.id, {
+            const fresh = await api.getTask(taskId, { commentLimit: 50 });
+            if (this.detail && this.detail.id === taskId) {
+              this.applyDetail(fresh);
+            }
+            if (fresh.status !== targetStatus) {
+              await api.updateTask(taskId, {
                 actor: this.actor(),
                 version: fresh.version,
-                status,
+                status: targetStatus,
               });
             }
-            await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+            await Promise.all([
+              this.detail && this.detail.id === taskId ? this.refreshDetail(true) : Promise.resolve(),
+              this.loadBoard(true),
+            ]);
             this.toast("Changed elsewhere — retried with the fresh version.", "info");
           } catch (e2) {
-            await this.refreshDetail(true).catch(() => undefined);
+            rollback();
+            await Promise.all([
+              this.detail && this.detail.id === taskId ? this.refreshDetail(true).catch(() => undefined) : Promise.resolve(),
+              this.loadBoard(true).catch(() => undefined),
+            ]);
             if (ApiError.isVersionConflict(e2)) {
               this.toast("Changed elsewhere — refreshed (your move was not applied).", "info");
             } else {
@@ -376,11 +532,22 @@ export function crowbanApp() {
             }
           }
         } else {
+          rollback();
+          await this.loadBoard(true).catch(() => undefined);
           this.toast(errMsg(e), "error");
         }
       } finally {
         this.busyStatus = "";
       }
+    },
+
+    /** Version-guarded status move from detail drawer. On 409 version_conflict:
+     *  re-read the task, re-apply the SAME intent once with the fresh version;
+     *  a second conflict just refreshes and says so (per docs/API.md error contract). */
+    async moveStatus(status: Status): Promise<void> {
+      const t = this.detail;
+      if (!t || this.busyStatus || t.status === status) return;
+      await this.moveTaskStatus(t.id, status, t.version);
     },
 
     // ------------------------------------------------------------------- notes

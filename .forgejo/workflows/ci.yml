@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  ci:
+    name: Test and Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Check formatting (gofmt)
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "The following files are not formatted with gofmt:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      - name: Check linting (go vet)
+        run: go vet ./...
+
+      - name: Run Go tests
+        run: go test -race ./...
+
+      - name: Build static binaries
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o bin/crowban-server ./cmd/crowban-server
+          CGO_ENABLED=0 go build -trimpath -o bin/crowban-mcp ./cmd/crowban-mcp
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web application
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Validate Docker Compose configuration
+        run: |
+          if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+            echo "Validating docker-compose.yml..."
+            docker compose -f docker-compose.yml config > /dev/null
+            echo "Validating docker-compose-v3.3.yml..."
+            docker compose -f docker-compose-v3.3.yml config > /dev/null
+            echo "Docker Compose configurations are valid."
+          elif command -v docker-compose >/dev/null 2>&1; then
+            echo "Validating docker-compose.yml with docker-compose..."
+            docker-compose -f docker-compose.yml config > /dev/null
+            echo "Validating docker-compose-v3.3.yml with docker-compose..."
+            docker-compose -f docker-compose-v3.3.yml config > /dev/null
+            echo "Docker Compose configurations are valid."
+          else
+            echo "Docker Compose is not available in runner environment; skipping."
+          fi

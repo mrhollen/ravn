@@ -38,7 +38,7 @@ func newTestDB(t *testing.T) *sql.DB {
 // httptest port so tests never collide with anything else.
 func startTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-such-dist")))
+	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-such-dist"), ""))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -57,7 +57,7 @@ func startStaticTestServer(t *testing.T) *httptest.Server {
 	if err := os.WriteFile(filepath.Join(staticDir, "assets", "app.js"), []byte(appJS), 0o644); err != nil {
 		t.Fatalf("write app.js: %v", err)
 	}
-	srv := httptest.NewServer(newRouter(newTestDB(t), staticDir))
+	srv := httptest.NewServer(newRouter(newTestDB(t), staticDir, ""))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -209,7 +209,7 @@ func TestNoStaticDirKeepsPlaceholderRoot(t *testing.T) {
 		"empty":   t.TempDir(), // exists but holds no index.html
 	} {
 		t.Run(name, func(t *testing.T) {
-			srv := httptest.NewServer(newRouter(newTestDB(t), dir))
+			srv := httptest.NewServer(newRouter(newTestDB(t), dir, ""))
 			t.Cleanup(srv.Close)
 
 			code, body := get(t, srv.URL+"/")
@@ -225,5 +225,109 @@ func TestNoStaticDirKeepsPlaceholderRoot(t *testing.T) {
 				t.Errorf("GET /healthz = %d %q, want 200 with ok JSON", code, body)
 			}
 		})
+	}
+}
+
+func reqWithAuth(t *testing.T, method, url, authHeader, body string) (int, string) {
+	t.Helper()
+	var bodyReader io.Reader
+	if body != "" {
+		bodyReader = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, bodyReader)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer res.Body.Close()
+	b, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read %s %s body: %v", method, url, err)
+	}
+	return res.StatusCode, string(b)
+}
+
+func TestAuthGatingWithToken(t *testing.T) {
+	const secret = "production-secret-token"
+	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-dist"), secret))
+	t.Cleanup(srv.Close)
+
+	// 1. /healthz is NEVER gated: without auth, with invalid auth, and with valid auth
+	for _, auth := range []string{"", "Bearer wrong", "Bearer " + secret} {
+		code, body := reqWithAuth(t, "GET", srv.URL+"/healthz", auth, "")
+		if code != http.StatusOK {
+			t.Errorf("GET /healthz (auth %q) status = %d, want 200", auth, code)
+		}
+		if body != `{"status":"ok","db":"ok"}` {
+			t.Errorf("GET /healthz body = %q, want ok JSON", body)
+		}
+	}
+
+	// 2. Placeholder root "/" is not gated
+	code, body := reqWithAuth(t, "GET", srv.URL+"/", "", "")
+	if code != http.StatusOK || !strings.Contains(body, "crowban server ok") {
+		t.Errorf("GET / status = %d, want 200", code)
+	}
+
+	// 3. GET /api/v1/projects without auth -> 401
+	code, body = reqWithAuth(t, "GET", srv.URL+"/api/v1/projects", "", "")
+	if code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/v1/projects without token status = %d, want 401", code)
+	}
+	const wantErr = `{"error":"unauthorized","message":"missing or invalid auth token"}`
+	if strings.TrimSpace(body) != wantErr {
+		t.Errorf("GET /api/v1/projects body = %q, want %q", body, wantErr)
+	}
+
+	// 4. POST /api/v1/projects without auth -> 401, mutation does not occur
+	createPayload := `{"actor":{"type":"agent","name":"bot"},"name":"Secure Project"}`
+	code, body = reqWithAuth(t, "POST", srv.URL+"/api/v1/projects", "", createPayload)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("POST /api/v1/projects without token status = %d, want 401", code)
+	}
+
+	// 5. POST /api/v1/projects with invalid auth -> 401
+	code, body = reqWithAuth(t, "POST", srv.URL+"/api/v1/projects", "Bearer wrong-token", createPayload)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("POST /api/v1/projects with wrong token status = %d, want 401", code)
+	}
+
+	// 6. Valid token succeeds: GET /api/v1/projects -> 200
+	code, body = reqWithAuth(t, "GET", srv.URL+"/api/v1/projects", "Bearer "+secret, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/v1/projects with token status = %d, want 200", code)
+	}
+
+	// 7. Valid token succeeds: POST /api/v1/projects -> 201
+	code, body = reqWithAuth(t, "POST", srv.URL+"/api/v1/projects", "Bearer "+secret, createPayload)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/projects with token status = %d, want 201 (body %s)", code, body)
+	}
+}
+
+func TestAuthUnsetLeavesAPIUnauthenticated(t *testing.T) {
+	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-dist"), ""))
+	t.Cleanup(srv.Close)
+
+	// GET /api/v1/projects without auth -> 200
+	code, body := reqWithAuth(t, "GET", srv.URL+"/api/v1/projects", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/v1/projects status = %d, want 200 (body %s)", code, body)
+	}
+
+	// POST /api/v1/projects without auth -> 201
+	createPayload := `{"actor":{"type":"agent","name":"bot"},"name":"Open Dev Project"}`
+	code, body = reqWithAuth(t, "POST", srv.URL+"/api/v1/projects", "", createPayload)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/projects status = %d, want 201 (body %s)", code, body)
 	}
 }

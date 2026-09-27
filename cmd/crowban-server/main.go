@@ -7,7 +7,7 @@
 // ready-made use-case structs and never sees the database. Slice 3a routes
 // Projects + Task-core + the board snapshot; Comments/Artifacts/Acceptance/
 // Relations are already constructed so slice 3b only adds routes. CROWBAN_TOKEN
-// is accepted but not enforced until the auth middleware lands. Slice 5a
+// gates the /api/v1 routes with bearer auth when set (auth is disabled when unset). Slice 5a
 // serves the built web UI from CROWBAN_STATIC_DIR (stdlib fs, SPA fallback);
 // a missing dist degrades to the placeholder root instead of failing to boot.
 package main
@@ -44,7 +44,7 @@ func main() {
 	var (
 		addr   = flag.String("addr", envOr("CROWBAN_ADDR", ":8080"), "listen address, e.g. :8080")
 		data   = flag.String("data", envOr("CROWBAN_DATA", "/data/crowban.db"), "path of the SQLite database file")
-		token  = flag.String("token", os.Getenv("CROWBAN_TOKEN"), "bearer token; accepted but unused until the auth middleware lands")
+		token  = flag.String("token", os.Getenv("CROWBAN_TOKEN"), "bearer token gating /api/v1 routes; empty disables auth (dev default)")
 		static = flag.String("static", envOr("CROWBAN_STATIC_DIR", "./web/dist"),
 			"directory holding the built web UI (Vite dist); placeholder root is served when it has no index.html")
 	)
@@ -71,7 +71,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newRouter(db, *static),
+		Handler:           newRouter(db, *static, *token),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -114,7 +114,7 @@ type healthResponse struct {
 // "GET /" catch-all; Go 1.22 mux resolution always prefers the specific one
 // regardless of registration order, so static serving can never shadow them
 // (proved by TestStaticServingDoesNotShadowAPIAndHealthz).
-func newRouter(db *sql.DB, staticDir string) http.Handler {
+func newRouter(db *sql.DB, staticDir, token string) http.Handler {
 	mux := http.NewServeMux()
 
 	// Slice 3 composition: one shared transactional seam, clock, and idgen —
@@ -164,7 +164,7 @@ func newRouter(db *sql.DB, staticDir string) http.Handler {
 		})
 	}
 
-	return mux
+	return httpapi.AuthMiddleware(token)(mux)
 }
 
 // hasIndexHTML reports whether dir exists and directly contains an index.html
