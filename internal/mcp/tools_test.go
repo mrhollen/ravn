@@ -3,10 +3,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,38 +32,143 @@ const mockDetailBody = `{"id":"T1","title":"Fix login bug","status":"doing","pri
 // Compared byte-for-byte against the isError text to prove VERBATIM propagation.
 const mockConflictBody = `{"error":"claim conflict","resource":"task","id":"HOLDING","holder":{"type":"agent","name":"runner-2"},"expires_at":"2026-09-26T15:53:00Z","message":"\"HOLDING\" is held by agent (runner-2) until 2026-09-26T15:53:00Z — wait for the lease to expire or work another task"}`
 
+// The summary row of T1 at its stored version 4 (matches mockDetailBody's row).
+const mockTaskRowV4 = `{"id":"T1","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z"}`
+
+// The exact 409 version-conflict body (API.md) a stale PATCH produces:
+// current_version + fresh "current" row so the agent can rebase without re-reading.
+const mockVersionConflictBody = `{"error":"version_conflict","resource":"task","id":"T1","current_version":4,"updated_at":"2026-09-26T15:48:03Z","message":"task \"T1\" is at version 4 — re-read it and retry with that version","current":{"id":"T1","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z"}}`
+
+// The exact 409 parent-conflict body (API.md): a second, different parent.
+const mockParentConflictBody = `{"error":"parent conflict","resource":"task","id":"TPARENT","message":"task already has a parent: task TPARENT already has a parent (TOTHER)"}`
+
 type claimCall struct {
 	path      string
 	body      string
 	authorize string
 }
 
+// capturedCall records EVERY /api/v1 request the MCP stack sent upstream:
+// method+path prove routing, query proves filter pass-through, body proves arg
+// decoding. (The apiclient unit tests already prove per-method wire behavior;
+// these assertions are tool-level wiring only.)
+type capturedCall struct {
+	method string
+	path   string
+	query  url.Values
+	body   string
+	auth   string
+}
+
 // newMockUpstream stands up a fake crowban-server. Every route answers with
-// fixed data; POST /tasks/{id}/claim returns the conflict body verbatim for id
-// "HOLDING" and echoes the requesting actor as claimed_by otherwise (and
-// records every claim call for assertions).
-func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall) {
+// fixed data:
+//   - POST /tasks/{id}/claim returns the conflict body verbatim for id "HOLDING"
+//     and echoes the requesting actor as claimed_by otherwise (and records every
+//     claim call).
+//   - PATCH /tasks/{id} treats version 4 as current: any other version → 409
+//     version_conflict verbatim; version 4 → fresh row at version 5.
+//   - POST /tasks/{id}/relations normalizes kind "parent" to the inverse child
+//     edge (server rule) and 409s on a second parent for id "TPARENT".
+func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedCall) {
 	t.Helper()
 
 	var claims []claimCall
+	var calls []capturedCall
 	mux := http.NewServeMux()
 
 	writeJSON := func(w http.ResponseWriter, code int, body string) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
-		_, _ = io.WriteString(w, body)
+		if body != "" {
+			_, _ = io.WriteString(w, body)
+		}
+	}
+
+	// record drains the request body, captures it for assertions, and enforces
+	// Bearer auth on every /api/v1 route.
+	record := func(r *http.Request) string {
+		var b []byte
+		if r.Body != nil {
+			b, _ = io.ReadAll(r.Body)
+		}
+		calls = append(calls, capturedCall{
+			method: r.Method,
+			path:   r.URL.Path,
+			query:  r.URL.Query(),
+			body:   string(b),
+			auth:   r.Header.Get("Authorization"),
+		})
+		if strings.HasPrefix(r.URL.Path, "/api/v1/") && r.Header.Get("Authorization") != "Bearer secret-token" {
+			t.Errorf("upstream: %s %s Authorization = %q, want Bearer secret-token", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+		}
+		return string(b)
 	}
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, `{"status":"ok","db":"ok"}`)
 	})
 	mux.HandleFunc("GET /api/v1/projects", func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
-			t.Errorf("upstream: Authorization = %q, want Bearer secret-token", got)
-		}
+		record(r)
 		writeJSON(w, http.StatusOK, mockProjectsBody)
 	})
+	mux.HandleFunc("POST /api/v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.CreateProjectRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: POST /projects body not JSON: %v (%s)", err, b)
+		}
+		row := map[string]any{
+			"id": "PNEW", "name": req.Name,
+			"created_at": "2026-09-26T15:48:03Z", "updated_at": "2026-09-26T15:48:03Z",
+		}
+		if req.Description != "" {
+			row["description"] = req.Description
+		}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusCreated, string(data))
+	})
+	mux.HandleFunc("GET /api/v1/tasks", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		q := r.URL.Query()
+		limit, offset := q.Get("limit"), q.Get("offset")
+		if limit == "" {
+			limit = "20"
+		}
+		if offset == "" {
+			offset = "0"
+		}
+		writeJSON(w, http.StatusOK, fmt.Sprintf(
+			`{"tasks":[%s],"total":1,"limit":%s,"offset":%s}`, mockTaskRowV4, limit, offset))
+	})
+	mux.HandleFunc("POST /api/v1/tasks", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.CreateTaskRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: POST /tasks body not JSON: %v (%s)", err, b)
+		}
+		task := map[string]any{
+			"id": "TNEW", "title": req.Title, "status": "todo", "priority": req.Priority,
+			"version": 1, "created_at": "2026-09-26T15:48:03Z", "updated_at": "2026-09-26T15:48:03Z",
+		}
+		if req.DueAt != nil {
+			task["due_at"] = *req.DueAt
+		}
+		if req.Assignee != nil {
+			task["assignee"] = req.Assignee
+		}
+		resp := map[string]any{ // advisory duplicates: never an error (API.md)
+			"task": task,
+			"possible_duplicates": []map[string]any{{
+				"id": "TDUP", "title": strings.ToLower(req.Title) + " (dup)", "status": "todo",
+				"priority": req.Priority, "version": 2,
+				"created_at": "2026-09-20T09:00:00Z", "updated_at": "2026-09-20T09:00:00Z",
+			}},
+		}
+		data, _ := json.Marshal(resp)
+		writeJSON(w, http.StatusCreated, string(data))
+	})
 	mux.HandleFunc("GET /api/v1/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
 		if r.PathValue("id") != "T1" {
 			writeJSON(w, http.StatusNotFound, `{"error":"not found","resource":"task","id":`+jsonString(r.PathValue("id"))+`,"message":"unknown task"}`)
 			return
@@ -70,14 +178,36 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall) {
 		}
 		writeJSON(w, http.StatusOK, mockDetailBody)
 	})
-	mux.HandleFunc("POST /api/v1/tasks/{id}/claim", func(w http.ResponseWriter, r *http.Request) {
-		var b []byte
-		if r.Body != nil {
-			b, _ = io.ReadAll(r.Body)
+	mux.HandleFunc("PATCH /api/v1/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: PATCH /tasks body not JSON: %v (%s)", err, b)
 		}
-		claims = append(claims, claimCall{path: r.URL.Path, body: string(b), authorize: r.Header.Get("Authorization")})
-
+		if req.Version != 4 { // the mock's stored version is 4 (mockDetailBody)
+			writeJSON(w, http.StatusConflict, mockVersionConflictBody)
+			return
+		}
+		row := map[string]any{
+			"id": r.PathValue("id"), "title": "Fix login bug", "status": "doing", "priority": 3,
+			"version": 5, "created_at": "2026-09-25T18:02:11Z", "updated_at": "2026-09-26T16:00:00Z",
+		}
+		if req.Title != nil {
+			row["title"] = *req.Title
+		}
+		if req.Status != nil {
+			row["status"] = *req.Status
+		}
+		if req.Priority != nil {
+			row["priority"] = *req.Priority
+		}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusOK, string(data))
+	})
+	mux.HandleFunc("POST /api/v1/tasks/{id}/claim", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
 		id := r.PathValue("id")
+		claims = append(claims, claimCall{path: r.URL.Path, body: string(b), authorize: r.Header.Get("Authorization")})
 		if id == "HOLDING" {
 			writeJSON(w, http.StatusConflict, mockConflictBody)
 			return
@@ -85,7 +215,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall) {
 		var req struct {
 			Actor apiclient.Actor `json:"actor"`
 		}
-		_ = json.Unmarshal(b, &req)
+		_ = json.Unmarshal([]byte(b), &req)
 		summary := map[string]any{
 			"id": id, "title": "Fix login bug", "status": "doing", "priority": 3,
 			"version": 5, "created_at": "2026-09-25T18:02:11Z", "updated_at": "2026-09-26T15:48:03Z",
@@ -95,10 +225,112 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall) {
 		data, _ := json.Marshal(summary)
 		writeJSON(w, http.StatusOK, string(data))
 	})
+	mux.HandleFunc("POST /api/v1/tasks/{id}/release", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.ReleaseTaskRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: POST /release body not JSON: %v (%s)", err, b)
+		}
+		row := map[string]any{ // lease cleared, status → todo (API.md)
+			"id": r.PathValue("id"), "title": "Fix login bug", "status": "todo", "priority": 3,
+			"version": 6, "created_at": "2026-09-25T18:02:11Z", "updated_at": "2026-09-26T16:01:00Z",
+		}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusOK, string(data))
+	})
+	mux.HandleFunc("POST /api/v1/tasks/{id}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.HeartbeatRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: POST /heartbeat body not JSON: %v (%s)", err, b)
+		}
+		row := map[string]any{ // lease extended; version and updated_at untouched (API.md)
+			"id": r.PathValue("id"), "title": "Fix login bug", "status": "doing", "priority": 3,
+			"version": 4, "claimed_by": req.Actor, "claim_expires_at": "2026-09-26T17:00:00Z",
+			"created_at": "2026-09-25T18:02:11Z", "updated_at": "2026-09-26T15:48:03Z",
+		}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusOK, string(data))
+	})
+	mux.HandleFunc("POST /api/v1/tasks/{id}/comments", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.CommentRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: POST /comments body not JSON: %v (%s)", err, b)
+		}
+		row := map[string]any{
+			"id": "CNEW", "kind": req.Kind, "body": req.Body,
+			"actor": req.Actor, "created_at": "2026-09-26T15:50:00Z",
+		}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusCreated, string(data))
+	})
+	mux.HandleFunc("PUT /api/v1/tasks/{id}/notes", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.NotesRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: PUT /notes body not JSON: %v (%s)", err, b)
+		}
+		row := map[string]any{ // a real notes change bumps the version (API.md)
+			"id": r.PathValue("id"), "title": "Fix login bug", "status": "doing", "priority": 3,
+			"version": 6, "created_at": "2026-09-25T18:02:11Z", "updated_at": "2026-09-26T16:02:00Z",
+		}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusOK, string(data))
+	})
+	mux.HandleFunc("PATCH /api/v1/tasks/{id}/acceptance-criteria/{seq}", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.ACToggleRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: PATCH /acceptance-criteria body not JSON: %v (%s)", err, b)
+		}
+		seq, err := strconv.Atoi(r.PathValue("seq"))
+		if err != nil {
+			t.Errorf("upstream: seq path value = %q, want number", r.PathValue("seq"))
+		}
+		row := apiclient.AcceptanceCriterion{Seq: seq, Text: "login works", Done: req.Done, Note: req.Note}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusOK, string(data))
+	})
+	mux.HandleFunc("POST /api/v1/tasks/{id}/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.ArtifactRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: POST /artifacts body not JSON: %v (%s)", err, b)
+		}
+		row := apiclient.Artifact{ID: "ANEW", Kind: req.Kind, Ref: req.Ref, Summary: req.Summary, Actor: req.Actor, CreatedAt: "2026-09-26T15:52:00Z"}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusCreated, string(data))
+	})
+	mux.HandleFunc("POST /api/v1/tasks/{id}/relations", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.RelationRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: POST /relations body not JSON: %v (%s)", err, b)
+		}
+		id := r.PathValue("id")
+		row := map[string]any{
+			"task_id": id, "other_task_id": req.OtherID, "kind": req.Kind,
+			"created_at": "2026-09-26T15:49:30Z",
+		}
+		switch {
+		case req.Kind == "parent" && id == "TPARENT": // second different parent → 409 (API.md)
+			writeJSON(w, http.StatusConflict, mockParentConflictBody)
+			return
+		case req.Kind == "parent": // input alias: stored as the inverse child edge
+			row["task_id"], row["other_task_id"], row["kind"] = req.OtherID, id, "child"
+		}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusCreated, string(data))
+	})
+	mux.HandleFunc("DELETE /api/v1/tasks/{id}/relations/{other_id}/{kind}", func(w http.ResponseWriter, r *http.Request) {
+		record(r) // body carries the actor (removal event attribution)
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv, &claims
+	return srv, &claims, &calls
 }
 
 func jsonString(s string) string {
@@ -107,6 +339,12 @@ func jsonString(s string) string {
 }
 
 // --- helpers ---------------------------------------------------------------------------
+
+var wantToolNames = []string{
+	"list_projects", "create_project", "list_tasks", "get_task", "create_task",
+	"update_task", "claim_task", "release_task", "heartbeat_task", "add_comment",
+	"update_notes", "complete_ac", "attach_artifact", "relate_tasks",
+}
 
 func startMCPStack(t *testing.T, upstreamURL string) *httptest.Server {
 	t.Helper()
@@ -141,6 +379,15 @@ func dial(t *testing.T, mcpURL string, ctx context.Context) *mcpclient.Client {
 	return c
 }
 
+func callTool(t *testing.T, c *mcpclient.Client, ctx context.Context, name string, args map[string]any) *mcpgo.CallToolResult {
+	t.Helper()
+	res, err := c.CallTool(ctx, mcpgo.CallToolRequest{Params: mcpgo.CallToolParams{Name: name, Arguments: args}})
+	if err != nil {
+		t.Fatalf("tools/call %s: %v", name, err)
+	}
+	return res
+}
+
 func firstText(t *testing.T, res *mcpgo.CallToolResult) string {
 	t.Helper()
 	if len(res.Content) == 0 {
@@ -162,39 +409,58 @@ func asMap(t *testing.T, text string) map[string]any {
 	return m
 }
 
+// findCall locates one captured upstream call; fatal if the tool never routed
+// there — the routing assertion that matters at the tool level.
+func findCall(t *testing.T, calls []capturedCall, method, path string) capturedCall {
+	t.Helper()
+	for _, cc := range calls {
+		if cc.method == method && cc.path == path {
+			return cc
+		}
+	}
+	t.Fatalf("no captured %s %s (upstream saw: %+v)", method, path, calls)
+	return capturedCall{}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(data)
+}
+
 // --- the round trip ----------------------------------------------------------------------
 
 func TestStreamableHTTPRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	upstream, claims := newMockUpstream(t)
+	upstream, claims, _ := newMockUpstream(t)
 	mcpSrv := startMCPStack(t, upstream.URL)
 
 	c := dial(t, mcpSrv.URL, ctx)
 	defer func() { _ = c.Close() }()
 
-	// tools/list shows exactly the three pattern tools.
+	// tools/list shows exactly the 14 crowban tools.
 	list, err := c.ListTools(ctx, mcpgo.ListToolsRequest{})
 	if err != nil {
 		t.Fatalf("tools/list: %v", err)
 	}
-	if len(list.Tools) != 3 {
+	if len(list.Tools) != len(wantToolNames) {
 		names := make([]string, 0, len(list.Tools))
 		for _, tool := range list.Tools {
 			names = append(names, tool.Name)
 		}
-		t.Fatalf("tools/list returned %d tools (%v), want 3", len(list.Tools), names)
+		t.Fatalf("tools/list returned %d tools (%v), want %d (%v)", len(list.Tools), names, len(wantToolNames), wantToolNames)
 	}
-	want := map[string]bool{"list_projects": false, "get_task": false, "claim_task": false}
+	seen := make(map[string]bool, len(list.Tools))
 	for _, tool := range list.Tools {
-		if _, ok := want[tool.Name]; !ok {
-			t.Fatalf("unexpected tool %q in tools/list", tool.Name)
-		}
-		want[tool.Name] = true
+		seen[tool.Name] = true
 	}
-	for name, seen := range want {
-		if !seen {
+	for _, name := range wantToolNames {
+		if !seen[name] {
 			t.Errorf("tools/list missing %q", name)
 		}
 	}
@@ -312,19 +578,427 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 	}
 }
 
-func mustJSON(t *testing.T, v any) string {
-	t.Helper()
-	data, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+// --- slice 4b tool round-trips -------------------------------------------------------------
+
+func TestCreateProjectRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	res := callTool(t, c, ctx, "create_project", map[string]any{
+		"actor":       map[string]any{"name": "ada", "type": "human"},
+		"name":        "Website Redesign",
+		"description": "MVP landing page work",
+	})
+	if res.IsError {
+		t.Fatalf("create_project returned isError: %s", firstText(t, res))
 	}
-	return string(data)
+	row := asMap(t, firstText(t, res))
+	if row["id"] != "PNEW" || row["name"] != "Website Redesign" || row["description"] != "MVP landing page work" {
+		t.Errorf("create_project result = %s", firstText(t, res))
+	}
+
+	cc := findCall(t, *calls, http.MethodPost, "/api/v1/projects")
+	var sent apiclient.CreateProjectRequest
+	if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+		t.Fatalf("create_project upstream body not JSON: %v (%s)", err, cc.body)
+	}
+	if sent.Actor.Name != "ada" || sent.Actor.Type != "human" || sent.Name != "Website Redesign" || sent.Description != "MVP landing page work" {
+		t.Errorf("create_project upstream body = %s", cc.body)
+	}
+}
+
+func TestListTasksFilterPassthrough(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// Every optional filter at once: the mock must see exactly these params.
+	res := callTool(t, c, ctx, "list_tasks", map[string]any{
+		"project_id":      "P1",
+		"status":          "todo",
+		"assignee_name":   "ada",
+		"unblocked":       true,
+		"search":          "login",
+		"priority":        3,
+		"due_before":      "2026-10-02T00:00:00Z",
+		"due_after":       "2026-09-01T00:00:00Z",
+		"completed_since": "2026-09-15T00:00:00Z",
+		"limit":           5,
+		"offset":          10,
+	})
+	if res.IsError {
+		t.Fatalf("list_tasks returned isError: %s", firstText(t, res))
+	}
+	env := asMap(t, firstText(t, res))
+	tasks, _ := env["tasks"].([]any)
+	total, _ := env["total"].(float64)
+	limit, _ := env["limit"].(float64)
+	offset, _ := env["offset"].(float64)
+	if len(tasks) != 1 || int(total) != 1 || int(limit) != 5 || int(offset) != 10 {
+		t.Errorf("list_tasks envelope = %s", firstText(t, res))
+	}
+
+	cc := findCall(t, *calls, http.MethodGet, "/api/v1/tasks")
+	wantQ := url.Values{
+		"project_id":    {"P1"},
+		"status":        {"todo"},
+		"assignee_name": {"ada"},
+		"unblocked":     {"true"},
+		"search":        {"login"},
+		"priority":      {"3"},
+		"due_before":    {"2026-10-02T00:00:00Z"},
+		"due_after":     {"2026-09-01T00:00:00Z"},
+		// The tool arg completed_since is transmitted as the documented alias
+		// param completed_after (API.md: "aliases of each other").
+		"completed_after": {"2026-09-15T00:00:00Z"},
+		"limit":           {"5"},
+		"offset":          {"10"},
+	}
+	if !reflect.DeepEqual(cc.query, wantQ) {
+		t.Errorf("filter query mismatch:\n got  %s\n want %s", cc.query.Encode(), wantQ.Encode())
+	}
+}
+
+func TestCreateTaskRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	res := callTool(t, c, ctx, "create_task", map[string]any{
+		"actor":               map[string]any{"name": "eve", "type": "agent"},
+		"title":               "Fix login bug",
+		"description":         "Users cannot log in after the password reset flow.",
+		"project_id":          "P1",
+		"priority":            3,
+		"due_at":              "2026-10-01T00:00:00Z",
+		"assignee":            map[string]any{"name": "ada", "type": "human"},
+		"acceptance_criteria": []any{"login works", "logout works"},
+	})
+	if res.IsError {
+		t.Fatalf("create_task returned isError: %s", firstText(t, res))
+	}
+	resp := asMap(t, firstText(t, res))
+	task, _ := resp["task"].(map[string]any)
+	dups, _ := resp["possible_duplicates"].([]any)
+	if task == nil || task["id"] != "TNEW" || task["version"] != float64(1) {
+		t.Errorf("create_task.task = %v", resp["task"])
+	}
+	if len(dups) != 1 {
+		t.Fatalf("possible_duplicates = %v, want the advisory duplicate row", dups)
+	}
+	dup, _ := dups[0].(map[string]any)
+	if dup["id"] != "TDUP" {
+		t.Errorf("possible_duplicates[0] = %v", dup)
+	}
+
+	cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks")
+	var sent apiclient.CreateTaskRequest
+	if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+		t.Fatalf("create_task upstream body not JSON: %v (%s)", err, cc.body)
+	}
+	if sent.Actor.Name != "eve" || sent.Title != "Fix login bug" || sent.ProjectID != "P1" ||
+		sent.Priority != 3 || sent.DueAt == nil || *sent.DueAt != "2026-10-01T00:00:00Z" {
+		t.Errorf("create_task upstream body = %s", cc.body)
+	}
+	if sent.Assignee == nil || sent.Assignee.Name != "ada" || sent.Assignee.Type != "human" {
+		t.Errorf("assignee not passed through: %s", cc.body)
+	}
+	if len(sent.AcceptanceCriteria) != 2 || sent.AcceptanceCriteria[0] != "login works" || sent.AcceptanceCriteria[1] != "logout works" {
+		t.Errorf("acceptance_criteria = %v", sent.AcceptanceCriteria)
+	}
+}
+
+func TestUpdateTaskRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// STALE version (3 vs stored 4) → isError with the 409 body VERBATIM — it
+	// carries current_version + a fresh "current" row for rebasing without re-reading.
+	res := callTool(t, c, ctx, "update_task", map[string]any{
+		"id":      "T1",
+		"actor":   map[string]any{"name": "runner-2", "type": "agent"},
+		"version": 3,
+		"status":  "done",
+	})
+	if !res.IsError {
+		t.Fatalf("stale update_task: expected isError, got success: %s", firstText(t, res))
+	}
+	if text := firstText(t, res); text != mockVersionConflictBody {
+		t.Errorf("409 body not verbatim:\n got  %s\n want %s", text, mockVersionConflictBody)
+	}
+
+	// FRESH version (4) → success with the bumped row.
+	res = callTool(t, c, ctx, "update_task", map[string]any{
+		"id":       "T1",
+		"version":  4,
+		"title":    "Fix login bug (again)",
+		"priority": 2,
+	})
+	if res.IsError {
+		t.Fatalf("fresh update_task returned isError: %s", firstText(t, res))
+	}
+	row := asMap(t, firstText(t, res))
+	if row["version"] != float64(5) || row["title"] != "Fix login bug (again)" || row["priority"] != float64(2) {
+		t.Errorf("update_task result = %s", firstText(t, res))
+	}
+
+	var patches []capturedCall
+	for _, cc := range *calls {
+		if cc.method == http.MethodPatch && cc.path == "/api/v1/tasks/T1" {
+			patches = append(patches, cc)
+		}
+	}
+	if len(patches) != 2 {
+		t.Fatalf("upstream saw %d PATCH /tasks/T1 calls, want 2: %+v", len(patches), patches)
+	}
+	var stale apiclient.UpdateTaskRequest
+	if err := json.Unmarshal([]byte(patches[0].body), &stale); err != nil {
+		t.Fatalf("stale update_task upstream body not JSON: %v (%s)", err, patches[0].body)
+	}
+	if stale.Version != 3 || stale.Status == nil || *stale.Status != "done" {
+		t.Errorf("stale update_task upstream body = %s", patches[0].body)
+	}
+	var sent apiclient.UpdateTaskRequest
+	if err := json.Unmarshal([]byte(patches[1].body), &sent); err != nil {
+		t.Fatalf("fresh update_task upstream body not JSON: %v (%s)", err, patches[1].body)
+	}
+	if sent.Version != 4 || sent.Title == nil || *sent.Title != "Fix login bug (again)" || sent.Priority == nil || *sent.Priority != 2 {
+		t.Errorf("fresh update_task upstream body = %s", patches[1].body)
+	}
+}
+
+func TestReleaseAndHeartbeatRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// release: routes to POST /tasks/{id}/release with actor+note; returns the
+	// fresh row (status → todo, lease cleared).
+	res := callTool(t, c, ctx, "release_task", map[string]any{
+		"id":    "T1",
+		"actor": map[string]any{"name": "runner-2", "type": "agent"},
+		"note":  "stalled on the DB migration",
+	})
+	if res.IsError {
+		t.Fatalf("release_task returned isError: %s", firstText(t, res))
+	}
+	row := asMap(t, firstText(t, res))
+	if row["status"] != "todo" || row["version"] != float64(6) {
+		t.Errorf("release_task result = %s", firstText(t, res))
+	}
+	if _, hasLease := row["claimed_by"]; hasLease {
+		t.Errorf("released row still carries claimed_by: %s", firstText(t, res))
+	}
+	ccRel := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/release")
+	var rel apiclient.ReleaseTaskRequest
+	if err := json.Unmarshal([]byte(ccRel.body), &rel); err != nil {
+		t.Fatalf("release upstream body not JSON: %v (%s)", err, ccRel.body)
+	}
+	if rel.Actor.Name != "runner-2" || rel.Note != "stalled on the DB migration" {
+		t.Errorf("release upstream body = %s", ccRel.body)
+	}
+
+	// heartbeat: routes to POST /tasks/{id}/heartbeat with actor only; returns
+	// the fresh row that doubles as the liveness answer (version NOT bumped).
+	res = callTool(t, c, ctx, "heartbeat_task", map[string]any{
+		"id":    "T1",
+		"actor": map[string]any{"name": "runner-2", "type": "agent"},
+	})
+	if res.IsError {
+		t.Fatalf("heartbeat_task returned isError: %s", firstText(t, res))
+	}
+	row = asMap(t, firstText(t, res))
+	holder, _ := row["claimed_by"].(map[string]any)
+	if row["version"] != float64(4) || holder == nil || holder["name"] != "runner-2" {
+		t.Errorf("heartbeat_task result = %s", firstText(t, res))
+	}
+	if row["claim_expires_at"] == nil {
+		t.Errorf("heartbeat row missing claim_expires_at: %s", firstText(t, res))
+	}
+	ccHb := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/heartbeat")
+	var hb apiclient.HeartbeatRequest
+	if err := json.Unmarshal([]byte(ccHb.body), &hb); err != nil {
+		t.Fatalf("heartbeat upstream body not JSON: %v (%s)", err, ccHb.body)
+	}
+	if hb.Actor.Name != "runner-2" || strings.Contains(ccHb.body, "note") {
+		t.Errorf("heartbeat upstream body = %s (want actor only)", ccHb.body)
+	}
+}
+
+func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	t.Run("add_comment", func(t *testing.T) {
+		res := callTool(t, c, ctx, "add_comment", map[string]any{
+			"id":    "T1",
+			"actor": map[string]any{"name": "ada", "type": "human"},
+			"kind":  "question",
+			"body":  "Which migration order is correct?",
+		})
+		if res.IsError {
+			t.Fatalf("add_comment returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		if row["id"] != "CNEW" || row["kind"] != "question" || row["body"] != "Which migration order is correct?" {
+			t.Errorf("add_comment result = %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/comments")
+		var sent apiclient.CommentRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("add_comment upstream body not JSON: %v (%s)", err, cc.body)
+		}
+		if sent.Kind != "question" || sent.Body != "Which migration order is correct?" || sent.Actor.Name != "ada" {
+			t.Errorf("add_comment upstream body = %s", cc.body)
+		}
+	})
+
+	t.Run("complete_ac", func(t *testing.T) {
+		res := callTool(t, c, ctx, "complete_ac", map[string]any{
+			"id":   "T1",
+			"seq":  2,
+			"done": true,
+			"note": "manual test passed",
+		})
+		if res.IsError {
+			t.Fatalf("complete_ac returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		seq, _ := row["seq"].(float64)
+		if int(seq) != 2 || row["done"] != true || row["note"] != "manual test passed" {
+			t.Errorf("complete_ac result = %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1/acceptance-criteria/2")
+		var sent apiclient.ACToggleRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("complete_ac upstream body not JSON: %v (%s)", err, cc.body)
+		}
+		if !sent.Done || sent.Note != "manual test passed" {
+			t.Errorf("complete_ac upstream body = %s", cc.body)
+		}
+	})
+
+	t.Run("attach_artifact", func(t *testing.T) {
+		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
+			"id":      "T1",
+			"actor":   map[string]any{"name": "runner-2", "type": "agent"},
+			"kind":    "url",
+			"ref":     "https://example.com/reports/deploy.json",
+			"summary": "deploy report for the fix",
+		})
+		if res.IsError {
+			t.Fatalf("attach_artifact returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		if row["id"] != "ANEW" || row["kind"] != "url" ||
+			row["ref"] != "https://example.com/reports/deploy.json" || row["summary"] != "deploy report for the fix" {
+			t.Errorf("attach_artifact result = %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/artifacts")
+		var sent apiclient.ArtifactRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("attach_artifact upstream body not JSON: %v (%s)", err, cc.body)
+		}
+		if sent.Kind != "url" || sent.Ref != "https://example.com/reports/deploy.json" || sent.Actor.Name != "runner-2" {
+			t.Errorf("attach_artifact upstream body = %s", cc.body)
+		}
+	})
+}
+
+func TestRelateTasksAddRemoveRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// ADD (action defaults to "add"): routes POST /tasks/{id}/relations with
+	// other_id+kind; returns the stored edge row.
+	res := callTool(t, c, ctx, "relate_tasks", map[string]any{
+		"id":       "T1",
+		"other_id": "T2",
+		"kind":     "blocked-by",
+	})
+	if res.IsError {
+		t.Fatalf("relate_tasks(add) returned isError: %s", firstText(t, res))
+	}
+	row := asMap(t, firstText(t, res))
+	if row["task_id"] != "T1" || row["other_task_id"] != "T2" || row["kind"] != "blocked-by" {
+		t.Errorf("relate_tasks(add) result = %s", firstText(t, res))
+	}
+	ccAdd := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/relations")
+	var add apiclient.RelationRequest
+	if err := json.Unmarshal([]byte(ccAdd.body), &add); err != nil {
+		t.Fatalf("relate_tasks(add) upstream body not JSON: %v (%s)", err, ccAdd.body)
+	}
+	if add.OtherID != "T2" || add.Kind != "blocked-by" {
+		t.Errorf("relate_tasks(add) upstream body = %s", ccAdd.body)
+	}
+
+	// REMOVE: routes DELETE /tasks/{id}/relations/{other_id}/{kind}; the 204
+	// No-Content answer becomes a compact removed:true confirmation.
+	res = callTool(t, c, ctx, "relate_tasks", map[string]any{
+		"id":       "T1",
+		"other_id": "T2",
+		"kind":     "blocked-by",
+		"action":   "remove",
+	})
+	if res.IsError {
+		t.Fatalf("relate_tasks(remove) returned isError: %s", firstText(t, res))
+	}
+	rem := asMap(t, firstText(t, res))
+	if rem["removed"] != true || rem["task_id"] != "T1" || rem["other_task_id"] != "T2" || rem["kind"] != "blocked-by" {
+		t.Errorf("relate_tasks(remove) result = %s", firstText(t, res))
+	}
+	ccDel := findCall(t, *calls, http.MethodDelete, "/api/v1/tasks/T1/relations/T2/blocked-by")
+	var del apiclient.UnrelateTaskRequest
+	if err := json.Unmarshal([]byte(ccDel.body), &del); err != nil {
+		t.Fatalf("relate_tasks(remove) upstream body not JSON: %v (%s)", err, ccDel.body)
+	}
+	if del.Actor.Name != "default-agent" { // no actor passed → container default fallback
+		t.Errorf("relate_tasks(remove) upstream body = %s", ccDel.body)
+	}
+
+	// A second, different parent → isError with the 409 body VERBATIM.
+	res = callTool(t, c, ctx, "relate_tasks", map[string]any{
+		"id":       "TPARENT",
+		"other_id": "TOTHER2",
+		"kind":     "parent",
+	})
+	if !res.IsError {
+		t.Fatalf("relate_tasks(second parent): expected isError, got success: %s", firstText(t, res))
+	}
+	if text := firstText(t, res); text != mockParentConflictBody {
+		t.Errorf("parent conflict body not verbatim:\n got  %s\n want %s", text, mockParentConflictBody)
+	}
 }
 
 // --- /healthz proxy -------------------------------------------------------------------------
 
 func TestHealthzProxiesUpstream(t *testing.T) {
-	upstream, _ := newMockUpstream(t)
+	upstream, _, _ := newMockUpstream(t)
 	mcpSrv := startMCPStack(t, upstream.URL)
 
 	getStatus := func() int {
