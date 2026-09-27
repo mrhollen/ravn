@@ -156,12 +156,14 @@ type TaskList struct {
 // Project is a project row. TaskCounts is present on list rows (GET /projects)
 // and omitted on bare create/get rows — hence the pointer + omitempty.
 type Project struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Description string        `json:"description,omitempty"`
-	CreatedAt   string        `json:"created_at"`
-	UpdatedAt   string        `json:"updated_at"`
-	TaskCounts  *StatusCounts `json:"task_counts,omitempty"`
+	ID                string        `json:"id"`
+	Name              string        `json:"name"`
+	Description       string        `json:"description,omitempty"`
+	OpenCodeServerURL string        `json:"opencode_server_url,omitempty"`
+	OpenCodeDirectory string        `json:"opencode_directory,omitempty"`
+	CreatedAt         string        `json:"created_at"`
+	UpdatedAt         string        `json:"updated_at"`
+	TaskCounts        *StatusCounts `json:"task_counts,omitempty"`
 }
 
 // Health is the body of GET /healthz (outside /api/v1): {"status":"ok","db":"ok"}

@@ -11,6 +11,9 @@ package httpapi
 import (
 	"context"
 
+	"net/http"
+	"time"
+
 	"github.com/mrhollen/crowban/internal/application"
 	"github.com/mrhollen/crowban/internal/domain"
 )
@@ -26,6 +29,7 @@ type Deps struct {
 	Acceptance *application.Acceptance // routed in slice 3b
 	Relations  *application.Relations  // routed in slice 3b
 	Broker     application.EventBroker // realtime pub-sub for SSE events
+	HTTPClient *http.Client            // optional HTTP client for external integrations (e.g. OpenCode)
 }
 
 type noopBroker struct{}
@@ -53,6 +57,9 @@ func NewApp(d Deps) *App {
 	}
 	if d.Broker == nil {
 		d.Broker = noopBroker{}
+	}
+	if d.HTTPClient == nil {
+		d.HTTPClient = &http.Client{Timeout: 30 * time.Second}
 	}
 	return &App{Deps: d}
 }

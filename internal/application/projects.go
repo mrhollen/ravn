@@ -14,8 +14,10 @@ import (
 // non-empty after trimming (else domain.ErrInvalid). An update with no fields
 // set is domain.ErrInvalid — there is nothing to write and no event to emit.
 type ProjectUpdate struct {
-	Name        *string // rename (unique constraint enforced by the repository)
-	Description *string // full markdown replace; empty string allowed
+	Name              *string // rename (unique constraint enforced by the repository)
+	Description       *string // full markdown replace; empty string allowed
+	OpenCodeServerURL *string // optional OpenCode server URL; empty string allowed to clear
+	OpenCodeDirectory *string // optional OpenCode worktree directory; empty string allowed to clear
 }
 
 // Projects implements the project use cases: create, get, list, update. It
@@ -176,7 +178,15 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 	if u.Description != nil {
 		newDesc, hasDesc = *u.Description, true
 	}
-	if !hasName && !hasDesc {
+	newServerURL, hasServerURL := "", false
+	if u.OpenCodeServerURL != nil {
+		newServerURL, hasServerURL = strings.TrimSpace(*u.OpenCodeServerURL), true
+	}
+	newDir, hasDir := "", false
+	if u.OpenCodeDirectory != nil {
+		newDir, hasDir = strings.TrimSpace(*u.OpenCodeDirectory), true
+	}
+	if !hasName && !hasDesc && !hasServerURL && !hasDir {
 		return domain.Project{}, fmt.Errorf("%w: no project fields to update", domain.ErrInvalid)
 	}
 
@@ -200,6 +210,16 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 			before["description"] = p.Description
 			after["description"] = newDesc
 			p.Description = newDesc
+		}
+		if hasServerURL {
+			before["opencode_server_url"] = p.OpenCodeServerURL
+			after["opencode_server_url"] = newServerURL
+			p.OpenCodeServerURL = newServerURL
+		}
+		if hasDir {
+			before["opencode_directory"] = p.OpenCodeDirectory
+			after["opencode_directory"] = newDir
+			p.OpenCodeDirectory = newDir
 		}
 		p.UpdatedAt = now
 		ev := domain.Event{

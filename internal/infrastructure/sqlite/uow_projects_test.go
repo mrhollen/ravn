@@ -203,3 +203,62 @@ func probeBoundRepo(r application.Repos, ctx context.Context) error {
 	}
 	return nil
 }
+
+func TestProjectsRepo_OpenCodeSettingsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	uow := NewUnitOfWork(db)
+
+	p := domain.Project{
+		ID:                "proj-opencode-1",
+		Name:              "OpenCode Integration Test",
+		Description:       "testing opencode settings",
+		OpenCodeServerURL: "http://localhost:5555",
+		OpenCodeDirectory: "/home/test/workspace",
+		CreatedAt:         time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC),
+	}
+
+	var r application.Repos
+	err := uow.Run(ctx, &r, func() error {
+		return r.Projects.Create(ctx, p)
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var got domain.Project
+	err = uow.Run(ctx, &r, func() error {
+		var gerr error
+		got, gerr = r.Projects.Get(ctx, p.ID)
+		return gerr
+	})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.OpenCodeServerURL != p.OpenCodeServerURL || got.OpenCodeDirectory != p.OpenCodeDirectory {
+		t.Fatalf("got OpenCode settings (%q, %q), want (%q, %q)", got.OpenCodeServerURL, got.OpenCodeDirectory, p.OpenCodeServerURL, p.OpenCodeDirectory)
+	}
+
+	// Test Update
+	p.OpenCodeServerURL = "http://localhost:6666"
+	p.OpenCodeDirectory = "/home/test/newdir"
+	err = uow.Run(ctx, &r, func() error {
+		return r.Projects.Update(ctx, p)
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	err = uow.Run(ctx, &r, func() error {
+		var gerr error
+		got, gerr = r.Projects.Get(ctx, p.ID)
+		return gerr
+	})
+	if err != nil {
+		t.Fatalf("Get after update: %v", err)
+	}
+	if got.OpenCodeServerURL != "http://localhost:6666" || got.OpenCodeDirectory != "/home/test/newdir" {
+		t.Fatalf("got updated settings (%q, %q), want (http://localhost:6666, /home/test/newdir)", got.OpenCodeServerURL, got.OpenCodeDirectory)
+	}
+}

@@ -234,3 +234,43 @@ func TestProjectsUpdate_EmptyNameOrNoFieldsReturnsErrInvalid(t *testing.T) {
 		t.Fatalf("failed updates must not emit events: got %d", len(fe.events))
 	}
 }
+
+func TestProjectsUpdate_OpenCodeSettings(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, fp, fe := newProjectTestEnv(t)
+
+	p, err := svc.Create(ctx, testAgent, "OpenCode Project", "initial desc")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	serverURL := "http://localhost:7777"
+	dir := "/home/test/app"
+	fc.SetNow(fc.now.Add(time.Minute))
+
+	updated, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{
+		OpenCodeServerURL: &serverURL,
+		OpenCodeDirectory: &dir,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.OpenCodeServerURL != serverURL || updated.OpenCodeDirectory != dir {
+		t.Fatalf("updated OpenCode fields mismatch: got (%q, %q), want (%q, %q)", updated.OpenCodeServerURL, updated.OpenCodeDirectory, serverURL, dir)
+	}
+	if stored := fp.byID[p.ID]; stored.OpenCodeServerURL != serverURL || stored.OpenCodeDirectory != dir {
+		t.Fatalf("stored OpenCode fields mismatch: got (%q, %q)", stored.OpenCodeServerURL, stored.OpenCodeDirectory)
+	}
+
+	// Verify update event
+	if len(fe.events) != 2 {
+		t.Fatalf("events count = %d, want 2 (create + update)", len(fe.events))
+	}
+	ev := fe.events[1]
+	if ev.Kind != domain.EventUpdated {
+		t.Fatalf("event kind = %v, want %v", ev.Kind, domain.EventUpdated)
+	}
+	if !strings.Contains(ev.After, `"opencode_server_url":"http://localhost:7777"`) || !strings.Contains(ev.After, `"opencode_directory":"/home/test/app"`) {
+		t.Fatalf("event after payload missing opencode fields: %s", ev.After)
+	}
+}

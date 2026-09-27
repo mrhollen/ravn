@@ -76,8 +76,10 @@ func (a *App) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := a.Projects.Update(r.Context(), actor, id, application.ProjectUpdate{
-		Name:        req.Name,
-		Description: req.Description,
+		Name:              req.Name,
+		Description:       req.Description,
+		OpenCodeServerURL: req.OpenCodeServerURL,
+		OpenCodeDirectory: req.OpenCodeDirectory,
 	})
 	if err != nil {
 		writeAppError(w, err, "project", id)

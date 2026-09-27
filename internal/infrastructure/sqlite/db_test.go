@@ -105,16 +105,16 @@ func TestOpenAppliesMigrationsAndSeedsStatuses(t *testing.T) {
 		t.Errorf("foreign_keys = %d, want 1", fk)
 	}
 
-	// The runner recorded exactly the three migrations it applied
-	// (0001 + 0002 + 0003).
+	// The runner recorded exactly the four migrations it applied
+	// (0001 + 0002 + 0003 + 0004).
 	var count int
 	var filename string
 	if err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*), MIN(filename) FROM schema_migrations`).Scan(&count, &filename); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if count != 3 || filename != "migrations/0001_init.sql" {
-		t.Errorf("schema_migrations = (%d rows, MIN=%q), want (3, %q)",
+	if count != 4 || filename != "migrations/0001_init.sql" {
+		t.Errorf("schema_migrations = (%d rows, MIN=%q), want (4, %q)",
 			count, filename, "migrations/0001_init.sql")
 	}
 
@@ -175,8 +175,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 3 {
-		t.Errorf("schema_migrations rows = %d after repeated runs, want 3 (one per migration)", count)
+	if count != 4 {
+		t.Errorf("schema_migrations rows = %d after repeated runs, want 4 (one per migration)", count)
 	}
 	var statuses int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM status`).Scan(&statuses); err != nil {

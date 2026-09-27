@@ -258,20 +258,24 @@ func toDetail(d application.TaskDetail) taskDetailDTO {
 
 // projectDTO is the wire form of domain.Project.
 type projectDTO struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Description       string `json:"description,omitempty"`
+	OpenCodeServerURL string `json:"opencode_server_url,omitempty"`
+	OpenCodeDirectory string `json:"opencode_directory,omitempty"`
+	CreatedAt         string `json:"created_at"`
+	UpdatedAt         string `json:"updated_at"`
 }
 
 func toProject(p domain.Project) projectDTO {
 	return projectDTO{
-		ID:          p.ID.String(),
-		Name:        p.Name,
-		Description: p.Description,
-		CreatedAt:   rfc3339(p.CreatedAt),
-		UpdatedAt:   rfc3339(p.UpdatedAt),
+		ID:                p.ID.String(),
+		Name:              p.Name,
+		Description:       p.Description,
+		OpenCodeServerURL: p.OpenCodeServerURL,
+		OpenCodeDirectory: p.OpenCodeDirectory,
+		CreatedAt:         rfc3339(p.CreatedAt),
+		UpdatedAt:         rfc3339(p.UpdatedAt),
 	}
 }
 
@@ -368,9 +372,11 @@ type createProjectReq struct {
 // updateProjectReq is PUT /projects/{id}. Pointer semantics: nil = unchanged;
 // at least one field must be present (the use case rejects an empty update).
 type updateProjectReq struct {
-	Actor       actorInput `json:"actor"`
-	Name        *string    `json:"name"`
-	Description *string    `json:"description"`
+	Actor             actorInput `json:"actor"`
+	Name              *string    `json:"name"`
+	Description       *string    `json:"description"`
+	OpenCodeServerURL *string    `json:"opencode_server_url"`
+	OpenCodeDirectory *string    `json:"opencode_directory"`
 }
 
 // createTaskReq is POST /tasks. Zero/omitted optional fields take documented
@@ -559,4 +565,10 @@ func extractEventStatus(e domain.Event) string {
 		}
 	}
 	return ""
+}
+
+// openCodeStartResponse is POST /tasks/{id}/opencode/start response body.
+type openCodeStartResponse struct {
+	SessionID  string `json:"session_id"`
+	SessionURL string `json:"session_url"`
 }

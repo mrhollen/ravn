@@ -6,9 +6,11 @@ import "time"
 // as the agent onboarding document. Project deletion is out of scope for the
 // MVP (cascade machinery exists in the schema regardless).
 type Project struct {
-	ID          ID
-	Name        string // unique across all projects
-	Description string // markdown; empty allowed
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                ID
+	Name              string // unique across all projects
+	Description       string // markdown; empty allowed
+	OpenCodeServerURL string // optional URL to OpenCode server (e.g. http://localhost:4444)
+	OpenCodeDirectory string // optional worktree directory for OpenCode
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
