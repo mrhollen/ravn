@@ -15,6 +15,7 @@ import type {
   Board,
   CommentKind,
   ProjectWithCounts,
+  RelationRow,
   Status,
   TaskDetail,
   TaskSummary,
@@ -54,6 +55,7 @@ interface RelationView {
   label: string;
   otherId: string;
   title: string;
+  raw: RelationRow;
 }
 
 export function crowbanApp() {
@@ -790,7 +792,106 @@ export function crowbanApp() {
       }
     },
 
+    // ---------------------------------------------------------------- claims
+    claimBusy: false,
+
+    async claimCurrentTask(): Promise<void> {
+      const d = this.detail;
+      if (!d || this.claimBusy) return;
+      this.claimBusy = true;
+      try {
+        const fresh = await api.claimTask(d.id, this.actor());
+        if (this.detail && this.detail.id === d.id) {
+          this.detail.status = fresh.status;
+          this.detail.version = fresh.version;
+          this.detail.claimed_by = fresh.claimed_by;
+          this.detail.claim_expires_at = fresh.claim_expires_at;
+          this.detail.updated_at = fresh.updated_at;
+        }
+        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+        this.toast(`Claimed task as ${this.actor().name}`);
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.claimBusy = false;
+      }
+    },
+
+    claimTask(): Promise<void> {
+      return this.claimCurrentTask();
+    },
+
+    async releaseCurrentTask(): Promise<void> {
+      const d = this.detail;
+      if (!d || this.claimBusy) return;
+      this.claimBusy = true;
+      try {
+        const fresh = await api.releaseTask(d.id, this.actor());
+        if (this.detail && this.detail.id === d.id) {
+          this.detail.status = fresh.status;
+          this.detail.version = fresh.version;
+          this.detail.claimed_by = undefined;
+          this.detail.claim_expires_at = undefined;
+          this.detail.updated_at = fresh.updated_at;
+        }
+        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+        this.toast("Released claim on task");
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.claimBusy = false;
+      }
+    },
+
+    releaseTask(): Promise<void> {
+      return this.releaseCurrentTask();
+    },
+
+    async heartbeatCurrentTask(): Promise<void> {
+      const d = this.detail;
+      if (!d || this.claimBusy) return;
+      this.claimBusy = true;
+      try {
+        const fresh = await api.heartbeatTask(d.id, this.actor());
+        if (this.detail && this.detail.id === d.id) {
+          this.detail.claim_expires_at = fresh.claim_expires_at;
+        }
+        await this.refreshDetail(true);
+        this.toast("Heartbeat recorded — lease extended");
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.claimBusy = false;
+      }
+    },
+
+    heartbeatTask(): Promise<void> {
+      return this.heartbeatCurrentTask();
+    },
+
     // ---------------------------------------------------------------- relations
+    relationForm: {
+      kind: "parent" as string,
+      targetId: "",
+      busy: false,
+    },
+
+    availableRelationTasks(): TaskSummary[] {
+      const d = this.detail;
+      const b = this.board;
+      if (!b) return [];
+      const currentId = d?.id;
+      const out: TaskSummary[] = [];
+      for (const s of STATUSES) {
+        for (const t of b.tasks[s] ?? []) {
+          if (t.id !== currentId) {
+            out.push(t);
+          }
+        }
+      }
+      return out;
+    },
+
     /** Resolve relation edges to display rows (direction-aware for child and
      *  blocked-by; the wire never exposes a "parent" kind). */
     relationRows(): RelationView[] {
@@ -801,12 +902,12 @@ export function crowbanApp() {
         let label: string;
         let otherId: string;
         if (r.kind === "child") {
-          // stored edge: task_id is the parent, other_task_id the child
+          // Stored edge: task_id is the child, other_task_id the parent.
           if (r.task_id === me) {
-            label = "Child";
+            label = "Parent";
             otherId = r.other_task_id;
           } else {
-            label = "Parent";
+            label = "Child";
             otherId = r.task_id;
           }
         } else if (r.kind === "blocked-by") {
@@ -818,14 +919,72 @@ export function crowbanApp() {
             otherId = r.task_id;
           }
         } else if (r.kind === "duplicate-of") {
-          label = "Duplicate of";
-          otherId = r.other_task_id;
+          if (r.task_id === me) {
+            label = "Duplicate of";
+            otherId = r.other_task_id;
+          } else {
+            label = "Duplicated by";
+            otherId = r.task_id;
+          }
         } else {
           label = "Related to";
-          otherId = r.other_task_id;
+          otherId = r.task_id === me ? r.other_task_id : r.task_id;
         }
-        return { key: `${r.task_id}:${r.other_task_id}:${r.kind}`, label, otherId, title: this.taskTitle(otherId) };
+        return {
+          key: `${r.task_id}:${r.other_task_id}:${r.kind}`,
+          label,
+          otherId,
+          title: this.taskTitle(otherId),
+          raw: r,
+        };
       });
+    },
+
+    async addRelation(): Promise<void> {
+      const d = this.detail;
+      const targetId = this.relationForm.targetId.trim();
+      const kind = this.relationForm.kind;
+      if (!d || !targetId || this.relationForm.busy) return;
+      if (targetId === d.id) {
+        this.toast("Cannot relate a task to itself", "error");
+        return;
+      }
+      this.relationForm.busy = true;
+      try {
+        if (kind === "parent") {
+          // Setting target as parent of this task -> this task is a child of target
+          await api.addRelation(d.id, targetId, "child", this.actor());
+        } else if (kind === "child") {
+          // Setting target as child of this task -> this task is a parent of target
+          await api.addRelation(d.id, targetId, "parent", this.actor());
+        } else if (kind === "blocking") {
+          // This task blocks target -> target is blocked by this task
+          await api.addRelation(targetId, d.id, "blocked-by", this.actor());
+        } else {
+          // blocked-by, duplicate-of, related
+          await api.addRelation(d.id, targetId, kind, this.actor());
+        }
+        this.relationForm.targetId = "";
+        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+        this.toast("Relation added");
+      } catch (e) {
+        // Surface 409 parent conflict or any error verbatim without corrupting state
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.relationForm.busy = false;
+      }
+    },
+
+    async removeRelation(r: RelationRow): Promise<void> {
+      const d = this.detail;
+      if (!d) return;
+      try {
+        await api.removeRelation(r.task_id, r.other_task_id, r.kind, this.actor());
+        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+        this.toast("Relation removed");
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      }
     },
 
     taskTitle(id: string): string {

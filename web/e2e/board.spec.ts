@@ -115,6 +115,7 @@ test.describe('Web E2E test suite', () => {
     uncaughtConsoleErrors = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
+        if (msg.text().includes('status of 409')) return;
         uncaughtConsoleErrors.push(`[console.error] ${msg.text()}`);
       }
     });
@@ -262,4 +263,170 @@ test.describe('Web E2E test suite', () => {
     await closeBtn.click();
     await expect(drawerTitle).not.toBeVisible();
   });
+
+  test('relate & unrelate tasks, second-parent conflict, and claim/release controls', async ({
+    page,
+  }) => {
+    // -------------------------------------------------------------------------
+    // Step 1: Seed 3 tasks in the project via API
+    // -------------------------------------------------------------------------
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Relations & Claims Test Project',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    const makeTask = async (title: string) => {
+      const res = await fetch(`${serverUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: project.id,
+          title,
+          priority: 2,
+          actor: { name: 'e2e-seed', type: 'agent' },
+        }),
+      });
+      expect(res.ok).toBe(true);
+      const data = await res.json();
+      return data.task;
+    };
+
+    const taskChild = await makeTask('Child Task');
+    const taskParent1 = await makeTask('Parent 1 Task');
+    const taskParent2 = await makeTask('Parent 2 Task');
+
+    // -------------------------------------------------------------------------
+    // Step 2: Open UI and select new project
+    // -------------------------------------------------------------------------
+    await page.goto(serverUrl);
+    await expect(page).toHaveTitle('crowban');
+
+    const projectSelect = page.locator('select').first();
+    await projectSelect.selectOption(project.id);
+
+    // Set actor name
+    const actorInput = page.getByPlaceholder('you');
+    await actorInput.fill('Human Tester');
+    await actorInput.dispatchEvent('change');
+
+    // -------------------------------------------------------------------------
+    // Step 3: Test Claim, Heartbeat, and Release controls (AC 3)
+    // -------------------------------------------------------------------------
+    const todoCol = page.locator('section', { has: page.getByRole('heading', { name: 'To Do' }) });
+    const childCard = todoCol.locator('h3', { hasText: 'Child Task' });
+    await expect(childCard).toBeVisible();
+    await childCard.click();
+
+    const drawer = page.locator('aside');
+    await expect(drawer.getByRole('heading', { name: 'Child Task' })).toBeVisible();
+
+    // Check initial unclaimed state
+    await expect(drawer.getByText('Unclaimed')).toBeVisible();
+    const claimBtn = drawer.getByRole('button', { name: 'Claim', exact: true });
+    const releaseBtn = drawer.getByRole('button', { name: 'Release', exact: true });
+    const heartbeatBtn = drawer.getByRole('button', { name: 'Heartbeat', exact: true });
+
+    await expect(claimBtn).toBeEnabled();
+    await expect(releaseBtn).toBeDisabled();
+    await expect(heartbeatBtn).toBeDisabled();
+
+    // Click Claim
+    await claimBtn.click();
+
+    // Live update check: should now be Claimed by Human Tester
+    await expect(drawer.getByText('Claimed', { exact: true })).toBeVisible();
+    await expect(drawer.locator('b', { hasText: 'Human Tester' })).toBeVisible();
+    await expect(drawer.getByText('Expires:')).toBeVisible();
+    await expect(releaseBtn).toBeEnabled();
+    await expect(heartbeatBtn).toBeEnabled();
+
+    // Click Heartbeat
+    await heartbeatBtn.click();
+    await expect(page.getByText('Heartbeat recorded — lease extended')).toBeVisible();
+
+    // Click Release
+    await releaseBtn.click();
+    await expect(page.getByText('Released claim on task')).toBeVisible();
+    await expect(drawer.getByText('Unclaimed')).toBeVisible();
+    await expect(releaseBtn).toBeDisabled();
+    await expect(heartbeatBtn).toBeDisabled();
+
+    // -------------------------------------------------------------------------
+    // Step 4: Add relation and verify both views (AC 1)
+    // -------------------------------------------------------------------------
+    // Set Parent 1 as parent of Child Task
+    const kindSelect = drawer.locator('select[name="kind"]');
+    await kindSelect.selectOption('parent');
+
+    const targetInput = drawer.locator('input[name="other_id"]');
+    await targetInput.fill(taskParent1.id);
+
+    const addRelBtn = drawer.getByRole('button', { name: 'Add relation' });
+    await addRelBtn.click();
+
+    await expect(page.getByText('Relation added')).toBeVisible();
+
+    // Verify Child Task shows "[Parent] Parent 1 Task"
+    const relItem = drawer.locator('li', { hasText: 'Parent 1 Task' });
+    await expect(relItem).toBeVisible();
+    await expect(relItem.getByText('Parent', { exact: true })).toBeVisible();
+
+    // Close drawer and open Parent 1 Task drawer
+    const closeBtn = drawer.locator('button[aria-label="Close"]').first();
+    await closeBtn.click();
+
+    const parent1Card = todoCol.locator('h3', { hasText: 'Parent 1 Task' });
+    await parent1Card.click();
+    await expect(drawer.getByRole('heading', { name: 'Parent 1 Task' })).toBeVisible();
+
+    // Verify Parent 1 Task shows "[Child] Child Task"
+    const relItemOnParent = drawer.locator('li', { hasText: 'Child Task' });
+    await expect(relItemOnParent).toBeVisible();
+    await expect(relItemOnParent.getByText('Child', { exact: true })).toBeVisible();
+
+    // Close drawer and return to Child Task
+    await closeBtn.click();
+    await childCard.click();
+    await expect(drawer.getByRole('heading', { name: 'Child Task' })).toBeVisible();
+
+    // -------------------------------------------------------------------------
+    // Step 5: Second-parent conflict (AC 2)
+    // -------------------------------------------------------------------------
+    // Attempt to set Parent 2 as a second parent for Child Task
+    await kindSelect.selectOption('parent');
+    await targetInput.fill(taskParent2.id);
+    await addRelBtn.click();
+
+    // 409 parent-conflict message must be surfaced verbatim
+    const conflictToast = page.locator('div[role="status"], .fixed', {
+      hasText: `task ${taskChild.id} already has a parent`,
+    });
+    await expect(conflictToast).toBeVisible();
+
+    // Ensure state is NOT corrupted: Child Task still has only Parent 1
+    await expect(drawer.locator('li', { hasText: 'Parent 2 Task' })).not.toBeVisible();
+    await expect(drawer.locator('li', { hasText: 'Parent 1 Task' })).toBeVisible();
+
+    // -------------------------------------------------------------------------
+    // Step 6: Remove relation and verify revert (AC 1)
+    // -------------------------------------------------------------------------
+    const removeBtn = drawer.locator('button[aria-label="Remove relation"]');
+    await removeBtn.click();
+    await expect(page.getByText('Relation removed')).toBeVisible();
+    await expect(drawer.getByText('No relations')).toBeVisible();
+
+    // Reopen Parent 1 Task and verify it is reverted there too
+    await closeBtn.click();
+    await parent1Card.click();
+    await expect(drawer.getByRole('heading', { name: 'Parent 1 Task' })).toBeVisible();
+    await expect(drawer.getByText('No relations')).toBeVisible();
+    await closeBtn.click();
+  });
 });
+

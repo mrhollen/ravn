@@ -21,6 +21,7 @@ import type {
   ListTasksResponse,
   NotesReq,
   Project,
+  RelationRow,
   TaskDetail,
   TaskSummary,
   UpdateTaskReq,
@@ -257,6 +258,22 @@ export const api = {
 
   heartbeatTask(id: string, actor: ActorInput): Promise<TaskSummary> {
     return post<TaskSummary>(`/tasks/${id}/heartbeat`, { actor });
+  },
+
+  // --- relations -------------------------------------------------------------
+  addRelation(taskId: string, otherId: string, kind: string, actor: ActorInput): Promise<RelationRow> {
+    return post<RelationRow>(`/tasks/${taskId}/relations`, {
+      actor,
+      other_id: otherId,
+      kind,
+    });
+  },
+
+  removeRelation(taskId: string, otherId: string, kind: string, actor: ActorInput): Promise<void> {
+    return request<void>(`/tasks/${taskId}/relations/${otherId}/${kind}`, {
+      method: "DELETE",
+      body: JSON.stringify({ actor }),
+    });
   },
 
   getAuthToken,

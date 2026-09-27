@@ -415,16 +415,51 @@
                   </ul>
                 </div>
 
-                <!-- claim indicator (READ-ONLY: agents manage leases via MCP) -->
-                <div x-show="detail.claimed_by" x-cloak
-                     class="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
-                  <span class="font-semibold">Claimed</span> by
-                  <b x-text="actorLabel(detail.claimed_by)"></b>
-                  <template x-if="detail.claimed_at">
-                    <span>, since <time :title="detail.claimed_at" x-text="relTime(detail.claimed_at)"></time></span>
-                  </template>
-                  <span class="text-indigo-500" x-text="claimHint(detail)"></span>
-                  <span class="mt-0.5 block text-[11px] text-indigo-400">Leases are managed by agents via MCP — read-only here.</span>
+                <!-- claim controls & lease status -->
+                <div class="rounded-lg border border-indigo-200 bg-indigo-50/70 p-3 text-sm">
+                  <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <div class="flex items-center gap-1.5">
+                      <span class="h-2 w-2 rounded-full"
+                            :class="detail.claimed_by ? 'bg-indigo-600 animate-pulse' : 'bg-zinc-400'"></span>
+                      <span class="font-semibold text-zinc-900"
+                            x-text="detail.claimed_by ? 'Claimed' : 'Unclaimed'"></span>
+                    </div>
+                    <div class="flex items-center gap-1.5" role="group" aria-label="Claim Controls">
+                      <button type="button" @click="claimTask()" :disabled="claimBusy"
+                              class="btn-primary text-xs py-1 px-2.5"
+                              :title="'Claim lease as ' + actor().name">
+                        <span x-text="claimBusy ? 'Claiming…' : 'Claim'"></span>
+                      </button>
+                      <button type="button" @click="releaseTask()" :disabled="claimBusy || !detail.claimed_by"
+                              class="btn-secondary text-xs py-1 px-2.5"
+                              :title="'Release lease as ' + actor().name">
+                        Release
+                      </button>
+                      <button type="button" @click="heartbeatTask()" :disabled="claimBusy || !detail.claimed_by"
+                              class="btn-secondary text-xs py-1 px-2.5"
+                              :title="'Extend lease as ' + actor().name">
+                        Heartbeat
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Claim details when claimed -->
+                  <div x-show="detail.claimed_by" x-cloak class="text-xs text-indigo-950 space-y-1">
+                    <div>
+                      Held by <b class="font-semibold" x-text="actorLabel(detail.claimed_by)"></b>
+                      <template x-if="detail.claimed_at">
+                        <span> (since <time :title="detail.claimed_at" x-text="relTime(detail.claimed_at)"></time>)</span>
+                      </template>
+                    </div>
+                    <div class="flex items-center gap-1 text-indigo-700" x-show="detail.claim_expires_at">
+                      <span>Expires:</span>
+                      <time class="font-mono" :title="detail.claim_expires_at" x-text="detail.claim_expires_at"></time>
+                      <span class="text-indigo-500 font-normal" x-text="'(' + claimHint(detail) + ')'"></span>
+                    </div>
+                  </div>
+                  <div x-show="!detail.claimed_by" class="text-xs text-zinc-500">
+                    No active lease. Click Claim to begin working on this task.
+                  </div>
                 </div>
 
                 <!-- description -->
@@ -564,19 +599,66 @@
                 </section>
 
                 <!-- relations -->
-                <section x-show="relationRows().length > 0" x-cloak>
-                  <h3 class="section-title">Relations</h3>
-                  <ul class="flex flex-col gap-1.5">
-                    <template x-for="r in relationRows()" :key="r.key">
-                      <li class="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm">
-                        <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600"
-                              x-text="r.label"></span>
-                        <button type="button" @click="openTask(r.otherId)"
-                                class="min-w-0 truncate underline decoration-zinc-300 hover:decoration-zinc-500"
-                                :title="r.title" x-text="r.title"></button>
-                      </li>
-                    </template>
-                  </ul>
+                <section>
+                  <h3 class="section-title mb-2">Relations</h3>
+                  <template x-if="relationRows().length > 0">
+                    <ul class="flex flex-col gap-1.5 mb-3">
+                      <template x-for="r in relationRows()" :key="r.key">
+                        <li class="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm">
+                          <div class="flex items-center gap-2 min-w-0 truncate">
+                            <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600 shrink-0"
+                                  x-text="r.label"></span>
+                            <button type="button" @click="openTask(r.otherId)"
+                                    class="min-w-0 truncate underline decoration-zinc-300 hover:decoration-zinc-500 text-left"
+                                    :title="r.title" x-text="r.title"></button>
+                          </div>
+                          <button type="button" @click="removeRelation(r.raw)"
+                                  class="text-zinc-400 hover:text-red-600 text-xs px-1.5 py-0.5 rounded hover:bg-zinc-100 shrink-0 font-medium"
+                                  title="Remove relation" aria-label="Remove relation">
+                            ✕
+                          </button>
+                        </li>
+                      </template>
+                    </ul>
+                  </template>
+                  <template x-if="relationRows().length === 0">
+                    <p class="text-xs text-zinc-400 italic mb-3">No relations</p>
+                  </template>
+
+                  <!-- add relation form -->
+                  <form @submit.prevent="addRelation()" class="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-zinc-50/70 p-2.5 text-xs">
+                    <div class="font-medium text-zinc-700">Add relation</div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <label class="block text-[11px] font-medium text-zinc-500 mb-1">Kind</label>
+                        <select x-model="relationForm.kind" name="kind" class="field text-xs py-1">
+                          <option value="parent">Parent</option>
+                          <option value="child">Child</option>
+                          <option value="blocked-by">Blocked by</option>
+                          <option value="blocking">Blocking</option>
+                          <option value="duplicate-of">Duplicate of</option>
+                          <option value="related">Related</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="block text-[11px] font-medium text-zinc-500 mb-1">Target task</label>
+                        <select x-model="relationForm.targetId" class="field text-xs py-1 mb-1">
+                          <option value="">Select a task…</option>
+                          <template x-for="t in availableRelationTasks()" :key="t.id">
+                            <option :value="t.id" x-text="t.title + ' (' + shortId(t.id) + ')'"></option>
+                          </template>
+                        </select>
+                        <input type="text" x-model="relationForm.targetId" name="other_id"
+                               placeholder="Or enter target task ID (ULID)…"
+                               class="field font-mono text-[11px] py-1" />
+                      </div>
+                    </div>
+                    <div class="flex justify-end mt-1">
+                      <button type="submit" :disabled="relationForm.busy || !relationForm.targetId.trim()"
+                              class="btn-primary text-xs py-1 px-3"
+                              x-text="relationForm.busy ? 'Adding…' : 'Add relation'"></button>
+                    </div>
+                  </form>
                 </section>
 
                 <!-- activity -->

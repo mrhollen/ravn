@@ -45,6 +45,14 @@ export const ARTIFACT_KINDS: readonly ArtifactKind[] = [
 // appears in a persisted row (stored as the inverse child edge).
 export type RelationKind = "child" | "blocked-by" | "duplicate-of" | "related";
 
+export type ToolRelationKind =
+  | "parent"
+  | "child"
+  | "blocked-by"
+  | "blocking"
+  | "duplicate-of"
+  | "related";
+
 /** Actor reference as embedded in rows. `name` can be "" for special holders
  *  (e.g. a no-lease claim-conflict holder `{ "type": "" }`). */
 export interface ActorRef {
