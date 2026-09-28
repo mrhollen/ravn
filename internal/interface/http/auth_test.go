@@ -293,4 +293,3 @@ func TestAuthMiddleware_QueryParamToken(t *testing.T) {
 		t.Fatalf("GET /api/v1/projects?token=wrong = %d, want 401", res.Code)
 	}
 }
-

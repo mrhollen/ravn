@@ -663,4 +663,3 @@ func TestStaticServingDoesNotShadowMetrics(t *testing.T) {
 		t.Fatalf("GET /api/v1/metrics returned invalid JSON: %v (%s)", err, body)
 	}
 }
-

@@ -46,7 +46,7 @@ func main() {
 		addr   = flag.String("addr", envOr("CROWBAN_ADDR", ":8080"), "listen address, e.g. :8080")
 		data   = flag.String("data", envOr("CROWBAN_DATA", "/data/crowban.db"), "path of the SQLite database file")
 		token  = flag.String("token", os.Getenv("CROWBAN_TOKEN"), "bearer token gating /api/v1 routes; empty disables auth (dev default)")
-		static   = flag.String("static", envOr("CROWBAN_STATIC_DIR", "./web/dist"),
+		static = flag.String("static", envOr("CROWBAN_STATIC_DIR", "./web/dist"),
 			"directory holding the built web UI (Vite dist); placeholder root is served when it has no index.html")
 		logLevel = flag.String("log-level", envOr("LOG_LEVEL", envOr("CROWBAN_LOG_LEVEL", "info")),
 			"log level: debug, info, warn, error")
