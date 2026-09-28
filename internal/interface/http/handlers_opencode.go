@@ -65,7 +65,9 @@ func parseOpenCodeModel(ref string) (providerID, modelID string, err error) {
 }
 
 // formatOpenCodePrompt formats the autonomous agent prompt with task details,
-// acceptance criteria, and explicit instructions to interact with CrowBan via MCP.
+// acceptance criteria, and explicit instructions to interact with CrowBan via
+// MCP — including the encouraged (not required) recommendation to attach test
+// artifacts as evidence for human verification.
 func formatOpenCodePrompt(task domain.Task, acs []domain.AcceptanceCriterion) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Task ID: %s\n", task.ID))
@@ -83,7 +85,7 @@ func formatOpenCodePrompt(task domain.Task, acs []domain.AcceptanceCriterion) st
 			sb.WriteString(fmt.Sprintf("- %s Seq %d: %s\n", box, ac.Seq, ac.Text))
 		}
 	}
-	sb.WriteString("Instructions: You are assigned to autonomously work on and complete this task in CrowBan. Use the CrowBan MCP tools (or REST API) as you progress: claim the task, update notes with your plan and progress, complete acceptance criteria using complete_ac as you verify them, and mark the task done when all criteria are met.")
+	sb.WriteString("Instructions: You are assigned to autonomously work on and complete this task in CrowBan. Use the CrowBan MCP tools (or REST API) as you progress: claim the task, update notes with your plan and progress, complete acceptance criteria using complete_ac as you verify them, and mark the task done when all criteria are met. When tests or verification commands produce output, upload it as evidence with attach_artifact (kind command-output/log/screenshot, ref = file path or URL) so a human can verify your work — encouraged, not required.")
 	return sb.String()
 }
 

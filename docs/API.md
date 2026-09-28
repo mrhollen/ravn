@@ -645,6 +645,12 @@ after trimming (else `400`); `summary` is an optional one-liner. Unknown task �
 `404`. Append-only, one `artifact-added` event, no version bump. `201` fresh
 artifact row (same shape as in the detail payload). Appends are not idempotent.
 
+**Testing-evidence convention:** the MCP `attach_artifact` tool description and
+the OpenCode dispatch prompt recommend that agents attach testing evidence
+(`command-output`/`log`/`screenshot`) after running tests or verification
+commands, so a human can verify the work — encouraged, never required; the
+endpoint itself stays neutral (no enforcement).
+
 ### POST /tasks/{id}/opencode/start (UI/ops)
 
 Dispatches an autonomous OpenCode session that works the task end-to-end and
@@ -657,7 +663,9 @@ talks back to crowban over MCP. No request body. `200` with:
 Server-side the handler (1) creates an OpenCode session — agent `build`, title
 `CrowBan: <task title>`, model per the table below; (2) asynchronously dispatch
 a prompt carrying the task's title, description and acceptance-criteria
-checklist plus explicit instructions to use the CrowBan MCP tools; (3) attaches
+checklist plus explicit instructions to use the CrowBan MCP tools and the
+encouraged (not required) recommendation to attach testing artifacts as
+evidence for human verification; (3) attaches
 a `url` artifact on the task pointing at the session; (4) if the task is
 unclaimed, claims it under `{ "type": "agent", "name": "opencode" }` with a
 3600s TTL. Fire-and-forget: after `200` the session progresses on its own —

@@ -618,7 +618,7 @@ func registerCompleteAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("attach_artifact",
 		mcpgo.WithDescription(
-			"Attach a typed piece of evidence to a task: kind log | screenshot | command-output | trace | url | other; ref is a URL or filesystem path (required); summary is an optional one-line description. Returns the created artifact row (201). Append-only and NOT idempotent — after an error, check artifacts via get_task before re-attaching or you may duplicate."+actorHint),
+			"Attach a typed piece of evidence to a task: kind log | screenshot | command-output | trace | url | other; ref is a URL or filesystem path (required); summary is an optional one-line description. Returns the created artifact row (201). Append-only and NOT idempotent — after an error, check artifacts via get_task before re-attaching or you may duplicate. RECOMMENDED for verification: when your work includes running tests or verification commands, attach that evidence (kind \"command-output\", \"log\" or \"screenshot\") so a human can verify it — encouraged, never required."+actorHint),
 		mcpgo.WithString("id", mcpgo.Required(),
 			mcpgo.Description("Task ULID to attach the artifact to.")),
 		mcpgo.WithString("kind", mcpgo.Required(), mcpgo.Enum("log", "screenshot", "command-output", "trace", "url", "other"),

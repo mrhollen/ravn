@@ -419,7 +419,9 @@ func registerNextTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Acto
 			sb.WriteString(fmt.Sprintf("4. **Complete Acceptance Criteria**:\n   `complete_ac(id=%q, seq=1, actor={\"type\": \"agent\", \"name\": %q}, done=true, note=\"...\")`\n\n", detail.ID, actorName))
 		}
 
-		sb.WriteString(fmt.Sprintf("5. **Finish and Release**:\n   - Move to done: `update_task(id=%q, version=%d, status=\"done\", actor={\"type\": \"agent\", \"name\": %q})`\n   - Release lease: `release_task(id=%q, actor={\"type\": \"agent\", \"name\": %q})`\n",
+		sb.WriteString(fmt.Sprintf("5. **Attach Testing Evidence** (encouraged, not required — humans verify via artifacts):\n   If you ran tests or verification commands, upload the output so a human can review it:\n   `attach_artifact(id=%q, kind=\"command-output\", ref=\"<path-or-URL of the test/verification output>\", summary=\"e.g. go test ./... — all pass\")`\n\n", detail.ID))
+
+		sb.WriteString(fmt.Sprintf("6. **Finish and Release**:\n   - Move to done: `update_task(id=%q, version=%d, status=\"done\", actor={\"type\": \"agent\", \"name\": %q})`\n   - Release lease: `release_task(id=%q, actor={\"type\": \"agent\", \"name\": %q})`\n",
 			detail.ID, detail.Version, actorName, detail.ID, actorName))
 
 		return mcpgo.NewGetPromptResult("Next task guidance", []mcpgo.PromptMessage{

@@ -101,7 +101,7 @@ All tools return **compact JSON text** on success. All failures come back as an
 | `add_comment` | Append a typed markdown comment (no version bump). `kind: "question"` signals **needs human input**. Not idempotent — after an error, check the tail before re-posting. | `id`, `kind` (required; progress\|question\|decision\|handoff\|note), `body` (required markdown), `actor?` | The created comment row |
 | `update_notes` | Replace the DURABLE resume-context blob — "write down what you found / what's next so a fresh session can pick up". **Replace-on-write**: send the complete new notes, not an append. No version field; identical content is a no-op. | `id`, `notes` (both required), `actor?` | Fresh summary row (read notes back via `get_task`) |
 | `complete_ac` | Check/uncheck one acceptance criterion by its 1-based seq. Uncheck clears `completed_by`/`completed_at` (free). No version bump. | `id`, `seq` (number ≥ 1, required), `done` (bool, required), `note?`, `actor?` | The updated AC row |
-| `attach_artifact` | Attach typed evidence. Not idempotent — check artifacts via `get_task` before re-attaching after an error. | `id`, `kind` (required; log\|screenshot\|command-output\|trace\|url\|other), `ref` (required URL/path), `summary?`, `actor?` | The created artifact row |
+| `attach_artifact` | Attach typed evidence. **Recommended for testing work:** when you run tests or verification commands, attach the output (`command-output`/`log`/`screenshot`) so a human can verify your work — encouraged, never required. Not idempotent — check artifacts via `get_task` before re-attaching after an error. | `id`, `kind` (required; log\|screenshot\|command-output\|trace\|url\|other), `ref` (required URL/path), `summary?`, `actor?` | The created artifact row |
 | `relate_tasks` | Add or remove a relation edge between two tasks in the same project. | `id`, `other_id`, `kind` (all required; child\|parent\|blocked-by\|duplicate-of\|related), `action?` ("add" default \| "remove"), `actor?` | add: stored relation row (a `parent` input is stored/returned as the inverse `child` edge); remove: `{"removed":true, task_id, other_task_id, kind}` |
 
 Notes on relations: a task has **at most one parent** — re-adding the same
@@ -119,7 +119,7 @@ Beyond the 14 tools, the server registers two workflow **prompts** and read-only
 | Prompt | Purpose | Arguments |
 |---|---|---|
 | `triage_open_tasks` | Formats a triage / next-actions summary: in-flight (`doing`) work, unblocked `todo` candidates, and blocked `todo` tasks. | `project_id?` (ULID; omitted = across projects), `limit?` (max tasks inspected per status; default 50, capped at 100) |
-| `next_task` | Finds the highest-priority unblocked task for an assignee or project and generates a ready-to-send agent onboarding prompt. | `project_id?`, `assignee?` (durable assignee name), `actor_name?` (defaults to the `CROWBAN_AGENT_NAME` container default) |
+| `next_task` | Finds the highest-priority unblocked task for an assignee or project and generates a ready-to-send agent onboarding prompt — task detail plus the step-by-step workflow playbook, including the encouraged (not required) test-evidence step via `attach_artifact`. | `project_id?`, `assignee?` (durable assignee name), `actor_name?` (defaults to the `CROWBAN_AGENT_NAME` container default) |
 
 ### Resources
 
@@ -171,6 +171,19 @@ is what a fresh session reads first):
   "actor": { "name": "runner-2", "type": "agent" },
   "version": 4,
   "status": "done"
+}
+```
+
+**Attach test evidence — `attach_artifact`** (encouraged for testing work, never
+required — this is what a human reviews to verify your work):
+
+```json
+{
+  "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
+  "actor": { "name": "runner-2", "type": "agent" },
+  "kind": "command-output",
+  "ref": "/tmp/crowban/test-run.log",
+  "summary": "go test ./... — all pass after the fix"
 }
 ```
 
