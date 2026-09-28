@@ -319,8 +319,8 @@ func TestOpenCodeStart_ResolutionDefaults(t *testing.T) {
 	if dir := resolveOpenCodeDirectory(""); dir != "/home/hollen/Code/crowban" {
 		t.Errorf("default directory = %q, want /home/hollen/Code/crowban", dir)
 	}
-	if model := resolveOpenCodeModel(""); model != "" {
-		t.Errorf("default model = %q, want empty (server decides)", model)
+	if model := resolveOpenCodeModel(""); model != "llama.cpp/Qwen Medium Long Context" {
+		t.Errorf("default model = %q, want llama.cpp/Qwen Medium Long Context", model)
 	}
 
 	// 2. Env vars when project settings are empty

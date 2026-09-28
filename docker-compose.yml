@@ -24,6 +24,7 @@ services:
       CROWBAN_DATA: "/data/crowban.db"
       CROWBAN_STATIC_DIR: "/app/public" # UI is baked into the image (web-build stage)
       CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
+      OPENCODE_MODEL: "${OPENCODE_MODEL:-llama.cpp/Qwen Medium Long Context}" # default model for autonomous sessions
     volumes:
       - crowban-data:/data
     healthcheck:

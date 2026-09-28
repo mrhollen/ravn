@@ -1229,10 +1229,9 @@ test.describe('Web E2E test suite', () => {
       expect(sessionCreated).toBe(true);
       expect(promptDispatched).toBe(true);
 
-      // Verify window.open was called with the session URL
+      // Verify window.open was NOT called (task starts silently server-side without navigating away)
       const openedUrls = await page.evaluate(() => (window as any).__openedUrls);
-      expect(openedUrls).toHaveLength(1);
-      expect(openedUrls[0]).toBe(`http://127.0.0.1:${mockPort}/session/mock-opencode-session-456`);
+      expect(openedUrls).toHaveLength(0);
 
       // Verify session URL artifact appears in detail drawer
       await expect(drawer.locator('a', { hasText: 'mock-opencode-session-456' })).toBeVisible({ timeout: 5000 });

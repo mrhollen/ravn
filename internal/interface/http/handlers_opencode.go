@@ -39,11 +39,10 @@ func resolveOpenCodeDirectory(projectDirectory string) string {
 }
 
 // resolveOpenCodeModel resolves the OpenCode model reference from the project
-// setting, the OPENCODE_MODEL environment variable, or defaults to "" (no
-// model passed — the OpenCode server applies its own default). When a server's
-// fallback model requires an API key the dispatched session dies with an
-// Authentication Error immediately, so hosts running local providers should
-// set this.
+// setting, the OPENCODE_MODEL environment variable, or defaults to
+// "llama.cpp/Qwen Medium Long Context". When a server's fallback model requires
+// an API key the dispatched session dies with an Authentication Error immediately,
+// so a local working model is used as default.
 func resolveOpenCodeModel(projectModel string) string {
 	if s := strings.TrimSpace(projectModel); s != "" {
 		return s
@@ -51,7 +50,7 @@ func resolveOpenCodeModel(projectModel string) string {
 	if s := strings.TrimSpace(os.Getenv("OPENCODE_MODEL")); s != "" {
 		return s
 	}
-	return ""
+	return "llama.cpp/Qwen Medium Long Context"
 }
 
 // parseOpenCodeModel splits a "providerID/modelID" reference into its two

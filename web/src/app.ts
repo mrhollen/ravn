@@ -847,11 +847,8 @@ export function crowbanApp() {
       if (!d || this.startingOpenCode) return;
       this.startingOpenCode = true;
       try {
-        const res = await api.startOpenCode(d.id);
+        await api.startOpenCode(d.id);
         this.toast("OpenCode session started");
-        if (typeof window !== "undefined" && res.session_url) {
-          window.open(res.session_url, "_blank");
-        }
         await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
       } catch (e) {
         this.toast(errMsg(e), "error");
