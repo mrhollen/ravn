@@ -4,8 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>crowban</title>
+    <script>
+      // Apply the stored theme before first paint to avoid a light-mode flash.
+      (function () {
+        try {
+          var t = localStorage.getItem("crowban.theme");
+          if (t !== "light" && t !== "dark" && t !== "system") t = "system";
+          var dark =
+            t === "dark" ||
+            (t === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (e) {
+          /* private mode — leave the default light theme */
+        }
+      })();
+    </script>
   </head>
-  <body class="h-full bg-zinc-100 text-zinc-900 antialiased">
+  <body class="h-full bg-zinc-100 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
     <div
       x-data="app()"
       x-init="init()"
@@ -20,8 +35,8 @@
             x-transition.opacity
             class="pointer-events-auto rounded-lg border px-3 py-2 text-sm shadow-md"
             :class="t.kind === 'error'
-              ? 'border-red-200 bg-red-50 text-red-800'
-              : 'border-zinc-200 bg-white text-zinc-700'"
+              ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
+              : 'border-zinc-200 bg-white text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200'"
           >
             <span class="font-semibold" x-text="t.kind === 'error' ? 'Error: ' : ''"></span>
             <span x-text="t.msg"></span>
@@ -33,7 +48,7 @@
       <!-- Mobile: row 1 = [project select][+ New task][hamburger]; the secondary
            controls collapse behind the hamburger into a strip below row 1. On
            md+ everything is inline again (the toggle button is hidden). -->
-      <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-white px-4 py-3 shadow-sm md:gap-x-4">
+      <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-white px-4 py-3 shadow-sm md:gap-x-4 dark:border-zinc-800 dark:bg-zinc-900">
         <div class="mr-1 hidden leading-tight sm:block">
           <h1 class="text-base font-semibold tracking-tight">crowban</h1>
           <p class="text-[11px] text-zinc-500">MCP-first kanban &middot; visibility UI</p>
@@ -72,12 +87,43 @@
           </button>
           <button type="button" @click="showNewProject = !showNewProject" class="btn-ghost">New project</button>
 
+          <!-- theme toggle: Light / Dark / System (persisted in localStorage) -->
+          <div role="group" aria-label="Theme" data-testid="theme-toggle"
+               class="flex items-center overflow-hidden rounded-md border border-zinc-300 shadow-sm dark:border-zinc-700">
+            <button type="button" data-testid="theme-light" @click="setTheme('light')"
+                    :aria-pressed="theme === 'light'" title="Always use the light theme"
+                    class="px-2.5 py-1 text-xs font-medium transition-colors"
+                    :class="theme === 'light'
+                      ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+              Light
+            </button>
+            <span class="h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
+            <button type="button" data-testid="theme-dark" @click="setTheme('dark')"
+                    :aria-pressed="theme === 'dark'" title="Always use the dark theme"
+                    class="px-2.5 py-1 text-xs font-medium transition-colors"
+                    :class="theme === 'dark'
+                      ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+              Dark
+            </button>
+            <span class="h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
+            <button type="button" data-testid="theme-system" @click="setTheme('system')"
+                    :aria-pressed="theme === 'system'" title="Follow the operating system color scheme"
+                    class="px-2.5 py-1 text-xs font-medium transition-colors"
+                    :class="theme === 'system'
+                      ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+              System
+            </button>
+          </div>
+
           <!-- realtime SSE live status indicator -->
           <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none"
                @click="connectSse()"
                :class="{
-                 'text-emerald-700': sseStatus === 'connected',
-                 'text-amber-700': sseStatus === 'connecting',
+                 'text-emerald-700 dark:text-emerald-400': sseStatus === 'connected',
+                 'text-amber-700 dark:text-amber-400': sseStatus === 'connecting',
                  'text-zinc-500': sseStatus === 'disconnected'
                }"
                :title="sseStatus === 'connected' ? 'Live' : (sseStatus === 'connecting' ? 'Reconnecting…' : (polling ? 'Polling (fallback)' : 'Disconnected'))"
@@ -95,9 +141,9 @@
             <span x-text="sseStatus === 'connected' ? 'Live' : (sseStatus === 'connecting' ? 'Reconnecting' : (polling ? 'Polling' : 'Offline'))"></span>
           </div>
 
-          <label class="tap-target flex cursor-pointer items-center gap-2 text-sm text-zinc-600" title="Re-fetches the board every 15 seconds">
+          <label class="tap-target flex cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300" title="Re-fetches the board every 15 seconds">
             <input type="checkbox" x-model="polling" @change="pollingChanged()"
-                   class="h-4 w-4 rounded border-zinc-300 accent-zinc-900" />
+                   class="h-4 w-4 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
             Auto-refresh
           </label>
           <label class="flex items-center gap-2 text-sm" title="Identity sent with every write (actor name)">
@@ -107,7 +153,9 @@
           </label>
           <button type="button" @click="openAuthModal()"
                   class="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium shadow-sm transition-colors"
-                  :class="authToken ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100'"
+                   :class="authToken
+                     ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 dark:hover:bg-emerald-900'
+                     : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'"
                   :title="authToken ? 'Auth token configured. Click to edit.' : 'No auth token set. Click to configure.'">
             <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
@@ -118,13 +166,13 @@
       </header>
 
       <!-- ======================================================== new project -->
-      <div x-show="showNewProject" x-cloak class="border-b border-zinc-200 bg-white px-4 py-3 shadow-sm">
+      <div x-show="showNewProject" x-cloak class="border-b border-zinc-200 bg-white px-4 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <form @submit.prevent="createProject()" class="flex flex-wrap items-end gap-x-4 gap-y-2">
-          <label class="flex min-w-56 flex-col text-xs font-medium text-zinc-500">
+          <label class="flex min-w-56 flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
             Name *
             <input x-model="newProject.name" class="field mt-1 w-64" placeholder="Website Redesign" required />
           </label>
-          <label class="flex min-w-52 flex-1 flex-col text-xs font-medium text-zinc-500">
+          <label class="flex min-w-52 flex-1 flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
             Description (markdown, optional)
             <input x-model="newProject.description" class="field mt-1" placeholder="MVP landing page work" />
           </label>
@@ -139,26 +187,26 @@
       <main class="flex-1 overflow-auto p-4">
         <!-- duplicate advisory (non-blocking, dismissible) -->
         <div x-show="duplicates.length > 0" x-cloak
-             class="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+             class="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
           <div class="min-w-0 flex-1">
             <b>Heads up — similar tasks already exist in this project:</b>
             <ul class="mt-1 list-disc pl-4 text-xs">
               <template x-for="d in duplicates" :key="d.id">
                 <li>
                   <button type="button" @click="openTask(d.id)"
-                          class="underline decoration-amber-400 hover:text-amber-950" x-text="d.title"></button>
+                          class="underline decoration-amber-400 hover:text-amber-950 dark:decoration-amber-600 dark:hover:text-amber-100" x-text="d.title"></button>
                 </li>
               </template>
             </ul>
           </div>
           <button type="button" @click="clearDuplicates()" aria-label="Dismiss"
-                  class="text-lg leading-none text-amber-700 hover:text-amber-950">&times;</button>
+                  class="text-lg leading-none text-amber-700 hover:text-amber-950 dark:text-amber-400 dark:hover:text-amber-100">&times;</button>
         </div>
 
         <!-- load error -->
         <div x-show="loadError && !board" x-cloak
-             class="mx-auto mt-16 max-w-md rounded-xl border border-red-200 bg-white p-6 text-center shadow-sm">
-          <p class="text-sm font-semibold text-red-700">Could not load the board</p>
+             class="mx-auto mt-16 max-w-md rounded-xl border border-red-200 bg-white p-6 text-center shadow-sm dark:border-red-800 dark:bg-zinc-900">
+          <p class="text-sm font-semibold text-red-700 dark:text-red-400">Could not load the board</p>
           <p class="mt-1 break-words text-xs text-zinc-500" x-text="loadError"></p>
           <div class="mt-4 flex justify-center gap-2">
             <button type="button" @click="loadBoard()" class="btn-primary">Retry</button>
@@ -168,8 +216,8 @@
 
         <!-- no projects at all -->
         <div x-show="projects.length === 0 && !loadError" x-cloak
-             class="mx-auto mt-16 max-w-md rounded-xl border border-zinc-200 bg-white p-6 text-center shadow-sm">
-          <p class="text-sm font-medium text-zinc-700">No projects yet.</p>
+             class="mx-auto mt-16 max-w-md rounded-xl border border-zinc-200 bg-white p-6 text-center shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+          <p class="text-sm font-medium text-zinc-700 dark:text-zinc-300">No projects yet.</p>
           <p class="mt-1 text-xs text-zinc-500">Agents create work via MCP; create a project here to start the board.</p>
         </div>
 
@@ -177,7 +225,7 @@
         <template x-if="board">
           <div class="flex flex-col gap-4">
             <!-- board filter bar -->
-            <div class="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-sm text-xs">
+            <div class="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-sm text-xs dark:border-zinc-700 dark:bg-zinc-900">
               <label class="flex flex-1 min-w-[180px] items-center gap-1.5">
                 <span class="font-medium text-zinc-500">Search</span>
                 <input type="text" x-model="filterSearch" placeholder="Filter title or ID…"
@@ -218,18 +266,18 @@
                 </select>
               </label>
 
-              <label class="tap-target flex cursor-pointer items-center gap-1.5 text-zinc-700">
+              <label class="tap-target flex cursor-pointer items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
                 <input type="checkbox" x-model="filterUnblocked"
-                       class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900" />
+                       class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
                 <span>Unblocked only</span>
               </label>
 
               <button type="button" @click="clearFilters()" x-show="hasActiveFilters()" x-cloak
-                      class="btn-ghost py-1 px-2 text-xs text-zinc-500 hover:text-zinc-800">
+                      class="btn-ghost py-1 px-2 text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200">
                 Reset filters
               </button>
 
-              <span class="h-4 w-px bg-zinc-200" aria-hidden="true"></span>
+              <span class="h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
 
               <label class="flex items-center gap-1.5">
                 <span class="font-medium text-zinc-500">Sort by</span>
@@ -251,7 +299,7 @@
 
               <button type="button" @click="clearSort()" x-show="sortKey !== ''" x-cloak
                       data-testid="sort-clear"
-                      class="btn-ghost py-1 px-2 text-xs text-zinc-500 hover:text-zinc-800">
+                      class="btn-ghost py-1 px-2 text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200">
                 Clear sort
               </button>
             </div>
@@ -264,20 +312,20 @@
                   @dragleave="onDragLeave($event, col.status)"
                   @drop.prevent="onDrop($event, col.status)"
                   class="flex flex-col rounded-xl border transition-colors shadow-sm"
-                  :class="dragOverStatus === col.status && draggedFromStatus !== col.status
-                    ? 'border-indigo-400 bg-indigo-50/50 ring-2 ring-indigo-300'
-                    : 'border-zinc-200 bg-white/70'"
-                >
-                  <header class="flex items-center justify-between border-b border-zinc-100 px-3 py-2">
+                   :class="dragOverStatus === col.status && draggedFromStatus !== col.status
+                     ? 'border-indigo-400 bg-indigo-50/50 ring-2 ring-indigo-300 dark:border-indigo-500 dark:bg-indigo-950/60 dark:ring-indigo-700'
+                     : 'border-zinc-200 bg-white/70 dark:border-zinc-700 dark:bg-zinc-900/60'"
+                 >
+                  <header class="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 px-3 py-2">
                     <div class="flex min-w-0 items-center gap-2">
                       <h2 class="text-sm font-semibold" x-text="col.label"></h2>
-                      <span x-show="sortKey !== ''" x-cloak data-testid="sort-indicator"
-                            class="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200"
+                       <span x-show="sortKey !== ''" x-cloak data-testid="sort-indicator"
+                             class="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:ring-indigo-800"
                             :title="'Cards sorted by ' + activeSortLabel() + (sortDir === 'asc' ? ' (ascending)' : ' (descending)') + '. Pick “Server order” in the toolbar to reset.'"
                             x-text="activeSortLabel() + (sortDir === 'asc' ? ' ↑' : ' ↓')"></span>
                     </div>
-                    <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 ring-1 ring-zinc-200"
-                          x-text="col.tasks.length"></span>
+                     <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700"
+                           x-text="col.tasks.length"></span>
                   </header>
                   <div class="flex flex-col gap-2 p-2.5">
                     <template x-for="task in col.tasks" :key="task.id">
@@ -295,10 +343,10 @@
                         @keydown.enter="openTask(task.id)"
                         @keydown.space.prevent="openTask(task.id)"
                         class="relative w-full rounded-lg border p-3 text-left shadow-sm transition select-none focus:outline-none focus:ring-2 focus:ring-zinc-400"
-                        :class="[
-                          draggedTaskId === task.id
-                            ? 'opacity-40 border-dashed border-zinc-400 bg-zinc-50'
-                            : 'border-zinc-200 bg-white hover:border-zinc-300 hover:shadow',
+                         :class="[
+                           draggedTaskId === task.id
+                             ? 'opacity-40 border-dashed border-zinc-400 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900'
+                             : 'border-zinc-200 bg-white hover:border-zinc-300 hover:shadow dark:border-zinc-700 dark:bg-zinc-800 dark:hover:border-zinc-600',
                           busyStatus === task.id
                             ? 'pointer-events-none opacity-60'
                             : 'cursor-grab active:cursor-grabbing'
@@ -309,8 +357,8 @@
                           <!-- explicit touch alternative to drag-and-drop: pick a target status -->
                           <button type="button" @click.stop="toggleCardMenu(task.id)"
                                   data-testid="card-menu-toggle" aria-label="Move task to another status"
-                                  title="Move task" :class="cardMenuTaskId === task.id ? 'text-zinc-900' : ''"
-                                  class="-my-1 -mr-1 shrink-0 rounded-md p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-400">
+                                   title="Move task" :class="cardMenuTaskId === task.id ? 'text-zinc-900 dark:text-zinc-100' : ''"
+                                   class="-my-1 -mr-1 shrink-0 rounded-md p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:text-zinc-500 dark:hover:bg-zinc-700 dark:hover:text-zinc-200">
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                               <path d="M12 8a2 2 0 100-4 2 2 0 000 4zm0 6a2 2 0 100-4 2 2 0 000 4zm0 6a2 2 0 100-4 2 2 0 000 4z"/>
                             </svg>
@@ -324,37 +372,37 @@
                              x-text="(swipeDirection(task.id) === 'right' ? '→ ' : '← ') + swipeTargetLabel(task.id)">
                         </div>
                         <!-- move-to row (explicit status picker, touch-first alternative to DnD) -->
-                        <div x-show="cardMenuTaskId === task.id" x-cloak
-                             class="mt-2 flex items-center gap-1.5 border-t border-zinc-100 pt-2">
-                          <span class="mr-auto text-[11px] font-medium text-zinc-400">Move to</span>
-                          <template x-for="st in STATUSES" :key="st">
-                            <button type="button" @click.stop="moveCardTo(task.id, st)"
-                                    :data-testid="'card-move-' + st"
-                                    class="rounded-md border px-2 py-1 text-xs font-medium transition-colors"
-                                    :class="st === col.status
-                                      ? 'cursor-default border-zinc-200 bg-zinc-50 text-zinc-400'
-                                      : 'border-zinc-300 bg-white text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50'">
+                         <div x-show="cardMenuTaskId === task.id" x-cloak
+                              class="mt-2 flex items-center gap-1.5 border-t border-zinc-100 pt-2 dark:border-zinc-700">
+                           <span class="mr-auto text-[11px] font-medium text-zinc-400">Move to</span>
+                           <template x-for="st in STATUSES" :key="st">
+                             <button type="button" @click.stop="moveCardTo(task.id, st)"
+                                     :data-testid="'card-move-' + st"
+                                     class="rounded-md border px-2 py-1 text-xs font-medium transition-colors"
+                                     :class="st === col.status
+                                       ? 'cursor-default border-zinc-200 bg-zinc-50 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-500'
+                                       : 'border-zinc-300 bg-white text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-zinc-500 dark:hover:bg-zinc-700'">
                               <span x-text="statusLabel(st)"></span>
                             </button>
                           </template>
                         </div>
-                        <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+                        <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
                           <span x-show="isBlocked(task.id)" x-cloak title="Has an open blocker"
-                                class="inline-flex items-center gap-1 font-semibold text-red-600">
+                                class="inline-flex items-center gap-1 font-semibold text-red-600 dark:text-red-400">
                             <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span> blocked
                           </span>
                           <span x-show="task.due_at" x-cloak :title="'Due ' + task.due_at"
-                                :class="isOverdue(task) ? 'font-semibold text-red-600' : ''"
+                                :class="isOverdue(task) ? 'font-semibold text-red-600 dark:text-red-400' : ''"
                                 x-text="dueLabel(task.due_at)"></span>
-                          <span x-show="task.assignee" x-cloak class="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200"
+                          <span x-show="task.assignee" x-cloak class="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800"
                                 :title="'Owner: ' + (task.assignee ? task.assignee.name + ' (' + task.assignee.type + ')' : '')">
-                            <span class="font-semibold text-amber-700">Owner:</span>
+                            <span class="font-semibold text-amber-700 dark:text-amber-400">Owner:</span>
                             <span x-text="task.assignee ? task.assignee.name : ''"></span>
                           </span>
-                          <span x-show="task.claimed_by" x-cloak class="inline-flex items-center gap-1 font-medium text-indigo-600">
+                          <span x-show="task.claimed_by" x-cloak class="inline-flex items-center gap-1 font-medium text-indigo-600 dark:text-indigo-400">
                             <span class="h-1.5 w-1.5 rounded-full bg-indigo-500"></span>
                             <span x-text="task.claimed_by ? task.claimed_by.name : ''"></span>
-                            <span class="font-normal text-indigo-400" x-text="claimHint(task)"></span>
+                            <span class="font-normal text-indigo-400 dark:text-indigo-300" x-text="claimHint(task)"></span>
                           </span>
                         </div>
                       </div>
@@ -362,14 +410,14 @@
                     <div
                       x-show="dragOverStatus === col.status && draggedFromStatus !== col.status"
                       x-cloak
-                      class="pointer-events-none rounded-lg border-2 border-dashed border-indigo-300 bg-indigo-50/70 p-3 text-center text-xs font-medium text-indigo-700"
-                    >
+                       class="pointer-events-none rounded-lg border-2 border-dashed border-indigo-300 bg-indigo-50/70 p-3 text-center text-xs font-medium text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300"
+                     >
                       Drop to move to <span x-text="col.label"></span>
                     </div>
                     <p x-show="col.tasks.length === 0 && !(dragOverStatus === col.status && draggedFromStatus !== col.status)" x-cloak
                        class="px-1 py-3 text-center text-xs italic text-zinc-400">No tasks</p>
-                    <button type="button" @click="openNewTask(col.status)"
-                            class="mt-0.5 rounded-md border border-dashed border-zinc-300 px-2 py-1.5 text-xs font-medium text-zinc-500 transition hover:border-zinc-400 hover:text-zinc-700">
+                     <button type="button" @click="openNewTask(col.status)"
+                             class="mt-0.5 rounded-md border border-dashed border-zinc-300 px-2 py-1.5 text-xs font-medium text-zinc-500 transition hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500 dark:hover:text-zinc-200">
                       + Add task to <span x-text="col.label"></span>
                     </button>
                   </div>
@@ -382,25 +430,25 @@
 
       <!-- ================================================== project settings modal -->
       <div x-show="showProjectSettings" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="closeProjectSettings()">
-        <div class="mx-auto mt-16 w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl">
-          <header class="flex items-center justify-between pb-3 border-b border-zinc-100">
+        <div class="mx-auto mt-16 w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
+          <header class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
             <div>
-              <h2 class="text-base font-semibold text-zinc-900">Project settings</h2>
+              <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Project settings</h2>
               <p class="text-xs text-zinc-500">Edit project name and description</p>
             </div>
-            <button type="button" @click="closeProjectSettings()" class="text-zinc-400 hover:text-zinc-600" aria-label="Close">
+            <button type="button" @click="closeProjectSettings()" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300" aria-label="Close">
               <span class="text-lg leading-none">&times;</span>
             </button>
           </header>
 
           <form @submit.prevent="saveProjectSettings()" class="mt-4 flex flex-col gap-4">
-            <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700">
+            <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
               Name *
               <input type="text" x-model="projectSettingsForm.name" placeholder="Project name"
                      class="field text-sm w-full" required />
             </label>
 
-            <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700">
+            <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
               Description (markdown, optional)
               <textarea x-model="projectSettingsForm.description" rows="3" class="field font-mono text-xs w-full"
                         placeholder="Project description…"></textarea>
@@ -408,27 +456,27 @@
 
             <div class="border-t border-zinc-100 pt-3 flex flex-col gap-3">
               <div class="flex items-center gap-1.5">
-                <svg class="h-3.5 w-3.5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg class="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
-                <span class="text-xs font-semibold text-zinc-900">OpenCode Autonomous Agent Integration</span>
+                <span class="text-xs font-semibold text-zinc-900 dark:text-zinc-100">OpenCode Autonomous Agent Integration</span>
               </div>
 
-              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700">
+              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
                 OpenCode Server URL
                 <input type="text" x-model="projectSettingsForm.opencode_server_url" placeholder="http://localhost:4444"
                        class="field font-mono text-xs w-full" />
                 <span class="text-[11px] font-normal text-zinc-400">Defaults to http://localhost:4444 or $OPENCODE_SERVER_URL</span>
               </label>
 
-              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700">
+              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
                 OpenCode Project Directory
                 <input type="text" x-model="projectSettingsForm.opencode_directory" placeholder="/home/hollen/Code/..."
                        class="field font-mono text-xs w-full" />
                 <span class="text-[11px] font-normal text-zinc-400">Target codebase root directory for OpenCode agent build sessions</span>
               </label>
 
-              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700">
+              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
                 OpenCode Model (providerID/modelID)
                 <input type="text" x-model="projectSettingsForm.opencode_model" placeholder="llama.cpp/Qwen Medium Long Context"
                        class="field font-mono text-xs w-full" />
@@ -450,26 +498,26 @@
 
       <!-- ========================================================== auth token modal -->
       <div x-show="showAuthModal" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="showAuthModal = false">
-        <div class="mx-auto mt-16 w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl">
-          <header class="flex items-center justify-between pb-3 border-b border-zinc-100">
+        <div class="mx-auto mt-16 w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
+          <header class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
             <div class="flex items-center gap-2.5">
-              <span class="rounded-lg bg-indigo-50 p-2 text-indigo-600">
+              <span class="rounded-lg bg-indigo-50 p-2 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400">
                 <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                 </svg>
               </span>
               <div>
-                <h2 class="text-base font-semibold text-zinc-900">API Authentication Token</h2>
+                <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">API Authentication Token</h2>
                 <p class="text-xs text-zinc-500">Configure credentials for production servers</p>
               </div>
             </div>
-            <button type="button" @click="showAuthModal = false" class="text-zinc-400 hover:text-zinc-600">
+            <button type="button" @click="showAuthModal = false" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
               <span class="text-lg leading-none">&times;</span>
             </button>
           </header>
 
           <form @submit.prevent="saveAuthToken()" class="mt-4 flex flex-col gap-4">
-            <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700">
+            <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
               Bearer Token
               <input type="password" x-model="tokenInput" placeholder="Enter CROWBAN_TOKEN..."
                      class="field font-mono text-xs w-full" autofocus />
@@ -482,7 +530,7 @@
 
             <div class="flex items-center justify-between pt-2">
               <button type="button" @click="clearAuthToken()" x-show="authToken"
-                      class="text-xs text-red-600 hover:underline">
+                      class="text-xs text-red-600 hover:underline dark:text-red-400">
                 Clear token
               </button>
               <div class="flex gap-2 ml-auto">
@@ -500,49 +548,49 @@
 
       <!-- ========================================================== new task -->
       <div x-show="showNewTask" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/30 p-4" @click.self="closeNewTask()">
-        <div class="mx-auto mt-10 w-full max-w-lg rounded-xl border border-zinc-200 bg-white shadow-xl">
-          <header class="flex items-center justify-between border-b border-zinc-100 px-5 py-3">
+        <div class="mx-auto mt-10 w-full max-w-lg rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+          <header class="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 px-5 py-3">
             <h2 class="text-base font-semibold">
               New task
               <span class="ml-1 text-xs font-normal text-zinc-400" x-text="'→ ' + statusLabel(newTaskTarget)"></span>
             </h2>
             <button type="button" @click="closeNewTask()" aria-label="Close"
-                    class="text-xl leading-none text-zinc-400 hover:text-zinc-600">&times;</button>
+                    class="text-xl leading-none text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">&times;</button>
           </header>
           <form @submit.prevent="createTask()" class="flex flex-col gap-3 px-5 py-4">
-            <label class="flex flex-col text-xs font-medium text-zinc-500">
+            <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
               Title *
               <input x-model="newTask.title" class="field mt-1" placeholder="Fix login bug" required />
             </label>
-            <label class="flex flex-col text-xs font-medium text-zinc-500">
+            <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
               Description (markdown, optional)
               <textarea x-model="newTask.description" rows="3" class="field mt-1"
                         placeholder="Users cannot log in after the password reset flow…"></textarea>
             </label>
             <div class="grid grid-cols-2 gap-3">
-              <label class="flex flex-col text-xs font-medium text-zinc-500">Priority
+              <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">Priority
                 <select x-model.number="newTask.priority" class="field mt-1">
                   <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
                     <option :value="p" x-text="'P' + p + ' — ' + priorityName(p)"></option>
                   </template>
                 </select>
               </label>
-              <label class="flex flex-col text-xs font-medium text-zinc-500">Due date
+              <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">Due date
                 <input type="date" x-model="newTask.due" class="field mt-1" />
               </label>
             </div>
             <div class="grid grid-cols-2 gap-3">
-              <label class="flex flex-col text-xs font-medium text-zinc-500">Assignee name
+              <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">Assignee name
                 <input type="text" x-model="newTask.assigneeName" class="field mt-1" placeholder="Optional owner" />
               </label>
-              <label class="flex flex-col text-xs font-medium text-zinc-500">Assignee type
+              <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">Assignee type
                 <select x-model="newTask.assigneeType" class="field mt-1">
                   <option value="human">human</option>
                   <option value="agent">agent</option>
                 </select>
               </label>
             </div>
-            <label class="flex flex-col text-xs font-medium text-zinc-500">
+            <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
               Acceptance criteria (one per line)
               <textarea x-model="newTask.acs" rows="3" class="field mt-1 font-mono text-xs"
                         placeholder="login works&#10;logout works"></textarea>
@@ -559,7 +607,7 @@
       <!-- ====================================================== task detail -->
       <div x-show="detailOpen" x-cloak class="fixed inset-0 z-40" @click.self="closeDetail()">
         <div class="absolute inset-0 bg-black/30"></div>
-        <aside class="absolute inset-y-0 right-0 flex w-full max-w-xl flex-col border-l border-zinc-200 bg-white shadow-2xl">
+        <aside class="absolute inset-y-0 right-0 flex w-full max-w-xl flex-col border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
           <div x-show="!detail" x-cloak class="flex flex-1 items-center justify-center text-sm text-zinc-400">
             Loading task…
           </div>
@@ -567,7 +615,7 @@
           <template x-if="detail">
             <div class="h-full overflow-y-auto">
               <!-- header (view mode) -->
-              <div x-show="!editingTask" class="border-b border-zinc-100 px-5 py-4">
+              <div x-show="!editingTask" class="border-b border-zinc-100 dark:border-zinc-800 px-5 py-4">
                 <div class="flex items-start justify-between gap-3">
                   <h2 class="min-w-0 break-words text-lg font-semibold leading-snug" x-text="detail.title"></h2>
                   <div class="flex shrink-0 items-center gap-2">
@@ -575,57 +623,57 @@
                       type="button"
                       @click="startTaskInOpenCode()"
                       :disabled="startingOpenCode"
-                      class="flex items-center gap-1.5 rounded-md bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 border border-indigo-200 shadow-sm transition hover:bg-indigo-100 hover:border-indigo-300 disabled:opacity-50"
+                       class="flex items-center gap-1.5 rounded-md bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 border border-indigo-200 shadow-sm transition hover:bg-indigo-100 hover:border-indigo-300 disabled:opacity-50 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800 dark:hover:bg-indigo-900 dark:hover:border-indigo-700"
                       title="Launch autonomous OpenCode session for this task"
                       data-testid="start-opencode-btn"
                     >
-                      <svg class="h-3.5 w-3.5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <svg class="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                       </svg>
                       <span x-text="startingOpenCode ? 'Starting OpenCode…' : 'Start Task in OpenCode'"></span>
                     </button>
                     <button type="button" @click="startEditing()" class="btn-ghost px-2.5 py-1 text-xs font-medium">Edit</button>
                     <button type="button" @click="closeDetail()" aria-label="Close"
-                            class="text-xl leading-none text-zinc-400 hover:text-zinc-600">&times;</button>
+                            class="text-xl leading-none text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">&times;</button>
                   </div>
                 </div>
                 <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
                   <span class="rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1"
                         :class="priorityClass(detail.priority)" x-text="'P' + detail.priority"></span>
-                  <span x-show="detail.assignee" x-cloak class="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-200">
-                    <span class="font-semibold text-amber-700">Owner:</span>
+                  <span x-show="detail.assignee" x-cloak class="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800">
+                    <span class="font-semibold text-amber-700 dark:text-amber-400">Owner:</span>
                     <span x-text="detail.assignee ? actorLabel(detail.assignee) : ''"></span>
                   </span>
                   <span x-show="detail.due_at" x-cloak class="inline-flex items-center gap-1"
-                        :class="isOverdue(detail) ? 'font-semibold text-red-600' : ''">
+                        :class="isOverdue(detail) ? 'font-semibold text-red-600 dark:text-red-400' : ''">
                     Due <time :title="detail.due_at" x-text="dueLabel(detail.due_at)"></time>
                   </span>
                   <span title="Optimistic-concurrency version — writes are guarded by it">v<span x-text="detail.version"></span></span>
-                  <code class="rounded bg-zinc-100 px-1 py-0.5 text-[10px]" :title="detail.id" x-text="shortId(detail.id)"></code>
+                  <code class="rounded bg-zinc-100 px-1 py-0.5 text-[10px] dark:bg-zinc-800" :title="detail.id" x-text="shortId(detail.id)"></code>
                   <span>updated</span>
                   <time :title="detail.updated_at" x-text="relTime(detail.updated_at)"></time>
                 </div>
               </div>
 
               <!-- edit form (edit mode) -->
-              <form x-show="editingTask" x-cloak @submit.prevent="saveTaskEdit()" class="border-b border-zinc-200 bg-zinc-50/70 p-5">
-                <div class="flex items-center justify-between pb-3 border-b border-zinc-200">
-                  <h3 class="text-sm font-semibold text-zinc-800">Edit task details</h3>
+              <form x-show="editingTask" x-cloak @submit.prevent="saveTaskEdit()" class="border-b border-zinc-200 bg-zinc-50/70 p-5 dark:border-zinc-700 dark:bg-zinc-800/60">
+                <div class="flex items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-700">
+                  <h3 class="text-sm font-semibold text-zinc-800 dark:text-zinc-200">Edit task details</h3>
                   <div class="flex items-center gap-2">
                     <button type="button" @click="cancelEditing()" :disabled="savingEdit" class="btn-ghost px-2.5 py-1 text-xs">Cancel</button>
                     <button type="submit" :disabled="savingEdit || !editDraft.title.trim()" class="btn-primary px-3 py-1 text-xs"
                             x-text="savingEdit ? 'Saving…' : 'Save'"></button>
                     <button type="button" @click="closeDetail()" aria-label="Close"
-                            class="ml-1 text-xl leading-none text-zinc-400 hover:text-zinc-600">&times;</button>
+                            class="ml-1 text-xl leading-none text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">&times;</button>
                   </div>
                 </div>
                 <div class="flex flex-col gap-3 pt-3">
-                  <label class="flex flex-col text-xs font-medium text-zinc-500">
+                  <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
                     Title *
                     <input x-model="editDraft.title" class="field mt-1 text-sm font-medium" placeholder="Task title" required />
                   </label>
                   <div class="grid grid-cols-2 gap-3">
-                    <label class="flex flex-col text-xs font-medium text-zinc-500">
+                    <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
                       Priority
                       <select x-model.number="editDraft.priority" class="field mt-1 text-xs">
                         <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
@@ -633,17 +681,17 @@
                         </template>
                       </select>
                     </label>
-                    <label class="flex flex-col text-xs font-medium text-zinc-500">
+                    <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
                       Due date
                       <input type="date" x-model="editDraft.due" class="field mt-1 text-xs" />
                     </label>
                   </div>
                   <div class="grid grid-cols-2 gap-3">
-                    <label class="flex flex-col text-xs font-medium text-zinc-500">
+                    <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
                       Assignee name
                       <input type="text" x-model="editDraft.assigneeName" class="field mt-1 text-xs" placeholder="Optional owner" />
                     </label>
-                    <label class="flex flex-col text-xs font-medium text-zinc-500">
+                    <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
                       Assignee type
                       <select x-model="editDraft.assigneeType" class="field mt-1 text-xs">
                         <option value="human">human</option>
@@ -651,7 +699,7 @@
                       </select>
                     </label>
                   </div>
-                  <label class="flex flex-col text-xs font-medium text-zinc-500">
+                  <label class="flex flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
                     Description (markdown)
                     <textarea x-model="editDraft.description" rows="5" class="field mt-1 font-mono text-xs"
                               placeholder="Markdown description…"></textarea>
@@ -661,11 +709,13 @@
 
               <div class="flex flex-col gap-5 px-5 py-4">
                 <!-- status -->
-                <div class="flex rounded-lg border border-zinc-200 bg-zinc-50 p-1" role="group" aria-label="Status">
+                <div class="flex rounded-lg border border-zinc-200 bg-zinc-50 p-1 dark:border-zinc-700 dark:bg-zinc-800" role="group" aria-label="Status">
                   <template x-for="s in ['todo', 'doing', 'done']" :key="s">
                     <button type="button" @click="moveStatus(s)" :disabled="busyStatus !== ''"
                             class="flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-zinc-400"
-                            :class="detail.status === s ? 'bg-zinc-900 text-white shadow' : 'text-zinc-600 hover:bg-zinc-200/70'"
+                            :class="detail.status === s
+                              ? 'bg-zinc-900 text-white shadow dark:bg-zinc-100 dark:text-zinc-900'
+                              : 'text-zinc-600 hover:bg-zinc-200/70 dark:text-zinc-300 dark:hover:bg-zinc-700/70'"
                             :aria-pressed="detail.status === s"
                             x-text="statusLabel(s)"></button>
                   </template>
@@ -673,13 +723,13 @@
 
                 <!-- blocked banner -->
                 <div x-show="detail.blocked" x-cloak
-                     class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
-                  <span class="font-semibold">Blocked by:</span>
-                  <ul class="mt-1 list-disc pl-4">
-                    <template x-for="b in detail.blockers" :key="b.id">
-                      <li>
-                        <button type="button" @click="openTask(b.id)"
-                                class="underline decoration-red-300 hover:text-red-950"
+                     class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+                   <span class="font-semibold">Blocked by:</span>
+                   <ul class="mt-1 list-disc pl-4">
+                     <template x-for="b in detail.blockers" :key="b.id">
+                       <li>
+                         <button type="button" @click="openTask(b.id)"
+                                 class="underline decoration-red-300 hover:text-red-950 dark:decoration-red-700 dark:hover:text-red-100"
                                 x-text="b.title + ' (' + b.status + ')'"></button>
                       </li>
                     </template>
@@ -687,22 +737,22 @@
                 </div>
 
                 <!-- durable owner / assignee controls -->
-                <div class="rounded-lg border border-amber-200 bg-amber-50/60 p-3 text-sm">
+                <div class="rounded-lg border border-amber-200 bg-amber-50/60 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40">
                   <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
                     <div class="flex items-center gap-1.5">
                       <span class="h-2 w-2 rounded-full"
-                            :class="detail.assignee ? 'bg-amber-500' : 'bg-zinc-400'"></span>
-                      <span class="font-semibold text-zinc-900">Owner</span>
-                      <span x-show="detail.assignee" x-cloak class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 ring-1 ring-amber-300">Durable</span>
+                            :class="detail.assignee ? 'bg-amber-500' : 'bg-zinc-400 dark:bg-zinc-600'"></span>
+                      <span class="font-semibold text-zinc-900 dark:text-zinc-100">Owner</span>
+                      <span x-show="detail.assignee" x-cloak class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 ring-1 ring-amber-300 dark:bg-amber-900 dark:text-amber-200 dark:ring-amber-700">Durable</span>
                     </div>
                     <div class="flex items-center gap-1.5">
-                      <span x-show="detail.assignee" x-cloak class="text-xs font-medium text-amber-900" x-text="actorLabel(detail.assignee)"></span>
+                      <span x-show="detail.assignee" x-cloak class="text-xs font-medium text-amber-900 dark:text-amber-300" x-text="actorLabel(detail.assignee)"></span>
                       <span x-show="!detail.assignee" class="text-xs text-zinc-500 italic">Unassigned</span>
                     </div>
                   </div>
 
                   <!-- inline assignee picker -->
-                  <form @submit.prevent="saveAssignee()" class="flex flex-wrap items-center gap-2 pt-1 border-t border-amber-200/60 text-xs">
+                  <form @submit.prevent="saveAssignee()" class="flex flex-wrap items-center gap-2 pt-1 border-t border-amber-200/60 text-xs dark:border-amber-800/60">
                     <input type="text" x-model="assigneeInputName" placeholder="Assignee name (e.g. alice, agent-1)"
                            class="field flex-1 min-w-[140px] text-xs py-1" />
                     <select x-model="assigneeInputType" class="field text-xs py-1 w-24">
@@ -714,19 +764,19 @@
                       <span x-text="assigneeBusy ? 'Assigning…' : 'Assign'"></span>
                     </button>
                     <button type="button" @click="clearAssignee()" :disabled="assigneeBusy || !detail.assignee"
-                            class="btn-ghost text-xs py-1 px-2 text-zinc-600 hover:text-red-600">
+                            class="btn-ghost text-xs py-1 px-2 text-zinc-600 hover:text-red-600 dark:text-zinc-400 dark:hover:text-red-400">
                       Clear
                     </button>
                   </form>
                 </div>
 
                 <!-- claim controls & lease status -->
-                <div class="rounded-lg border border-indigo-200 bg-indigo-50/70 p-3 text-sm">
+                <div class="rounded-lg border border-indigo-200 bg-indigo-50/70 p-3 text-sm dark:border-indigo-800 dark:bg-indigo-950/60">
                   <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
                     <div class="flex items-center gap-1.5">
                       <span class="h-2 w-2 rounded-full"
-                            :class="detail.claimed_by ? 'bg-indigo-600 animate-pulse' : 'bg-zinc-400'"></span>
-                      <span class="font-semibold text-zinc-900"
+                            :class="detail.claimed_by ? 'bg-indigo-600 animate-pulse' : 'bg-zinc-400 dark:bg-zinc-600'"></span>
+                      <span class="font-semibold text-zinc-900 dark:text-zinc-100"
                             x-text="detail.claimed_by ? 'Claimed' : 'Unclaimed'"></span>
                     </div>
                     <div class="flex items-center gap-1.5" role="group" aria-label="Claim Controls">
@@ -749,19 +799,19 @@
                   </div>
 
                   <!-- Claim details when claimed -->
-                  <div x-show="detail.claimed_by" x-cloak class="text-xs text-indigo-950 space-y-1">
-                    <div>
-                      Held by <b class="font-semibold" x-text="actorLabel(detail.claimed_by)"></b>
-                      <template x-if="detail.claimed_at">
-                        <span> (since <time :title="detail.claimed_at" x-text="relTime(detail.claimed_at)"></time>)</span>
-                      </template>
+                    <div x-show="detail.claimed_by" x-cloak class="text-xs text-indigo-950 space-y-1 dark:text-indigo-200">
+                      <div>
+                        Held by <b class="font-semibold" x-text="actorLabel(detail.claimed_by)"></b>
+                        <template x-if="detail.claimed_at">
+                          <span> (since <time :title="detail.claimed_at" x-text="relTime(detail.claimed_at)"></time>)</span>
+                        </template>
+                      </div>
+                      <div class="flex items-center gap-1 text-indigo-700 dark:text-indigo-300" x-show="detail.claim_expires_at">
+                        <span>Expires:</span>
+                        <time class="font-mono" :title="detail.claim_expires_at" x-text="detail.claim_expires_at"></time>
+                        <span class="text-indigo-500 font-normal dark:text-indigo-400" x-text="'(' + claimHint(detail) + ')'"></span>
+                      </div>
                     </div>
-                    <div class="flex items-center gap-1 text-indigo-700" x-show="detail.claim_expires_at">
-                      <span>Expires:</span>
-                      <time class="font-mono" :title="detail.claim_expires_at" x-text="detail.claim_expires_at"></time>
-                      <span class="text-indigo-500 font-normal" x-text="'(' + claimHint(detail) + ')'"></span>
-                    </div>
-                  </div>
                   <div x-show="!detail.claimed_by" class="text-xs text-zinc-500">
                     No active lease. Click Claim to begin working on this task.
                   </div>
@@ -771,7 +821,7 @@
                 <section x-show="!editingTask">
                   <div class="flex items-center justify-between mb-1">
                     <h3 class="section-title mb-0">Description</h3>
-                    <button type="button" @click="startEditing()" class="text-xs font-medium text-zinc-500 hover:text-zinc-800">Edit</button>
+                    <button type="button" @click="startEditing()" class="text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">Edit</button>
                   </div>
                   <div class="md-body mt-1" x-show="detail.description" x-html="md(detail.description)"></div>
                   <p x-show="!detail.description" x-cloak class="mt-1 text-sm italic text-zinc-400">No description.</p>
@@ -784,7 +834,7 @@
                             placeholder="Last run: …&#10;Next: …"
                             class="field w-full font-mono text-xs leading-relaxed"></textarea>
                   <div class="mt-1.5 flex items-center justify-end gap-2">
-                    <span x-show="notesDirty" x-cloak class="text-[11px] text-amber-600">Unsaved changes</span>
+                    <span x-show="notesDirty" x-cloak class="text-[11px] text-amber-600 dark:text-amber-400">Unsaved changes</span>
                     <button type="button" @click="saveNotes()" :disabled="savingNotes || !notesDirty"
                             class="btn-primary" x-text="savingNotes ? 'Saving…' : 'Save notes'"></button>
                   </div>
@@ -796,7 +846,7 @@
                      x-text="'(' + acDoneCount() + '/' + (detail ? detail.acceptance_criteria.length : 0) + ')'"></span></h3>
                   <ul class="flex flex-col gap-1.5">
                     <template x-for="ac in detail.acceptance_criteria" :key="ac.seq">
-                      <li class="rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm transition">
+                       <li class="rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm transition dark:border-zinc-700 dark:bg-zinc-800">
                         <!-- view mode: the whole row (checkbox + text) is one tappable label -->
                         <div x-show="editingAcSeq !== ac.seq" class="flex items-start gap-2.5">
                           <label class="tap-target flex min-w-0 flex-1 cursor-pointer items-start gap-2.5">
@@ -804,28 +854,28 @@
                                    class="mt-0.5 h-4 w-4 rounded border-zinc-300 accent-emerald-600 shrink-0"
                                    :aria-label="'Mark done: ' + ac.text" />
                             <span class="min-w-0 flex-1">
-                              <p class="break-words text-sm" :class="ac.done ? 'text-zinc-400 line-through' : 'text-zinc-800'"
-                                 x-text="ac.text"></p>
-                              <template x-if="ac.done && ac.completed_by">
-                                <p class="mt-0.5 text-[11px] text-emerald-700" x-text="completedLabel(ac)"></p>
-                              </template>
+                               <p class="break-words text-sm" :class="ac.done ? 'text-zinc-400 line-through dark:text-zinc-500' : 'text-zinc-800 dark:text-zinc-200'"
+                                  x-text="ac.text"></p>
+                               <template x-if="ac.done && ac.completed_by">
+                                 <p class="mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-400" x-text="completedLabel(ac)"></p>
+                               </template>
                               <p x-show="ac.note" x-cloak class="mt-0.5 break-words text-[11px] italic text-zinc-500"
                                  x-text="ac.note"></p>
                             </span>
                           </label>
                           <div class="flex items-center gap-1 shrink-0">
-                            <button type="button" @click="startEditingAc(ac)"
-                                    :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0"
-                                    class="rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 font-medium"
-                                    title="Edit criterion" aria-label="Edit criterion">
-                              Edit
-                            </button>
-                            <button type="button" @click="deleteAc(ac.seq)"
-                                    :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0"
-                                    class="rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-red-600 font-medium"
-                                    title="Delete criterion" :aria-label="'Delete criterion ' + ac.seq">
-                              ✕
-                            </button>
+                             <button type="button" @click="startEditingAc(ac)"
+                                     :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0"
+                                     class="rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 font-medium dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+                                     title="Edit criterion" aria-label="Edit criterion">
+                               Edit
+                             </button>
+                             <button type="button" @click="deleteAc(ac.seq)"
+                                     :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0"
+                                     class="rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-red-600 font-medium dark:hover:bg-zinc-700 dark:hover:text-red-400"
+                                     title="Delete criterion" :aria-label="'Delete criterion ' + ac.seq">
+                               ✕
+                             </button>
                           </div>
                         </div>
 
@@ -870,20 +920,20 @@
                   <!-- load older comments button -->
                   <div x-show="hasMoreOlderComments()" class="mb-2">
                     <button type="button" @click="loadOlderComments()" :disabled="loadingOlderComments"
-                            class="w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-50">
+                            class="w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-zinc-100">
                       <span x-text="loadingOlderComments ? 'Loading older comments…' : 'Load older comments (' + olderCommentsRemaining() + ' remaining)'"></span>
                     </button>
                   </div>
 
                   <div class="flex flex-col gap-2">
                     <template x-for="c in detail.comments" :key="c.id">
-                      <article class="rounded-lg border border-zinc-200 bg-white p-3 shadow-sm">
-                        <header class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+                      <article class="rounded-lg border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-700 dark:bg-zinc-800">
+                        <header class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
                           <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
                                 :class="commentKindClass(c.kind)" x-text="c.kind"></span>
-                          <b class="text-zinc-700" x-text="c.actor.name"></b>
+                          <b class="text-zinc-700 dark:text-zinc-200" x-text="c.actor.name"></b>
                           <template x-if="c.actor.type === 'agent'">
-                            <span class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500">agent</span>
+                            <span class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-700 dark:text-zinc-300">agent</span>
                           </template>
                           <time class="ml-auto" :title="c.created_at" x-text="relTime(c.created_at)"></time>
                         </header>
@@ -894,7 +944,7 @@
                        class="text-sm italic text-zinc-400">No comments yet.</p>
                   </div>
 
-                  <form @submit.prevent="postComment()" class="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                  <form @submit.prevent="postComment()" class="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800">
                     <div class="flex items-center gap-2">
                       <select x-model="commentForm.kind" class="field w-auto text-xs">
                         <template x-for="k in ['progress', 'question', 'decision', 'handoff', 'note']" :key="k">
@@ -917,21 +967,21 @@
                   <h3 class="section-title">Artifacts</h3>
                   <ul class="flex flex-col gap-1.5">
                     <template x-for="a in detail.artifacts" :key="a.id">
-                      <li class="rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm">
-                        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+                      <li class="rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm dark:border-zinc-700 dark:bg-zinc-800">
+                        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
                           <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
                                 :class="artifactKindClass(a.kind)" x-text="a.kind"></span>
                           <template x-if="isWebHref(a.ref)">
                             <a :href="a.ref" target="_blank" rel="noreferrer noopener"
-                               class="break-all font-mono text-xs text-sky-700 underline decoration-sky-300 hover:decoration-sky-500"
+                               class="break-all font-mono text-xs text-sky-700 underline decoration-sky-300 hover:decoration-sky-500 dark:text-sky-400 dark:decoration-sky-700"
                                x-text="a.ref"></a>
                           </template>
-                          <code x-show="!isWebHref(a.ref)" class="break-all rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs text-zinc-700"
+                          <code x-show="!isWebHref(a.ref)" class="break-all rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300"
                                 x-text="a.ref"></code>
                           <span class="ml-auto"><span x-text="actorLabel(a.actor)"></span>
                             <time class="text-zinc-400" :title="a.created_at" x-text="relTime(a.created_at)"></time></span>
                         </div>
-                        <p x-show="a.summary" x-cloak class="mt-1 text-xs text-zinc-600" x-text="a.summary"></p>
+                        <p x-show="a.summary" x-cloak class="mt-1 text-xs text-zinc-600 dark:text-zinc-400" x-text="a.summary"></p>
                       </li>
                     </template>
                   </ul>
@@ -940,8 +990,8 @@
 
                   <button type="button" @click="artifactForm.open = !artifactForm.open"
                           class="btn-ghost mt-2" x-text="artifactForm.open ? 'Cancel' : '+ Attach artifact'"></button>
-                  <form x-show="artifactForm.open" x-cloak @submit.prevent="attachArtifact()"
-                        class="mt-2 flex flex-col gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                      <form x-show="artifactForm.open" x-cloak @submit.prevent="attachArtifact()"
+                            class="mt-2 flex flex-col gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800">
                     <div class="flex flex-wrap gap-2">
                       <select x-model="artifactForm.kind" class="field w-auto text-xs">
                         <template x-for="k in ['url', 'log', 'screenshot', 'command-output', 'trace', 'other']" :key="k">
@@ -965,16 +1015,16 @@
                   <template x-if="relationRows().length > 0">
                     <ul class="flex flex-col gap-1.5 mb-3">
                       <template x-for="r in relationRows()" :key="r.key">
-                        <li class="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm">
+                        <li class="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm dark:border-zinc-700 dark:bg-zinc-800">
                           <div class="flex items-center gap-2 min-w-0 truncate">
-                            <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600 shrink-0"
+                            <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600 shrink-0 dark:bg-zinc-700 dark:text-zinc-300"
                                   x-text="r.label"></span>
                             <button type="button" @click="openTask(r.otherId)"
                                     class="min-w-0 truncate underline decoration-zinc-300 hover:decoration-zinc-500 text-left"
                                     :title="r.title" x-text="r.title"></button>
                           </div>
                           <button type="button" @click="removeRelation(r.raw)"
-                                  class="text-zinc-400 hover:text-red-600 text-xs px-1.5 py-0.5 rounded hover:bg-zinc-100 shrink-0 font-medium"
+                                  class="text-zinc-400 hover:text-red-600 text-xs px-1.5 py-0.5 rounded hover:bg-zinc-100 shrink-0 font-medium dark:hover:text-red-400 dark:hover:bg-zinc-700"
                                   title="Remove relation" aria-label="Remove relation">
                             ✕
                           </button>
@@ -987,8 +1037,8 @@
                   </template>
 
                   <!-- add relation form -->
-                  <form @submit.prevent="addRelation()" class="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-zinc-50/70 p-2.5 text-xs">
-                    <div class="font-medium text-zinc-700">Add relation</div>
+                  <form @submit.prevent="addRelation()" class="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-zinc-50/70 p-2.5 text-xs dark:border-zinc-700 dark:bg-zinc-800/60">
+                    <div class="font-medium text-zinc-700 dark:text-zinc-300">Add relation</div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div>
                         <label class="block text-[11px] font-medium text-zinc-500 mb-1">Kind</label>
@@ -1027,8 +1077,8 @@
                   <h3 class="section-title">Activity</h3>
                   <ul class="text-xs text-zinc-500">
                     <template x-for="e in detail.events.slice(0, 12)" :key="e.id">
-                      <li class="flex items-center gap-2 border-b border-zinc-100 py-1.5 last:border-0">
-                        <code class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px]" x-text="e.kind"></code>
+                      <li class="flex items-center gap-2 border-b border-zinc-100 dark:border-zinc-800 py-1.5 last:border-0">
+                        <code class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] dark:bg-zinc-800" x-text="e.kind"></code>
                         <span class="truncate" x-text="actorLabel(e.actor)"></span>
                         <time class="ml-auto shrink-0" :title="e.at" x-text="relTime(e.at)"></time>
                       </li>

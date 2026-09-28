@@ -46,8 +46,27 @@ import {
 const LS_ACTOR = "crowban.actor";
 const LS_PROJECT = "crowban.project";
 const LS_SORT = "crowban.sort";
+const LS_THEME = "crowban.theme";
 const POLL_MS = 15_000;
 const MD_CACHE_MAX = 500;
+
+// --------------------------------------------------------------------------- theme
+/** UI theme choice. "system" (default) follows the OS prefers-color-scheme. */
+export type ThemeMode = "light" | "dark" | "system";
+
+function isThemeMode(v: unknown): v is ThemeMode {
+  return v === "light" || v === "dark" || v === "system";
+}
+
+/** Read the persisted theme choice; anything malformed falls back to system. */
+function readStoredTheme(): ThemeMode {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(LS_THEME) : null;
+    return isThemeMode(raw) ? raw : "system";
+  } catch {
+    return "system";
+  }
+}
 
 // ---------------------------------------------------------------- client-side sort
 /** Sort criteria for the board columns. "" = canonical server order (no sort). */
@@ -171,6 +190,38 @@ export function crowbanApp() {
 
     actor(): ActorInput {
       return { name: this.actorName.trim() || "human", type: "human" };
+    },
+
+    // ------------------------------------------------------------------- theme
+    /** Persisted UI theme; applied by toggling `.dark` on <html>. */
+    theme: readStoredTheme(),
+    _themeMq: (typeof window !== "undefined"
+      ? window.matchMedia("(prefers-color-scheme: dark)")
+      : null) as MediaQueryList | null,
+
+    /** Whether the resolved theme is dark right now. */
+    effectiveDark(): boolean {
+      if (this.theme === "light") return false;
+      if (this.theme === "dark") return true;
+      return !!this._themeMq?.matches;
+    },
+
+    setTheme(mode: ThemeMode): void {
+      this.theme = mode;
+      try {
+        localStorage.setItem(LS_THEME, mode);
+      } catch {
+        /* private mode — non-fatal */
+      }
+      this.applyTheme();
+    },
+
+    /** Re-sync the `.dark` class on <html> with the resolved theme. The OS-
+     *  preference listener (wired in init) only re-applies while in system mode,
+     *  so explicit light/dark stays pinned. */
+    applyTheme(): void {
+      if (typeof document === "undefined") return;
+      document.documentElement.classList.toggle("dark", this.effectiveDark());
     },
 
     // ------------------------------------------------------------------ toasts
@@ -1900,7 +1951,12 @@ export function crowbanApp() {
         window.addEventListener("beforeunload", () => {
           this.disconnectSse(true);
         });
+        // Track live OS preference changes — only relevant while in system mode.
+        this._themeMq?.addEventListener("change", () => {
+          if (this.theme === "system") this.applyTheme();
+        });
       }
+      this.applyTheme();
       await this.loadProjects();
       const known = this.projects.some((p) => p.id === this.selectedProjectId);
       if (!known || !this.selectedProjectId) {

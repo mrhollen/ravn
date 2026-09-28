@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+/* Class-based dark mode: `.dark` on <html>, set by the pre-paint bootstrap
+   script in index.html and kept in sync by Alpine's theme toggle. Tailwind v4
+   defaults to a media-query `dark:` variant, so opt into class-driven here. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Native form controls (selects, date pickers, scrollbars) follow the theme. */
+html {
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
+}
+
 /* Alpine: hide [x-cloak] elements until the app boots (prevents attribute flash). */
 [x-cloak] {
   display: none !important;
@@ -9,15 +22,15 @@
 
 @layer components {
   .btn-primary {
-    @apply rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white;
   }
 
   .btn-ghost {
-    @apply rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-transparent dark:text-zinc-300 dark:hover:bg-zinc-800;
   }
 
   .field {
-    @apply w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm shadow-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400;
+    @apply w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm shadow-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-500;
   }
 
   .section-title {
@@ -26,7 +39,7 @@
 
   /* Rendered markdown (descriptions, notes, comments). */
   .md-body {
-    @apply text-sm leading-relaxed text-zinc-700;
+    @apply text-sm leading-relaxed text-zinc-700 dark:text-zinc-300;
   }
   .md-body p {
     @apply my-1.5;
@@ -35,7 +48,7 @@
   .md-body h2,
   .md-body h3,
   .md-body h4 {
-    @apply mb-1 mt-3 font-semibold text-zinc-900 first:mt-0;
+    @apply mb-1 mt-3 font-semibold text-zinc-900 first:mt-0 dark:text-zinc-100;
   }
   .md-body ul {
     @apply my-1.5 list-disc pl-5;
@@ -44,29 +57,29 @@
     @apply my-1.5 list-decimal pl-5;
   }
   .md-body code {
-    @apply rounded bg-zinc-100 px-1 py-0.5 font-mono text-[0.85em] text-zinc-800;
+    @apply rounded bg-zinc-100 px-1 py-0.5 font-mono text-[0.85em] text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200;
   }
   .md-body pre {
-    @apply my-2 overflow-x-auto rounded-lg bg-zinc-900 p-3 text-xs leading-relaxed text-zinc-100;
+    @apply my-2 overflow-x-auto rounded-lg bg-zinc-900 p-3 text-xs leading-relaxed text-zinc-100 dark:border dark:border-zinc-700;
   }
   .md-body pre code {
     @apply bg-transparent p-0 text-inherit;
   }
   .md-body a {
-    @apply text-sky-700 underline decoration-sky-300 hover:decoration-sky-500;
+    @apply text-sky-700 underline decoration-sky-300 hover:decoration-sky-500 dark:text-sky-400 dark:decoration-sky-700;
   }
   .md-body blockquote {
-    @apply my-1.5 border-l-2 border-zinc-300 pl-3 italic text-zinc-500;
+    @apply my-1.5 border-l-2 border-zinc-300 pl-3 italic text-zinc-500 dark:border-zinc-600 dark:text-zinc-400;
   }
   .md-body table {
     @apply my-2 w-full border-collapse text-xs;
   }
   .md-body th,
   .md-body td {
-    @apply border border-zinc-200 px-2 py-1 text-left;
+    @apply border border-zinc-200 px-2 py-1 text-left dark:border-zinc-700;
   }
   .md-body hr {
-    @apply my-3 border-zinc-200;
+    @apply my-3 border-zinc-200 dark:border-zinc-800;
   }
 }
 

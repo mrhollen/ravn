@@ -87,12 +87,12 @@ export function claimHint(t: Pick<TaskSummary, "claimed_by" | "claim_expires_at"
 
 /** Priority badge classes — p0 (red/urgent) through p5 (zinc/trivial). */
 const PRIORITY_CLASSES = [
-  "bg-red-100 text-red-700 ring-red-200",
-  "bg-orange-100 text-orange-700 ring-orange-200",
-  "bg-amber-100 text-amber-800 ring-amber-200",
-  "bg-lime-100 text-lime-800 ring-lime-200",
-  "bg-sky-100 text-sky-700 ring-sky-200",
-  "bg-zinc-100 text-zinc-600 ring-zinc-300",
+  "bg-red-100 text-red-700 ring-red-200 dark:bg-red-950 dark:text-red-300 dark:ring-red-800",
+  "bg-orange-100 text-orange-700 ring-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:ring-orange-800",
+  "bg-amber-100 text-amber-800 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800",
+  "bg-lime-100 text-lime-800 ring-lime-200 dark:bg-lime-950 dark:text-lime-300 dark:ring-lime-800",
+  "bg-sky-100 text-sky-700 ring-sky-200 dark:bg-sky-950 dark:text-sky-300 dark:ring-sky-800",
+  "bg-zinc-100 text-zinc-600 ring-zinc-300 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700",
 ];
 
 export function priorityClass(p: number): string {
@@ -108,28 +108,28 @@ export function priorityName(p: number): string {
 }
 
 const COMMENT_KIND_CLASSES: Record<string, string> = {
-  progress: "bg-sky-100 text-sky-700",
-  question: "bg-violet-100 text-violet-700",
-  decision: "bg-emerald-100 text-emerald-800",
-  handoff: "bg-amber-100 text-amber-800",
-  note: "bg-zinc-100 text-zinc-600",
+  progress: "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  question: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
+  decision: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+  handoff: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  note: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
 };
 
 export function commentKindClass(kind: string): string {
-  return COMMENT_KIND_CLASSES[kind] ?? "bg-zinc-100 text-zinc-600";
+  return COMMENT_KIND_CLASSES[kind] ?? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300";
 }
 
 const ARTIFACT_KIND_CLASSES: Record<string, string> = {
-  url: "bg-sky-100 text-sky-700",
-  log: "bg-zinc-100 text-zinc-600",
-  screenshot: "bg-pink-100 text-pink-700",
-  "command-output": "bg-emerald-100 text-emerald-800",
-  trace: "bg-indigo-100 text-indigo-700",
-  other: "bg-zinc-100 text-zinc-600",
+  url: "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  log: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+  screenshot: "bg-pink-100 text-pink-700 dark:bg-pink-950 dark:text-pink-300",
+  "command-output": "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+  trace: "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
+  other: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
 };
 
 export function artifactKindClass(kind: string): string {
-  return ARTIFACT_KIND_CLASSES[kind] ?? "bg-zinc-100 text-zinc-600";
+  return ARTIFACT_KIND_CLASSES[kind] ?? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300";
 }
 
 /** Truncated ULID for display ("01J3ZK8W…"). */
