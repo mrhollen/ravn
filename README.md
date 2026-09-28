@@ -19,13 +19,17 @@ crowban is an MCP-first KanBan tool where AI coding agents are the primary users
 - **Artifacts**: Typed evidence links (log / screenshot / command-output / trace / url / other) attached to tasks.
 - **Relations**: Parent/child, blocked-by, duplicate-of, related edges; computed "blocked" flag; duplicate warnings on create.
 - **Optimistic versioning**: Version-guarded writes with full activity log on every mutation.
+- **Realtime events**: Per-project SSE streams; every mutation emits a typed event (the UI updates live, with a 15s poll fallback).
+- **Optional token auth**: `CROWBAN_TOKEN` gates all `/api/v1/*` routes when set (`Authorization: Bearer …` or `?token=…` for SSE clients); off by default.
+- **Observability**: `/healthz` liveness + in-memory metrics (Prometheus text or JSON) at `/metrics`.
 - **Agent-first reads**: Filtered list_tasks (project/status/assignee/unblocked/search/date-range) with canonical sort and pagination; get_task returns one-call resume payload.
-- **Minimal web UI**: Board columns by status plus task detail (notes, ACs, comments, artifacts).
-- **MCP tool surface**: 14 tools for agents to interact with the system.
+- **Minimal web UI**: Board columns by status plus task detail (notes, ACs, comments, artifacts), project settings, relations editor, and drag-and-drop status moves.
+- **OpenCode dispatch**: Start an autonomous agent session per task via `POST /tasks/{id}/opencode/start` or the board launcher.
+- **MCP tool surface**: 14 tools plus onboarding prompts and read-only task/project resources for agents to interact with the system.
 
 ## Architecture
 
-- **Onion layering**: domain (stdlib only) → application (ports defined here) → infrastructure (SQLite driver, ULID) → api (REST adapter) → mcp (MCP adapter).
+- **Onion layering**: domain (stdlib only) → application (ports defined here) → infrastructure (SQLite driver, ULID) → interface/http (REST adapter) → mcp (MCP adapter).
 - **Pure-Go SQLite**: No CGO via modernc.org/sqlite; fully static binaries with CGO_ENABLED=0.
 - **MCP (dual transport)**: Stateless Streamable-HTTP via mark3labs/mcp-go v1.x over stdlib net/http (`/mcp`), plus legacy SSE (`/sse` + `/message`) with session fallback for pre-streamable clients.
 - **Frontend**: Vite + TypeScript + Tailwind CSS v4 + Alpine.js, built at image-build time and served by the Go binary.
@@ -69,7 +73,7 @@ CROWBAN_API_URL=http://localhost:3311 ./bin/crowban-mcp -addr=:9311 &
 
 `-addr`, `-data`, `-token`, `-static` are the server flags; the MCP binary takes `-addr` plus env `CROWBAN_API_URL` (where the server lives), `CROWBAN_AGENT_NAME` (fallback actor name for calls that omit `actor`), and optional `CROWBAN_TOKEN` (forwarded upstream as a Bearer token). Verify with `curl http://localhost:3311/healthz` and `curl http://localhost:9311/healthz`.
 
-**Optional auth.** Set `CROWBAN_TOKEN` in your environment or `.env`; the MCP container forwards it on every upstream call. Auth enforcement on the server itself is a planned addition (see [docs/ROADMAP.md](docs/ROADMAP.md)) — for now the token is accepted but not yet required.
+**Optional auth.** Set `CROWBAN_TOKEN` in your environment or `.env` to enable shared-token auth: the server then requires it on every `/api/v1/*` route — `Authorization: Bearer <token>` or, for SSE/EventSource clients that cannot set headers, `?token=<token>` — answering `401` when absent or mismatched. `/healthz` and the web UI stay open either way. The MCP container forwards the same token on every upstream call, so agent tools keep working with no extra client config.
 
 ## MCP client config
 
@@ -91,7 +95,7 @@ An MCP client would point at the server over HTTP like this:
 }
 ```
 
-*Illustrative example — omit `authentication` entirely while auth enforcement is not yet in place; adjust to your client's format.*
+*Illustrative example — omit `authentication` when you run without `CROWBAN_TOKEN`; adjust to your client's format.*
 
 ## Documentation
 

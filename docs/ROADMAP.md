@@ -38,17 +38,27 @@ All Tier 1 items are built, tested, and verified end-to-end (live E2E smoke: bot
 - ✅ **REST API + MCP server**: Full HTTP contract ([API.md](API.md)) and all 14 MCP tools over stateless Streamable-HTTP ([MCP.md](MCP.md)). (`bd9ba62`, `d19799b`, `e0aca8b`)
 - ✅ **Docker-first deployment**: Multi-stage build, compose with DB volume + healthchecks, smoke script. (`74b9dc2`)
 
-**Explicitly ALLOWED in MVP**: Marking a task `done` is allowed even if acceptance criteria are unchecked or no artifact attached (Definition-of-Done *enforcement* is Tier 2). Auth/token is OPTIONAL for local dev (accepted but not yet enforced — see below).
+**Explicitly ALLOWED in MVP**: Marking a task `done` is allowed even if acceptance criteria are unchecked or no artifact attached (Definition-of-Done *enforcement* is Tier 2). Token auth (`CROWBAN_TOKEN`) is OPTIONAL for local dev: off by default, and when set the server enforces it on all `/api/v1/*` routes with `401`.
 
-### Shipped boundary — what the MVP does NOT include (deferred)
+### Post-MVP waves — shipped after the initial MVP
 
-- **Drag-drop UI** — status changes in the web board use controls (and the API), not column drag-and-drop.
-- **Realtime updates / websockets** — the UI refreshes on interaction; there is no push channel.
-- **Auth enforcement in production** — `CROWBAN_TOKEN` is accepted and forwarded by the MCP layer but the server does not yet 401 on missing tokens (Tier 2, "Agent identity & auth").
-- **Project edit in UI** — `PUT /projects/{id}` exists in the API; the web UI creates projects but does not rename/edit them.
-- **AC management in UI** — the API supports post-create checklist editing (append via `POST …/acceptance-criteria`, reword via `PATCH` with `text`, remove via `DELETE`; seqs stay monotonic), but the web board still only renders + toggles criteria; add/edit/remove controls are tracked separately.
-- **Relations & claims in UI** — relation edges and claim/release/heartbeat are API + MCP tools; the web board does not surface them.
-- **MCP prompts/resources** — tools only (Tier 2).
+- ✅ **Auth token enforcement**: Shared `CROWBAN_TOKEN` gates every `/api/v1/*` route when set (`Authorization: Bearer …`, or `?token=…` for SSE clients that cannot set headers); the web UI sends it; off by default. (`05a8bed`, `0149cb4`)
+- ✅ **Drag-and-drop board**: Column drag-and-drop status moves with optimistic move + 409 re-read/re-apply and rollback. (`05a8bed`)
+- ✅ **Realtime SSE events**: Per-project event stream (15 canonical kinds); the UI updates board, detail, counts and comment threads live, with a 15s poll fallback. (`028a0d0`, `bce6dd5`, `7b4c792`)
+- ✅ **Task edit + project settings in UI**: Edit title/description/priority/due date/assignee; project settings modal (name, description, OpenCode server/directory/model); board filters. (`028a0d0`, `e3d2079`)
+- ✅ **AC management in UI**: Append, inline reword, and delete criteria — matching the API endpoints exactly. (`e439c09`)
+- ✅ **Relations & claims visibility in UI**: Relations editor (create/remove edges with 409-surface); claims rendered read-only — agents manage leases via MCP by design. (`01a1518`)
+- ✅ **Client-side column sorting**: By last modified, created, due date, priority, or title with persisted direction. (`3a4757e`)
+- ✅ **Observability**: `/metrics` and `/api/v1/metrics` (Prometheus text or JSON) and a configurable server log level. (`ed7489d`)
+- ✅ **OpenCode dispatch**: `POST /tasks/{id}/opencode/start` creates an autonomous session, claims the task, attaches the session URL as an artifact; project-level server/directory/model settings plus a board launcher button. (`8dd1801`, `5dbd18a`, `cbef29e`, `c0a97e3`)
+- ✅ **MCP prompts**: Onboarding prompts (`triage_open_tasks`, `next_task`). (`05a8bed`)
+- ✅ **MCP resources**: Read-only `crowban://task/{id}` and `crowban://project/{id}` resources for resume payloads and project summaries. (`028a0d0`)
+
+### Shipped boundary — still deferred
+
+- **Definition-of-Done enforcement** — marking a task `done` stays allowed with unchecked ACs or no artifacts (Tier 2).
+- **Claim operations in the UI** — claims are displayed read-only; claim/release/heartbeat remain API + MCP only, deliberately.
+- **Per-agent identity & rate limits** — auth is one shared token for the whole stack; a registered agent table with per-agent tokens/audit lands in Tier 2.
 
 Everything else deferred is listed under Tier 2 / Tier 3 below.
 
@@ -59,9 +69,8 @@ Everything else deferred is listed under Tier 2 / Tier 3 below.
 - **Explicit policies (Kanban practice)**: Custom statuses/workflow per project, WIP limits per column, Definition-of-Done *enforcement* (block status=done until all ACs checked / ≥1 artifact attached).
 - **Labels/tags**: Filtering and full-text search (SQLite FTS5 over titles/descriptions/notes/comments) for richer discovery.
 - **Structured decision records (ADR-lite)**: Options considered, decision, rationale — searchable across tasks/projects; links from task to decision.
-- **Agent identity & auth**: Registered agent table + API tokens (attribution integrity, per-agent audit/rate limits); optional outbound webhooks (e.g., question comment → Gotify/push so humans are pinged).
+- **Agent identity & advanced auth**: Registered agent table + per-agent tokens with attribution integrity and audit/rate limits on top of the shipped shared-token gating; optional outbound webhooks (e.g., question comment → Gotify/push so humans are pinged).
 - **Artifact file uploads**: Server-side storage, size caps, UI preview beyond URL references.
-- **MCP prompts/resources**: Onboarding prompt ("how agents should use crowban": claim → work → heartbeat → notes often → complete with evidence) and read-only task resources for richer context delivery.
 - **Stall/health surfacing**: Stale filter on list_tasks (doing beyond N hours without activity), per-agent workload summaries.
 
 ## Tier 3 — Later / nice-to-haves

@@ -1,6 +1,6 @@
 # crowban — MCP-first Kanban: feature & architecture analysis (research notes)
 
-Researcher: opencode. Status: final v1 (2026-09-25). Repo was greenfield at time of writing (README/LICENSE only).
+Researcher: opencode. Status: final v1 (2026-09-25). Repo was greenfield at time of writing (README/LICENSE only). Pre-implementation snapshot — where it diverges from what shipped, the ADR section of `docs/ARCHITECTURE.md` and `docs/ROADMAP.md` are current.
 
 ## Problem framing
 

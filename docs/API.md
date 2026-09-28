@@ -7,12 +7,16 @@ and the code ever disagree, the tests win — but changes to either must update
 this file in the same commit.
 
 - **Base path:** `/api/v1` (all routes below are relative to it unless noted).
-- **Transport:** JSON over HTTP only (`Content-Type: application/json`).
-  Timestamps are RFC3339 UTC (`2026-09-26T15:48:00Z`). IDs are ULID strings.
-- **Auth:** none by default — crowban is a single-tenant, LAN-local service in
-  the MVP tier. Token auth (`Authorization: Bearer …`) is a planned later
-  addition; when it lands, `CROWBAN_TOKEN` will gate every `/api/v1/*` route
-  with `401` on absence and `/healthz` stays open. Until then send nothing.
+- **Transport:** JSON over HTTP only (`Content-Type: application/json`) except
+  the SSE event streams, which are `text/event-stream`. Timestamps are RFC3339
+  UTC (`2026-09-26T15:48:00Z`). IDs are ULID strings.
+- **Auth:** off by default — crowban is a single-tenant, LAN-local service. When
+  the server starts with `CROWBAN_TOKEN` set (env or `-token` flag), every route
+  under `/api/v1/*` (the SSE event streams included) requires the token, sent as
+  `Authorization: Bearer <token>` **or** `?token=<token>` on the query string
+  (the query form exists for EventSource/SSE clients that cannot set headers).
+  Absent or mismatched → `401` (below); unset token → nothing required.
+  `/healthz`, root-level `/metrics`, and the static UI are never gated.
 
 ## Actor convention
 
@@ -50,6 +54,15 @@ Emitted for: malformed JSON (`"malformed JSON body: …"`), missing path id,
 bad actor, unknown kind/status/type values, out-of-range priority or limit,
 non-RFC3339 timestamps, negative claim ttl, self-relations, cross-project
 relation pairs, and any other use-case validation failure. No `resource`/`id`.
+
+### 401 unauthorized
+
+Only when the server has `CROWBAN_TOKEN` configured (see Auth above); returned
+by any `/api/v1/*` route on an absent or mismatched token:
+
+```json
+{ "error": "unauthorized", "message": "missing or invalid auth token" }
+```
 
 ### 404 not found
 
@@ -187,6 +200,7 @@ plus:
   "blockers": [ { "id": "…", "title": "Fix DB migration", "status": "doing" } ],   // [] when none — never null
   "claimed_at": "2026-09-26T15:48:03Z",          // omitted while unclaimed (also claim_ttl_seconds)
   "claim_ttl_seconds": 900,
+  "completed_at": "2026-09-26T15:55:00Z",        // set when the task moves to done; cleared again if it leaves done
   "acceptance_criteria": [ /* ac rows, [] when none — never null */ ],
   "comments":          [ /* comment rows, newest first (tail) */ ],
   "artifacts":         [ /* artifact rows, oldest first */ ],
@@ -211,11 +225,15 @@ extras (the web frontend uses them directly).
 | Method & path | Purpose | MCP tool |
 |---|---|---|
 | `GET /healthz`                        | liveness + DB ping (unauthenticated, outside `/api/v1`) | — (container healthcheck) |
+| `GET  /metrics`                       | in-memory metrics, Prometheus text or JSON (outside `/api/v1`, never gated) | — (ops) |
+| `GET  /api/v1/metrics`                | same metrics under the API prefix (auth-gated when a token is set)          | — (ops) |
 | `GET  /projects`                      | projects + per-status open task counts                  | `list_projects` |
 | `POST /projects`                      | create project → 201                                     | `create_project` |
 | `GET  /projects/{id}`                 | project detail (UI)                                      | — |
-| `PUT  /projects/{id}`                 | rename/description edit (UI)                             | — |
+| `PUT  /projects/{id}`                 | rename/description/opencode-config edit (UI)             | — |
 | `GET  /projects/{id}/board`           | whole-project board snapshot (UI)                        | — |
+| `GET  /projects/{id}/events`          | realtime SSE event stream scoped to the project (UI)     | — |
+| `GET  /events?project_id=…`           | same stream, query-scoped; `project_id` required (else `400`) | — |
 | `GET  /tasks`                         | filtered, ordered, paged task summaries                  | `list_tasks` |
 | `POST /tasks`                         | create task (+ACs) → 201 with duplicate advisory         | `create_task` |
 | `GET  /tasks/{id}`                    | one-call resume payload                                  | `get_task` |
@@ -230,6 +248,7 @@ extras (the web frontend uses them directly).
 | `PATCH /tasks/{id}/acceptance-criteria/{seq}`     | toggle one AC, or reword it via `text`    | `complete_ac` |
 | `DELETE /tasks/{id}/acceptance-criteria/{seq}`    | remove one AC → 204 (actor required)      | — (UI) |
 | `POST /tasks/{id}/artifacts`          | attach evidence → 201                                    | `attach_artifact` |
+| `POST /tasks/{id}/opencode/start`     | dispatch an autonomous OpenCode session → 200 session id + url (UI/ops) | — |
 | `POST   /tasks/{id}/relations`        | add a relation edge (upsert)                             | `relate_tasks` (add) |
 | `DELETE /tasks/{id}/relations/{other_id}/{kind}` | remove a relation edge                | `relate_tasks` (remove) |
 
@@ -248,6 +267,25 @@ Liveness probe; the MCP container pings it to report upstream health.
 `503 {"status":"degraded","db":"error: …"}` when the DB ping fails. Outside the
 `/api/v1` prefix; never requires auth.
 
+### GET /metrics · GET /api/v1/metrics — observability
+
+In-memory request and task counters, no external dependencies. The format is
+chosen by `?format=json|prometheus|text` or the `Accept` header; with neither,
+`/api/v1/metrics` defaults to JSON and root `/metrics` to Prometheus text
+exposition (`text/plain; version=0.0.4`).
+
+- Root `/metrics` lives outside the API prefix — never auth-gated (ops-only,
+  not part of the durable agent contract).
+- `GET /api/v1/metrics` is under the prefix and takes the same `401` gate as
+  everything else when a token is configured.
+
+Series: `http_requests_total`, `http_requests_in_flight`,
+`http_requests_by_status{code}`, `http_requests_by_method{method}`,
+`http_request_duration_seconds_total`, `process_uptime_seconds` (Prometheus) /
+`uptime_seconds` (JSON), plus live DB counts `tasks_by_status{status}` and
+`active_claims` (omitted from JSON when the DB callback is unwired). The JSON
+body is a flat snapshot object with one key per series.
+
 ### GET /projects → `list_projects`
 
 Lists projects, newest-first, with per-status **open** task counts (all three
@@ -260,6 +298,9 @@ statuses always present, zero when empty). Not paged in the MVP.
       "id": "01J3YV2NMB4D9C6K8F0H3L5P7Q",
       "name": "Website Redesign",
       "description": "MVP landing page work",
+      "opencode_server_url": "http://localhost:4444",
+      "opencode_directory": "/home/hollen/Code/crowban",
+      "opencode_model": "llama.cpp/Qwen Medium Long Context",
       "created_at": "2026-09-20T09:00:00Z",
       "updated_at": "2026-09-20T09:00:00Z",
       "task_counts": { "todo": 3, "doing": 1, "done": 5 }
@@ -269,6 +310,10 @@ statuses always present, zero when empty). Not paged in the MVP.
 }
 ```
 
+`description` and the three `opencode_*` fields are **omitted** when unset. The
+`opencode_*` fields configure autonomous session dispatch for this project
+(see `POST /tasks/{id}/opencode/start`).
+
 ### POST /projects → `create_project`
 
 Request: `{ "actor": {"name":"ada"}, "name": "Website Redesign", "description": "MVP landing page work" }`
@@ -277,9 +322,12 @@ Request: `{ "actor": {"name":"ada"}, "name": "Website Redesign", "description": 
 ### GET /projects/{id} (UI) · PUT /projects/{id} (UI)
 
 Get returns the project row; `404 not found` (`resource: "project"`) when
-unknown. Put takes `{ "actor": …, "name"?: …, "description"?: … }` with pointer
-semantics — omitted = unchanged, at least one required (else `400`) — and
-returns `200` with the updated row.
+unknown. Put takes `{ "actor": …, "name"?: …, "description"?: …,
+"opencode_server_url"?: …, "opencode_directory"?: …, "opencode_model"?: … }`
+with pointer semantics — omitted = unchanged, at least one field required (else
+`400`) — and returns `200` with the updated row. The `opencode_*` fields
+configure where/how `POST /tasks/{id}/opencode/start` dispatches sessions for
+this project (empty string clears the value).
 
 ### GET /projects/{id}/board (UI)
 
@@ -299,6 +347,39 @@ inside each column.
 ```
 
 All three columns always present (`[]` when empty). `404` for unknown project.
+
+### GET /projects/{id}/events · GET /events — realtime SSE streams
+
+Both endpoints stream the same project-scoped mutation feed over Server-Sent
+Events (`Content-Type: text/event-stream`; headers `Cache-Control: no-cache`,
+`X-Accel-Buffering: no`). Use whichever scoping is convenient; the web UI uses
+the path form.
+
+- `GET /api/v1/projects/{id}/events` — project from the path. Unknown project →
+  `404 not found` (`resource: "project"`) before the stream opens.
+- `GET /api/v1/events?project_id=…` — project from the query string; a missing
+  or empty `project_id` → `400 invalid input`
+  (`missing required query parameter "project_id"`).
+
+Stream framing (both endpoints): an initial comment line `: connected`, then a
+`: ping` comment every 15 seconds to keep idle streams alive through proxies.
+Each mutation is one SSE event:
+
+```
+id: 01J3ZKQ5M2T8V4X6Y0Z2A4B6C8
+event: status-changed
+data: {"event_id":"…","project_id":"01J3YV2NMB4D9C6K8F0H3L5P7Q","task_id":"01J3ZK8WQ9X7M2P4R6S8T0U2V4","kind":"status-changed","status":"doing","actor":{"type":"agent","name":"runner-2"},"timestamp":"2026-09-26T15:48:03Z"}
+```
+
+The `data` payload omits `project_id`, `task_id`, `status`, and `actor` when
+empty. The canonical event kinds are: `created`, `updated`, `status-changed`,
+`claimed`, `released`, `heartbeat`, `assigned`, `noted`, `commented`,
+`ac-toggled`, `ac-added`, `ac-updated`, `ac-removed`, `artifact-added`,
+`relation-changed` (one event per mutation — the same feed as the task detail's
+`events` tail, live).
+
+SSE clients cannot set headers, so when auth is enabled the token rides on the
+query string: `…/events?project_id=…&token=<CROWBAN_TOKEN>`.
 
 ### GET /tasks → `list_tasks`
 
@@ -563,6 +644,37 @@ keep their seq values — **no renumbering** (gaps stay). Unknown task or seq �
 after trimming (else `400`); `summary` is an optional one-liner. Unknown task →
 `404`. Append-only, one `artifact-added` event, no version bump. `201` fresh
 artifact row (same shape as in the detail payload). Appends are not idempotent.
+
+### POST /tasks/{id}/opencode/start (UI/ops)
+
+Dispatches an autonomous OpenCode session that works the task end-to-end and
+talks back to crowban over MCP. No request body. `200` with:
+
+```json
+{ "session_id": "ses_…", "session_url": "http://localhost:4444/session/ses_…" }
+```
+
+Server-side the handler (1) creates an OpenCode session — agent `build`, title
+`CrowBan: <task title>`, model per the table below; (2) asynchronously dispatch
+a prompt carrying the task's title, description and acceptance-criteria
+checklist plus explicit instructions to use the CrowBan MCP tools; (3) attaches
+a `url` artifact on the task pointing at the session; (4) if the task is
+unclaimed, claims it under `{ "type": "agent", "name": "opencode" }` with a
+3600s TTL. Fire-and-forget: after `200` the session progresses on its own —
+watch it through the task's events/comments or the attached artifact URL.
+
+Each setting resolves project row → env var → default:
+
+| Setting | Project field | Env var | Default |
+|---|---|---|---|
+| OpenCode server base URL | `opencode_server_url` | `OPENCODE_SERVER_URL` | `http://localhost:4444` |
+| Session working directory | `opencode_directory` | `OPENCODE_DIRECTORY` | `/home/hollen/Code/crowban` |
+| Model ref (`providerID/modelID`) | `opencode_model` | `OPENCODE_MODEL` | `llama.cpp/Qwen Medium Long Context` |
+
+Errors: unknown task or project → `404`; malformed model ref (must look like
+`"providerID/modelID"`) or server URL → `400 invalid input`; unreachable
+OpenCode server, non-2xx upstream response, or an unparsable session reply →
+`502 {"error": "opencode_error", "message": "…"}`.
 
 ### POST /tasks/{id}/relations → `relate_tasks` (add)
 

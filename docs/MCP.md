@@ -2,8 +2,8 @@
 
 This is the reference an **MCP client (or the agent behind one)** needs to work
 on a crowban board. The full wire contract lives in [API.md](API.md); this doc
-covers how to connect, the actor convention, and all 14 tools with their exact
-arguments.
+covers how to connect, the actor convention, all 14 tools with their exact
+arguments, plus the workflow prompts and read-only resources.
 
 ## What it is
 
@@ -108,6 +108,29 @@ Notes on relations: a task has **at most one parent** — re-adding the same
 parent is an idempotent no-op, a second *different* parent → 409 parent
 conflict. Edges are child rows (no version bump). The `blocked` flag on
 `get_task` is derived from your outgoing `blocked-by` edges at read time.
+
+## Prompts & resources
+
+Beyond the 14 tools, the server registers two workflow **prompts** and read-only
+**resources** (both show up in your client's prompt/resource listings).
+
+### Prompts
+
+| Prompt | Purpose | Arguments |
+|---|---|---|
+| `triage_open_tasks` | Formats a triage / next-actions summary: in-flight (`doing`) work, unblocked `todo` candidates, and blocked `todo` tasks. | `project_id?` (ULID; omitted = across projects), `limit?` (max tasks inspected per status; default 50, capped at 100) |
+| `next_task` | Finds the highest-priority unblocked task for an assignee or project and generates a ready-to-send agent onboarding prompt. | `project_id?`, `assignee?` (durable assignee name), `actor_name?` (defaults to the `CROWBAN_AGENT_NAME` container default) |
+
+### Resources
+
+| Resource URI | Contents |
+|---|---|
+| `crowban://task/{id}` | The full `get_task` resume payload — version, notes, ACs, comments tail, blockers/relations, artifacts, events — as a resource. |
+| `crowban://project/{id}` | Project summary row with per-status open task counts. |
+
+Resources are addressed by URI (`crowban://task/<ULID>`); an unknown or missing
+task/project id returns an error naming what to fix. They are read-only and
+never mutate state.
 
 ## Example tool calls
 
