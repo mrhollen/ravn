@@ -213,6 +213,32 @@
                       class="btn-ghost py-1 px-2 text-xs text-zinc-500 hover:text-zinc-800">
                 Reset filters
               </button>
+
+              <span class="h-4 w-px bg-zinc-200" aria-hidden="true"></span>
+
+              <label class="flex items-center gap-1.5">
+                <span class="font-medium text-zinc-500">Sort by</span>
+                <select x-model="sortKey" @change="setSort()"
+                        data-testid="sort-key" aria-label="Sort cards by"
+                        class="field py-1 text-xs">
+                  <template x-for="o in SORT_OPTIONS" :key="o.value">
+                    <option :value="o.value" x-text="o.label"></option>
+                  </template>
+                </select>
+              </label>
+
+              <button type="button" @click="toggleSortDir()" :disabled="sortKey === ''"
+                      data-testid="sort-dir"
+                      class="btn-ghost py-1 px-2 text-xs disabled:opacity-40"
+                      :title="'Toggle direction (' + (sortDir === 'asc' ? 'ascending → descending' : 'descending → ascending') + ')'">
+                <span x-text="sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'"></span>
+              </button>
+
+              <button type="button" @click="clearSort()" x-show="sortKey !== ''" x-cloak
+                      data-testid="sort-clear"
+                      class="btn-ghost py-1 px-2 text-xs text-zinc-500 hover:text-zinc-800">
+                Clear sort
+              </button>
             </div>
 
             <!-- columns -->
@@ -228,7 +254,13 @@
                     : 'border-zinc-200 bg-white/70'"
                 >
                   <header class="flex items-center justify-between border-b border-zinc-100 px-3 py-2">
-                    <h2 class="text-sm font-semibold" x-text="col.label"></h2>
+                    <div class="flex min-w-0 items-center gap-2">
+                      <h2 class="text-sm font-semibold" x-text="col.label"></h2>
+                      <span x-show="sortKey !== ''" x-cloak data-testid="sort-indicator"
+                            class="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200"
+                            :title="'Cards sorted by ' + activeSortLabel() + (sortDir === 'asc' ? ' (ascending)' : ' (descending)') + '. Pick “Server order” in the toolbar to reset.'"
+                            x-text="activeSortLabel() + (sortDir === 'asc' ? ' ↑' : ' ↓')"></span>
+                    </div>
                     <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 ring-1 ring-zinc-200"
                           x-text="col.tasks.length"></span>
                   </header>

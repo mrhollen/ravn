@@ -1248,5 +1248,133 @@ test.describe('Web E2E test suite', () => {
       await new Promise<void>((resolve) => mockOpenCodeServer.close(() => resolve()));
     }
   });
+
+  test('sorts column cards by criterion and direction, clears to server order, persists across reload', async ({
+    page,
+  }) => {
+    // -------------------------------------------------------------------------
+    // Step 1: Seed a project with three tasks whose fields discriminate every sort
+    // -------------------------------------------------------------------------
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Sorting Test Project',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    const hourMs = 3600 * 1000;
+    const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+    // >1s apart so RFC3339 timestamps never collide regardless of storage precision
+    const tick = () => new Promise((r) => setTimeout(r, 1100));
+
+    const mkTask = async (body: Record<string, unknown>) => {
+      const res = await fetch(`${serverUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: project.id, priority: 2, actor: { name: 'e2e-seed', type: 'agent' }, ...body }),
+      });
+      expect(res.ok).toBe(true);
+      return (await res.json()).task;
+    };
+
+    const tAlpha = await mkTask({ title: 'Alpha', priority: 2, due_at: iso(48 * hourMs) });
+    await tick();
+    const tBeta = await mkTask({ title: 'Beta', priority: 0, due_at: iso(1 * hourMs) });
+    await tick();
+    const tGamma = await mkTask({ title: 'Gamma', priority: 4 }); // no due date
+    await tick();
+
+    // Touch Gamma so it is the most-recently-updated task (created third AND updated last)
+    const touchRes = await fetch(`${serverUrl}/api/v1/tasks/${tGamma.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actor: { name: 'e2e-seed', type: 'agent' }, version: tGamma.version, description: 'Touched for sort test' }),
+    });
+    expect(touchRes.ok).toBe(true);
+
+    // -------------------------------------------------------------------------
+    // Step 2: Open UI, select project, verify baseline server order (priority DESC)
+    // -------------------------------------------------------------------------
+    await page.goto(serverUrl);
+    const projectSelect = page.locator('select').first();
+    await projectSelect.selectOption(project.id);
+
+    const todoCol = page.locator('section', { has: page.getByRole('heading', { name: 'To Do' }) });
+    await expect(todoCol).toBeVisible();
+    const cardTitles = async () => (await todoCol.locator('h3').allTextContents()).map((t) => t.trim());
+
+    // Canonical server order: priority DESC → Gamma(4), Alpha(2), Beta(0)
+    await expect.poll(cardTitles, { timeout: 10000 }).toEqual(['Gamma', 'Alpha', 'Beta']);
+
+    // Default state: no sort active
+    const sortKeySelect = page.locator('[data-testid="sort-key"]');
+    const sortDirBtn = page.locator('[data-testid="sort-dir"]');
+    const sortClearBtn = page.locator('[data-testid="sort-clear"]');
+    const sortIndicator = page.locator('[data-testid="sort-indicator"]');
+    await expect(sortKeySelect).toHaveValue('');
+    await expect(sortDirBtn).toBeDisabled();
+    await expect(sortClearBtn).not.toBeVisible();
+    await expect(sortIndicator.first()).not.toBeVisible();
+
+    // -------------------------------------------------------------------------
+    // Step 3: Sort by Last Modified — desc default, then toggle to asc
+    // -------------------------------------------------------------------------
+    await sortKeySelect.selectOption('updated_at');
+    await expect(sortDirBtn).toBeEnabled();
+    await expect(sortClearBtn).toBeVisible();
+    await expect(sortIndicator.first()).toBeVisible();
+    await expect(sortIndicator.first()).toContainText('Last Modified ↓');
+
+    // desc: Gamma (touched last) first, then Beta, Alpha
+    await expect.poll(cardTitles).toEqual(['Gamma', 'Beta', 'Alpha']);
+
+    // Toggle direction → asc: Alpha, Beta, Gamma
+    await sortDirBtn.click();
+    await expect(sortDirBtn).toContainText('↑ Ascending');
+    await expect(page.locator('[data-testid="sort-indicator"]').first()).toContainText('Last Modified ↑');
+    await expect.poll(cardTitles).toEqual(['Alpha', 'Beta', 'Gamma']);
+
+    // -------------------------------------------------------------------------
+    // Step 4: Other criteria — Priority asc, Due Date asc (nulls last)
+    // -------------------------------------------------------------------------
+    await sortKeySelect.selectOption('priority');
+    await expect(sortDirBtn).toContainText('↑ Ascending'); // default dir for priority
+    await expect.poll(cardTitles).toEqual(['Beta', 'Alpha', 'Gamma']);
+
+    await sortKeySelect.selectOption('due_at');
+    await expect.poll(cardTitles).toEqual(['Beta', 'Alpha', 'Gamma']); // Gamma (no due) last
+
+    // -------------------------------------------------------------------------
+    // Step 5: Clear sort → canonical server order restored, controls reset
+    // -------------------------------------------------------------------------
+    await sortClearBtn.click();
+    await expect(sortKeySelect).toHaveValue('');
+    await expect(sortDirBtn).toBeDisabled();
+    await expect(sortClearBtn).not.toBeVisible();
+    await expect(sortIndicator.first()).not.toBeVisible();
+    await expect.poll(cardTitles).toEqual(['Gamma', 'Alpha', 'Beta']);
+
+    // -------------------------------------------------------------------------
+    // Step 6: Sort choice persists across a full page reload
+    // -------------------------------------------------------------------------
+    await sortKeySelect.selectOption('created_at');
+    await expect(sortDirBtn).toContainText('↓ Descending'); // default dir for created_at
+    await expect.poll(cardTitles).toEqual(['Gamma', 'Beta', 'Alpha']);
+
+    await page.reload();
+    await expect(page).toHaveTitle('crowban');
+    await expect(projectSelect).toHaveValue(project.id);
+    await expect(sortKeySelect).toHaveValue('created_at');
+    await expect(sortDirBtn).toContainText('↓ Descending');
+    await expect.poll(cardTitles).toEqual(['Gamma', 'Beta', 'Alpha']);
+
+    // Blocked badges & card counts still intact on sorted columns
+    const countBadge = todoCol.locator('header span.rounded-full');
+    await expect(countBadge).toHaveText('3');
+  });
 });
 

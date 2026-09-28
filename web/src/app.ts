@@ -45,8 +45,82 @@ import {
 
 const LS_ACTOR = "crowban.actor";
 const LS_PROJECT = "crowban.project";
+const LS_SORT = "crowban.sort";
 const POLL_MS = 15_000;
 const MD_CACHE_MAX = 500;
+
+// ---------------------------------------------------------------- client-side sort
+/** Sort criteria for the board columns. "" = canonical server order (no sort). */
+export type SortKey = "" | "updated_at" | "created_at" | "due_at" | "priority" | "title";
+export type SortDir = "asc" | "desc";
+
+export const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: "", label: "Server order (default)" },
+  { value: "updated_at", label: "Last Modified" },
+  { value: "created_at", label: "Created At" },
+  { value: "due_at", label: "Due Date" },
+  { value: "priority", label: "Priority" },
+  { value: "title", label: "Title (A→Z)" },
+];
+
+/** Sensible initial direction per criterion, applied when the user picks a new key. */
+const DEFAULT_SORT_DIR: Record<Exclude<SortKey, "">, SortDir> = {
+  updated_at: "desc", // newest first
+  created_at: "desc", // newest first
+  due_at: "asc", // nearest first
+  priority: "asc", // P0 (urgent) first
+  title: "asc", // alphabetical
+};
+
+function isSortKey(v: unknown): v is SortKey {
+  return typeof v === "string" && SORT_OPTIONS.some((o) => o.value === v);
+}
+
+/** Read the persisted sort choice; anything malformed falls back to no sort. */
+function readStoredSort(): { key: SortKey; dir: SortDir } {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(LS_SORT) : null;
+    if (!raw) return { key: "", dir: "desc" };
+    const parsed = JSON.parse(raw) as { key?: unknown; dir?: unknown };
+    const key: SortKey = isSortKey(parsed.key) ? parsed.key : "";
+    const dir: SortDir = parsed.dir === "asc" ? "asc" : "desc";
+    return { key, dir };
+  } catch {
+    return { key: "", dir: "desc" };
+  }
+}
+
+/** Comparator for one criterion + direction. Ties always break by id (ascending)
+ *  so the order is deterministic regardless of direction. */
+function compareTasks(a: TaskSummary, b: TaskSummary, key: SortKey, dir: SortDir): number {
+  let cmp = 0;
+  switch (key) {
+    case "priority":
+      cmp = a.priority - b.priority;
+      break;
+    case "title":
+      cmp = a.title.localeCompare(b.title, undefined, { sensitivity: "base", numeric: true });
+      break;
+    case "due_at": {
+      // No due date sorts last (mirrors the server's nulls-last convention).
+      const da = a.due_at ? Date.parse(a.due_at) : Infinity;
+      const db = b.due_at ? Date.parse(b.due_at) : Infinity;
+      cmp = da === db ? 0 : da < db ? -1 : 1;
+      break;
+    }
+    case "created_at":
+    case "updated_at": {
+      const va = Date.parse(a[key]);
+      const vb = Date.parse(b[key]);
+      cmp = Number.isNaN(va) || Number.isNaN(vb) ? 0 : va - vb;
+      break;
+    }
+    default:
+      return a.id.localeCompare(b.id);
+  }
+  if (cmp === 0) return a.id.localeCompare(b.id);
+  return dir === "asc" ? cmp : -cmp;
+}
 
 const SSE_EVENT_KINDS = [
   "message",
@@ -272,6 +346,46 @@ export function crowbanApp() {
       return this.blockedIds.has(id) || !!this.knownBlocked[id];
     },
 
+    // ------------------------------------------------------ client-side sorting
+    /** Purely cosmetic ordering inside each column; the server order is never
+     *  changed. Persisted so reloads keep the user's choice (like actor name). */
+    sortKey: readStoredSort().key,
+    sortDir: readStoredSort().dir,
+
+    /** Change handler: x-model has already written the raw value into sortKey;
+     *  normalize it and apply the criterion's default direction. */
+    setSort(): void {
+      const k: SortKey = isSortKey(this.sortKey) ? this.sortKey : "";
+      this.sortKey = k;
+      if (k !== "") this.sortDir = DEFAULT_SORT_DIR[k];
+      this.saveSort();
+    },
+
+    toggleSortDir(): void {
+      if (this.sortKey === "") return;
+      this.sortDir = this.sortDir === "asc" ? "desc" : "asc";
+      this.saveSort();
+    },
+
+    clearSort(): void {
+      if (this.sortKey === "") return;
+      this.sortKey = "";
+      this.saveSort();
+    },
+
+    saveSort(): void {
+      try {
+        localStorage.setItem(LS_SORT, JSON.stringify({ key: this.sortKey, dir: this.sortDir }));
+      } catch {
+        /* private mode — non-fatal */
+      }
+    },
+
+    activeSortLabel(): string {
+      const o = SORT_OPTIONS.find((x) => x.value === this.sortKey);
+      return o && o.value !== "" ? o.label : "";
+    },
+
     // ------------------------------------------------------------------ filters
     filterPriority: "" as string,
     filterAssignee: "" as string,
@@ -378,6 +492,12 @@ export function crowbanApp() {
           tasks = tasks.filter(
             (t) => t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q),
           );
+        }
+        // Client-side sort: re-applied on every render, so SSE/poll refreshes
+        // keep the user's ordering without fighting live updates. Copies —
+        // never mutates the board arrays the optimistic-move code owns.
+        if (this.sortKey !== "") {
+          tasks = [...tasks].sort((a, b) => compareTasks(a, b, this.sortKey, this.sortDir));
         }
         return {
           status: s,
@@ -1657,6 +1777,7 @@ export function crowbanApp() {
     },
 
     // ------------------------------------------------------------- template glue
+    SORT_OPTIONS,
     statusLabel,
     priorityClass,
     priorityName,
