@@ -69,3 +69,27 @@
     @apply my-3 border-zinc-200;
   }
 }
+
+/* --- mobile tap targets ------------------------------------------------------
+   44x44px minimum touch-target guideline (WCAG 2.5.8 / Apple HIG) applied on
+   small screens only, so the desktop UI keeps its denser layout. Checkboxes are
+   excluded — their wrapping <label> is the tappable area (see .tap-target). */
+@media (max-width: 767px) {
+  button,
+  select,
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea {
+    min-height: 44px;
+  }
+
+  button {
+    min-width: 44px;
+  }
+
+  /* Clickable non-button controls (live indicator) and label-wrapped
+     checkboxes need an explicit height. */
+  [data-testid="live-indicator"],
+  .tap-target {
+    min-height: 44px;
+  }
+}

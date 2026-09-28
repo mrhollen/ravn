@@ -1151,6 +1151,93 @@ export function crowbanApp() {
       void this.openTask(id);
     },
 
+    // ---------------------------------- touch: swipe-to-status + per-card move menu
+    // Explicit touch alternative to HTML5 drag-and-drop (which never fires on
+    // touch devices). A mostly-horizontal swipe moves the card one column in
+    // that direction; the ⋮ button opens a "Move to" status picker row. Both
+    // funnel into moveTaskStatus(), so 409-rebase + rollback behaviour is shared.
+    showMobileMenu: false,
+    cardMenuTaskId: null as string | null,
+    swipeState: {
+      id: null as string | null,
+      startX: 0,
+      startY: 0,
+      dx: 0,
+      fromStatus: null as Status | null,
+      active: false,
+    },
+
+    swiping(id: string): boolean {
+      return this.swipeState.active && this.swipeState.id === id;
+    },
+
+    swipeDirection(id: string): "right" | "left" {
+      return this.swiping(id) && this.swipeState.dx < 0 ? "left" : "right";
+    },
+
+    swipeTargetLabel(id: string): string {
+      const from = this.swipeState.fromStatus;
+      if (!from) return "";
+      const idx = STATUSES.indexOf(from);
+      const target =
+        this.swipeDirection(id) === "right" ? STATUSES[idx + 1] : STATUSES[idx - 1];
+      return target ? statusLabel(target) : "";
+    },
+
+    onCardTouchStart(e: TouchEvent, task: TaskSummary): void {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      this.swipeState = {
+        id: task.id,
+        startX: t.clientX,
+        startY: t.clientY,
+        dx: 0,
+        fromStatus: task.status,
+        active: false,
+      };
+    },
+
+    onCardTouchMove(e: TouchEvent): void {
+      const s = this.swipeState;
+      if (!s || !s.id) return;
+      const t = e.touches[0];
+      if (!t) return;
+      const dx = t.clientX - s.startX;
+      const dy = t.clientY - s.startY;
+      // Activate once movement is clearly horizontal (past slop, vs vertical).
+      if (!s.active && Math.abs(dx) > 24 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+        s.active = true;
+      }
+      if (s.active) {
+        s.dx = dx;
+        // Owning the gesture: stop vertical scroll and suppress the follow-up
+        // compatibility click so the card doesn't open its detail drawer.
+        e.preventDefault();
+      }
+    },
+
+    onCardTouchEnd(e: TouchEvent, task: TaskSummary): void {
+      const s = this.swipeState;
+      if (!s || !s.id || s.id !== task.id) return;
+      const endX = e.changedTouches[0]?.clientX ?? s.startX + s.dx;
+      const dx = endX - s.startX;
+      this.swipeState = { id: null, startX: 0, startY: 0, dx: 0, fromStatus: null, active: false };
+      if (!s.active || !s.fromStatus) return;
+      const idx = STATUSES.indexOf(s.fromStatus);
+      const target: Status | null =
+        dx > 48 ? (STATUSES[idx + 1] ?? null) : dx < -48 ? (STATUSES[idx - 1] ?? null) : null;
+      if (target) void this.moveTaskStatus(task.id, target);
+    },
+
+    toggleCardMenu(id: string): void {
+      this.cardMenuTaskId = this.cardMenuTaskId === id ? null : id;
+    },
+
+    async moveCardTo(id: string, status: Status): Promise<void> {
+      this.cardMenuTaskId = null;
+      await this.moveTaskStatus(id, status);
+    },
+
     /** Optimistically move a task to targetStatus, then persist with PATCH.
      *  Reuses the 409 re-read + re-apply-once logic.
      *  Rolls back the optimistic board move on failure so no orphan/ghost cards remain. */
@@ -1771,6 +1858,8 @@ export function crowbanApp() {
       else if (this.detailOpen) this.closeDetail();
       else if (this.showNewTask) this.closeNewTask();
       else if (this.showNewProject) this.showNewProject = false;
+      else if (this.cardMenuTaskId) this.cardMenuTaskId = null;
+      else if (this.showMobileMenu) this.showMobileMenu = false;
     },
 
     isWebHref(s: string | null | undefined): boolean {
@@ -1778,6 +1867,7 @@ export function crowbanApp() {
     },
 
     // ------------------------------------------------------------- template glue
+    STATUSES,
     SORT_OPTIONS,
     statusLabel,
     priorityClass,
