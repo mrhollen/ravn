@@ -469,6 +469,18 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 		}
 	}
 
+	// attach_artifact encourages (but never requires) testing-artifact uploads
+	// so humans can verify agent work — the wording is part of the contract.
+	for _, tool := range list.Tools {
+		if tool.Name == "attach_artifact" {
+			for _, sub := range []string{"RECOMMENDED for verification", "encouraged, never required"} {
+				if !strings.Contains(tool.Description, sub) {
+					t.Errorf("attach_artifact description missing %q: %s", sub, tool.Description)
+				}
+			}
+		}
+	}
+
 	// get_task returns the mock's resume payload (JSON-equivalent).
 	res, err := c.CallTool(ctx, mcpgo.CallToolRequest{Params: mcpgo.CallToolParams{
 		Name:      "get_task",

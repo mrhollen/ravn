@@ -308,7 +308,10 @@ func TestNextTask_GuidancePlanFromLiveTool(t *testing.T) {
 		"Seq 2**: Returns live guidance plan",
 		"Starting prompt implementation",
 		"claim_task(id=\"TASK-TOP-PRIORITY\", actor={\"type\": \"agent\", \"name\": \"agent-mcp\"})",
-		"update_task(id=\"TASK-TOP-PRIORITY\", version=3, status=\"done\"",
+		"Attach Testing Evidence",
+		"attach_artifact(id=\"TASK-TOP-PRIORITY\", kind=\"command-output\"",
+		"release_task(id=\"TASK-TOP-PRIORITY\"",
+		"update_task(id=\"TASK-TOP-PRIORITY\", version=<version from the release response>, status=\"done\"",
 		"heartbeat_task(id=\"TASK-TOP-PRIORITY\"",
 		"complete_ac(id=\"TASK-TOP-PRIORITY\", seq=1",
 	}
