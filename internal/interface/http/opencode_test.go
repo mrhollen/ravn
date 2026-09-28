@@ -20,24 +20,26 @@ func TestUpdateProject_OpenCodeSettings(t *testing.T) {
 		t.Fatalf("GET /projects/%s = %d, want 200", p.ID, code)
 	}
 	got := mustDecode[projectDTO](t, body)
-	if got.OpenCodeServerURL != "" || got.OpenCodeDirectory != "" {
-		t.Fatalf("initial opencode settings not empty: url=%q dir=%q", got.OpenCodeServerURL, got.OpenCodeDirectory)
+	if got.OpenCodeServerURL != "" || got.OpenCodeDirectory != "" || got.OpenCodeModel != "" {
+		t.Fatalf("initial opencode settings not empty: url=%q dir=%q model=%q", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel)
 	}
 
 	// 2. PUT updates opencode_server_url and opencode_directory
 	serverURL := "http://localhost:4444"
 	dir := "/home/test/workspace"
+	modelRef := "llama.cpp/Qwen Nano"
 	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
 		"actor":               actor("admin"),
 		"opencode_server_url": serverURL,
 		"opencode_directory":  dir,
+		"opencode_model":      modelRef,
 	})
 	if code != http.StatusOK {
 		t.Fatalf("PUT /projects/%s = %d, want 200 (body %s)", p.ID, code, string(body))
 	}
 	updated := mustDecode[projectDTO](t, body)
-	if updated.OpenCodeServerURL != serverURL || updated.OpenCodeDirectory != dir {
-		t.Fatalf("PUT response mismatch: url=%q dir=%q, want url=%q dir=%q", updated.OpenCodeServerURL, updated.OpenCodeDirectory, serverURL, dir)
+	if updated.OpenCodeServerURL != serverURL || updated.OpenCodeDirectory != dir || updated.OpenCodeModel != modelRef {
+		t.Fatalf("PUT response mismatch: url=%q dir=%q model=%q, want url=%q dir=%q model=%q", updated.OpenCodeServerURL, updated.OpenCodeDirectory, updated.OpenCodeModel, serverURL, dir, modelRef)
 	}
 
 	// 3. GET confirms persistence
@@ -46,8 +48,8 @@ func TestUpdateProject_OpenCodeSettings(t *testing.T) {
 		t.Fatalf("GET after PUT /projects/%s = %d", p.ID, code)
 	}
 	got = mustDecode[projectDTO](t, body)
-	if got.OpenCodeServerURL != serverURL || got.OpenCodeDirectory != dir {
-		t.Fatalf("persisted settings mismatch: url=%q dir=%q", got.OpenCodeServerURL, got.OpenCodeDirectory)
+	if got.OpenCodeServerURL != serverURL || got.OpenCodeDirectory != dir || got.OpenCodeModel != modelRef {
+		t.Fatalf("persisted settings mismatch: url=%q dir=%q model=%q", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel)
 	}
 
 	// 4. PUT clears settings with empty string
@@ -56,13 +58,14 @@ func TestUpdateProject_OpenCodeSettings(t *testing.T) {
 		"actor":               actor("admin"),
 		"opencode_server_url": empty,
 		"opencode_directory":  empty,
+		"opencode_model":      empty,
 	})
 	if code != http.StatusOK {
 		t.Fatalf("PUT clear settings = %d", code)
 	}
 	cleared := mustDecode[projectDTO](t, body)
-	if cleared.OpenCodeServerURL != "" || cleared.OpenCodeDirectory != "" {
-		t.Fatalf("settings not cleared: url=%q dir=%q", cleared.OpenCodeServerURL, cleared.OpenCodeDirectory)
+	if cleared.OpenCodeServerURL != "" || cleared.OpenCodeDirectory != "" || cleared.OpenCodeModel != "" {
+		t.Fatalf("settings not cleared: url=%q dir=%q model=%q", cleared.OpenCodeServerURL, cleared.OpenCodeDirectory, cleared.OpenCodeModel)
 	}
 }
 
@@ -71,6 +74,8 @@ func TestOpenCodeStart_Success(t *testing.T) {
 	var promptDispatched atomic.Bool
 	var receivedPromptText string
 	var receivedDirectory string
+	var receivedModelProviderID string
+	var receivedModelID string
 
 	expectedSessionID := "test-session-12345"
 
@@ -78,25 +83,36 @@ func TestOpenCodeStart_Success(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/session":
 			receivedDirectory = r.URL.Query().Get("directory")
-			var req map[string]string
+			var req struct {
+				Title string `json:"title"`
+				Agent string `json:"agent"`
+				Model *struct {
+					ID         string `json:"id"`
+					ProviderID string `json:"providerID"`
+				} `json:"model"`
+			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			if req["agent"] != "build" {
+			if req.Agent != "build" {
 				http.Error(w, "expected agent 'build'", http.StatusBadRequest)
 				return
 			}
-			if !strings.HasPrefix(req["title"], "CrowBan: ") {
+			if !strings.HasPrefix(req.Title, "CrowBan: ") {
 				http.Error(w, "expected title prefix 'CrowBan: '", http.StatusBadRequest)
 				return
+			}
+			if req.Model != nil {
+				receivedModelProviderID = req.Model.ProviderID
+				receivedModelID = req.Model.ID
 			}
 			sessionCreated.Store(true)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id":    expectedSessionID,
-				"title": req["title"],
+				"title": req.Title,
 			})
 
 		case r.Method == http.MethodPost && r.URL.Path == "/session/"+expectedSessionID+"/prompt_async":
@@ -139,10 +155,12 @@ func TestOpenCodeStart_Success(t *testing.T) {
 	// 1. Create project with opencode settings pointing to mock server
 	p := createProject(t, stk, "OpenCode Session Test")
 	customDir := "/home/test/my-repo"
+	modelRef := "llama.cpp/Qwen Nano"
 	code, _ := doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
 		"actor":               actor("admin"),
 		"opencode_server_url": mockServer.URL,
 		"opencode_directory":  customDir,
+		"opencode_model":      modelRef,
 	})
 	if code != http.StatusOK {
 		t.Fatalf("PUT project opencode settings = %d", code)
@@ -184,6 +202,14 @@ func TestOpenCodeStart_Success(t *testing.T) {
 	}
 	if receivedDirectory != customDir {
 		t.Errorf("received directory = %q, want %q", receivedDirectory, customDir)
+	}
+	// The resolved model must ride on the session-create body so the dispatched
+	// session doesn't fall back to the server default (the 401 auth-error bug).
+	if receivedModelProviderID != "llama.cpp" {
+		t.Errorf("received model providerID = %q, want llama.cpp", receivedModelProviderID)
+	}
+	if receivedModelID != "Qwen Nano" {
+		t.Errorf("received model ID = %q, want Qwen Nano", receivedModelID)
 	}
 
 	// 5. Verify Prompt contents
@@ -286,21 +312,29 @@ func TestOpenCodeStart_ResolutionDefaults(t *testing.T) {
 	// 1. Defaults when project and env vars are empty
 	t.Setenv("OPENCODE_SERVER_URL", "")
 	t.Setenv("OPENCODE_DIRECTORY", "")
+	t.Setenv("OPENCODE_MODEL", "")
 	if url := resolveOpenCodeServerURL(""); url != "http://localhost:4444" {
 		t.Errorf("default server URL = %q, want http://localhost:4444", url)
 	}
 	if dir := resolveOpenCodeDirectory(""); dir != "/home/hollen/Code/crowban" {
 		t.Errorf("default directory = %q, want /home/hollen/Code/crowban", dir)
 	}
+	if model := resolveOpenCodeModel(""); model != "" {
+		t.Errorf("default model = %q, want empty (server decides)", model)
+	}
 
 	// 2. Env vars when project settings are empty
 	t.Setenv("OPENCODE_SERVER_URL", "http://env-host:9999/")
 	t.Setenv("OPENCODE_DIRECTORY", "/env/workdir")
+	t.Setenv("OPENCODE_MODEL", "llama.cpp/Qwen Nano")
 	if url := resolveOpenCodeServerURL(""); url != "http://env-host:9999" {
 		t.Errorf("env server URL = %q, want http://env-host:9999", url)
 	}
-	if dir := resolveOpenCodeDirectory(""); dir != "/env/workdir" {
+	if dir := resolveOpenCodeDirectory("/env/workdir"); dir != "/env/workdir" {
 		t.Errorf("env directory = %q, want /env/workdir", dir)
+	}
+	if model := resolveOpenCodeModel(""); model != "llama.cpp/Qwen Nano" {
+		t.Errorf("env model = %q, want llama.cpp/Qwen Nano", model)
 	}
 
 	// 3. Project settings take precedence over env vars
@@ -309,6 +343,62 @@ func TestOpenCodeStart_ResolutionDefaults(t *testing.T) {
 	}
 	if dir := resolveOpenCodeDirectory("/proj/workdir"); dir != "/proj/workdir" {
 		t.Errorf("project directory = %q, want /proj/workdir", dir)
+	}
+	if model := resolveOpenCodeModel("openrouter/deepseek/deepseek-chat-v3-0324"); model != "openrouter/deepseek/deepseek-chat-v3-0324" {
+		t.Errorf("project model = %q, want the project value", model)
+	}
+}
+
+func TestParseOpenCodeModel(t *testing.T) {
+	cases := []struct {
+		ref            string
+		wantProviderID string
+		wantModelID    string
+		wantErr        bool
+	}{
+		{ref: "llama.cpp/Qwen Nano", wantProviderID: "llama.cpp", wantModelID: "Qwen Nano"},
+		{ref: "openrouter/deepseek/deepseek-chat-v3-0324", wantProviderID: "openrouter", wantModelID: "deepseek/deepseek-chat-v3-0324"},
+		{ref: "no-slash", wantErr: true},
+		{ref: "/missing-provider", wantErr: true},
+		{ref: "provider/", wantErr: true},
+	}
+	for _, tc := range cases {
+		providerID, modelID, err := parseOpenCodeModel(tc.ref)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("parseOpenCodeModel(%q) = (%q, %q), want error", tc.ref, providerID, modelID)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseOpenCodeModel(%q) unexpected error: %v", tc.ref, err)
+			continue
+		}
+		if providerID != tc.wantProviderID || modelID != tc.wantModelID {
+			t.Errorf("parseOpenCodeModel(%q) = (%q, %q), want (%q, %q)", tc.ref, providerID, modelID, tc.wantProviderID, tc.wantModelID)
+		}
+	}
+}
+
+func TestOpenCodeStart_InvalidModelRef(t *testing.T) {
+	stk := newStack(t)
+	t.Setenv("OPENCODE_MODEL", "")
+
+	p := createProject(t, stk, "Invalid Model Project")
+	_, _ = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":               actor("admin"),
+		"opencode_server_url": "http://unreachable.invalid:4444", // never contacted: parse fails first
+		"opencode_model":      "not-a-model-ref",
+	})
+
+	taskID := makeTask(t, stk, p.ID, "Task with bad model ref", nil).ID
+
+	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskID+"/opencode/start", nil)
+	if code != http.StatusBadRequest {
+		t.Fatalf("POST with malformed opencode_model = %d, want 400 (body %s)", code, string(body))
+	}
+	if !strings.Contains(string(body), "invalid opencode model") {
+		t.Errorf("error body missing 'invalid opencode model': %s", string(body))
 	}
 }
 

@@ -246,20 +246,22 @@ func TestProjectsUpdate_OpenCodeSettings(t *testing.T) {
 
 	serverURL := "http://localhost:7777"
 	dir := "/home/test/app"
+	model := "llama.cpp/Qwen Nano"
 	fc.SetNow(fc.now.Add(time.Minute))
 
 	updated, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{
 		OpenCodeServerURL: &serverURL,
 		OpenCodeDirectory: &dir,
+		OpenCodeModel:     &model,
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if updated.OpenCodeServerURL != serverURL || updated.OpenCodeDirectory != dir {
-		t.Fatalf("updated OpenCode fields mismatch: got (%q, %q), want (%q, %q)", updated.OpenCodeServerURL, updated.OpenCodeDirectory, serverURL, dir)
+	if updated.OpenCodeServerURL != serverURL || updated.OpenCodeDirectory != dir || updated.OpenCodeModel != model {
+		t.Fatalf("updated OpenCode fields mismatch: got (%q, %q, %q), want (%q, %q, %q)", updated.OpenCodeServerURL, updated.OpenCodeDirectory, updated.OpenCodeModel, serverURL, dir, model)
 	}
-	if stored := fp.byID[p.ID]; stored.OpenCodeServerURL != serverURL || stored.OpenCodeDirectory != dir {
-		t.Fatalf("stored OpenCode fields mismatch: got (%q, %q)", stored.OpenCodeServerURL, stored.OpenCodeDirectory)
+	if stored := fp.byID[p.ID]; stored.OpenCodeServerURL != serverURL || stored.OpenCodeDirectory != dir || stored.OpenCodeModel != model {
+		t.Fatalf("stored OpenCode fields mismatch: got (%q, %q, %q)", stored.OpenCodeServerURL, stored.OpenCodeDirectory, stored.OpenCodeModel)
 	}
 
 	// Verify update event
@@ -270,7 +272,7 @@ func TestProjectsUpdate_OpenCodeSettings(t *testing.T) {
 	if ev.Kind != domain.EventUpdated {
 		t.Fatalf("event kind = %v, want %v", ev.Kind, domain.EventUpdated)
 	}
-	if !strings.Contains(ev.After, `"opencode_server_url":"http://localhost:7777"`) || !strings.Contains(ev.After, `"opencode_directory":"/home/test/app"`) {
+	if !strings.Contains(ev.After, `"opencode_server_url":"http://localhost:7777"`) || !strings.Contains(ev.After, `"opencode_directory":"/home/test/app"`) || !strings.Contains(ev.After, `"opencode_model":"llama.cpp/Qwen Nano"`) {
 		t.Fatalf("event after payload missing opencode fields: %s", ev.After)
 	}
 }

@@ -81,6 +81,7 @@ export interface Project {
   description?: string;
   opencode_server_url?: string;
   opencode_directory?: string;
+  opencode_model?: string;
   created_at: string;
   updated_at: string;
 }
@@ -227,6 +228,7 @@ export interface UpdateProjectReq {
   description?: string;
   opencode_server_url?: string;
   opencode_directory?: string;
+  opencode_model?: string;
 }
 
 export interface StartOpenCodeResponse {

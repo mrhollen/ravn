@@ -18,6 +18,7 @@ type ProjectUpdate struct {
 	Description       *string // full markdown replace; empty string allowed
 	OpenCodeServerURL *string // optional OpenCode server URL; empty string allowed to clear
 	OpenCodeDirectory *string // optional OpenCode worktree directory; empty string allowed to clear
+	OpenCodeModel     *string // optional OpenCode model "providerID/modelID"; empty string allowed to clear
 }
 
 // Projects implements the project use cases: create, get, list, update. It
@@ -186,7 +187,11 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 	if u.OpenCodeDirectory != nil {
 		newDir, hasDir = strings.TrimSpace(*u.OpenCodeDirectory), true
 	}
-	if !hasName && !hasDesc && !hasServerURL && !hasDir {
+	newModel, hasModel := "", false
+	if u.OpenCodeModel != nil {
+		newModel, hasModel = strings.TrimSpace(*u.OpenCodeModel), true
+	}
+	if !hasName && !hasDesc && !hasServerURL && !hasDir && !hasModel {
 		return domain.Project{}, fmt.Errorf("%w: no project fields to update", domain.ErrInvalid)
 	}
 
@@ -220,6 +225,11 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 			before["opencode_directory"] = p.OpenCodeDirectory
 			after["opencode_directory"] = newDir
 			p.OpenCodeDirectory = newDir
+		}
+		if hasModel {
+			before["opencode_model"] = p.OpenCodeModel
+			after["opencode_model"] = newModel
+			p.OpenCodeModel = newModel
 		}
 		p.UpdatedAt = now
 		ev := domain.Event{

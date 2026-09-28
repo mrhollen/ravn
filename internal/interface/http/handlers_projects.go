@@ -80,6 +80,7 @@ func (a *App) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		Description:       req.Description,
 		OpenCodeServerURL: req.OpenCodeServerURL,
 		OpenCodeDirectory: req.OpenCodeDirectory,
+		OpenCodeModel:     req.OpenCodeModel,
 	})
 	if err != nil {
 		writeAppError(w, err, "project", id)

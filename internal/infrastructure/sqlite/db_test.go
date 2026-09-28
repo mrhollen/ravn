@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,17 +106,20 @@ func TestOpenAppliesMigrationsAndSeedsStatuses(t *testing.T) {
 		t.Errorf("foreign_keys = %d, want 1", fk)
 	}
 
-	// The runner recorded exactly the four migrations it applied
-	// (0001 + 0002 + 0003 + 0004).
+	// The runner recorded exactly the embedded migrations it applied.
+	migrationFiles, err := fs.Glob(migrationFS, "migrations/*.sql")
+	if err != nil {
+		t.Fatalf("glob embedded migrations: %v", err)
+	}
 	var count int
 	var filename string
 	if err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*), MIN(filename) FROM schema_migrations`).Scan(&count, &filename); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if count != 4 || filename != "migrations/0001_init.sql" {
-		t.Errorf("schema_migrations = (%d rows, MIN=%q), want (4, %q)",
-			count, filename, "migrations/0001_init.sql")
+	if count != len(migrationFiles) || filename != "migrations/0001_init.sql" {
+		t.Errorf("schema_migrations = (%d rows, MIN=%q), want (%d, %q)",
+			count, filename, len(migrationFiles), "migrations/0001_init.sql")
 	}
 
 	// Slice 2D2a: the ≤1-parent partial unique index now targets the canonical
@@ -171,12 +175,16 @@ func TestMigrateIsIdempotent(t *testing.T) {
 		t.Fatalf("Migrate on re-opened handle: %v", err)
 	}
 
+	migrationFiles, gerr := fs.Glob(migrationFS, "migrations/*.sql")
+	if gerr != nil {
+		t.Fatalf("glob embedded migrations: %v", gerr)
+	}
 	var count int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 4 {
-		t.Errorf("schema_migrations rows = %d after repeated runs, want 4 (one per migration)", count)
+	if count != len(migrationFiles) {
+		t.Errorf("schema_migrations rows = %d after repeated runs, want %d (one per migration)", count, len(migrationFiles))
 	}
 	var statuses int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM status`).Scan(&statuses); err != nil {

@@ -278,6 +278,7 @@ export function crowbanApp() {
       description: "",
       opencode_server_url: "",
       opencode_directory: "",
+      opencode_model: "",
     },
     projectSettingsBusy: false,
 
@@ -290,6 +291,7 @@ export function crowbanApp() {
           description: p.description ?? "",
           opencode_server_url: p.opencode_server_url ?? "",
           opencode_directory: p.opencode_directory ?? "",
+          opencode_model: p.opencode_model ?? "",
         };
       }
       this.showProjectSettings = true;
@@ -300,6 +302,7 @@ export function crowbanApp() {
           description: full.description ?? "",
           opencode_server_url: full.opencode_server_url ?? "",
           opencode_directory: full.opencode_directory ?? "",
+          opencode_model: full.opencode_model ?? "",
         };
       } catch {
         /* keep current list info */
@@ -321,6 +324,7 @@ export function crowbanApp() {
           description: this.projectSettingsForm.description.trim() || undefined,
           opencode_server_url: this.projectSettingsForm.opencode_server_url.trim() || undefined,
           opencode_directory: this.projectSettingsForm.opencode_directory.trim() || undefined,
+          opencode_model: this.projectSettingsForm.opencode_model.trim() || undefined,
         });
         await this.loadProjects();
         this.showProjectSettings = false;

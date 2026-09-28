@@ -263,6 +263,7 @@ type projectDTO struct {
 	Description       string `json:"description,omitempty"`
 	OpenCodeServerURL string `json:"opencode_server_url,omitempty"`
 	OpenCodeDirectory string `json:"opencode_directory,omitempty"`
+	OpenCodeModel     string `json:"opencode_model,omitempty"`
 	CreatedAt         string `json:"created_at"`
 	UpdatedAt         string `json:"updated_at"`
 }
@@ -274,6 +275,7 @@ func toProject(p domain.Project) projectDTO {
 		Description:       p.Description,
 		OpenCodeServerURL: p.OpenCodeServerURL,
 		OpenCodeDirectory: p.OpenCodeDirectory,
+		OpenCodeModel:     p.OpenCodeModel,
 		CreatedAt:         rfc3339(p.CreatedAt),
 		UpdatedAt:         rfc3339(p.UpdatedAt),
 	}
@@ -377,6 +379,7 @@ type updateProjectReq struct {
 	Description       *string    `json:"description"`
 	OpenCodeServerURL *string    `json:"opencode_server_url"`
 	OpenCodeDirectory *string    `json:"opencode_directory"`
+	OpenCodeModel     *string    `json:"opencode_model"`
 }
 
 // createTaskReq is POST /tasks. Zero/omitted optional fields take documented

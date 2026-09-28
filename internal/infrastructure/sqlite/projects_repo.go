@@ -22,15 +22,15 @@ var _ application.ProjectRepository = (*projectRepo)(nil)
 
 // projectColumns is the single source of truth for SELECT column order — it
 // must stay aligned with scanProject's Scan targets.
-const projectColumns = "id, name, description, opencode_server_url, opencode_directory, created_at, updated_at"
+const projectColumns = "id, name, description, opencode_server_url, opencode_directory, opencode_model, created_at, updated_at"
 
 // Create stores a new project row exactly as given (IDs and timestamps are
 // minted/stamped by the use case). A duplicate name trips the UNIQUE
 // constraint and surfaces as a wrapped domain.ErrInvalid per the port contract.
 func (r *projectRepo) Create(ctx context.Context, p domain.Project) error {
 	_, err := r.q.ExecContext(ctx,
-		`INSERT INTO project (`+projectColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		string(p.ID), p.Name, p.Description, p.OpenCodeServerURL, p.OpenCodeDirectory, formatTS(p.CreatedAt), formatTS(p.UpdatedAt))
+		`INSERT INTO project (`+projectColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		string(p.ID), p.Name, p.Description, p.OpenCodeServerURL, p.OpenCodeDirectory, p.OpenCodeModel, formatTS(p.CreatedAt), formatTS(p.UpdatedAt))
 	if err != nil {
 		if isConstraintViolation(err) {
 			return fmt.Errorf("%w: project name %q already exists", domain.ErrInvalid, p.Name)
@@ -76,8 +76,8 @@ func (r *projectRepo) List(ctx context.Context) ([]domain.Project, error) {
 // does not exist (domain.ErrNotFound).
 func (r *projectRepo) Update(ctx context.Context, p domain.Project) error {
 	res, err := r.q.ExecContext(ctx,
-		`UPDATE project SET name = ?, description = ?, opencode_server_url = ?, opencode_directory = ?, updated_at = ? WHERE id = ?`,
-		p.Name, p.Description, p.OpenCodeServerURL, p.OpenCodeDirectory, formatTS(p.UpdatedAt), string(p.ID))
+		`UPDATE project SET name = ?, description = ?, opencode_server_url = ?, opencode_directory = ?, opencode_model = ?, updated_at = ? WHERE id = ?`,
+		p.Name, p.Description, p.OpenCodeServerURL, p.OpenCodeDirectory, p.OpenCodeModel, formatTS(p.UpdatedAt), string(p.ID))
 	if err != nil {
 		if isConstraintViolation(err) {
 			return fmt.Errorf("%w: project name %q already exists", domain.ErrInvalid, p.Name)
@@ -104,10 +104,11 @@ func scanProject(s scanner) (domain.Project, error) {
 		description       string
 		opencodeServerURL string
 		opencodeDirectory string
+		opencodeModel     string
 		createdAt         string
 		updatedAt         string
 	)
-	if err := s.Scan(&p.ID, &p.Name, &description, &opencodeServerURL, &opencodeDirectory, &createdAt, &updatedAt); err != nil {
+	if err := s.Scan(&p.ID, &p.Name, &description, &opencodeServerURL, &opencodeDirectory, &opencodeModel, &createdAt, &updatedAt); err != nil {
 		return domain.Project{}, err
 	}
 	created, err := parseTS(createdAt)
@@ -121,6 +122,7 @@ func scanProject(s scanner) (domain.Project, error) {
 	p.Description = description
 	p.OpenCodeServerURL = opencodeServerURL
 	p.OpenCodeDirectory = opencodeDirectory
+	p.OpenCodeModel = opencodeModel
 	p.CreatedAt = created
 	p.UpdatedAt = updated
 	return p, nil

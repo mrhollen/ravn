@@ -380,6 +380,13 @@
                        class="field font-mono text-xs w-full" />
                 <span class="text-[11px] font-normal text-zinc-400">Target codebase root directory for OpenCode agent build sessions</span>
               </label>
+
+              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700">
+                OpenCode Model (providerID/modelID)
+                <input type="text" x-model="projectSettingsForm.opencode_model" placeholder="llama.cpp/Qwen Medium Long Context"
+                       class="field font-mono text-xs w-full" />
+                <span class="text-[11px] font-normal text-zinc-400">Model for dispatched sessions; defaults to $OPENCODE_MODEL or the OpenCode server's default</span>
+              </label>
             </div>
 
             <div class="flex items-center justify-end gap-2 pt-2">

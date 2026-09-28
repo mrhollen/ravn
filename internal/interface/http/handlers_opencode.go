@@ -38,6 +38,33 @@ func resolveOpenCodeDirectory(projectDirectory string) string {
 	return "/home/hollen/Code/crowban"
 }
 
+// resolveOpenCodeModel resolves the OpenCode model reference from the project
+// setting, the OPENCODE_MODEL environment variable, or defaults to "" (no
+// model passed — the OpenCode server applies its own default). When a server's
+// fallback model requires an API key the dispatched session dies with an
+// Authentication Error immediately, so hosts running local providers should
+// set this.
+func resolveOpenCodeModel(projectModel string) string {
+	if s := strings.TrimSpace(projectModel); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(os.Getenv("OPENCODE_MODEL")); s != "" {
+		return s
+	}
+	return ""
+}
+
+// parseOpenCodeModel splits a "providerID/modelID" reference into its two
+// halves. The provider ID is everything before the first slash; model IDs may
+// themselves contain slashes (e.g. "openrouter/meta-llama/..." style refs).
+func parseOpenCodeModel(ref string) (providerID, modelID string, err error) {
+	i := strings.Index(ref, "/")
+	if i <= 0 || i == len(ref)-1 {
+		return "", "", fmt.Errorf("model %q must look like \"providerID/modelID\"", ref)
+	}
+	return ref[:i], ref[i+1:], nil
+}
+
 // formatOpenCodePrompt formats the autonomous agent prompt with task details,
 // acceptance criteria, and explicit instructions to interact with CrowBan via MCP.
 func formatOpenCodePrompt(task domain.Task, acs []domain.AcceptanceCriterion) string {
@@ -84,6 +111,18 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 
 	serverURL := resolveOpenCodeServerURL(proj.OpenCodeServerURL)
 	dir := resolveOpenCodeDirectory(proj.OpenCodeDirectory)
+	modelRef := resolveOpenCodeModel(proj.OpenCodeModel)
+	var modelProviderID, modelID string
+	if modelRef != "" {
+		modelProviderID, modelID, err = parseOpenCodeModel(modelRef)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, map[string]any{
+				"error":   "invalid input",
+				"message": fmt.Sprintf("invalid opencode model: %v", err),
+			})
+			return
+		}
+	}
 	promptText := formatOpenCodePrompt(detail.Task, detail.AcceptanceCriteria)
 
 	// Step 1: Create OpenCode session
@@ -99,10 +138,21 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	q.Set("directory", dir)
 	sessionURLParsed.RawQuery = q.Encode()
 
-	sessionReqBody, err := json.Marshal(map[string]string{
+	// The model is set on the session (not just the prompt): sessions created
+	// without one fall back to the OpenCode server's default model, which on
+	// some hosts points at a key-gated provider and dies with a 401
+	// "Authentication Error" before doing any work.
+	sessionCreateBody := map[string]any{
 		"title": "CrowBan: " + detail.Task.Title,
 		"agent": "build",
-	})
+	}
+	if modelProviderID != "" {
+		sessionCreateBody["model"] = map[string]string{
+			"id":         modelID,
+			"providerID": modelProviderID,
+		}
+	}
+	sessionReqBody, err := json.Marshal(sessionCreateBody)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
 			"error":   "internal",
