@@ -6,15 +6,23 @@ import (
 	"github.com/mrhollen/crowban/internal/domain"
 )
 
-// Timestamps cross the storage boundary as RFC3339 UTC strings
+// TimestampLayout formats timestamps as fixed-width, zero-padded 9-digit UTC
+// RFC3339 strings ("2006-01-02T15:04:05.000000000Z"). Fixed 30-character length
+// guarantees that SQLite lexicographical text comparisons (<, <=, >, >=, ORDER BY,
+// BETWEEN) exactly match chronological time comparison across whole-second and
+// sub-second instants.
+const TimestampLayout = "2006-01-02T15:04:05.000000000Z"
+
+// Timestamps cross the storage boundary as fixed-width RFC3339 UTC strings
 // (ARCHITECTURE §4 — trivially readable for agents, no float issues). All repo
 // code formats and parses through these two helpers so neither direction can
-// drift. Formatting uses RFC3339Nano so sub-second precision survives the
-// round-trip losslessly (whole-second instants render exactly like the plain
-// RFC3339 form); parsing accepts fractional seconds either way.
-func formatTS(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+// drift. Formatting uses TimestampLayout so sub-second precision survives the
+// round-trip losslessly and sorts correctly in SQLite text comparisons; parsing
+// uses RFC3339Nano so both fixed-width strings and legacy unpadded timestamps
+// parse transparently.
+func formatTS(t time.Time) string { return t.UTC().Format(TimestampLayout) }
 
-func parseTS(s string) (time.Time, error) { return time.Parse(time.RFC3339, s) }
+func parseTS(s string) (time.Time, error) { return time.Parse(time.RFC3339Nano, s) }
 
 // tsOrNil renders an optional timestamp as a SQL argument: NULL when the
 // pointer is nil, RFC3339 UTC otherwise. The inverse of parseTS at scan sites.
