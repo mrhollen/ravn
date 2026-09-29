@@ -241,6 +241,12 @@ func TestTasksUpdate_StatusToDoneStampsCompletedAtAndBackClearsIt(t *testing.T) 
 	}
 
 	fc.SetNow(fc.now.Add(time.Hour))
+	doing := domain.StatusDoing
+	if _, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &doing}); err != nil {
+		t.Fatalf("Update → doing: %v", err)
+	}
+
+	fc.SetNow(fc.now.Add(time.Hour))
 	done := domain.StatusDone
 	updated, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
 	if err != nil {
@@ -259,8 +265,8 @@ func TestTasksUpdate_StatusToDoneStampsCompletedAtAndBackClearsIt(t *testing.T) 
 	if back.CompletedAt != nil {
 		t.Errorf("moving out of done must clear CompletedAt, got %v", back.CompletedAt)
 	}
-	if len(uow.events.events) != 3 { // created + 2 status-changed
-		t.Errorf("events = %d, want 3 (one status-changed per move)", len(uow.events.events))
+	if len(uow.events.events) != 4 { // created + 3 status-changed
+		t.Errorf("events = %d, want 4 (one status-changed per move)", len(uow.events.events))
 	}
 }
 
@@ -697,4 +703,167 @@ func artifactIDs(as []domain.Artifact) []string {
 		out[i] = string(a.ID)
 	}
 	return out
+}
+
+func TestTasksUpdate_StatusTransitionsValidation(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := newTaskTestEnv(t)
+	task := mustCreateTask(t, svc, "Transition Test", 0, nil)
+
+	done := domain.StatusDone
+	doing := domain.StatusDoing
+	todo := domain.StatusTodo
+	bogus := domain.Status("bogus")
+
+	// 1. Invalid: todo -> done (skipping doing)
+	_, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Update todo -> done err = %v, want domain.ErrInvalid", err)
+	}
+
+	// 2. Invalid: unknown status
+	_, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &bogus})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Update todo -> bogus err = %v, want domain.ErrInvalid", err)
+	}
+
+	// 3. Valid: todo -> doing
+	task, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &doing})
+	if err != nil {
+		t.Fatalf("Update todo -> doing: %v", err)
+	}
+	if task.Status != domain.StatusDoing {
+		t.Errorf("status = %q, want doing", task.Status)
+	}
+
+	// 4. Valid: doing -> done
+	task, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
+	if err != nil {
+		t.Fatalf("Update doing -> done: %v", err)
+	}
+	if task.Status != domain.StatusDone {
+		t.Errorf("status = %q, want done", task.Status)
+	}
+
+	// 5. Invalid: done -> doing (cannot skip todo)
+	_, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &doing})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Update done -> doing err = %v, want domain.ErrInvalid", err)
+	}
+
+	// 6. Valid: done -> todo (reopen)
+	task, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &todo})
+	if err != nil {
+		t.Fatalf("Update done -> todo: %v", err)
+	}
+	if task.Status != domain.StatusTodo {
+		t.Errorf("status = %q, want todo", task.Status)
+	}
+
+	// 7. No-op: todo -> todo
+	unchanged, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &todo})
+	if err != nil {
+		t.Fatalf("Update todo -> todo: %v", err)
+	}
+	if unchanged.Version != task.Version {
+		t.Errorf("version bumped on no-op status update: %d -> %d", task.Version, unchanged.Version)
+	}
+}
+
+func TestTasksUpdate_ClearsActiveClaimLeaseWhenLeavingDoing(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := newTaskTestEnv(t)
+
+	t.Run("doing -> done clears active claim lease", func(t *testing.T) {
+		task := mustCreateTask(t, svc, "Claimed Task", 0, nil)
+		claimed, err := svc.Claim(ctx, testAgent, task.ID, 900)
+		if err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		if !claimed.Claimed() || claimed.ClaimedBy == nil {
+			t.Fatalf("task not claimed: %+v", claimed)
+		}
+
+		done := domain.StatusDone
+		updated, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
+		if err != nil {
+			t.Fatalf("Update to done: %v", err)
+		}
+		if updated.Status != domain.StatusDone {
+			t.Errorf("status = %q, want done", updated.Status)
+		}
+		if updated.Claimed() {
+			t.Errorf("updated.Claimed() = true, want false")
+		}
+		if updated.ClaimedBy != nil {
+			t.Errorf("ClaimedBy = %+v, want nil", updated.ClaimedBy)
+		}
+		if updated.ClaimedAt != nil {
+			t.Errorf("ClaimedAt = %v, want nil", updated.ClaimedAt)
+		}
+		if updated.ClaimExpiry != nil {
+			t.Errorf("ClaimExpiry = %v, want nil", updated.ClaimExpiry)
+		}
+		if updated.ClaimTTLSeconds != 0 {
+			t.Errorf("ClaimTTLSeconds = %d, want 0", updated.ClaimTTLSeconds)
+		}
+		if updated.CompletedAt == nil {
+			t.Errorf("CompletedAt is nil on done task")
+		}
+
+		// Re-fetch via Get to ensure persistence state
+		fresh, err := svc.Get(ctx, task.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if fresh.ClaimedBy != nil || fresh.ClaimExpiry != nil {
+			t.Errorf("persisted task has active lease: ClaimedBy=%+v ClaimExpiry=%v", fresh.ClaimedBy, fresh.ClaimExpiry)
+		}
+	})
+
+	t.Run("doing -> todo clears active claim lease", func(t *testing.T) {
+		task := mustCreateTask(t, svc, "Claimed Task 2", 0, nil)
+		claimed, err := svc.Claim(ctx, testAgent, task.ID, 900)
+		if err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		if !claimed.Claimed() {
+			t.Fatalf("task not claimed")
+		}
+
+		todo := domain.StatusTodo
+		updated, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &todo})
+		if err != nil {
+			t.Fatalf("Update to todo: %v", err)
+		}
+		if updated.Status != domain.StatusTodo {
+			t.Errorf("status = %q, want todo", updated.Status)
+		}
+		if updated.Claimed() || updated.ClaimedBy != nil || updated.ClaimExpiry != nil || updated.ClaimTTLSeconds != 0 {
+			t.Errorf("lease not cleared on moving doing -> todo: %+v", updated)
+		}
+	})
+
+	t.Run("updating other fields in doing preserves active claim lease", func(t *testing.T) {
+		task := mustCreateTask(t, svc, "Claimed Task 3", 0, nil)
+		claimed, err := svc.Claim(ctx, testAgent, task.ID, 900)
+		if err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		if !claimed.Claimed() {
+			t.Fatalf("task not claimed")
+		}
+
+		newTitle := "Updated Title While Doing"
+		updated, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Title: &newTitle})
+		if err != nil {
+			t.Fatalf("Update title: %v", err)
+		}
+		if !updated.Claimed() || updated.ClaimedBy == nil {
+			t.Errorf("lease was cleared when updating title in doing: %+v", updated)
+		}
+		if updated.ClaimedBy.Name != testAgent.Name {
+			t.Errorf("ClaimedBy = %q, want %q", updated.ClaimedBy.Name, testAgent.Name)
+		}
+	})
 }

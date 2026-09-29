@@ -285,6 +285,17 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 		}
 
 		if statusChanged {
+			if !domain.CanTransition(cur.Status, *in.Status) {
+				return fmt.Errorf("%w: cannot transition status from %q to %q", domain.ErrInvalid, cur.Status, *in.Status)
+			}
+
+			if cur.Status == domain.StatusDoing && *in.Status != domain.StatusDoing {
+				next.ClaimedBy = nil
+				next.ClaimedAt = nil
+				next.ClaimExpiry = nil
+				next.ClaimTTLSeconds = 0
+			}
+
 			wasDone := cur.Status == domain.StatusDone
 			next.Status = *in.Status
 			nowDone := next.Status == domain.StatusDone

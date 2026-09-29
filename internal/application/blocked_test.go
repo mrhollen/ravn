@@ -61,6 +61,10 @@ func TestGetDetail_BlockedFlagAndBlockers_FlipWhenBlockerDone(t *testing.T) {
 		t.Errorf("Blockers = %+v, want the single open blocker (id %s title %q status todo)", detail.Blockers, y.ID, y.Title)
 	}
 
+	doing := domain.StatusDoing
+	if _, err := svc.Update(ctx, testAgent, y.ID, TaskUpdateInput{Status: &doing}); err != nil {
+		t.Fatalf("Update blocker to doing: %v", err)
+	}
 	done := domain.StatusDone
 	if _, err := svc.Update(ctx, testAgent, y.ID, TaskUpdateInput{Status: &done}); err != nil {
 		t.Fatalf("Update blocker to done: %v", err)
@@ -104,6 +108,10 @@ func TestGetDetail_DoneOrArchivedTargetsDoNotBlock(t *testing.T) {
 	doneTarget := mustCreateTask(t, svc, "Already finished", 1, nil)
 	archivedTarget := mustCreateTask(t, svc, "Archived mid-flight", 1, nil)
 
+	doingStatus := domain.StatusDoing
+	if _, err := svc.Update(ctx, testAgent, doneTarget.ID, TaskUpdateInput{Status: &doingStatus}); err != nil {
+		t.Fatalf("move target to doing: %v", err)
+	}
 	doneStatus := domain.StatusDone
 	if _, err := svc.Update(ctx, testAgent, doneTarget.ID, TaskUpdateInput{Status: &doneStatus}); err != nil {
 		t.Fatalf("complete target: %v", err)
@@ -174,6 +182,10 @@ func TestList_UnblockedOnly_ExcludesTasksWithOpenBlockers(t *testing.T) {
 	// Complete the blocker: a re-enters, and everything composes with the other
 	// filters — an "actionable" query (open + todo + unblocked) drops b (now
 	// done) and keeps a (freshly unblocked) before c (canonical priority order).
+	doing := domain.StatusDoing
+	if _, err := svc.Update(ctx, testAgent, b.ID, TaskUpdateInput{Status: &doing}); err != nil {
+		t.Fatalf("move blocker to doing: %v", err)
+	}
 	done := domain.StatusDone
 	if _, err := svc.Update(ctx, testAgent, b.ID, TaskUpdateInput{Status: &done}); err != nil {
 		t.Fatalf("complete blocker: %v", err)

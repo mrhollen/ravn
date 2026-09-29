@@ -80,6 +80,10 @@ func TestUnblockedOnlyFilterAndBlockedFlag(t *testing.T) {
 	}
 
 	// Complete the blocker via the version-guarded update path.
+	doing := domain.StatusDoing
+	if _, err := tasks.Update(ctx, testActor, y.ID, application.TaskUpdateInput{Status: &doing}); err != nil {
+		t.Fatalf("move blocker to doing: %v", err)
+	}
 	done := domain.StatusDone
 	if _, err := tasks.Update(ctx, testActor, y.ID, application.TaskUpdateInput{Status: &done}); err != nil {
 		t.Fatalf("complete blocker: %v", err)
@@ -129,6 +133,10 @@ func TestFindDuplicateCandidates_Integration(t *testing.T) {
 	assertIDs(t, capped, auth.ID)
 
 	// Done tasks are not candidates ("open" = not done/archived).
+	doing := domain.StatusDoing
+	if _, err := tasks.Update(ctx, testActor, auth.ID, application.TaskUpdateInput{Status: &doing}); err != nil {
+		t.Fatalf("move candidate to doing: %v", err)
+	}
 	done := domain.StatusDone
 	if _, err := tasks.Update(ctx, testActor, auth.ID, application.TaskUpdateInput{Status: &done}); err != nil {
 		t.Fatalf("complete candidate: %v", err)

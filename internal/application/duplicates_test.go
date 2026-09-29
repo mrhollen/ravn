@@ -94,6 +94,10 @@ func TestFindDuplicateCandidates_IgnoresDoneAndArchived(t *testing.T) {
 	stillOpen := createTaskIn(t, svc, testProjectID, "Refactor authentication")
 	shelved := createTaskIn(t, svc, testProjectID, "Refactor authorization")
 
+	doingStatus := domain.StatusDoing
+	if _, err := svc.Update(ctx, testAgent, finished.ID, TaskUpdateInput{Status: &doingStatus}); err != nil {
+		t.Fatalf("move task to doing: %v", err)
+	}
 	doneStatus := domain.StatusDone
 	if _, err := svc.Update(ctx, testAgent, finished.ID, TaskUpdateInput{Status: &doneStatus}); err != nil {
 		t.Fatalf("complete task: %v", err)

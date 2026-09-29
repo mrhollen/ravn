@@ -27,3 +27,20 @@ func (s Status) IsCanonical() bool {
 		return false
 	}
 }
+
+// AllowedTransitions maps each workflow status to the valid target statuses it can transition to.
+var AllowedTransitions = map[Status][]Status{
+	StatusTodo:  {StatusDoing},
+	StatusDoing: {StatusDone, StatusTodo},
+	StatusDone:  {StatusTodo},
+}
+
+// CanTransition reports whether moving from status from to status to is permitted.
+func CanTransition(from, to Status) bool {
+	for _, allowed := range AllowedTransitions[from] {
+		if allowed == to {
+			return true
+		}
+	}
+	return false
+}
