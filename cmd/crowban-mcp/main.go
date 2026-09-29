@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,7 +16,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -69,6 +72,7 @@ func main() {
 		mcpsrv.WithKeepAlive(true),
 		mcpsrv.WithKeepAliveInterval(30*time.Second),   // ping keeps idle streams through proxies
 		mcpsrv.WithSSEDisableLocalhostProtection(true), // same LAN-local rationale as the streamable server above
+		mcpsrv.WithAppendQueryToMessageEndpoint(),
 	)
 
 	mux := http.NewServeMux()
@@ -79,7 +83,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           withLogging(logger, withModernMCPCompat(mux)),
+		Handler:           withLogging(logger, withAuth(token, withModernMCPCompat(mux))),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -213,4 +217,51 @@ func withModernMCPCompat(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// withAuth gates endpoints (/mcp, /sse, /message) with Bearer token authentication
+// when expectedToken is non-empty. When expectedToken is empty, all requests pass
+// through untouched (local dev mode). /healthz is never gated.
+func withAuth(expectedToken string, next http.Handler) http.Handler {
+	if expectedToken == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isMCPRoute(r.URL.Path) {
+			auth := r.Header.Get("Authorization")
+			if !validBearerToken(auth, expectedToken) {
+				qToken := r.URL.Query().Get("token")
+				if qToken == "" || subtle.ConstantTimeCompare([]byte(qToken), []byte(expectedToken)) != 1 {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusUnauthorized)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"error":   "unauthorized",
+						"message": "missing or invalid auth token",
+					})
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isMCPRoute(p string) bool {
+	cleaned := path.Clean(p)
+	return cleaned == "/mcp" || cleaned == "/sse" || cleaned == "/message"
+}
+
+func validBearerToken(header, expected string) bool {
+	if header == "" || expected == "" {
+		return false
+	}
+	parts := strings.SplitN(strings.TrimSpace(header), " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+		return false
+	}
+	token := strings.TrimSpace(parts[1])
+	if token == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
 }

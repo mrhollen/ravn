@@ -97,6 +97,8 @@ An MCP client would point at the server over HTTP like this:
 
 *Illustrative example — omit `authentication` when you run without `CROWBAN_TOKEN`; adjust to your client's format.*
 
+When `CROWBAN_TOKEN` is set, the MCP server itself requires that token on every request to `/mcp`, `/sse`, and `/message`: send `Authorization: Bearer <token>` (or `?token=<token>` for SSE clients that cannot set headers), else you get `401`. Unset = no auth, keeping zero-config local dev.
+
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — stack, onion layout, schema, API map, MCP design, Docker blueprint

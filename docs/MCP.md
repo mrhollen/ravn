@@ -42,7 +42,7 @@ The server container's configuration (env vars):
 | Variable | Default | Meaning |
 |---|---|---|
 | `CROWBAN_API_URL` | `http://crowban-server:8080` | Base URL of the crowban-server instance to proxy. |
-| `CROWBAN_TOKEN` | *(unset)* | When set, forwarded on every upstream request as `Authorization: Bearer <token>`. Unset = no auth (the single-tenant LAN default). |
+| `CROWBAN_TOKEN` | *(unset)* | When set, the MCP server requires it from its own clients (`Authorization: Bearer <token>` or `?token=<token>`) on `/mcp`, `/sse`, and `/message`, and forwards it on every upstream request. Unset = no auth (the single-tenant LAN default). |
 | `CROWBAN_AGENT_NAME` | `agent` | The container-default actor NAME used when a call arrives without an `actor` argument (see below). Set it to this agent's own name. |
 | `MCP_ADDR` | `:9080` | Listen address of the MCP HTTP server. |
 
@@ -59,7 +59,7 @@ Example MCP client config (Streamable-HTTP transport):
 }
 ```
 
-(Include the `/mcp` path in the URL. Healthcheck: `curl http://192.168.1.50:9311/healthz`. Replace 9311 with your `CROWBAN_MCP_PORT` if you overrode it.)
+(Include the `/mcp` path in the URL. Healthcheck: `curl http://192.168.1.50:9311/healthz`. Replace 9311 with your `CROWBAN_MCP_PORT` if you overrode it. When `CROWBAN_TOKEN` is set, add an `Authorization: Bearer <token>` header to the client config — legacy SSE clients can instead pass `?token=<token>` on `/sse`.)
 
 ## The actor convention
 
