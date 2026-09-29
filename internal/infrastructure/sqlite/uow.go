@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 
 	"github.com/mrhollen/crowban/internal/application"
@@ -70,6 +69,17 @@ func (u *SQLiteUnitOfWork) Run(ctx context.Context, r *application.Repos, fn fun
 		return fmt.Errorf("begin tx: %w", err)
 	}
 
+	committed := false
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
 	r.Projects = newProjectRepo(tx)
 	r.Tasks = newTaskRepo(tx)
 	r.ACs = newAcceptanceCriterionRepo(tx)
@@ -93,18 +103,15 @@ func (u *SQLiteUnitOfWork) Run(ctx context.Context, r *application.Repos, fn fun
 	err = fn()
 	if err == nil {
 		if cerr := tx.Commit(); cerr != nil {
-			_ = tx.Rollback() // best effort; a failed commit has already killed the tx state we care about
 			return fmt.Errorf("commit: %w", cerr)
 		}
+		committed = true
 		if u.publisher != nil && len(committedEvents) > 0 {
 			for _, e := range committedEvents {
 				u.publisher.Publish(e)
 			}
 		}
 		return nil
-	}
-	if rerr := tx.Rollback(); rerr != nil && !errors.Is(rerr, sql.ErrTxDone) {
-		return fmt.Errorf("%w (rollback also failed: %v)", err, rerr)
 	}
 	return err
 }
