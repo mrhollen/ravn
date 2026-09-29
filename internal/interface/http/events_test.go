@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -381,5 +383,202 @@ func TestEvents_SSE_BurstWritesDoNotBlock(t *testing.T) {
 	// 100 SQLite commits should complete in under 5 seconds, not blocked by slow SSE client
 	if elapsed > 5*time.Second {
 		t.Errorf("burst of 100 writes took %v, expected non-blocking execution under 5s", elapsed)
+	}
+}
+
+type testDeadlineRecorder struct {
+	http.ResponseWriter
+	mu        sync.Mutex
+	deadlines []time.Time
+	flushErr  error
+	writeErr  error
+}
+
+func (r *testDeadlineRecorder) SetWriteDeadline(t time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deadlines = append(r.deadlines, t)
+	return nil
+}
+
+func (r *testDeadlineRecorder) Flush() {}
+
+func (r *testDeadlineRecorder) FlushError() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.flushErr
+}
+
+func (r *testDeadlineRecorder) SetFlushErr(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.flushErr = err
+}
+
+func (r *testDeadlineRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	err := r.writeErr
+	r.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	return r.ResponseWriter.Write(p)
+}
+
+func (r *testDeadlineRecorder) Deadlines() []time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := make([]time.Time, len(r.deadlines))
+	copy(cp, r.deadlines)
+	return cp
+}
+
+func TestEvents_SSE_ConfiguresAndClearsWriteDeadlines(t *testing.T) {
+	stk, _, _ := newRealtimeStack(t)
+	proj := createProject(t, stk, "Deadline Project")
+
+	rec := &testDeadlineRecorder{
+		ResponseWriter: httptest.NewRecorder(),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req := httptest.NewRequestWithContext(ctx, "GET", "/api/v1/projects/"+proj.ID+"/events", nil)
+
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		stk.Handler.ServeHTTP(rec, req)
+	}()
+
+	// Wait for initial : connected write to execute and deadlines recorded
+	deadline := time.Now().Add(1 * time.Second)
+	var dls []time.Time
+	for time.Now().Before(deadline) {
+		dls = rec.Deadlines()
+		if len(dls) >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if len(dls) < 2 {
+		t.Fatalf("expected at least 2 deadline calls (set + clear), got %d", len(dls))
+	}
+
+	firstDeadline := dls[0]
+	if firstDeadline.IsZero() || !firstDeadline.After(time.Now()) {
+		t.Errorf("expected first deadline to be in future, got %v", firstDeadline)
+	}
+
+	clearedDeadline := dls[1]
+	if !clearedDeadline.IsZero() {
+		t.Errorf("expected second deadline to be zero (cleared), got %v", clearedDeadline)
+	}
+
+	cancel()
+	<-doneCh
+}
+
+func TestEvents_SSE_WriteErrorCleansUpBrokerSubscription(t *testing.T) {
+	stk, broker, _ := newRealtimeStack(t)
+	proj := createProject(t, stk, "Write Error Project")
+
+	rec := &testDeadlineRecorder{
+		ResponseWriter: httptest.NewRecorder(),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req := httptest.NewRequestWithContext(ctx, "GET", "/api/v1/projects/"+proj.ID+"/events", nil)
+
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		stk.Handler.ServeHTTP(rec, req)
+	}()
+
+	// Wait for subscription
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		if broker.SubscriberCountForProject(domain.ID(proj.ID)) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if count := broker.SubscriberCountForProject(domain.ID(proj.ID)); count != 1 {
+		t.Fatalf("subscriber count = %d, want 1", count)
+	}
+
+	// Arm recorder to return an error on next flush (simulating write failure / deadline exceeded)
+	rec.SetFlushErr(errors.New("i/o timeout: write deadline exceeded"))
+
+	// Trigger an event to force a write
+	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks", map[string]any{
+		"project_id": proj.ID,
+		"title":      "Trigger Task",
+		"actor":      actor("ada"),
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("create task failed: %d (%s)", code, body)
+	}
+
+	// Handler should detect the flushErr and exit immediately
+	select {
+	case <-doneCh:
+		// Success: handler terminated cleanly
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not terminate after write error")
+	}
+
+	// Verify subscriber was removed from broker
+	if count := broker.SubscriberCountForProject(domain.ID(proj.ID)); count != 0 {
+		t.Errorf("subscriber count = %d, want 0 after write error (leak!)", count)
+	}
+}
+
+func TestEvents_SSE_ClientAbruptDisconnectOnEventCleansUp(t *testing.T) {
+	stk, broker, srv := newRealtimeStack(t)
+	proj := createProject(t, stk, "Abrupt Disconnect Project")
+
+	// Connect SSE client
+	res, err := srv.Client().Get(srv.URL + "/api/v1/projects/" + proj.ID + "/events")
+	if err != nil {
+		t.Fatalf("connect SSE: %v", err)
+	}
+
+	// Wait for subscriber registration
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		if broker.SubscriberCountForProject(domain.ID(proj.ID)) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if count := broker.SubscriberCountForProject(domain.ID(proj.ID)); count != 1 {
+		t.Fatalf("subscriber count = %d, want 1", count)
+	}
+
+	// Abruptly close response body without cancelling request context
+	_ = res.Body.Close()
+
+	// Trigger a task creation event so server attempts to write to broken connection
+	newTask(t, stk, proj.ID, "Post Disconnect Task")
+
+	// Wait for subscriber cleanup
+	deadline = time.Now().Add(2 * time.Second)
+	cleaned := false
+	for time.Now().Before(deadline) {
+		if broker.SubscriberCountForProject(domain.ID(proj.ID)) == 0 {
+			cleaned = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if !cleaned {
+		t.Errorf("subscriber count was not cleaned up after client disconnect and event write (leak!)")
 	}
 }
