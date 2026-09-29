@@ -797,6 +797,88 @@ func TestUpdateTaskRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUpdateTaskClearDueAndAssigneeRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// Call update_task with clear_due: true, clear_assignee: true
+	res := callTool(t, c, ctx, "update_task", map[string]any{
+		"id":             "T1",
+		"version":        4,
+		"clear_due":      true,
+		"clear_assignee": true,
+	})
+	if res.IsError {
+		t.Fatalf("update_task with clear_due and clear_assignee returned error: %s", firstText(t, res))
+	}
+
+	var patches []capturedCall
+	for _, cc := range *calls {
+		if cc.method == http.MethodPatch && cc.path == "/api/v1/tasks/T1" {
+			patches = append(patches, cc)
+		}
+	}
+	if len(patches) != 1 {
+		t.Fatalf("expected 1 PATCH /tasks/T1 call, got %d", len(patches))
+	}
+	var sent apiclient.UpdateTaskRequest
+	if err := json.Unmarshal([]byte(patches[0].body), &sent); err != nil {
+		t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, patches[0].body)
+	}
+	if !sent.ClearDue {
+		t.Errorf("expected ClearDue == true, got false")
+	}
+	if !sent.ClearAssignee {
+		t.Errorf("expected ClearAssignee == true, got false")
+	}
+	if sent.Version != 4 {
+		t.Errorf("expected Version == 4, got %d", sent.Version)
+	}
+
+	// Verify that when clear_due and clear_assignee are omitted, they default to false
+	resDefault := callTool(t, c, ctx, "update_task", map[string]any{
+		"id":      "T1",
+		"version": 4,
+		"title":   "New Title",
+	})
+	if resDefault.IsError {
+		t.Fatalf("update_task without clear flags returned error: %s", firstText(t, resDefault))
+	}
+	patches = nil
+	for _, cc := range *calls {
+		if cc.method == http.MethodPatch && cc.path == "/api/v1/tasks/T1" {
+			patches = append(patches, cc)
+		}
+	}
+	if len(patches) != 2 {
+		t.Fatalf("expected 2 PATCH /tasks/T1 calls, got %d", len(patches))
+	}
+	var sentDefault apiclient.UpdateTaskRequest
+	if err := json.Unmarshal([]byte(patches[1].body), &sentDefault); err != nil {
+		t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, patches[1].body)
+	}
+	if sentDefault.ClearDue {
+		t.Errorf("expected ClearDue == false when omitted, got true")
+	}
+	if sentDefault.ClearAssignee {
+		t.Errorf("expected ClearAssignee == false when omitted, got true")
+	}
+
+	// Schema validation: non-boolean passed to clear_due should return isError
+	resInvalid := callTool(t, c, ctx, "update_task", map[string]any{
+		"id":        "T1",
+		"version":   4,
+		"clear_due": "not-a-bool",
+	})
+	if !resInvalid.IsError {
+		t.Fatalf("expected isError for non-boolean clear_due, got success: %s", firstText(t, resInvalid))
+	}
+}
+
 func TestReleaseAndHeartbeatRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

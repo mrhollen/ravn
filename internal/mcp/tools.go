@@ -382,7 +382,7 @@ func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("update_task",
 		mcpgo.WithDescription(
-			"Version-guarded partial update of one task: any of title, description, status (todo|doing|done, validated against allowed transitions), priority (0–5), due_at (RFC3339), assignee, archived — omitted fields are unchanged. version is REQUIRED and must be the stored version you last read (fresh tasks are version 1; every mutating result echoes the new version). A STALE version returns isError with the 409 body VERBATIM — it carries current_version plus a fresh \"current\" row, so retry your update with that version WITHOUT re-reading. Returns the fresh summary row (version bumped)."+actorHint),
+			"Version-guarded partial update of one task: any of title, description, status (todo|doing|done, validated against allowed transitions), priority (0–5), due_at (RFC3339), clear_due (boolean), assignee, clear_assignee (boolean), archived — omitted fields are unchanged. version is REQUIRED and must be the stored version you last read (fresh tasks are version 1; every mutating result echoes the new version). A STALE version returns isError with the 409 body VERBATIM — it carries current_version plus a fresh \"current\" row, so retry your update with that version WITHOUT re-reading. Returns the fresh summary row (version bumped)."+actorHint),
 		mcpgo.WithString("id", mcpgo.Required(),
 			mcpgo.Description("Task ULID to update.")),
 		mcpgo.WithInteger("version", mcpgo.Required(),
@@ -396,8 +396,12 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		mcpgo.WithNumber("priority", mcpgo.Min(0), mcpgo.Max(5),
 			mcpgo.Description("New priority 0–5.")),
 		mcpgo.WithString("due_at",
-			mcpgo.Description("RFC3339 due date to set.")),
+			mcpgo.Description("RFC3339 due date to set. An empty string is a no-op that keeps the current deadline — use clear_due to remove it.")),
+		mcpgo.WithBoolean("clear_due",
+			mcpgo.Description("true = clear the task's deadline (due_at becomes null). Takes precedence over due_at if both are given in the same call.")),
 		assigneeProp(),
+		mcpgo.WithBoolean("clear_assignee",
+			mcpgo.Description("true = remove durable assignee (task becomes unassigned). Takes precedence over assignee if both are given in the same call.")),
 		mcpgo.WithBoolean("archived",
 			mcpgo.Description("Archive (true) or unarchive (false) the task.")),
 		actorProp(),
@@ -436,7 +440,9 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 			s := v
 			body.DueAt = &s
 		}
+		body.ClearDue = req.GetBool("clear_due", false)
 		body.Assignee = optionalActor(args, "assignee")
+		body.ClearAssignee = req.GetBool("clear_assignee", false)
 		if v, ok := args["archived"]; ok {
 			b, _ := v.(bool)
 			body.Archived = &b
