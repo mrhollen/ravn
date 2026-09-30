@@ -1,23 +1,29 @@
-// Markdown rendering with a no-extra-dependencies sanitization pipeline.
+// Markdown rendering with a detached DOM sanitization pipeline.
 //
-// Strategy ("escape-then-render"):
-//   1. HTML-significant characters in the *source* are escaped first, so raw
-//      <script>/<img onerror=…>/etc. from data can never become live markup —
-//      marked only ever emits tags that markdown SYNTAX asks for (p, a, code,
-//      ul, img from ![…], …).
-//   2. The rendered HTML is then post-processed in a detached DOM: script/
-//      form-like elements and <img> are dropped entirely (no remote images in
-//      the MVP — this also kills data:-URL exfiltration via broken links),
-//      anchor hrefs are restricted to http(s)/relative/#/mailto:, inline event
-//      handlers and suspicious style values are stripped.
+// Strategy ("parse-then-sanitize"):
+//   1. Raw markdown source is parsed directly with marked.parse so that markdown
+//      syntax (blockquotes '>', code blocks with '<' and '&', emphasis, lists)
+//      emits proper semantic HTML without entity mangling or double escaping.
+//   2. The rendered HTML is post-processed in a detached DOM (DOMParser):
+//      forbidden elements (script, noscript, iframe, form, style, svg, math,
+//      template, input, button, select, textarea, dialog, etc.) and images are
+//      stripped entirely, URL-typed attributes (href/src/data/…) carrying
+//      javascript:/data: values are neutralized, anchor hrefs are restricted to
+//      safe schemes (http(s), mailto, relative, #), and inline event handlers
+//      and unsafe style values are removed.
 //
-// The pipeline can never throw out of normal operation: any parse failure
-// degrades to escaped plain text.
+// The pipeline can never throw out of normal operation: any parse or DOM
+// failure degrades safely to escaped plain text.
 
 import { marked } from "marked";
 
+// URL-typed attributes whose values must never carry an active scheme.
+const URL_ATTRS = new Set(["HREF", "SRC", "DATA", "POSTER", "ACTION", "FORMACTION", "XLINK:HREF"]);
+const UNSAFE_URL_SCHEME = /^\s*(javascript|vbscript|data)\s*:/i;
+
 const FORBIDDEN_TAGS = new Set([
   "SCRIPT",
+  "NOSCRIPT",
   "IFRAME",
   "OBJECT",
   "EMBED",
@@ -28,6 +34,14 @@ const FORBIDDEN_TAGS = new Set([
   "STYLE",
   "AUDIO",
   "VIDEO",
+  "SVG",
+  "MATH",
+  "TEMPLATE",
+  "INPUT",
+  "BUTTON",
+  "SELECT",
+  "TEXTAREA",
+  "DIALOG",
 ]);
 
 export function escapeHtml(s: string): string {
@@ -37,15 +51,23 @@ export function escapeHtml(s: string): string {
 function sanitizeHtml(html: string): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
   for (const el of Array.from(doc.body.querySelectorAll("*"))) {
+    if (!el.isConnected) continue;
     const tag = el.tagName.toUpperCase();
     if (FORBIDDEN_TAGS.has(tag) || tag === "IMG") {
       el.remove();
       continue;
     }
-    // Strip inline event handlers (defence in depth — the escape step already
-    // prevents them from ever existing).
+    // Strip inline event handlers
     for (const attr of Array.from(el.attributes)) {
       if (/^on/i.test(attr.name)) el.removeAttribute(attr.name);
+    }
+    // Neutralize javascript:/data:/vbscript: URLs in URL-typed attributes.
+    // <img>/<iframe>/<object>/<embed> are already gone above, but raw source
+    // markup can still smuggle these onto surviving elements (e.g. <area>).
+    for (const attr of Array.from(el.attributes)) {
+      if (URL_ATTRS.has(attr.name.toUpperCase()) && UNSAFE_URL_SCHEME.test(attr.value)) {
+        el.removeAttribute(attr.name);
+      }
     }
     const style = el.getAttribute("style");
     if (style !== null && /expression|javascript\s*:|url\s*\(/i.test(style)) {
@@ -68,17 +90,17 @@ function sanitizeHtml(html: string): string {
 /** Renders markdown source to sanitized HTML. Empty/whitespace → "". */
 export function renderMarkdown(src: string | null | undefined): string {
   if (!src || !src.trim()) return "";
-  const escaped = escapeHtml(src);
   let html: string;
   try {
-    html = marked.parse(escaped, { async: false });
+    html = marked.parse(src, { async: false }) as string;
   } catch {
-    return `<p>${escaped}</p>`; // never crash — show the escaped text as-is
+    return `<p>${escapeHtml(src)}</p>`; // never crash — show the escaped text as-is
   }
-  if (typeof html !== "string") return `<p>${escaped}</p>`;
+  if (typeof html !== "string") return `<p>${escapeHtml(src)}</p>`;
   try {
     return sanitizeHtml(html);
   } catch {
-    return `<p>${escaped}</p>`;
+    return `<p>${escapeHtml(src)}</p>`;
   }
 }
+
