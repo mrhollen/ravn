@@ -52,7 +52,8 @@ RUN go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
 #    unprivileged user cannot write the database).
 # ---------------------------------------------------------------------------
 FROM alpine:3.21 AS server-runtime
-RUN addgroup -g 10001 app \
+RUN apk add --no-cache ca-certificates \
+ && addgroup -g 10001 app \
  && adduser -D -u 10001 -G app app \
  && mkdir -p /data \
  && chown app:app /data
@@ -76,7 +77,8 @@ ENTRYPOINT ["crowban-server"]
 #    main server's healthcheck, so compose `service_healthy` chains through it.
 # ---------------------------------------------------------------------------
 FROM alpine:3.21 AS mcp-runtime
-RUN addgroup -g 10001 app \
+RUN apk add --no-cache ca-certificates \
+ && addgroup -g 10001 app \
  && adduser -D -u 10001 -G app app
 COPY --from=go-build /out/crowban-mcp /usr/local/bin/
 USER app

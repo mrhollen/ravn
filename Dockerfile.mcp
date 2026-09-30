@@ -16,7 +16,8 @@ RUN go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
         -o /out/crowban-mcp ./cmd/crowban-mcp
 
 FROM alpine:3.21
-RUN addgroup -g 10001 app \
+RUN apk add --no-cache ca-certificates \
+ && addgroup -g 10001 app \
  && adduser -D -u 10001 -G app app
 COPY --from=go-build /out/crowban-mcp /usr/local/bin/
 USER app
