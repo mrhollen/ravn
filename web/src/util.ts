@@ -152,3 +152,73 @@ export function splitLines(s: string): string[] {
     .map((l) => l.trim())
     .filter(Boolean);
 }
+
+// ----------------------------------------------------------- safe storage
+// Safe localStorage wrapper with in-memory map fallback.
+// Sandboxed iframes, Safari private browsing, or storage-disabled browsers throw
+// DOMException: SecurityError upon accessing window.localStorage. This wrapper
+// guarantees that reads and writes degrade gracefully to an in-memory Map rather
+// than throwing and halting application initialization.
+const memoryStorage = new Map<string, string>();
+
+function getLocalStorage(): Storage | null {
+  try {
+    return typeof window !== "undefined" && window.localStorage ? window.localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+export const safeStorage = {
+  getItem(key: string): string | null {
+    try {
+      const ls = getLocalStorage();
+      if (ls) {
+        const val = ls.getItem(key);
+        if (val !== null) return val;
+      }
+    } catch {
+      /* storage blocked */
+    }
+    return memoryStorage.get(key) ?? null;
+  },
+
+  setItem(key: string, value: string): void {
+    try {
+      const ls = getLocalStorage();
+      if (ls) {
+        ls.setItem(key, value);
+        memoryStorage.set(key, value);
+        return;
+      }
+    } catch {
+      /* storage blocked or quota exceeded */
+    }
+    memoryStorage.set(key, value);
+  },
+
+  removeItem(key: string): void {
+    try {
+      const ls = getLocalStorage();
+      if (ls) {
+        ls.removeItem(key);
+      }
+    } catch {
+      /* storage blocked */
+    }
+    memoryStorage.delete(key);
+  },
+
+  clear(): void {
+    try {
+      const ls = getLocalStorage();
+      if (ls) {
+        ls.clear();
+      }
+    } catch {
+      /* storage blocked */
+    }
+    memoryStorage.clear();
+  },
+};
+

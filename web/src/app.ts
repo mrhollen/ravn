@@ -38,6 +38,7 @@ import {
   priorityClass,
   priorityName,
   relTime,
+  safeStorage,
   shortId,
   splitLines,
   statusLabel,
@@ -61,7 +62,7 @@ function isThemeMode(v: unknown): v is ThemeMode {
 /** Read the persisted theme choice; anything malformed falls back to system. */
 function readStoredTheme(): ThemeMode {
   try {
-    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(LS_THEME) : null;
+    const raw = safeStorage.getItem(LS_THEME);
     return isThemeMode(raw) ? raw : "system";
   } catch {
     return "system";
@@ -98,7 +99,7 @@ function isSortKey(v: unknown): v is SortKey {
 /** Read the persisted sort choice; anything malformed falls back to no sort. */
 function readStoredSort(): { key: SortKey; dir: SortDir } {
   try {
-    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(LS_SORT) : null;
+    const raw = safeStorage.getItem(LS_SORT);
     if (!raw) return { key: "", dir: "desc" };
     const parsed = JSON.parse(raw) as { key?: unknown; dir?: unknown };
     const key: SortKey = isSortKey(parsed.key) ? parsed.key : "";
@@ -178,11 +179,11 @@ export function crowbanApp() {
   return {
     // ------------------------------------------------------------------ actor
     /** Display name stored in localStorage; sent as `actor.name` on every mutation. */
-    actorName: (typeof localStorage !== "undefined" ? localStorage.getItem(LS_ACTOR) : "") ?? "",
+    actorName: safeStorage.getItem(LS_ACTOR) ?? "",
 
     saveActor(): void {
       try {
-        localStorage.setItem(LS_ACTOR, this.actorName.trim());
+        safeStorage.setItem(LS_ACTOR, this.actorName.trim());
       } catch {
         /* private mode — non-fatal */
       }
@@ -209,7 +210,7 @@ export function crowbanApp() {
     setTheme(mode: ThemeMode): void {
       this.theme = mode;
       try {
-        localStorage.setItem(LS_THEME, mode);
+        safeStorage.setItem(LS_THEME, mode);
       } catch {
         /* private mode — non-fatal */
       }
@@ -311,7 +312,7 @@ export function crowbanApp() {
         await this.loadProjects();
         this.selectedProjectId = p.id;
         try {
-          localStorage.setItem(LS_PROJECT, p.id);
+          safeStorage.setItem(LS_PROJECT, p.id);
         } catch { /* ignore */ }
         this.connectSse();
         await this.loadBoard();
@@ -388,7 +389,7 @@ export function crowbanApp() {
     },
 
     // ------------------------------------------------------------------- board
-    selectedProjectId: (typeof localStorage !== "undefined" ? localStorage.getItem(LS_PROJECT) : "") ?? "",
+    selectedProjectId: safeStorage.getItem(LS_PROJECT) ?? "",
     board: null as Board | null,
 
     /** IDs of tasks known to be blocked right now — summary rows don't carry
@@ -430,7 +431,7 @@ export function crowbanApp() {
 
     saveSort(): void {
       try {
-        localStorage.setItem(LS_SORT, JSON.stringify({ key: this.sortKey, dir: this.sortDir }));
+        safeStorage.setItem(LS_SORT, JSON.stringify({ key: this.sortKey, dir: this.sortDir }));
       } catch {
         /* private mode — non-fatal */
       }
@@ -564,7 +565,7 @@ export function crowbanApp() {
 
     selectProject(): void {
       try {
-        localStorage.setItem(LS_PROJECT, this.selectedProjectId);
+        safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
       } catch { /* ignore */ }
       this.board = null;
       this.connectSse();
@@ -1964,7 +1965,7 @@ export function crowbanApp() {
       }
       if (this.selectedProjectId) {
         try {
-          localStorage.setItem(LS_PROJECT, this.selectedProjectId);
+          safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
         } catch { /* ignore */ }
         await this.loadBoard();
         this.connectSse();

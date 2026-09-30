@@ -102,8 +102,8 @@ export function getAuthToken(): string {
 
 /** Stores or clears the auth token in localStorage. */
 export function setAuthToken(token: string): void {
-  if (typeof localStorage === "undefined") return;
   try {
+    if (typeof localStorage === "undefined") return;
     const trimmed = token.trim();
     if (!trimmed) {
       localStorage.removeItem(LS_TOKEN);
