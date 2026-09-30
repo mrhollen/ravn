@@ -527,13 +527,13 @@ test.describe('Web E2E test suite', () => {
     // AC 2: Assignee selector & durable owner chip distinct from claimer
     // -------------------------------------------------------------------------
     // Verify Task 1 has distinct amber Owner chip on card
-    const card1 = page.locator('div[role="button"]', { hasText: 'Alpha Critical Task' });
+    const card1 = page.locator('article', { hasText: 'Alpha Critical Task' });
     const ownerChip1 = card1.locator('span.bg-amber-50');
     await expect(ownerChip1).toBeVisible();
     await expect(ownerChip1).toContainText('alice');
 
     // Open detail drawer for Task 3 (unassigned)
-    const card3 = page.locator('div[role="button"]', { hasText: 'Gamma Low Task' });
+    const card3 = page.locator('article', { hasText: 'Gamma Low Task' });
     await card3.click();
     const drawer = page.locator('aside');
     await expect(drawer.getByRole('heading', { name: 'Gamma Low Task' })).toBeVisible();
@@ -556,7 +556,7 @@ test.describe('Web E2E test suite', () => {
     // Close drawer and verify card shows both owner and claimer distinctly
     const closeBtn = drawer.locator('button[aria-label="Close"]').first();
     await closeBtn.click();
-    const card3Updated = page.locator('div[role="button"]', { hasText: 'Gamma Low Task' });
+    const card3Updated = page.locator('article', { hasText: 'Gamma Low Task' });
     await expect(card3Updated.locator('span.bg-amber-50')).toContainText('charlie-human');
 
     // Reopen drawer, clear assignee
@@ -629,7 +629,7 @@ test.describe('Web E2E test suite', () => {
     await page.locator('select[x-model="newTask.assigneeType"]').selectOption('agent');
     await page.getByRole('button', { name: 'Create task' }).click();
 
-    const deltaCard = page.locator('div[role="button"]', { hasText: 'Delta Assigned Task' });
+    const deltaCard = page.locator('article', { hasText: 'Delta Assigned Task' });
     await expect(deltaCard).toBeVisible();
     await expect(deltaCard.locator('span.bg-amber-50')).toContainText('diana-agent');
 
@@ -680,7 +680,7 @@ test.describe('Web E2E test suite', () => {
     const projectSelect = page.locator('select').first();
     await projectSelect.selectOption(project.id);
 
-    const taskCard = page.locator('div[role="button"]', { hasText: 'Task with ACs' });
+    const taskCard = page.locator('article', { hasText: 'Task with ACs' });
     await expect(taskCard).toBeVisible();
     await taskCard.click();
 
@@ -836,7 +836,7 @@ test.describe('Web E2E test suite', () => {
     const projectSelect = page.locator('select').first();
     await projectSelect.selectOption(project.id);
 
-    const taskCard = page.locator('div[role="button"]', { hasText: 'Task with 55 Comments' });
+    const taskCard = page.locator('article', { hasText: 'Task with 55 Comments' });
     await expect(taskCard).toBeVisible();
     await taskCard.click();
 

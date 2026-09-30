@@ -313,7 +313,7 @@ test.describe('theme (dark mode)', () => {
     expect(nearRgb(headerBg, ZINC_900)).toBe(true);
 
     // Board cards render on the elevated dark surface.
-    const card = page.locator('div[role="button"][draggable="true"]').first();
+    const card = page.locator('article[draggable="true"]').first();
     await expect(card).toBeVisible();
     expect(nearRgb(await locatorBg(card), ZINC_800)).toBe(true);
 

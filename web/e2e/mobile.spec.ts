@@ -310,7 +310,7 @@ test.describe('Mobile experience (375px, touch)', () => {
     const doingCol = column(page, 'Doing');
 
     // Swipe right: todo -> doing. The aria-label includes the current status.
-    let card = page.getByRole('button', { name: 'Task: Swipe me, status To Do' });
+    let card = page.getByRole('article', { name: 'Task: Swipe me, status To Do' });
     await expect(card).toBeVisible();
     await swipeHorizontal(cdp, card, 'right');
 
@@ -320,7 +320,7 @@ test.describe('Mobile experience (375px, touch)', () => {
     await expect(page.getByRole('button', { name: 'Post comment' })).toBeHidden();
 
     // Swipe left: doing -> todo.
-    card = page.getByRole('button', { name: 'Task: Swipe me, status Doing' });
+    card = page.getByRole('article', { name: 'Task: Swipe me, status Doing' });
     await expect(card).toBeVisible();
     await swipeHorizontal(cdp, card, 'left');
 
@@ -334,26 +334,34 @@ test.describe('Mobile experience (375px, touch)', () => {
     const { context, page } = await openMobileBoard(browser);
 
     const todoCol = column(page, 'To Do');
+    const doingCol = column(page, 'Doing');
     const doneCol = column(page, 'Done');
 
-    let card = page.getByRole('button', { name: 'Task: Menu mover, status To Do' });
+    let card = page.getByRole('article', { name: 'Task: Menu mover, status To Do' });
     await expect(card).toBeVisible();
 
     // Open the per-card move menu.
     const toggle = card.getByRole('button', { name: 'Move task to another status' });
     await toggle.click();
-    await expect(card.locator('[data-testid="card-move-done"]')).toBeVisible();
+    await expect(card.locator('[data-testid="card-move-doing"]')).toBeVisible();
     // The current status is shown but not actionable...
     await expect(card.locator('[data-testid="card-move-todo"]')).toHaveClass(/cursor-default/);
 
-    // Pick "Done".
-    await card.locator('[data-testid="card-move-done"]').click();
-    await expect(doneCol.getByText('Menu mover')).toBeVisible();
+    // Pick "Doing" (valid transition from To Do).
+    await card.locator('[data-testid="card-move-doing"]').click();
+    await expect(doingCol.getByText('Menu mover')).toBeVisible();
     await expect(todoCol.getByText('Menu mover')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Post comment' })).toBeHidden();
 
-    // Move it back to To Do through the menu.
-    card = page.getByRole('button', { name: 'Task: Menu mover, status Done' });
+    // Move from Doing to Done.
+    card = page.getByRole('article', { name: 'Task: Menu mover, status Doing' });
+    await card.getByRole('button', { name: 'Move task to another status' }).click();
+    await card.locator('[data-testid="card-move-done"]').click();
+    await expect(doneCol.getByText('Menu mover')).toBeVisible();
+    await expect(doingCol.getByText('Menu mover')).toHaveCount(0);
+
+    // Move it back to To Do through the menu (valid transition from Done).
+    card = page.getByRole('article', { name: 'Task: Menu mover, status Done' });
     await card.getByRole('button', { name: 'Move task to another status' }).click();
     await card.locator('[data-testid="card-move-todo"]').click();
     await expect(todoCol.getByText('Menu mover')).toBeVisible();
