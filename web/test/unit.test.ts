@@ -15,7 +15,7 @@ import {
 import { escapeHtml, renderMarkdown } from "../src/md.ts";
 import { crowbanApp } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
-import { beginMove, endMove, withTimeout } from "../src/moves.ts";
+import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, shouldApplyBoard } from "../src/refresh.ts";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -746,4 +746,66 @@ test("Refresh: coalesceInFlight — a failed flight resets so the next call retr
   failNext = false;
   assert.equal(await c.call(), "ok", "after a failure the next call re-runs (no stuck coalescer)");
   assert.equal(runs, 2, "exactly two executions: the failed flight + the successful retry");
+});
+
+// --------------------------------------------------------------- transition map
+// The client transition map (moves.ts LEGAL_TRANSITIONS) is a MIRROR of the
+// server's domain.CanTransition — internal/domain/status.go, matrix pinned by
+// TestCanTransition in internal/domain/status_test.go. These tests pin the same
+// pairs so a drift on either side shows up here or in `go test ./internal/...`.
+
+test("Moves: canMove mirrors the full 9-pair server transition matrix", () => {
+  const pairs: Array<[string, string, boolean]> = [
+    // legal (the only three)
+    ["todo", "doing", true],
+    ["doing", "done", true],
+    ["doing", "todo", true],
+    ["done", "todo", true],
+    // illegal — skipping a step / going backwards through doing
+    ["todo", "done", false],
+    ["done", "doing", false],
+    // self-transitions: rejected by domain.CanTransition (API no-ops them)
+    ["todo", "todo", false],
+    ["doing", "doing", false],
+    ["done", "done", false],
+  ];
+  for (const [from, to, want] of pairs) {
+    assert.equal(canMove(from, to), want, `canMove(${from}, ${to})`);
+  }
+});
+
+test("Moves: canMove fails closed on unknown/empty statuses (like the server)", () => {
+  for (const [from, to] of [
+    ["", "todo"],
+    ["todo", ""],
+    ["unknown", "unknown"],
+    ["doing", "invalid"],
+  ] as Array<[string, string]>) {
+    assert.equal(canMove(from, to), false, `canMove(${from}, ${to})`);
+  }
+});
+
+test("Moves: legalTargets returns each status' allowed destinations (server order)", () => {
+  assert.deepEqual(legalTargets("todo"), ["doing"]);
+  assert.deepEqual(legalTargets("doing"), ["done", "todo"]);
+  assert.deepEqual(legalTargets("done"), ["todo"]);
+  assert.deepEqual(legalTargets("nonsense"), []);
+  const copy = legalTargets("doing");
+  copy.push("nope");
+  assert.deepEqual(legalTargets("doing"), ["done", "todo"], "returns a fresh copy, not the map entry");
+});
+
+test("Moves: friendlyTransitionError maps the server's ErrInvalid message to a friendly toast", () => {
+  // Exact server shape — internal/application/tasks.go wraps domain.ErrInvalid:
+  const e = new Error('invalid input: cannot transition status from "todo" to "done"');
+  assert.equal(friendlyTransitionError(e), "Can't move To Do → Done — that's not an allowed step.");
+
+  const e2 = new Error('invalid input: cannot transition status from "done" to "doing"');
+  assert.equal(friendlyTransitionError(e2), "Can't move Done → Doing — that's not an allowed step.");
+
+  // Anything else (network errors, version conflicts, plain failures) passes through untouched.
+  assert.equal(friendlyTransitionError(new Error("version conflict")), null);
+  assert.equal(friendlyTransitionError(new TypeError("fetch failed")), null);
+  assert.equal(friendlyTransitionError(null), null);
+  assert.equal(friendlyTransitionError("cannot transition status from \"todo\" to \"done\""), null, "non-Error values are not interpreted");
 });

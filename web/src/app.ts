@@ -8,7 +8,7 @@
 
 import { ApiError, api, errMsg } from "./api";
 import { focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
-import { beginMove, endMove, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
+import { beginMove, canMove, endMove, friendlyTransitionError, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
 import { renderMarkdown } from "./md";
 import type {
@@ -1323,6 +1323,13 @@ export function crowbanApp() {
     dragOverStatus: null as Status | null,
     isDragging: false,
 
+    /** Template helper: may the CURRENTLY-DRAGGED card be dropped on `status`?
+     *  (False while nothing legal is known — grey-out styling for illegal
+     *  columns reads this. The transition map itself lives in moves.ts.) */
+    dragTargetLegal(status: Status): boolean {
+      return this.draggedFromStatus ? canMove(this.draggedFromStatus, status) : true;
+    },
+
     onDragStart(e: DragEvent, task: TaskSummary, fromStatus: Status): void {
       // Only the card's OWN in-flight move blocks it (per-task lock); tell the
       // user instead of silently refusing the drag.
@@ -1350,7 +1357,11 @@ export function crowbanApp() {
     },
 
     onDragOver(e: DragEvent, status: Status): void {
-      if (!this.draggedTaskId) return;
+      if (!this.draggedTaskId || !this.draggedFromStatus) return;
+      // Illegal transition → do NOT preventDefault: the browser then shows a
+      // no-drop cursor and never fires @drop, so illegal columns can't take
+      // the card (the grey-out styling below tells the user why).
+      if (!canMove(this.draggedFromStatus, status)) return;
       e.preventDefault();
       if (e.dataTransfer) {
         e.dataTransfer.dropEffect = "move";
@@ -1383,6 +1394,12 @@ export function crowbanApp() {
       }, 50);
 
       if (!taskId || !fromStatus || fromStatus === targetStatus) {
+        return;
+      }
+      // Belt-and-braces with the dragover guard: a drop on an illegal target
+      // is ignored (with feedback), never sent to the server.
+      if (!canMove(fromStatus, targetStatus)) {
+        this.toast(`Can't move ${statusLabel(fromStatus)} → ${statusLabel(targetStatus)} — that's not an allowed step.`, "info");
         return;
       }
       await this.moveTaskStatus(taskId, targetStatus);
@@ -1468,7 +1485,15 @@ export function crowbanApp() {
       const idx = STATUSES.indexOf(s.fromStatus);
       const target: Status | null =
         dx > 48 ? (STATUSES[idx + 1] ?? null) : dx < -48 ? (STATUSES[idx - 1] ?? null) : null;
-      if (target) void this.moveTaskStatus(task.id, target);
+      if (!target) return;
+      // Swipes move exactly one column at a time. The only adjacent pair that
+      // the domain transition map rejects is done → doing (left-swipe on a Done
+      // card); refuse it with feedback instead of hitting the 400 + rollback.
+      if (!canMove(s.fromStatus, target)) {
+        this.toast(`Can't move ${statusLabel(s.fromStatus)} → ${statusLabel(target)} — that's not an allowed step.`, "info");
+        return;
+      }
+      void this.moveTaskStatus(task.id, target);
     },
 
     toggleCardMenu(id: string): void {
@@ -1612,7 +1637,7 @@ export function crowbanApp() {
               // completed the retry — state may be half-applied, so say "may".
               this.toast("Move timed out — your change may not have saved. Please try again.", "error");
             } else {
-              this.toast(errMsg(e2), "error");
+              this.toast(friendlyTransitionError(e2) ?? errMsg(e2), "error");
             }
           }
         } else if (e instanceof MoveTimedOutError) {
@@ -1622,7 +1647,9 @@ export function crowbanApp() {
         } else {
           rollback();
           await this.loadBoard(true).catch(() => undefined);
-          this.toast(errMsg(e), "error");
+          // Server-side rejections (e.g. another agent moved the card mid-drag)
+          // surface with friendly wording for known error shapes, raw text otherwise.
+          this.toast(friendlyTransitionError(e) ?? errMsg(e), "error");
         }
       } finally {
         endMove(this.busyTaskIds, taskId);
@@ -2193,6 +2220,7 @@ export function crowbanApp() {
     // ------------------------------------------------------------- template glue
     STATUSES,
     SORT_OPTIONS,
+    canMove,
     statusLabel,
     priorityClass,
     priorityName,

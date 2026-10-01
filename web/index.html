@@ -308,14 +308,21 @@
             <div class="grid grid-cols-1 items-start gap-4 md:grid-cols-2 lg:grid-cols-3">
               <template x-for="col in columns()" :key="col.status">
                 <section
-                  @dragover.prevent="onDragOver($event, col.status)"
+                  @dragover="onDragOver($event, col.status)"
                   @dragleave="onDragLeave($event, col.status)"
                   @drop.prevent="onDrop($event, col.status)"
                   class="flex flex-col rounded-xl border transition-colors shadow-sm"
-                   :class="dragOverStatus === col.status && draggedFromStatus !== col.status
-                     ? 'border-indigo-400 bg-indigo-50/50 ring-2 ring-indigo-300 dark:border-indigo-500 dark:bg-indigo-950/60 dark:ring-indigo-700'
-                     : 'border-zinc-200 bg-white/70 dark:border-zinc-700 dark:bg-zinc-900/60'"
-                 >
+                   :class="[
+                      isDragging && draggedFromStatus && !canMove(draggedFromStatus, col.status)
+                        ? 'border-zinc-200 bg-zinc-100/80 opacity-50 saturate-50 cursor-not-allowed dark:border-zinc-800 dark:bg-zinc-900/40'
+                        : dragOverStatus === col.status && draggedFromStatus !== col.status
+                          ? 'border-indigo-400 bg-indigo-50/50 ring-2 ring-indigo-300 dark:border-indigo-500 dark:bg-indigo-950/60 dark:ring-indigo-700'
+                          : 'border-zinc-200 bg-white/70 dark:border-zinc-700 dark:bg-zinc-900/60'
+                    ]"
+                   :title="isDragging && draggedFromStatus && !canMove(draggedFromStatus, col.status)
+                      ? 'Not an allowed step from ' + statusLabel(draggedFromStatus)
+                      : ''"
+                  >
                   <header class="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 px-3 py-2">
                     <div class="flex min-w-0 items-center gap-2">
                       <h2 class="text-sm font-semibold" x-text="col.label"></h2>
@@ -324,8 +331,13 @@
                             :title="'Cards sorted by ' + activeSortLabel() + (sortDir === 'asc' ? ' (ascending)' : ' (descending)') + '. Pick “Server order” in the toolbar to reset.'"
                             x-text="activeSortLabel() + (sortDir === 'asc' ? ' ↑' : ' ↓')"></span>
                     </div>
-                     <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700"
-                           x-text="col.tasks.length"></span>
+                      <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700"
+                            x-text="col.tasks.length"></span>
+                      <span x-show="isDragging && draggedFromStatus && !canMove(draggedFromStatus, col.status)" x-cloak
+                            data-testid="col-not-allowed"
+                            class="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                        not allowed
+                      </span>
                   </header>
                   <div class="flex flex-col gap-2 p-2.5">
                     <template x-for="task in col.tasks" :key="task.id">
@@ -374,16 +386,21 @@
                          <div x-show="cardMenuTaskId === task.id" x-cloak
                               class="mt-2 flex items-center gap-1.5 border-t border-zinc-100 pt-2 dark:border-zinc-700">
                            <span class="mr-auto text-[11px] font-medium text-zinc-400">Move to</span>
-                           <template x-for="st in STATUSES" :key="st">
-                             <button type="button" @click.stop="moveCardTo(task.id, st)"
-                                     :data-testid="'card-move-' + st"
-                                     class="rounded-md border px-2 py-1 text-xs font-medium transition-colors"
-                                     :class="st === col.status
-                                       ? 'cursor-default border-zinc-200 bg-zinc-50 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-500'
-                                       : 'border-zinc-300 bg-white text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-zinc-500 dark:hover:bg-zinc-700'">
-                              <span x-text="statusLabel(st)"></span>
-                            </button>
-                          </template>
+                            <template x-for="st in STATUSES" :key="st">
+                              <!-- Convention: statuses stay VISIBLE; illegal destinations are disabled + dimmed
+                                   (same muted styling as the card's current column), with a title explaining why. -->
+                              <button type="button" @click.stop="moveCardTo(task.id, st)"
+                                      :data-testid="'card-move-' + st"
+                                      :disabled="st !== col.status && !canMove(col.status, st)"
+                                      :title="st !== col.status && !canMove(col.status, st)
+                                        ? 'Not an allowed step from ' + statusLabel(col.status) : ''"
+                                      class="rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                                      :class="st === col.status || !canMove(col.status, st)
+                                        ? 'cursor-default border-zinc-200 bg-zinc-50 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-500'
+                                        : 'border-zinc-300 bg-white text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-zinc-500 dark:hover:bg-zinc-700'">
+                               <span x-text="statusLabel(st)"></span>
+                             </button>
+                           </template>
                         </div>
                         <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
                           <span x-show="isBlocked(task.id)" x-cloak title="Has an open blocker"
@@ -710,7 +727,11 @@
                 <!-- status -->
                 <div class="flex rounded-lg border border-zinc-200 bg-zinc-50 p-1 dark:border-zinc-700 dark:bg-zinc-800" role="group" aria-label="Status">
                   <template x-for="s in ['todo', 'doing', 'done']" :key="s">
-                    <button type="button" @click="moveStatus(s)" :disabled="isTaskBusy(detail.id)"
+                    <!-- Illegal transitions are DISABLED (app convention: stay visible, dimmed) —
+                         mirrors the card move-menu; current status stays enabled as a state indicator. -->
+                    <button type="button" @click="moveStatus(s)"
+                            :disabled="isTaskBusy(detail.id) || (s !== detail.status && !canMove(detail.status, s))"
+                            :title="s !== detail.status && !canMove(detail.status, s) ? 'Not an allowed step from ' + statusLabel(detail.status) : ''"
                             class="flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-zinc-400"
                             :class="detail.status === s
                               ? 'bg-zinc-900 text-white shadow dark:bg-zinc-100 dark:text-zinc-900'
