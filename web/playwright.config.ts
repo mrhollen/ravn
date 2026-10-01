@@ -16,6 +16,10 @@ export default defineConfig({
   reporter: 'list',
   use: {
     headless: true,
+    // Capture a screenshot for every test (passing included) into the default
+    // outputDir (test-results/) under a per-test folder named after the spec
+    // + full test title. Ephemeral QA evidence; never commit it.
+    screenshot: 'on',
     launchOptions: {
       ...(chromiumPath ? { executablePath: chromiumPath } : {}),
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
