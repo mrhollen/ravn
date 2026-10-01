@@ -159,7 +159,7 @@ func TestTasksUpdateNotes_ReplacesBumpAndEmitsNoted(t *testing.T) {
 
 	fc.SetNow(fc.now.Add(10 * time.Minute)) // distinct from the create instant
 	notedAt := fc.now
-	got, err := svc.UpdateNotes(ctx, testAgent, task.ID, "# handoff notes\nreplace the WHOLE blob")
+	got, err := svc.UpdateNotes(ctx, testAgent, task.ID, "# handoff notes\nreplace the WHOLE blob", 0)
 	if err != nil {
 		t.Fatalf("UpdateNotes: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestTasksUpdateNotes_NoOpDoesNotBumpOrEmit(t *testing.T) {
 	svc, _, uow := newTaskTestEnv(t)
 	task := mustCreateTask(t, svc, "Same notes", 0, nil)
 
-	got, err := svc.UpdateNotes(ctx, testAgent, task.ID, "") // the zero-value blob again
+	got, err := svc.UpdateNotes(ctx, testAgent, task.ID, "", 0) // the zero-value blob again (unguarded)
 	if err != nil {
 		t.Fatalf("UpdateNotes: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestTasksUpdateNotes_NoOpDoesNotBumpOrEmit(t *testing.T) {
 
 func TestTasksUpdateNotes_UnknownTask(t *testing.T) {
 	svc, _, _ := newTaskTestEnv(t)
-	if _, err := svc.UpdateNotes(context.Background(), testAgent, domain.ID("no-such-task"), "x"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.UpdateNotes(context.Background(), testAgent, domain.ID("no-such-task"), "x", 0); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("unknown task → err = %v, want ErrNotFound", err)
 	}
 }

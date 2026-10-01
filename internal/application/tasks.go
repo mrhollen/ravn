@@ -536,14 +536,24 @@ func (s *Tasks) FindDuplicateCandidates(ctx context.Context, projectID domain.ID
 
 // UpdateNotes performs a REPLACE-ON-WRITE of the task's durable resume notes
 // (ARCHITECTURE §5 PUT /tasks/{id}/notes, MCP update_notes): the whole blob is
-// replaced by `notes` — no merge, no base-version check at this layer — and
-// ONE `noted` event is appended in the same unit of work. Because it IS a task
-// row mutation (version-bump policy), the write goes through the version-
-// guarded TaskRepository.Update path: version +1 and updated_at = now, no
-// other field touched. A missing task → domain.ErrNotFound; replacing with an
-// identical blob is a no-op that returns the current row without bumping or
-// emitting (same convention as Update's no-op case).
-func (s *Tasks) UpdateNotes(ctx context.Context, actor domain.Actor, id domain.ID, notes string) (domain.Task, error) {
+// replaced by `notes` — no merge, no merging of old content — and ONE `noted`
+// event is appended in the same unit of work. Because it IS a task row
+// mutation (version-bump policy), the write goes through the version-guarded
+// TaskRepository.Update path: version +1 and updated_at = now, no other field
+// touched. A missing task → domain.ErrNotFound; replacing with an identical
+// blob is a no-op that returns the current row without bumping or emitting
+// (same convention as Update's no-op case).
+//
+// expectedVersion is the OPTIONAL optimistic guard, mirroring
+// TaskUpdateInput.ExpectedVersion: 0 (the historical call shape) keeps pure
+// replace-on-write — today's contract for every existing caller, where only a
+// genuinely CONCURRENT write can lose the repository CAS and surface as
+// *domain.ConflictError. >0 additionally rejects a stale BASE version INSIDE
+// the transaction: if the row's current version differs, a
+// *domain.ConflictError carrying the fresh row is returned before anything is
+// written or emitted (even when the blob would otherwise be an identical
+// no-op — the guard protects the caller's read state).
+func (s *Tasks) UpdateNotes(ctx context.Context, actor domain.Actor, id domain.ID, notes string, expectedVersion int) (domain.Task, error) {
 	a, err := normalizeActor(actor)
 	if err != nil {
 		return domain.Task{}, err
@@ -556,6 +566,12 @@ func (s *Tasks) UpdateNotes(ctx context.Context, actor domain.Actor, id domain.I
 		cur, gerr := r.Tasks.Get(ctx, id)
 		if gerr != nil {
 			return gerr // ErrNotFound for unknown tasks
+		}
+		if expectedVersion > 0 && cur.Version != expectedVersion {
+			// Stale base version: reject INSIDE the transaction before the
+			// no-op check — a caller whose read predates another writer's
+			// commit must rebase even if its blob happens to match.
+			return &domain.ConflictError{Current: cur}
 		}
 		if cur.Notes == notes {
 			stored = cur // replace-on-write of the same blob: nothing to write or record

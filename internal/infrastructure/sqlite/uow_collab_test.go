@@ -220,7 +220,7 @@ func TestCollab_UpdateNotesReplacesBumpsVersionAndEmitsNoted(t *testing.T) {
 	}
 	baseVersion := task.Version
 
-	got, err := tasks.UpdateNotes(ctx, testActor, task.ID, "## resume context\nleft off at the migration step")
+	got, err := tasks.UpdateNotes(ctx, testActor, task.ID, "## resume context\nleft off at the migration step", 0)
 	if err != nil {
 		t.Fatalf("UpdateNotes: %v", err)
 	}

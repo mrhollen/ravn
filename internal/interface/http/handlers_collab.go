@@ -198,7 +198,7 @@ func (a *App) handleUpdateNotes(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	fresh, err := a.Tasks.UpdateNotes(ctx, actor, id, req.Notes)
+	fresh, err := a.Tasks.UpdateNotes(ctx, actor, id, req.Notes, 0) // 0 = legacy replace-on-write (no base-version guard)
 	if err != nil {
 		writeAppError(w, err, "task", id)
 		return

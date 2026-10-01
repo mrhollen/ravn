@@ -159,3 +159,93 @@ func TestTasksUpdate_ExpectedVersionMismatch_UnknownTaskStillNot409(t *testing.T
 		t.Errorf("unknown task → err = %v, want ErrNotFound", err)
 	}
 }
+
+// --- version-guarded notes (Tasks.UpdateNotes expected-version parameter) ----
+
+func TestTasksUpdateNotes_ExpectedVersionMismatch_ConflictsRowUnchanged(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := mustCreateTask(t, svc, "notes OCC", 0, nil)
+
+	// A rival write moves the notes blob forward (v1 → v2).
+	fc.SetNow(fc.now.Add(time.Minute))
+	rivalNotes := "rival resume context"
+	rival, err := svc.UpdateNotes(ctx, testAgent, task.ID, rivalNotes, 0)
+	if err != nil {
+		t.Fatalf("rival UpdateNotes: %v", err)
+	}
+
+	// Our caller still believes the row is v1 and attempts a GUARDED replace.
+	staleNotes := "my stale blob"
+	_, err = svc.UpdateNotes(ctx, testAgent, task.ID, staleNotes, 1)
+	conflict := asConflict(t, err)
+	if conflict.Current.Version != rival.Version || conflict.Current.Version != 2 {
+		t.Errorf("ConflictError.Current.Version = %d, want %d (the fresh row)", conflict.Current.Version, rival.Version)
+	}
+	if conflict.Current.Notes != rivalNotes {
+		t.Errorf("ConflictError.Current.Notes = %q, want %q", conflict.Current.Notes, rivalNotes)
+	}
+
+	stored, ok := uow.tasks.byID[task.ID]
+	if !ok || stored.Notes != rivalNotes || stored.Version != 2 {
+		t.Fatalf("stored row after rejected guarded notes write = (notes %q v%d), want (%q v2)",
+			stored.Notes, stored.Version, rivalNotes)
+	}
+	noted := eventsOfKind(uow, domain.EventNoted)
+	if len(noted) != 1 {
+		t.Errorf("noted events = %d, want 1 (the rival's — the loser appends nothing)", len(noted))
+	}
+}
+
+func TestTasksUpdateNotes_ExpectedVersionMismatch_ConflictsEvenWhenBlobUnchanged(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, _ := newTaskTestEnv(t)
+	task := mustCreateTask(t, svc, "notes OCC no-op", 0, nil)
+
+	fc.SetNow(fc.now.Add(time.Minute))
+	rivalNotes := "rival blob"
+	if _, err := svc.UpdateNotes(ctx, testAgent, task.ID, rivalNotes, 0); err != nil {
+		t.Fatalf("rival UpdateNotes: %v", err)
+	}
+
+	// Blob equals the CURRENT one (unguarded this is a silent no-op), but the
+	// caller's base version is stale → the guard still conflicts.
+	_, err := svc.UpdateNotes(ctx, testAgent, task.ID, rivalNotes, 1)
+	conflict := asConflict(t, err)
+	if conflict.Current.Version != 2 {
+		t.Errorf("ConflictError.Current.Version = %d, want 2", conflict.Current.Version)
+	}
+}
+
+func TestTasksUpdateNotes_ExpectedVersionMatch_SucceedsAndBumps(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, _ := newTaskTestEnv(t)
+	task := mustCreateTask(t, svc, "notes OCC match", 0, nil)
+
+	fc.SetNow(fc.now.Add(time.Minute))
+	got, err := svc.UpdateNotes(ctx, testAgent, task.ID, "guarded blob", 1)
+	if err != nil {
+		t.Fatalf("guarded UpdateNotes with matching version: %v", err)
+	}
+	if got.Version != 2 || got.Notes != "guarded blob" {
+		t.Errorf("row = (notes %q v%d), want (%q v2)", got.Notes, got.Version, "guarded blob")
+	}
+}
+
+// Zero-version notes writes keep the historical replace-on-write contract:
+// identical content is a no-op without bump or event. (Pinned here with the
+// explicit 0 argument — the existing collab tests exercise the same path.)
+func TestTasksUpdateNotes_ZeroVersion_UnguardedIdenticalNoOp(t *testing.T) {
+	ctx := context.Background()
+	svc, _, uow := newTaskTestEnv(t)
+	task := mustCreateTask(t, svc, "notes legacy no-op", 0, nil)
+
+	got, err := svc.UpdateNotes(ctx, testAgent, task.ID, "", 0)
+	if err != nil {
+		t.Fatalf("unguarded UpdateNotes: %v", err)
+	}
+	if got.Version != task.Version || len(eventsOfKind(uow, domain.EventNoted)) != 0 {
+		t.Errorf("identical unguarded replace must be a no-op: version %d (want %d), noted events present",
+			got.Version, task.Version)
+	}
+}
