@@ -15,6 +15,7 @@ import {
 import { escapeHtml, renderMarkdown } from "../src/md.ts";
 import { crowbanApp } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
+import { beginMove, endMove, withTimeout } from "../src/moves.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -455,4 +456,73 @@ test("FocusTrap: pickFocusable keeps tabbable AND visible elements only", () => 
 
   // Empty input → empty output.
   assert.deepEqual(pickFocusable([]), []);
+});
+
+// ---------------------------------------------------------------------------
+// moves.ts — per-task in-flight lock + request timeout (task 01M3MMY2SYX3RR9NZHJTSVBS1C)
+// ---------------------------------------------------------------------------
+
+test("Moves: beginMove allows a task, then blocks a DUPLICATE of the same id only", () => {
+  const busy = new Set<string>();
+  assert.equal(beginMove(busy, "A"), true); // A starts moving
+  assert.equal(beginMove(busy, "A"), false); // duplicate concurrent move of A is blocked
+  assert.equal(beginMove(busy, "B"), true); // a DIFFERENT task stays fully interactive
+  assert.deepEqual(
+    [...busy].sort(),
+    ["A", "B"],
+  );
+});
+
+test("Moves: endMove releases the lock so the same task can move again (idempotent)", () => {
+  const busy = new Set<string>();
+  beginMove(busy, "A");
+  endMove(busy, "A");
+  assert.equal(beginMove(busy, "A"), true); // re-allowed after release
+  endMove(busy, "A");
+  endMove(busy, "A"); // idempotent — no throw
+  assert.equal([...busy].length, 0);
+});
+
+test("Moves: withTimeout resolves fast calls untouched and does not abort", async () => {
+  let seenAborted = false;
+  const r = await withTimeout(50, async (signal) => {
+    seenAborted = signal.aborted;
+    return "ok";
+  });
+  assert.equal(r.value, "ok");
+  assert.equal(r.timedOut, false);
+  assert.equal(seenAborted, false); // fast path never trips the abort
+});
+
+test("Moves: withTimeout reports timedOut=true when the deadline passes", async () => {
+  const r = await withTimeout(20, (signal) => new Promise((_res, rej) => {
+    signal.addEventListener("abort", () => rej(new Error("aborted")));
+  }));
+  assert.equal(r.value, undefined);
+  assert.equal(r.timedOut, true); // we aborted it ourselves — a stall, not an API error
+  assert.ok(r.error instanceof Error);
+});
+
+test("Moves: withTimeout distinguishes a real error from a timeout (timedOut=false)", async () => {
+  const boom = new Error("version_conflict");
+  const r = await withTimeout(100, async () => {
+    throw boom;
+  });
+  assert.equal(r.value, undefined);
+  assert.equal(r.timedOut, false); // the fn threw its own error before the deadline
+  assert.equal(r.error, boom);
+});
+
+test("Moves: withTimeout clears its timer once the request settles (no dangling abort)", async () => {
+  // A call that resolves well before a SHORT deadline must leave no pending
+  // abort — if the timer leaked, it would fire during the wait below.
+  let abortedAfterSettle = false;
+  const r = await withTimeout(60, (signal) => {
+    signal.addEventListener("abort", () => (abortedAfterSettle = true));
+    return "done";
+  });
+  assert.equal(r.value, "done");
+  // Past the 60ms deadline: a leaked timer would have aborted by now.
+  await new Promise((res) => setTimeout(res, 100));
+  assert.equal(abortedAfterSettle, false);
 });

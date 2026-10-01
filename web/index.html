@@ -346,7 +346,7 @@
                            draggedTaskId === task.id
                              ? 'opacity-40 border-dashed border-zinc-400 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900'
                              : 'border-zinc-200 bg-white hover:border-zinc-300 hover:shadow dark:border-zinc-700 dark:bg-zinc-800 dark:hover:border-zinc-600',
-                          busyStatus === task.id
+                          isTaskBusy(task.id)
                             ? 'pointer-events-none opacity-60'
                             : 'cursor-grab active:cursor-grabbing'
                         ]"
@@ -710,7 +710,7 @@
                 <!-- status -->
                 <div class="flex rounded-lg border border-zinc-200 bg-zinc-50 p-1 dark:border-zinc-700 dark:bg-zinc-800" role="group" aria-label="Status">
                   <template x-for="s in ['todo', 'doing', 'done']" :key="s">
-                    <button type="button" @click="moveStatus(s)" :disabled="busyStatus !== ''"
+                    <button type="button" @click="moveStatus(s)" :disabled="isTaskBusy(detail.id)"
                             class="flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-zinc-400"
                             :class="detail.status === s
                               ? 'bg-zinc-900 text-white shadow dark:bg-zinc-100 dark:text-zinc-900'

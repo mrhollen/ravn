@@ -220,11 +220,16 @@ export const api = {
     return request<TaskDetail>(`/tasks/${id}${s ? `?${s}` : ""}`);
   },
 
-  /** Version-guarded partial update; stale version → 409 version_conflict. */
-  updateTask(id: string, req: UpdateTaskReq): Promise<TaskSummary> {
+  /** Version-guarded partial update; stale version → 409 version_conflict.
+   *  `opts.signal` lets a CALLER bound a specific request (e.g. the move
+   *  flow's own AbortController+timeout). Intentionally not global: api.ts
+   *  keeps no timeouts of its own (tracked separately, task
+   *  01M3MMYBHECPH5Z5FRHJDS5G4J). */
+  updateTask(id: string, req: UpdateTaskReq, opts?: { signal?: AbortSignal }): Promise<TaskSummary> {
     return request<TaskSummary>(`/tasks/${id}`, {
       method: "PATCH",
       body: JSON.stringify(req),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
     });
   },
 

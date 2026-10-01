@@ -8,6 +8,7 @@
 
 import { ApiError, api, errMsg } from "./api";
 import { focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
+import { beginMove, endMove, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
 import { renderMarkdown } from "./md";
 import type {
   AcRow,
@@ -912,8 +913,13 @@ export function crowbanApp() {
      *  a refresh can start even while `detail` is momentarily null. */
     detailId: null as string | null,
     detail: null as TaskDetail | null,
-    /** id of the task being moved (disables status buttons mid-flight). */
-    busyStatus: "",
+    /** Task ids whose status-move PATCH is in flight — one entry PER TASK so
+     *  moving card A never freezes card B. See web/src/moves.ts for the rules. */
+    busyTaskIds: new Set<string>(),
+    /** Reactive read for templates (card busy styling, drawer button disable). */
+    isTaskBusy(id: string): boolean {
+      return this.busyTaskIds.has(id);
+    },
     /** Focus session for the drawer (trap + restore). Survives in-drawer task
      *  switches so focus still returns to the original board trigger. */
     detailFocus: null as DialogFocus | null,
@@ -1242,8 +1248,11 @@ export function crowbanApp() {
     isDragging: false,
 
     onDragStart(e: DragEvent, task: TaskSummary, fromStatus: Status): void {
-      if (this.busyStatus === task.id) {
+      // Only the card's OWN in-flight move blocks it (per-task lock); tell the
+      // user instead of silently refusing the drag.
+      if (this.isTaskBusy(task.id)) {
         e.preventDefault();
+        this.toast("That task is still moving — one moment.", "info");
         return;
       }
       this.isDragging = true;
@@ -1397,10 +1406,16 @@ export function crowbanApp() {
 
     /** Optimistically move a task to targetStatus, then persist with PATCH.
      *  Reuses the 409 re-read + re-apply-once logic.
-     *  Rolls back the optimistic board move on failure so no orphan/ghost cards remain. */
+     *  Rolls back the optimistic board move on failure so no orphan/ghost cards remain.
+     *
+     *  Concurrency (per task, not per board):
+     *   - only a duplicate concurrent move of the SAME taskId is rejected — and
+     *     with a toast, never a silent drop; every other card stays interactive
+     *     while this task's PATCH is in flight (busyTaskIds set);
+     *   - every move PATCH runs under withTimeout(MOVE_TIMEOUT_MS), so a stalled
+     *     request aborts, rolls back, toasts, and releases the per-task lock —
+     *     it can never freeze the card (or the board) until page refresh. */
     async moveTaskStatus(taskId: string, targetStatus: Status, initialVersion?: number): Promise<void> {
-      if (this.busyStatus) return;
-
       // Locate task in current board columns or open detail
       let currentStatus: Status | null = null;
       let taskSummary: TaskSummary | null = null;
@@ -1419,11 +1434,29 @@ export function crowbanApp() {
         currentStatus = this.detail.status;
       }
 
+      // No-op moves (unknown card, drop onto own column) need no lock at all.
       if (!taskSummary || !currentStatus || currentStatus === targetStatus) {
         return;
       }
 
+      // Per-task in-flight lock: same id already moving → feedback, not silence.
+      if (!beginMove(this.busyTaskIds, taskId)) {
+        this.toast("That task is still moving — one moment.", "info");
+        return;
+      }
+
       const versionToUse = initialVersion ?? taskSummary.version;
+
+      // Move-related PATCH under the timeout guard. A stall becomes a
+      // MoveTimedOutError so the catch below can roll back + toast honestly; a
+      // real API error passes through untouched (409 handling stays intact).
+      const patch = (version: number): Promise<TaskSummary> =>
+        withTimeout(MOVE_TIMEOUT_MS, (signal) =>
+          api.updateTask(taskId, { actor: this.actor(), version, status: targetStatus }, { signal }),
+        ).then((r) => {
+          if (r.value !== undefined) return r.value;
+          throw r.timedOut ? new MoveTimedOutError() : r.error;
+        });
 
       // 1. Snapshot board state for rollback
       const prevBoardTasks: Record<Status, TaskSummary[]> | null = this.board
@@ -1461,14 +1494,8 @@ export function crowbanApp() {
         this.detail.status = targetStatus;
       }
 
-      this.busyStatus = taskId;
-
       try {
-        const updated = await api.updateTask(taskId, {
-          actor: this.actor(),
-          version: versionToUse,
-          status: targetStatus,
-        });
+        const updated = await patch(versionToUse);
         if (this.board) {
           const inBoard = this.board.tasks[targetStatus]?.find((t) => t.id === taskId);
           if (inBoard) {
@@ -1487,11 +1514,9 @@ export function crowbanApp() {
               this.applyDetail(fresh);
             }
             if (fresh.status !== targetStatus) {
-              await api.updateTask(taskId, {
-                actor: this.actor(),
-                version: fresh.version,
-                status: targetStatus,
-              });
+              // Retry under the same timeout guard — a stall here must release
+              // the per-task lock too (handled by the e2 branch + finally).
+              await patch(fresh.version);
             }
             await Promise.all([
               this.detail && this.detail.id === taskId ? this.refreshDetail(true) : Promise.resolve(),
@@ -1506,17 +1531,25 @@ export function crowbanApp() {
             ]);
             if (ApiError.isVersionConflict(e2)) {
               this.toast("Changed elsewhere — refreshed (your move was not applied).", "info");
+            } else if (e2 instanceof MoveTimedOutError) {
+              // Server answered the first PATCH with a conflict but never
+              // completed the retry — state may be half-applied, so say "may".
+              this.toast("Move timed out — your change may not have saved. Please try again.", "error");
             } else {
               this.toast(errMsg(e2), "error");
             }
           }
+        } else if (e instanceof MoveTimedOutError) {
+          rollback();
+          await this.loadBoard(true).catch(() => undefined);
+          this.toast("Move timed out — your change was not saved. Please try again.", "error");
         } else {
           rollback();
           await this.loadBoard(true).catch(() => undefined);
           this.toast(errMsg(e), "error");
         }
       } finally {
-        this.busyStatus = "";
+        endMove(this.busyTaskIds, taskId);
       }
     },
 
@@ -1525,7 +1558,8 @@ export function crowbanApp() {
      *  a second conflict just refreshes and says so (per docs/API.md error contract). */
     async moveStatus(status: Status): Promise<void> {
       const t = this.detail;
-      if (!t || this.busyStatus || t.status === status) return;
+      // Per-task: only the open task's own in-flight move blocks its buttons.
+      if (!t || this.isTaskBusy(t.id) || t.status === status) return;
       await this.moveTaskStatus(t.id, status, t.version);
     },
 
