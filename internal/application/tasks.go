@@ -111,6 +111,17 @@ type TaskUpdateInput struct {
 	ClearAssignee bool // remove the durable owner
 
 	Archived *bool // archive (true) or unarchive (false)
+
+	// ExpectedVersion is the stored version the caller last read. >0 enables
+	// the optimistic-concurrency guard: INSIDE the write transaction, if the
+	// row's current version differs, a *domain.ConflictError carrying the fresh
+	// row is returned immediately — nothing is written and no event is emitted
+	// (the fresh row IS the recovery instruction: re-read and retry with it).
+	// 0 (the zero value) = UNGUARDED legacy behavior: the update rebases onto
+	// whatever row the transaction reads. The HTTP PATCH adapter always sets
+	// this; internal callers that manage concurrency themselves (claim CAS,
+	// status-transition tests) deliberately leave it 0 so nothing regresses.
+	ExpectedVersion int
 }
 
 // Create validates the input, mints the task ID, stamps timestamps, and stores
@@ -204,11 +215,21 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 // right event(s) in the same unit of work: `status-changed` when the status
 // moves (before→after), `updated` for any other changed field (changed fields
 // only, before→after), and `assigned` when the durable assignee is set or
-// changes. The write itself is version-guarded via TaskRepository.Update: on a
-// stale version the *domain.ConflictError carrying the fresh row propagates
-// untouched and no event is appended. A no-op update (nothing actually
+// changes. Optimistic concurrency: when in.ExpectedVersion > 0 the caller's
+// base version is checked against the stored row INSIDE the transaction before
+// anything is written — on a mismatch a *domain.ConflictError carrying the
+// fresh row is returned immediately, so a concurrent writer that committed
+// after the caller's read can never produce a lost update (the HTTP layer's
+// pre-check may still fast-fail, but this in-transaction check is the
+// authoritative one). ExpectedVersion == 0 leaves the update unguarded
+// (legacy rebase-onto-latest behavior). The write itself is ALSO version-
+// guarded via TaskRepository.Update: on a stale version the *domain.ConflictError
+// carrying the fresh row propagates untouched and no event is appended (the
+// repository CAS remains the backstop for writers whose reads interleave
+// inside the same transaction). A no-op update (nothing actually
 // differs) returns the current row without bumping the version or emitting an
-// event.
+// event — EXCEPT when guarded: a stale base conflicts even if the payload
+// would otherwise be a no-op.
 func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in TaskUpdateInput) (domain.Task, error) {
 	if in.Title != nil && strings.TrimSpace(*in.Title) == "" {
 		return domain.Task{}, fmt.Errorf("%w: task title must not be empty", domain.ErrInvalid)
@@ -241,6 +262,13 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 		cur, err := r.Tasks.Get(ctx, id)
 		if err != nil {
 			return err
+		}
+		if in.ExpectedVersion > 0 && cur.Version != in.ExpectedVersion {
+			// Stale base version: reject INSIDE the transaction, before anything
+			// is computed or written — a concurrent writer that committed after
+			// the caller's read can never slip past this. The fresh row carried
+			// by the error IS the recovery instruction (rebase and retry with it).
+			return &domain.ConflictError{Current: cur}
 		}
 
 		next := cur
