@@ -133,11 +133,15 @@ func (a *App) handleGetTask(w http.ResponseWriter, r *http.Request) {
 // Success → 200 with the fresh task (summary row, incremented version); a stale
 // version → 409 whose body carries current_version AND the fresh current task.
 //
-// Where the guard lives: the Tasks use case deliberately rebases onto the LATEST
-// stored row (its internal CAS then covers races inside its own write — ADR
-// "next.Version = cur.Version"), so the caller's expected version is enforced
-// at this adapter edge, per §5's PATCH contract: read the current row first,
-// reject on mismatch before anything is written.
+// Where the guard lives: req.Version is passed to the use case as
+// TaskUpdateInput.ExpectedVersion, and Tasks.Update checks it INSIDE its write
+// transaction — that in-transaction check is the AUTHORITATIVE one, so a
+// concurrent writer that commits between this handler's read and the use case's
+// write can never slip past it (no lost updates; see the race test in
+// occ_test.go). The pre-read below is only a fast-fail for obviously stale
+// requests: it renders the identical 409 body (the contract the web client's
+// moveTaskStatus retry parses) without opening the write transaction. It is NOT
+// what makes the guard correct under concurrency.
 func (a *App) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := pathID(w, r)
@@ -172,8 +176,11 @@ func (a *App) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := application.TaskUpdateInput{
-		ClearDue:      req.ClearDue,
-		ClearAssignee: req.ClearAssignee,
+		// The caller's last-read version — validated authoritatively INSIDE the
+		// use case's write transaction (the pre-check above is a fast-fail only).
+		ExpectedVersion: req.Version,
+		ClearDue:        req.ClearDue,
+		ClearAssignee:   req.ClearAssignee,
 	}
 	if req.Title != nil {
 		in.Title = req.Title

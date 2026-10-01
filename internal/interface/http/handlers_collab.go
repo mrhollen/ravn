@@ -176,13 +176,16 @@ func (a *App) handleListComments(w http.ResponseWriter, r *http.Request) {
 // --- notes --------------------------------------------------------------------------
 
 // handleUpdateNotes → PUT /api/v1/tasks/{id}/notes. Replace-on-write of the
-// WHOLE notes blob — deliberately NO caller-supplied base version (§5's
-// required `version` was dropped for this endpoint: notes are a single-writer
-// resume scratchpad, and demanding a re-read before every edit would only add
-// round-trips). The use case's internal read-then-write guard still turns a
-// genuinely CONCURRENT write into 409 version_conflict. Identical content is
-// a no-op that returns the fresh row without bumping; a real change bumps the
-// version and appends a `noted` event. Unknown task → 404.
+// WHOLE notes blob. The request's `version` field is an OPTIONAL optimistic
+// guard — demanding a re-read before every edit would only add round-trips, so
+// it stays omitted-by-default: 0/absent keeps today's contract, where the use
+// case's internal read-then-write guard still turns a genuinely CONCURRENT
+// write into 409 version_conflict. A provided version is checked INSIDE the
+// use case's transaction and rejects a stale base with the same 409 body
+// (current_version + fresh row), even when the blob would otherwise be an
+// identical no-op. Identical content (unguarded, or guarded with a matching
+// version) is a no-op that returns the fresh row without bumping; a real change
+// bumps the version and appends a `noted` event. Unknown task → 404.
 func (a *App) handleUpdateNotes(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := pathID(w, r)
@@ -198,9 +201,9 @@ func (a *App) handleUpdateNotes(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	fresh, err := a.Tasks.UpdateNotes(ctx, actor, id, req.Notes, 0) // 0 = legacy replace-on-write (no base-version guard)
+	fresh, err := a.Tasks.UpdateNotes(ctx, actor, id, req.Notes, req.Version) // 0 = legacy replace-on-write (no base-version guard)
 	if err != nil {
-		writeAppError(w, err, "task", id)
+		writeAppError(w, err, "task", id) // *ConflictError → 409 with current_version + current task
 		return
 	}
 	writeJSON(w, http.StatusOK, toSummary(fresh))

@@ -446,13 +446,17 @@ type commentReq struct {
 	Body  string     `json:"body"`
 }
 
-// notesReq is PUT /tasks/{id}/notes — whole-blob replace. NO version field:
-// the endpoint takes no caller-supplied base version (see handleUpdateNotes);
-// an interlocking concurrent write still surfaces as 409 from the use case's
-// internal read-then-write guard.
+// notesReq is PUT /tasks/{id}/notes — whole-blob replace. Version is an
+// OPTIONAL optimistic guard: omitted/0 keeps the historical contract (single-
+// writer resume scratchpad; only a genuinely interlocking concurrent write can
+// lose the use case's internal CAS and surface as 409), while a provided value
+// makes a stale base version conflict with 409 carrying the fresh row — even
+// when the blob is identical (see handleUpdateNotes). Existing clients that
+// send no field are unaffected (absent decodes to 0 = unguarded).
 type notesReq struct {
-	Actor actorInput `json:"actor"`
-	Notes string     `json:"notes"`
+	Actor   actorInput `json:"actor"`
+	Notes   string     `json:"notes"`
+	Version int        `json:"version"` // optional; 0/absent = unguarded (legacy)
 }
 
 // acToggleReq is PATCH /tasks/{id}/acceptance-criteria/{seq}. Two shapes share

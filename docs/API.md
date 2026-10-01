@@ -81,9 +81,11 @@ this shape (`resource: "task"`, the task id echoed).
 
 ### 409 version conflict
 
-Returned by `PATCH /tasks/{id}` when the caller's `version` is stale, and (rarely)
-by other write paths when a concurrent writer wins an internal guard. The body
-carries everything needed to rebase **without a separate read**:
+Returned by `PATCH /tasks/{id}` when the caller's `version` is stale — checked
+**inside the write transaction**, so it holds even under concurrency — and by
+other write paths when a concurrent writer wins an internal guard or (on the
+optionally-guarded notes path) the base version is stale. The body carries
+everything needed to rebase **without a separate read**:
 
 ```json
 {
@@ -452,8 +454,11 @@ larger values are clamped; negative/non-numeric → `400`. Unknown id → `404`.
 
 Version-guarded partial update. **`version` is required** — the stored version
 you last read (fresh tasks are version 1); missing/0 → `400`, stale → `409
-version_conflict` carrying `current_version` + the fresh `current` row. All
-other fields optional (omitted = unchanged):
+version_conflict` carrying `current_version` + the fresh `current` row. The
+check runs **inside the write transaction**, so a concurrent writer that lands
+between your read and this request can never produce a lost update — you will
+always see either `200` (your write won) or `409` with the winner's fresh row.
+All other fields optional (omitted = unchanged):
 
 ```json
 {
@@ -565,18 +570,23 @@ Paged thread, **newest first**, standard envelope (`limit` default 20 max 100,
 ### PUT /tasks/{id}/notes → `update_notes`
 
 ```json
-{ "actor": { "name": "eve" }, "notes": "Last run: migration half-applied.\nNext: verify tests." }
+{ "actor": { "name": "eve" }, "notes": "Last run: migration half-applied.\nNext: verify tests.", "version": 7 }
 ```
 
-**Replace-on-write of the whole blob. There is NO `version` field in this
-request** — notes are a single-writer resume scratchpad, and demanding a
-re-read before every edit would only add round-trips. Consequences to know:
+**Replace-on-write of the whole blob.** The `version` field is **optional** —
+notes are a single-writer resume scratchpad, and demanding a re-read before
+every edit would only add round-trips:
 
-- A real change bumps the task version; **identical content is a no-op** that
-  returns the fresh row without another bump (retry-safe).
-- The use case still read-then-writes internally, so a genuinely *concurrent*
-  write can lose its race and surface as `409 version_conflict` — rare, but
-  handle it like any 409.
+- **Omitted (or 0):** the historical contract. A real change bumps the task
+  version; **identical content is a no-op** that returns the fresh row without
+  another bump (retry-safe). The use case still read-then-writes internally,
+  so a genuinely *concurrent* write can lose its race and surface as
+  `409 version_conflict` — rare, but handle it like any 409.
+- **Provided:** optimistic guard, checked inside the write transaction. If the
+  stored version is no longer that value, `409 version_conflict` with
+  `current_version` + the fresh `current` row — a stale base conflicts even
+  when the blob is identical. Retry with the current version (no re-read
+  needed; it is in the body).
 
 `200` with the fresh summary row (notes are visible via `get_task`). Unknown
 task → `404`.
