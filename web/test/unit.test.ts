@@ -4,7 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { safeStorage } from "../src/util.ts";
+import {
+  dateInputToIso,
+  dueCalendarDate,
+  fmtDueDate,
+  isOverdue,
+  localCalendarToday,
+  safeStorage,
+} from "../src/util.ts";
 import { escapeHtml, renderMarkdown } from "../src/md.ts";
 import { crowbanApp } from "../src/app.ts";
 
@@ -292,4 +299,109 @@ test("Notes: clean close does not prompt and a fresh open loads server notes (re
   app.applyDetail(fakeDetail("A", "saved notes of A"));
   assert.equal(app.notesDraft, "saved notes of A");
   assert.equal(app.notesDirty, false);
+});
+
+// --------------------------------------------------------------------------- Due dates as calendar days (task 01M3MMT0T5678NXKC41JX05Z63)
+// Run the suite under TZ=UTC, TZ=America/New_York and TZ=Pacific/Kiritimati —
+// every due-date assertion below must hold in ALL of them.
+
+/** Local-calendar "YYYY-MM-DD" offset by N days (test helper only). */
+function localYmd(offsetDays: number): string {
+  const n = new Date();
+  n.setDate(n.getDate() + offsetDays);
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
+}
+
+/** Minimal TaskSummary row for columns() filtering. */
+function dueTask(id: string, daysFromToday: number, status: "todo" | "doing" | "done" = "todo"): any {
+  return { id, title: `due ${id}`, status, priority: 3, version: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", due_at: `${localYmd(daysFromToday)}T00:00:00Z` };
+}
+
+test("Due: dueCalendarDate extracts the UTC calendar day in every timezone", () => {
+  // This app's own storage format (UTC midnight) — same answer in any TZ.
+  assert.equal(dueCalendarDate("2026-10-01T00:00:00Z"), "2026-10-01");
+  assert.equal(dueCalendarDate("2028-02-29T00:00:00Z"), "2028-02-29"); // leap day (2028 is a leap year)
+  assert.equal(dueCalendarDate("1999-12-31T23:59:59Z"), "1999-12-31");
+  // Non-Z offsets written by external tools (instant == Oct 1 00:00Z).
+  assert.equal(dueCalendarDate("2026-10-01T08:00:00+08:00"), "2026-10-01");
+  assert.equal(dueCalendarDate("2026-10-01T05:30:00+05:30"), "2026-10-01");
+  assert.equal(dueCalendarDate("2026-09-30T19:00:00-05:00"), "2026-10-01"); // western offset, same instant
+  assert.equal(dueCalendarDate("2026-10-01T12:00:00Z"), "2026-10-01"); // mid-day instant, same calendar day
+  assert.equal(dueCalendarDate("not-a-date"), "");
+});
+
+test("Due: fmtDueDate renders the encoded day identically in every timezone (off-by-one regression)", () => {
+  // The original bug: this rendered "Sep 30" in browsers west of UTC.
+  assert.equal(fmtDueDate("2026-10-01T00:00:00Z"), "Oct 1");
+  assert.equal(fmtDueDate("2028-02-29T00:00:00Z"), "Feb 29, 2028"); // other year → includes the year
+  // Year appears when it isn't the current one.
+  const otherYear = fmtDueDate("2025-01-02T00:00:00Z");
+  assert.ok(otherYear.includes("Jan 2"), `got "${otherYear}"`);
+  assert.ok(otherYear.includes("2025"), `got "${otherYear}"`);
+  const currentYear = fmtDueDate(`${new Date().getFullYear()}-07-04T00:00:00Z`);
+  assert.ok(!/19\d{2}|20\d{2}/.test(currentYear), `current-year label must omit the year, got "${currentYear}"`);
+  // Garbage passes through untouched.
+  assert.equal(fmtDueDate("nonsense"), "nonsense");
+});
+
+test("Due: isOverdue boundary — a task due today is never overdue during its due day", () => {
+  // The original bug marked this overdue from ~8pm local the previous evening.
+  assert.equal(isOverdue({ due_at: `${localYmd(0)}T00:00:00Z`, status: "todo" }), false, "due today → not overdue");
+  assert.equal(isOverdue({ due_at: `${localYmd(-1)}T00:00:00Z`, status: "todo" }), true, "due yesterday → overdue");
+  assert.equal(isOverdue({ due_at: `${localYmd(1)}T00:00:00Z`, status: "todo" }), false, "due tomorrow → not overdue");
+  assert.equal(isOverdue({ due_at: undefined as unknown as string, status: "todo" }), false);
+  assert.equal(isOverdue({ due_at: `${localYmd(-5)}T00:00:00Z`, status: "done" }), false, "done tasks never overdue");
+});
+
+test("Due: dateInputToIso round-trips through the picker without shifting the day", () => {
+  const picked = "2026-10-01"; // what the <input type="date"> holds
+  const stored = dateInputToIso(picked);
+  assert.equal(stored, "2026-10-01T00:00:00Z", "storage format unchanged (UTC midnight)");
+  assert.equal(dueCalendarDate(stored!), picked, "stored day === picked day");
+});
+
+test("Due: 'Due today' filter matches exactly today and excludes older overdue tasks (AC3)", () => {
+  const app = crowbanApp();
+  const todayTask = dueTask("TODAY", 0);
+  const oldOverdue = dueTask("OLD", -9); // the leak: used to appear in "today"
+  const tomorrow = dueTask("TOMORROW", 1);
+  const doneToday = dueTask("DONE_TODAY", 0, "done");
+  app.board = { project_id: "P", tasks: { todo: [todayTask, oldOverdue, tomorrow], doing: [], done: [doneToday] }, counts: { todo: 3, doing: 0, done: 1 } } as any;
+
+  app.filterDue = "today";
+  const todayIds = app.columns().find((c) => c.status === "todo")!.tasks.map((t) => t.id).sort();
+  assert.deepEqual(todayIds, ["TODAY"], `older overdue tasks must not leak into "Due today", got ${todayIds}`);
+
+  app.filterDue = "overdue";
+  const overdueIds = app.columns().find((c) => c.status === "todo")!.tasks.map((t) => t.id).sort();
+  assert.deepEqual(overdueIds, ["OLD"], `only genuinely past-due tasks match "Overdue", got ${overdueIds}`);
+
+  app.filterDue = "week";
+  const weekIds = app.columns().find((c) => c.status === "todo")!.tasks.map((t) => t.id).sort();
+  assert.deepEqual(weekIds, ["TODAY", "TOMORROW"], `"This week" is a forward window: ${weekIds}`);
+
+  app.filterDue = "";
+  const allIds = app.columns().find((c) => c.status === "todo")!.tasks.map((t) => t.id).sort();
+  assert.deepEqual(allIds, ["OLD", "TODAY", "TOMORROW"]);
+});
+
+test("Due: editing round-trip preserves the calendar day shown on the card (duplicate task nuance)", () => {
+  const app = crowbanApp();
+  // Canonical stored value (this app's own write format).
+  app.detail = { id: "X", title: "t", description: "", priority: 3, due_at: `${localYmd(0)}T00:00:00Z`, assignee: undefined } as any;
+  app.startEditing();
+  assert.equal(app.editDraft.due, localYmd(0), "picker shows the same day the card badge shows");
+  assert.equal(dateInputToIso(app.editDraft.due), (app.detail as any).due_at, "re-saving unchanged shifts nothing (bit-identical)");
+
+  // Offset-bearing value written by an external tool: picker and re-save stay on the UTC calendar day.
+  app.detail = { id: "Y", title: "t", description: "", priority: 3, due_at: `${localYmd(2)}T08:00:00+08:00`, assignee: undefined } as any;
+  app.startEditing();
+  assert.equal(app.editDraft.due, localYmd(2), "offset value → same UTC calendar day in the picker");
+  const resaved = dateInputToIso(app.editDraft.due)!;
+  assert.equal(dueCalendarDate(resaved), localYmd(2), "re-save keeps the calendar day even for offset values");
+
+  // No due date → empty picker.
+  app.detail = { id: "Z", title: "t", description: "", priority: 3, assignee: undefined } as any;
+  app.startEditing();
+  assert.equal(app.editDraft.due, "");
 });

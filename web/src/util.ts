@@ -39,7 +39,9 @@ export function relTime(iso: string | undefined): string {
   return fmtDate(iso);
 }
 
-/** "Sep 30" — with the year when it isn't the current one. */
+/** "Sep 30" — with the year when it isn't the current one. LOCAL time: use for
+ *  point-in-time timestamps (created_at/updated_at/events), NOT for due dates,
+ *  which are calendar days (see fmtDueDate). */
 export function fmtDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -56,16 +58,60 @@ export function timeOfDay(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
-/** Due label for cards: date (+ year). */
-export function dueLabel(iso: string | undefined): string {
-  return iso ? fmtDate(iso) : "";
+// ------------------------------------------------------------------- due dates
+// Due dates are CALENDAR days, not instants. This app stores them as RFC3339
+// UTC midnight (see dateInputToIso), so the encoded day is ALWAYS readable via
+// the UTC getters — in every browser timezone. Every consumer that treats a
+// due date as a day goes through these helpers so cards, the editor and
+// re-saves always agree.
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
 }
 
+/** Calendar day of a stored due_at as "YYYY-MM-DD" (UTC components). "" if the
+ *  value is not parseable. For our own T00:00:00Z values this is exactly the
+ *  day that was picked in the date input — regardless of browser TZ. */
+export function dueCalendarDate(dueAt: string): string {
+  const d = new Date(dueAt);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
+/** Today's LOCAL calendar day as "YYYY-MM-DD" — the day the user is on right now. */
+export function localCalendarToday(): string {
+  const n = new Date();
+  return `${n.getFullYear()}-${pad2(n.getMonth() + 1)}-${pad2(n.getDate())}`;
+}
+
+/** Calendar-day label for DUE dates: "Oct 1" (+ year when not the current one),
+ *  identical in every browser timezone. */
+export function fmtDueDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  // Re-anchor on an instant whose UTC fields ARE the calendar date, then format
+  // in UTC — immune to the browser's own offset.
+  const anchor = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const opts: Intl.DateTimeFormatOptions =
+    d.getUTCFullYear() === new Date().getFullYear()
+      ? { month: "short", day: "numeric" }
+      : { month: "short", day: "numeric", year: "numeric" };
+  return anchor.toLocaleDateString(undefined, { ...opts, timeZone: "UTC" });
+}
+
+/** Due label for cards: date (+ year), timezone-stable. */
+export function dueLabel(iso: string | undefined): string {
+  return iso ? fmtDueDate(iso) : "";
+}
+
+/** Overdue ⇔ the due day is strictly before today's LOCAL calendar day — a task
+ *  due today stays on time for its whole due day and only flags from the next
+ *  local day onward. */
 export function isOverdue(t: Pick<TaskSummary, "due_at" | "status">): boolean {
   if (!t.due_at || t.status === "done") return false;
-  const due = Date.parse(t.due_at);
-  if (Number.isNaN(due)) return false;
-  return due < Date.now();
+  const due = dueCalendarDate(t.due_at);
+  if (!due) return false;
+  return due < localCalendarToday();
 }
 
 function humanDuration(ms: number): string {

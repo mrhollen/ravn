@@ -32,8 +32,10 @@ import {
   claimHint,
   commentKindClass,
   dateInputToIso,
+  dueCalendarDate,
   dueLabel,
   isOverdue,
+  localCalendarToday,
   initials,
   priorityClass,
   priorityName,
@@ -523,24 +525,22 @@ export function crowbanApp() {
         if (this.filterUnblocked) {
           tasks = tasks.filter((t) => !this.isBlocked(t.id));
         }
+        // Calendar-day comparisons (due dates are days, not instants): "YYYY-MM-DD"
+        // sorts lexicographically, so ranges are plain string compares. This keeps
+        // the filters TZ-stable and stops past-due tasks leaking into "today".
         if (this.filterDue === "overdue") {
           tasks = tasks.filter((t) => isOverdue(t));
-        } else if (this.filterDue === "today") {
-          const end = new Date();
-          end.setHours(23, 59, 59, 999);
+        } else if (this.filterDue === "today" || this.filterDue === "week") {
+          const today = localCalendarToday();
+          const weekEnd = new Date();
+          weekEnd.setDate(weekEnd.getDate() + 7);
+          const endExclusive = `${weekEnd.getFullYear()}-${String(weekEnd.getMonth() + 1).padStart(2, "0")}-${String(weekEnd.getDate()).padStart(2, "0")}`;
           tasks = tasks.filter((t) => {
             if (!t.due_at || t.status === "done") return false;
-            const ms = Date.parse(t.due_at);
-            return !Number.isNaN(ms) && ms <= end.getTime();
-          });
-        } else if (this.filterDue === "week") {
-          const end = new Date();
-          end.setDate(end.getDate() + 7);
-          end.setHours(23, 59, 59, 999);
-          tasks = tasks.filter((t) => {
-            if (!t.due_at || t.status === "done") return false;
-            const ms = Date.parse(t.due_at);
-            return !Number.isNaN(ms) && ms <= end.getTime();
+            const due = dueCalendarDate(t.due_at);
+            if (!due) return false;
+            if (this.filterDue === "today") return due === today;
+            return due >= today && due < endExclusive;
           });
         }
         const q = this.filterSearch.trim().toLowerCase();
@@ -1082,7 +1082,9 @@ export function crowbanApp() {
         title: t.title ?? "",
         description: t.description ?? "",
         priority: t.priority ?? 0,
-        due: t.due_at ? t.due_at.slice(0, 10) : "",
+        // Calendar day via the shared helper — always equals what the card
+        // shows, and re-saving it round-trips to the same stored day.
+        due: t.due_at ? dueCalendarDate(t.due_at) : "",
         assigneeName: t.assignee?.name ?? "",
         assigneeType: (t.assignee?.type as "human" | "agent") || "human",
       };
