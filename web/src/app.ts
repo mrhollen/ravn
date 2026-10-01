@@ -870,6 +870,18 @@ export function crowbanApp() {
     busyStatus: "",
 
     async openTask(id: string): Promise<void> {
+      // Unsaved notes belong to the task being left — ask before dropping them
+      // (AC 3). Re-opening the SAME task is just a refresh: its in-progress
+      // draft is intentionally preserved (see applyDetail).
+      if (this.notesDirty && this.detailOpen && this.detailId !== id) {
+        this.unsavedNotesAction = { kind: "open", taskId: id };
+        return;
+      }
+      // Defensive: a scratchpad that belongs to another task is discarded up
+      // front so it can never surface inside the drawer about to open (AC 2).
+      if (this.notesDraftOwner !== null && this.notesDraftOwner !== id) {
+        this.resetNotesDraft();
+      }
       this.detailOpen = true;
       this.detailId = id;
       this.detail = null;
@@ -880,6 +892,16 @@ export function crowbanApp() {
       void this.initComments(id);
     },
 
+    /** Drawer-close entry point for the backdrop, × buttons and Escape: asks
+     *  first when notes have unsaved edits (AC 3). */
+    requestCloseDetail(): void {
+      if (this.notesDirty) {
+        this.unsavedNotesAction = { kind: "close" };
+        return;
+      }
+      this.closeDetail();
+    },
+
     closeDetail(): void {
       this.editingTask = false;
       this.editingAcSeq = 0;
@@ -888,6 +910,10 @@ export function crowbanApp() {
       this.totalComments = 0;
       this.loadingOlderComments = false;
       this.startingOpenCode = false;
+      // AC 1: the notes scratchpad never outlives its drawer — otherwise a
+      // dirty draft would leak into whatever task is opened next.
+      this.resetNotesDraft();
+      this.unsavedNotesAction = null;
       this.detailOpen = false;
     },
 
@@ -952,7 +978,14 @@ export function crowbanApp() {
       if (t.blocked) kb[t.id] = true;
       else delete kb[t.id];
       this.knownBlocked = kb;
-      if (!this.notesDirty) this.notesDraft = t.notes;
+      // Never clobber an in-progress edit of THIS task; a scratchpad that
+      // belongs to a DIFFERENT task is discarded so drafts cannot leak across
+      // tasks (AC 2).
+      if (!(this.notesDirty && this.notesDraftOwner === t.id)) {
+        this.notesDraft = t.notes;
+        this.notesDirty = false;
+        this.notesDraftOwner = t.id;
+      }
     },
 
     // ------------------------------------------------------------ assignee
@@ -1426,14 +1459,52 @@ export function crowbanApp() {
 
     // ------------------------------------------------------------------- notes
     notesDraft: "",
+    /** The task id whose notes this scratchpad currently reflects/edits. Pins
+     *  the draft to a task so saveNotes() can refuse cross-task writes (AC 3). */
+    notesDraftOwner: null as string | null,
     notesDirty: false,
     savingNotes: false,
+
+    /** The close/switch held behind the unsaved-notes confirmation — null when
+     *  no prompt is on screen. */
+    unsavedNotesAction: null as { kind: "close" } | { kind: "open"; taskId: string } | null,
+
+    /** Clear the notes scratchpad so a closed or abandoned drawer can never
+     *  leak its draft into another task (AC 1 + AC 2). */
+    resetNotesDraft(): void {
+      this.notesDirty = false;
+      this.notesDraft = "";
+      this.notesDraftOwner = null;
+    },
+
+    /** "Keep editing" — dismiss the unsaved-notes prompt, draft untouched. */
+    cancelUnsavedNotes(): void {
+      this.unsavedNotesAction = null;
+    },
+
+    /** "Discard changes" — drop the draft, then run the deferred close/switch. */
+    async confirmUnsavedNotes(): Promise<void> {
+      const action = this.unsavedNotesAction;
+      this.unsavedNotesAction = null;
+      this.resetNotesDraft();
+      if (action?.kind === "open") await this.openTask(action.taskId);
+      else if (action?.kind === "close") this.closeDetail();
+    },
 
     /** PUT /notes replaces the whole blob and carries NO version — a concurrent
      *  write can still 409; then we refresh (keeping the user's draft) and say so. */
     async saveNotes(): Promise<void> {
       const t = this.detail;
       if (!t || this.savingNotes) return;
+      // AC 3 guard: a draft may only ever be saved to the task it belongs to.
+      // Unreachable through the UI (openTask/closeDetail gate drafts), but if
+      // stale state ever appears we must never PUT one task's draft onto another.
+      if (this.notesDraftOwner !== null && this.notesDraftOwner !== t.id) {
+        this.resetNotesDraft();
+        await this.refreshDetail(true);
+        this.toast("Notes draft was from a different task — discarded and refreshed.", "error");
+        return;
+      }
       this.savingNotes = true;
       try {
         await api.putNotes(t.id, { actor: this.actor(), notes: this.notesDraft });
@@ -1903,11 +1974,12 @@ export function crowbanApp() {
 
     /** Escape key: close the top-most overlay or cancel edit mode. */
     dismissTop(): void {
-      if (this.showAuthModal) this.showAuthModal = false;
+      if (this.unsavedNotesAction) this.cancelUnsavedNotes(); // Escape = "keep editing"
+      else if (this.showAuthModal) this.showAuthModal = false;
       else if (this.showProjectSettings) this.showProjectSettings = false;
       else if (this.editingAcSeq !== 0) this.cancelEditingAc();
       else if (this.editingTask) this.cancelEditing();
-      else if (this.detailOpen) this.closeDetail();
+      else if (this.detailOpen) this.requestCloseDetail();
       else if (this.showNewTask) this.closeNewTask();
       else if (this.showNewProject) this.showNewProject = false;
       else if (this.cardMenuTaskId) this.cardMenuTaskId = null;

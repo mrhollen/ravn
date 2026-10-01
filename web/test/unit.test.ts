@@ -196,3 +196,100 @@ test("R10: web/index.html uses <article> containers with scoped keyboard listene
   assert.match(html, /tabindex="0"/);
   assert.match(html, /:aria-label="'Task: ' \+ task\.title \+ ', status ' \+ statusLabel\(col\.status\)"/);
 });
+
+// --------------------------------------------------------------------------- Notes scratchpad reset (task 01M3MMSVAF8RV8J7VGDSCV6M07)
+/** Build a minimal TaskDetail-shaped object for applyDetail(). */
+function fakeDetail(id: string, notes: string): any {
+  return { id, notes, comments: [], assignee: undefined, blocked: false };
+}
+
+test("Notes: closeDetail() resets the scratchpad so no draft leaks (AC1)", () => {
+  const app = crowbanApp();
+  app.detailOpen = true;
+  app.detailId = "A";
+  app.notesDirty = true;
+  app.notesDraft = "unsaved draft of A";
+  app.notesDraftOwner = "A";
+
+  app.closeDetail();
+
+  assert.equal(app.detailOpen, false);
+  assert.equal(app.notesDirty, false);
+  assert.equal(app.notesDraft, "");
+  assert.equal(app.notesDraftOwner, null);
+});
+
+test("Notes: opening another task with a dirty draft prompts and does NOT switch (AC2/AC3)", () => {
+  const app = crowbanApp();
+  // Drawer open on A with an unsaved edit…
+  app.detailOpen = true;
+  app.detailId = "A";
+  app.notesDirty = true;
+  app.notesDraft = "draft of A";
+  app.notesDraftOwner = "A";
+
+  // …user opens B: must be held behind the confirm prompt, draft intact.
+  void app.openTask("B");
+
+  assert.deepEqual(app.unsavedNotesAction, { kind: "open", taskId: "B" });
+  assert.equal(app.detailId, "A", "must not switch until confirmed");
+  assert.equal(app.notesDraft, "draft of A", "dirty draft must survive the prompt");
+});
+
+test("Notes: keep-editing (cancel) preserves the draft and leaves drawer open (AC3)", () => {
+  const app = crowbanApp();
+  app.detailOpen = true;
+  app.detailId = "A";
+  app.notesDirty = true;
+  app.notesDraft = "draft of A";
+  app.notesDraftOwner = "A";
+
+  app.requestCloseDetail(); // close requested while dirty → prompt
+  assert.deepEqual(app.unsavedNotesAction, { kind: "close" });
+  assert.equal(app.detailOpen, true, "drawer must stay open behind the prompt");
+
+  app.cancelUnsavedNotes();
+  assert.equal(app.unsavedNotesAction, null);
+  assert.equal(app.detailOpen, true);
+  assert.equal(app.notesDirty, true);
+  assert.equal(app.notesDraft, "draft of A", "keep-editing must preserve the draft");
+});
+
+test("Notes: applyDetail never carries one task's draft into another (AC2 core)", () => {
+  const app = crowbanApp();
+  // The leak condition: scratchpad still holds a dirty draft owned by A.
+  app.notesDirty = true;
+  app.notesDraft = "draft of A";
+  app.notesDraftOwner = "A";
+
+  // Applying task B's detail must load B's notes, not keep A's draft.
+  app.applyDetail(fakeDetail("B", "notes for B"));
+  assert.equal(app.notesDraft, "notes for B");
+  assert.equal(app.notesDirty, false);
+  assert.equal(app.notesDraftOwner, "B");
+
+  // But a refresh of the SAME task must NOT clobber an in-progress edit.
+  app.notesDirty = true;
+  app.notesDraft = "notes for B + my edit";
+  app.applyDetail(fakeDetail("B", "notes for B"));
+  assert.equal(app.notesDraft, "notes for B + my edit", "same-task refresh keeps the draft");
+});
+
+test("Notes: clean close does not prompt and a fresh open loads server notes (regression)", () => {
+  const app = crowbanApp();
+  // Open A, no edits, close — must be silent (no prompt).
+  app.detailOpen = true;
+  app.detailId = "A";
+  app.notesDirty = false;
+  app.notesDraftOwner = "A";
+  app.requestCloseDetail();
+  assert.equal(app.unsavedNotesAction, null, "clean close must not prompt");
+  assert.equal(app.detailOpen, false);
+
+  // Re-open A: applyDetail populates A's server notes into a clean scratchpad.
+  app.notesDraft = "";
+  app.notesDirty = false;
+  app.applyDetail(fakeDetail("A", "saved notes of A"));
+  assert.equal(app.notesDraft, "saved notes of A");
+  assert.equal(app.notesDirty, false);
+});
