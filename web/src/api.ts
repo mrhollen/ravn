@@ -31,6 +31,86 @@ import type {
 
 const BASE = "/api/v1";
 
+/** Default deadline for a single API request (ms). Longer than this and the
+ *  connection is considered dead: fetch() is aborted, every caller's `finally`
+ *  runs (busy flags release), and errMsg() maps it to a friendly message.
+ *  Chosen in the 15–30s band per task 01M3MMYBHECPH5Z5G4J. This timeout
+ *  applies to every request that flows through request() — including the
+ *  move path's 409-retry getTask re-read, which was unbounded before. The SSE
+ *  EventSource connection does NOT flow through request() and is exempt by
+ *  design (long-lived + auto-reconnecting). */
+export const API_TIMEOUT_MS = 20_000;
+
+// Mutable holder behind a setter so tests can shorten the deadline instead of
+// waiting real seconds — same spirit as the timer-injectable helpers in
+// refresh.ts / moves.ts. Production code never calls the setter.
+let activeTimeoutMs = API_TIMEOUT_MS;
+/** TEST-ONLY override for the per-request timeout (ms). Values ≤ 0 reset to
+ *  the default. Exposed on the Alpine app purely so browser tests can exercise
+ *  hang paths quickly. */
+export function setApiTimeoutMsForTests(ms: number): void {
+  activeTimeoutMs = ms > 0 ? ms : API_TIMEOUT_MS;
+}
+
+/** Thrown when OUR per-request timeout aborts a fetch. Kept distinct from a
+ *  caller-initiated abort (whose AbortError must pass through untouched — the
+ *  move flow owns its own shorter window in moves.ts and maps it to its
+ *  specific "Move timed out" message, which stays more specific than ours). */
+export class ApiTimeoutError extends Error {
+  readonly timeoutMs: number;
+  constructor(timeoutMs: number) {
+    super(`request timed out after ${timeoutMs}ms`);
+    this.name = "ApiTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/** Merges an optional caller-supplied AbortSignal with a per-request timeout
+ *  into ONE signal for fetch(), and lets the caller attribute which side won:
+ *   - `signal`      — pass to fetch(); aborts when EITHER side fires.
+ *   - `timedOut()`  — true only if OUR timer fired (set synchronously in the
+ *                     timer callback before the abort).
+ *   - `cleanup()`   — always call (clears the timer + caller listener).
+ * Manual AbortController+setTimeout merge rather than AbortSignal.any()/
+ * AbortSignal.timeout(): identical behavior on every target (including Node
+ * test envs), and it preserves cause attribution — essential so a move's own
+ * 10s abort is never misreported as the generic API timeout. */
+export function withRequestTimeout(
+  ms: number,
+  callerSignal?: AbortSignal,
+): { signal: AbortSignal; timedOut: () => boolean; cleanup: () => void } {
+  const ctrl = new AbortController();
+  let ours = false;
+  const timer = setTimeout(() => {
+    ours = true;
+    ctrl.abort();
+  }, ms);
+  const onCallerAbort = (): void => ctrl.abort();
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      // Caller already lost the race before we started — adopt their abort
+      // immediately without attributing it to our timer.
+      ctrl.abort();
+    } else {
+      callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+    }
+  }
+  return {
+    signal: ctrl.signal,
+    timedOut: () => ours,
+    cleanup: () => {
+      clearTimeout(timer);
+      if (callerSignal && !callerSignal.aborted) callerSignal.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
+/** True for the native abort DOMExceptions fetch rejects with ("AbortError" /
+ *  "TimeoutError"). */
+function isAbortLike(e: unknown): boolean {
+  return e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError");
+}
+
 /** An HTTP error with the parsed crowban error body. */
 export class ApiError extends Error {
   readonly status: number;
@@ -118,6 +198,14 @@ export function setAuthToken(token: string): void {
 /** Extracts a human-readable message from any thrown value. */
 export function errMsg(e: unknown): string {
   if (e instanceof ApiError) return `${e.body.message ?? e.body.error ?? e.status}`;
+  if (e instanceof ApiTimeoutError || isAbortLike(e)) {
+    // Request aborted by OUR per-request timeout, or a raw AbortError/
+    // TimeoutError from any other source. Callers that OWN an abort signal
+    // (the move flow's own 10s window) map it to their specific message BEFORE
+    // errMsg is ever consulted, so this generic text only ever appears for
+    // timeouts no one else owns.
+    return "Request timed out — please check your connection or server status.";
+  }
   if (e instanceof TypeError) {
     // fetch network failure
     return `cannot reach the crowban server (${BASE}) — is it running?`;
@@ -134,14 +222,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...((init?.headers as Record<string, string>) ?? {}),
   };
   let res: Response;
+  // Every request is bounded by the global timeout, merged with any caller-
+  // supplied signal (updateTask's move-path window). Cause attribution: OUR
+  // timer firing → ApiTimeoutError; the caller's own abort → the original
+  // AbortError rethrown untouched so the signal owner can map it itself.
+  const callerSignal = init?.signal ?? undefined;
+  const guard = withRequestTimeout(activeTimeoutMs, callerSignal);
   try {
     res = await fetch(`${BASE}${path}`, {
       ...init,
       headers,
+      signal: guard.signal,
     });
   } catch (e) {
-    if (e instanceof TypeError) throw e; // rethrown as-is by errMsg()
+    if (guard.timedOut()) throw new ApiTimeoutError(activeTimeoutMs);
+    if (isAbortLike(e)) throw e; // caller-initiated abort — owner handles it
+    if (e instanceof TypeError) throw e; // network failure, rethrown as-is by errMsg()
     throw new Error(String(e));
+  } finally {
+    guard.cleanup();
   }
 
   const ctype = res.headers.get("content-type") ?? "";
@@ -221,10 +320,13 @@ export const api = {
   },
 
   /** Version-guarded partial update; stale version → 409 version_conflict.
-   *  `opts.signal` lets a CALLER bound a specific request (e.g. the move
-   *  flow's own AbortController+timeout). Intentionally not global: api.ts
-   *  keeps no timeouts of its own (tracked separately, task
-   *  01M3MMYBHECPH5Z5FRHJDS5G4J). */
+   *  `opts.signal` lets a CALLER bound its own deadline to this request (the
+   *  move flow passes its 10s window from moves.ts). The signal is MERGED with
+   *  the global per-request timeout (API_TIMEOUT_MS) — whichever fires first
+   *  aborts the fetch, and cause attribution in request() keeps the caller's
+   *  AbortError distinct from our ApiTimeoutError, so a move's own timeout
+   *  still produces its specific "Move timed out" message rather than the
+   *  generic one. */
   updateTask(id: string, req: UpdateTaskReq, opts?: { signal?: AbortSignal }): Promise<TaskSummary> {
     return request<TaskSummary>(`/tasks/${id}`, {
       method: "PATCH",

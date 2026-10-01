@@ -6,7 +6,7 @@
 // move status, save notes, toggle ACs, comment, attach artifacts. Claims are
 // READ-ONLY here (agents manage leases via MCP).
 
-import { ApiError, api, errMsg } from "./api";
+import { ApiError, api, errMsg, setApiTimeoutMsForTests } from "./api";
 import { focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { beginMove, canMove, endMove, friendlyTransitionError, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
@@ -2221,6 +2221,11 @@ export function crowbanApp() {
     STATUSES,
     SORT_OPTIONS,
     canMove,
+    /** TEST hook only (task 01M3MMYBHECPH5Z5FRHJDS5G4J): lets a browser test
+     *  shorten the per-request timeout so hang paths are exercised in ~1s
+     *  instead of 20. Never referenced by any template or production code path;
+     *  values ≤ 0 restore the default (API_TIMEOUT_MS). */
+    setApiTimeoutMsForTests,
     statusLabel,
     priorityClass,
     priorityName,
