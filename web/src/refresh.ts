@@ -100,6 +100,27 @@ export interface BoardApplyDecision {
   selectedProjectId: string;
 }
 
+/** Ownership predicate for task-detail payloads (drawer guard, task
+ *  01M3MMY78F1TRP6MKDRT0SKQWB). A fetched TaskDetail may be written into the
+ *  drawer only if the drawer is STILL OPEN and its payload belongs to the
+ *  task the user has open RIGHT NOW. One check covering all three races:
+ *  (a) a stale SSE refresh that outlives an in-drawer task switch,
+ *  (b) a slow response arriving after the user clicked another card, and
+ *  (c) any fetch whose drawer was closed mid-flight. Fail-closed: unknown or
+ *  empty ids never apply. */
+export function canApplyDetail(
+  payloadId: string | null | undefined,
+  detailId: string | null,
+  detailOpen: boolean,
+): boolean {
+  return (
+    detailOpen &&
+    typeof payloadId === "string" &&
+    payloadId.length > 0 &&
+    payloadId === detailId
+  );
+}
+
 /** In-flight coalescing for duplicate CONCURRENT calls. Observed at boot:
  *  Alpine re-runs init() in some environments, racing two list-projects calls;
  *  a sequence guard alone then discards the first response and that caller

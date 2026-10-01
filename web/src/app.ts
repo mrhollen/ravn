@@ -9,7 +9,7 @@
 import { ApiError, api, errMsg } from "./api";
 import { focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { beginMove, endMove, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
-import { coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
+import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
 import { renderMarkdown } from "./md";
 import type {
   AcRow,
@@ -788,8 +788,14 @@ export function crowbanApp() {
           this.detailOpen &&
           (this.detailId === data.task_id || this.detail?.id === data.task_id)
         ) {
-          void this.refreshDetail(true, data.task_id).then(() => {
-            if (this.detail && this.detail.id === data.task_id) {
+          void this.refreshDetail(true, data.task_id).then((applied) => {
+            // refreshDetail now returns false when its payload was discarded by
+            // the ownership guard (drawer closed or switched mid-flight) — and
+            // even for an applied payload we re-verify at settle time, so a
+            // stale SSE event can never trigger comment side effects after the
+            // drawer closed or moved on.
+            if (!applied) return;
+            if (this.detailOpen && this.detail && this.detail.id === data.task_id) {
               void this.initComments(data.task_id);
             }
           });
@@ -1068,12 +1074,19 @@ export function crowbanApp() {
     },
 
     /** Fetch GET /tasks/{id} (full resume payload, comment tail 50) and apply it.
-     *  An in-progress notes edit (notesDirty) is NEVER clobbered by a refresh. */
+     *  An in-progress notes edit (notesDirty) is NEVER clobbered by a refresh.
+     *  Ownership-guarded (task 01M3MMY78F1TRP6MKDRT0SKQWB): by the time the
+     *  fetch resolves, the drawer may have been closed or switched to another
+     *  task — a payload for a no-longer-active id is discarded (returns false)
+     *  instead of overwriting the active task's detail. */
     async refreshDetail(silent = false, idToFetch?: string): Promise<boolean> {
       const id = idToFetch ?? this.detailId ?? this.detail?.id;
       if (!id) return false;
       try {
         const t = await api.getTask(id, { commentLimit: 50 });
+        if (!canApplyDetail(t.id, this.detailId, this.detailOpen)) {
+          return false; // drawer closed or switched since the fetch started — drop stale payload
+        }
         this.applyDetail(t);
         return true;
       } catch (e) {
@@ -1083,6 +1096,13 @@ export function crowbanApp() {
     },
 
     applyDetail(t: TaskDetail): void {
+      // Ownership guard (task 01M3MMY78F1TRP6MKDRT0SKQWB), second layer under
+      // refreshDetail's: covers direct call sites too (409-retry re-reads).
+      // Discarding BEFORE any state write also guarantees a stale/foreign
+      // payload can never reset or clobber an in-progress notes draft.
+      if (!canApplyDetail(t.id, this.detailId, this.detailOpen)) {
+        return;
+      }
       const existingComments = (this.detail && this.detail.id === t.id) ? this.detail.comments : [];
       const map = new Map<string, CommentRow>();
       for (const c of existingComments) {

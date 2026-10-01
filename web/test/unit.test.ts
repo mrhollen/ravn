@@ -16,7 +16,7 @@ import { escapeHtml, renderMarkdown } from "../src/md.ts";
 import { crowbanApp } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
 import { beginMove, endMove, withTimeout } from "../src/moves.ts";
-import { coalesceInFlight, createDebounce, createSequenceGuard, shouldApplyBoard } from "../src/refresh.ts";
+import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, shouldApplyBoard } from "../src/refresh.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -267,7 +267,11 @@ test("Notes: keep-editing (cancel) preserves the draft and leaves drawer open (A
 
 test("Notes: applyDetail never carries one task's draft into another (AC2 core)", () => {
   const app = crowbanApp();
-  // The leak condition: scratchpad still holds a dirty draft owned by A.
+  // The leak condition: scratchpad still holds a dirty draft owned by A, and
+  // the user has just opened B (open-drawer context — required since
+  // 01M3MMY78F1TRP6MKDRT0SKQWB made applyDetail ownership-guarded).
+  app.detailOpen = true;
+  app.detailId = "B";
   app.notesDirty = true;
   app.notesDraft = "draft of A";
   app.notesDraftOwner = "A";
@@ -296,12 +300,71 @@ test("Notes: clean close does not prompt and a fresh open loads server notes (re
   assert.equal(app.unsavedNotesAction, null, "clean close must not prompt");
   assert.equal(app.detailOpen, false);
 
-  // Re-open A: applyDetail populates A's server notes into a clean scratchpad.
+  // Re-open A (open-drawer context restored): applyDetail populates A's server
+  // notes into a clean scratchpad.
+  app.detailOpen = true;
+  app.detailId = "A";
   app.notesDraft = "";
   app.notesDirty = false;
   app.applyDetail(fakeDetail("A", "saved notes of A"));
   assert.equal(app.notesDraft, "saved notes of A");
   assert.equal(app.notesDirty, false);
+});
+
+// ---------------------------------------------------------------------------
+// canApplyDetail — drawer ownership guard (task 01M3MMY78F1TRP6MKDRT0SKQWB)
+// ---------------------------------------------------------------------------
+
+test("Drawer: canApplyDetail only admits an open drawer's own payload", () => {
+  assert.equal(canApplyDetail("A", "A", true), true, "open + matching id applies");
+  assert.equal(canApplyDetail("A", "B", true), false, "foreign task id never applies (switch mid-fetch)");
+  assert.equal(canApplyDetail("A", "A", false), false, "closed drawer ignores in-flight fetches");
+  assert.equal(canApplyDetail(null, "A", true), false, "null payload id fails closed");
+  assert.equal(canApplyDetail("", "A", true), false, "empty payload id fails closed");
+  assert.equal(canApplyDetail("A", null, true), false, "no active task id fails closed");
+});
+
+test("Drawer: a stale foreign response must NOT reset a dirty draft of the open task", () => {
+  const app = crowbanApp();
+  app.detailOpen = true;
+  app.detailId = "B";
+  // User is editing B's notes…
+  app.notesDirty = true;
+  app.notesDraft = "notes for B + my edit";
+  app.notesDraftOwner = "B";
+
+  // …when a slow task-A response (started before the switch) lands, it must be
+  // discarded wholesale — including leaving the dirty draft completely intact.
+  const detailBefore = app.detail;
+  app.applyDetail(fakeDetail("A", "notes for A"));
+  assert.equal(app.notesDirty, true, "dirty flag untouched by a discarded foreign payload");
+  assert.equal(app.notesDraft, "notes for B + my edit", "draft text untouched");
+  assert.equal(app.notesDraftOwner, "B", "draft ownership untouched");
+  assert.equal(app.detail, detailBefore, "detail row untouched");
+});
+
+test("Drawer: a response for a closed drawer is discarded (AC3 core)", () => {
+  const app = crowbanApp();
+  app.detailOpen = true;
+  app.detailId = "A";
+  app.applyDetail(fakeDetail("A", "notes for A"));
+  assert.equal(app.detail?.id, "A");
+
+  // Drawer closes (clean) — an in-flight response for A landing afterwards…
+  app.closeDetail();
+  const draftAfterClose = app.notesDraft; // closeDetail already reset the scratchpad
+  app.applyDetail(fakeDetail("A", "late notes for A"));
+  assert.equal(app.detailOpen, false);
+  assert.equal(app.notesDraft, draftAfterClose, "no state writes after close");
+
+  // …and reopening a DIFFERENT task must not be clobbered by that late payload.
+  // (openTask sets these synchronously before its fetch; set them directly to
+  // avoid openTask's DOM-touching path, which node doesn't have.)
+  app.detailOpen = true;
+  app.detailId = "B";
+  app.detail = null;
+  app.applyDetail(fakeDetail("A", "late notes for A"));
+  assert.equal(app.detail, null, "late foreign payload did not install itself into B's drawer");
 });
 
 // --------------------------------------------------------------------------- Due dates as calendar days (task 01M3MMT0T5678NXKC41JX05Z63)
