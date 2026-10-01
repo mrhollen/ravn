@@ -9,6 +9,7 @@
 import { ApiError, api, errMsg } from "./api";
 import { focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { beginMove, endMove, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
+import { coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
 import { renderMarkdown } from "./md";
 import type {
   AcRow,
@@ -309,9 +310,36 @@ export function crowbanApp() {
     projects: [] as ProjectWithCounts[],
     loadError: "",
 
-    async loadProjects(silent = false): Promise<void> {
+    /** Request-sequence guards: a response may only apply if no NEWER load was
+     *  initiated after it started (see web/src/refresh.ts). Internal-only — not
+     *  rendered, so deliberately plain fields outside template concerns. */
+    _projectSeq: createSequenceGuard(),
+    _boardSeq: createSequenceGuard(),
+    /** Trailing debounce coalescing SSE-triggered board/projects reloads into
+     *  one round per quiet window (SSE_RELOAD_DEBOUNCE_MS). Created in init(). */
+    sseReloadDebounce: null as ReturnType<typeof createDebounce> | null,
+
+    /** In-flight coalescer for loadProjects, created lazily on first use (so
+     *  the closure's `this` is always the live app instance): a concurrent
+     *  duplicate — observed at boot, where Alpine re-runs init() — JOINS the
+     *  running request instead of racing it, so no caller ever resumes against
+     *  state that a sibling call's sequence guard discarded. */
+    _projectsCoalesced: null as ReturnType<typeof coalesceInFlight<boolean[], void>> | null,
+
+    loadProjects(silent = false): Promise<void> {
+      if (!this._projectsCoalesced) {
+        this._projectsCoalesced = coalesceInFlight((s: boolean) => this.loadProjectsCore(s));
+      }
+      return this._projectsCoalesced.call(silent);
+    },
+
+    async loadProjectsCore(silent: boolean): Promise<void> {
+      const token = this._projectSeq.next(); // newest initiated list-projects wins
       try {
         const res = await api.listProjects();
+        // A slower EARLIER request must never overwrite counts a newer request
+        // already delivered (out-of-order network responses).
+        if (!this._projectSeq.isFresh(token)) return;
         this.projects = res.projects;
         if (!silent) this.loadError = "";
       } catch (e) {
@@ -608,17 +636,39 @@ export function crowbanApp() {
         safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
       } catch { /* ignore */ }
       this.board = null;
+      // Invalidate anything pending for the PREVIOUS project: drop a queued
+      // debounced SSE reload and retire in-flight board loads. (The fresh
+      // loadBoard() below also bumps the sequence, and late payloads fail the
+      // project-ownership check too — this makes the switch explicit.)
+      this.sseReloadDebounce?.cancel();
+      this._boardSeq.next();
       this.connectSse();
       void this.loadBoard();
     },
 
     async loadBoard(silent = false): Promise<void> {
       if (!this.selectedProjectId) return;
+      const token = this._boardSeq.next(); // newest initiated board load wins
       try {
         const b = await api.getBoard(this.selectedProjectId);
+        // Out-of-order + project-switch protection: a stale response (a newer
+        // load started after this one, or the user moved to another project in
+        // flight) must never overwrite current state.
+        const mayApply = (): boolean =>
+          shouldApplyBoard({
+            token,
+            latestToken: this._boardSeq.latest(),
+            payloadProjectId: b.project_id,
+            selectedProjectId: this.selectedProjectId,
+          });
+        if (!mayApply()) return; // stale (newer load started) or foreign project — never overwrite
         this.board = b;
         if (!silent) this.loadError = "";
-        await this.refreshBlockedSet(b);
+        await this.refreshBlockedSet(b, () =>
+          // The 2×listTasks diff must not write results that belong to a
+          // superseded load (project switched or newer load in flight).
+          mayApply(),
+        );
       } catch (e) {
         if (!silent) this.loadError = errMsg(e);
         if (ApiError.isUnauthorized(e)) {
@@ -629,11 +679,13 @@ export function crowbanApp() {
 
     /** Derive which open tasks are blocked without N extra calls: one
      *  list_tasks plus the same call with unblocked=true, then diff by id.
-     *  Skipped when the project has more than `limit` open tasks (MVP). */
-    async refreshBlockedSet(b: Board): Promise<void> {
+     *  Skipped when the project has more than `limit` open tasks (MVP).
+     *  `isStillCurrent` lets the caller veto writing a stale diff after awaits. */
+    async refreshBlockedSet(b: Board, isStillCurrent?: () => boolean): Promise<void> {
+      const stillCurrent = (): boolean => (isStillCurrent ? isStillCurrent() : true);
       const total = STATUSES.reduce((n, s) => n + (b.tasks[s]?.length ?? 0), 0);
       if (total === 0) {
-        this.blockedIds = new Set();
+        if (stillCurrent()) this.blockedIds = new Set();
         return;
       }
       const limit = 100;
@@ -642,6 +694,7 @@ export function crowbanApp() {
           api.listTasks({ project_id: b.project_id, limit }),
           api.listTasks({ project_id: b.project_id, unblocked: true, limit }),
         ]);
+        if (!stillCurrent()) return; // superseded — keep whatever we had
         if (all.total > limit || un.total > limit) return; // too big to diff cheaply
         const unIds = new Set(un.tasks.map((t) => t.id));
         this.blockedIds = new Set(
@@ -720,9 +773,12 @@ export function crowbanApp() {
           return;
         }
 
-        // Immediately reload board silently so column counts and card positions update without latency
-        void this.loadBoard(true);
-        void this.loadProjects(true);
+        // Coalesced silent reload: a burst of events (agent batch ops) within
+        // SSE_RELOAD_DEBOUNCE_MS schedules ONE board + ONE projects round after
+        // the quiet period instead of N parallel ones; each individual event
+        // still refreshes at most once per window. (The drawer's in-place task
+        // refresh below stays per-event — its race is a separate concern.)
+        this.sseReloadDebounce?.schedule();
 
         // If the task detail drawer is currently open for the event's task_id,
         // re-fetch the task detail in-place (api.getTask(data.task_id)) to show
@@ -2144,6 +2200,13 @@ export function crowbanApp() {
 
     // ---------------------------------------------------------------------- init
     async init(): Promise<void> {
+      // Coalescer for SSE-triggered board/projects reloads (handleSseEvent):
+      // a burst of events → ONE round after the quiet window. Created before any
+      // network work so even an early event burst can't fire uncoalesced loads.
+      this.sseReloadDebounce = createDebounce(() => {
+        void this.loadBoard(true);
+        void this.loadProjects(true);
+      }, SSE_RELOAD_DEBOUNCE_MS);
       if (typeof window !== "undefined") {
         window.addEventListener("beforeunload", () => {
           this.disconnectSse(true);
