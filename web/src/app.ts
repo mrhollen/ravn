@@ -7,6 +7,7 @@
 // READ-ONLY here (agents manage leases via MCP).
 
 import { ApiError, api, errMsg } from "./api";
+import { focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { renderMarkdown } from "./md";
 import type {
   AcRow,
@@ -243,16 +244,27 @@ export function crowbanApp() {
     authToken: api.getAuthToken(),
     showAuthModal: false,
     tokenInput: "",
+    /** Focus session for the auth modal (trap + restore); null while closed. */
+    authFocus: null as DialogFocus | null,
 
     openAuthModal(): void {
       this.tokenInput = this.authToken;
       this.showAuthModal = true;
+      // Token input first — least destructive control in this dialog.
+      this.authFocus = this.openDialog("cb-auth-modal", "input");
+    },
+
+    /** Single close path for the auth modal (× / Cancel / backdrop / save / clear / Esc). */
+    closeAuthModal(): void {
+      this.showAuthModal = false;
+      this.closeDialog(this.authFocus);
+      this.authFocus = null;
     },
 
     saveAuthToken(): void {
       api.setAuthToken(this.tokenInput);
       this.authToken = api.getAuthToken();
-      this.showAuthModal = false;
+      this.closeAuthModal();
       this.loadError = "";
       if (this.selectedProjectId) this.connectSse();
       void this.loadProjects().then(() => {
@@ -264,12 +276,32 @@ export function crowbanApp() {
       api.setAuthToken("");
       this.authToken = "";
       this.tokenInput = "";
-      this.showAuthModal = false;
+      this.closeAuthModal();
       this.loadError = "";
       if (this.selectedProjectId) this.connectSse();
       void this.loadProjects().then(() => {
         if (this.selectedProjectId) void this.loadBoard();
       });
+    },
+
+    // -------------------------------------------------------------- focus session
+    /** Start a focus session for a dialog surface by root element id (WCAG 2.4.3).
+     *  Initial focus moves in as soon as the surface is actually rendered
+     *  (focusWhenReady polls frames: x-show flushes on Alpine's own schedule,
+     *  which can post-date even a setTimeout(0)). `autoFocus: false` for
+     *  surfaces that focus explicitly once their content has loaded (drawer). */
+    openDialog(id: string, initialSelector?: string, autoFocus = true): DialogFocus | null {
+      if (typeof document === "undefined") return null;
+      const root = document.getElementById(id);
+      if (!root) return null;
+      const f = openDialogFocus(root, { initialSelector });
+      if (autoFocus) focusWhenReady(f, root);
+      return f;
+    },
+
+    /** Close a focus session (restores trigger focus); idempotent on null. */
+    closeDialog(f: DialogFocus | null): void {
+      f?.close();
     },
 
     // ---------------------------------------------------------------- projects
@@ -335,6 +367,8 @@ export function crowbanApp() {
       opencode_model: "",
     },
     projectSettingsBusy: false,
+    /** Focus session for the project settings modal (trap + restore). */
+    projectSettingsFocus: null as DialogFocus | null,
 
     async openProjectSettings(): Promise<void> {
       if (!this.selectedProjectId) return;
@@ -349,6 +383,8 @@ export function crowbanApp() {
         };
       }
       this.showProjectSettings = true;
+      // Name field first — least destructive control in this dialog.
+      this.projectSettingsFocus = this.openDialog("cb-project-settings", "input");
       try {
         const full = await api.getProject(this.selectedProjectId);
         this.projectSettingsForm = {
@@ -363,8 +399,11 @@ export function crowbanApp() {
       }
     },
 
+    /** Single close path for the settings modal (× / Cancel / backdrop / save / Esc). */
     closeProjectSettings(): void {
       this.showProjectSettings = false;
+      this.closeDialog(this.projectSettingsFocus);
+      this.projectSettingsFocus = null;
     },
 
     async saveProjectSettings(): Promise<void> {
@@ -381,7 +420,7 @@ export function crowbanApp() {
           opencode_model: this.projectSettingsForm.opencode_model.trim() || undefined,
         });
         await this.loadProjects();
-        this.showProjectSettings = false;
+        this.closeProjectSettings();
         this.toast("Project updated");
       } catch (e) {
         this.toast(errMsg(e), "error");
@@ -791,6 +830,8 @@ export function crowbanApp() {
     taskBusy: false,
     /** possible_duplicates advisory from the last create — shown non-blockingly. */
     duplicates: [] as TaskSummary[],
+    /** Focus session for the new-task modal (trap + restore). */
+    newTaskFocus: null as DialogFocus | null,
 
     openNewTask(status: Status = "todo"): void {
       this.newTaskTarget = status;
@@ -805,11 +846,16 @@ export function crowbanApp() {
       };
       this.duplicates = [];
       this.showNewTask = true;
+      // First form FIELD first (not the submit button) per a11y convention.
+      this.newTaskFocus = this.openDialog('cb-new-task', 'input[x-model="newTask.title"]');
     },
 
+    /** Single close path for the new-task modal (× / Cancel / backdrop / create / Esc). */
     closeNewTask(): void {
       this.showNewTask = false;
       this.duplicates = [];
+      this.closeDialog(this.newTaskFocus);
+      this.newTaskFocus = null;
     },
 
     clearDuplicates(): void {
@@ -850,7 +896,7 @@ export function crowbanApp() {
           }
         }
         this.duplicates = res.possible_duplicates ?? [];
-        this.showNewTask = false;
+        this.closeNewTask();
       } catch (e) {
         this.toast(errMsg(e), "error");
       } finally {
@@ -868,13 +914,16 @@ export function crowbanApp() {
     detail: null as TaskDetail | null,
     /** id of the task being moved (disables status buttons mid-flight). */
     busyStatus: "",
+    /** Focus session for the drawer (trap + restore). Survives in-drawer task
+     *  switches so focus still returns to the original board trigger. */
+    detailFocus: null as DialogFocus | null,
 
     async openTask(id: string): Promise<void> {
       // Unsaved notes belong to the task being left — ask before dropping them
       // (AC 3). Re-opening the SAME task is just a refresh: its in-progress
       // draft is intentionally preserved (see applyDetail).
       if (this.notesDirty && this.detailOpen && this.detailId !== id) {
-        this.unsavedNotesAction = { kind: "open", taskId: id };
+        this.promptUnsavedNotes({ kind: "open", taskId: id });
         return;
       }
       // Defensive: a scratchpad that belongs to another task is discarded up
@@ -882,21 +931,36 @@ export function crowbanApp() {
       if (this.notesDraftOwner !== null && this.notesDraftOwner !== id) {
         this.resetNotesDraft();
       }
+      // In-drawer switch (discard-&-switch): keep the existing session so focus
+      // restoration still targets the element that originally opened the drawer.
+      const switching = this.detailOpen && this.detailFocus !== null;
       this.detailOpen = true;
       this.detailId = id;
       this.detail = null;
       this.editingTask = false;
       this.totalComments = 0;
       this.loadingOlderComments = false;
+      if (!switching) {
+        // Defensive: a stale session must never survive to capture a new trigger.
+        this.closeDialog(this.detailFocus);
+        this.detailFocus = null;
+        // The × button is the safe initial focus (not "Start Task in OpenCode").
+        // autoFocus off: content arrives via fetch, so focus moves explicitly
+        // once (below) instead of racing the render.
+        this.detailFocus = this.openDialog('cb-detail-drawer', 'button[aria-label="Close"]', false);
+      }
       await this.refreshDetail(false);
       void this.initComments(id);
+      // Content arrives via fetch; only move focus once the dialog actually has
+      // focusables (no-op if the user already tabbed somewhere inside).
+      this.detailFocus?.focusInitial();
     },
 
     /** Drawer-close entry point for the backdrop, × buttons and Escape: asks
      *  first when notes have unsaved edits (AC 3). */
     requestCloseDetail(): void {
       if (this.notesDirty) {
-        this.unsavedNotesAction = { kind: "close" };
+        this.promptUnsavedNotes({ kind: "close" });
         return;
       }
       this.closeDetail();
@@ -914,6 +978,12 @@ export function crowbanApp() {
       // dirty draft would leak into whatever task is opened next.
       this.resetNotesDraft();
       this.unsavedNotesAction = null;
+      // A confirm session must not outlive its drawer either (defensive).
+      this.closeDialog(this.confirmNotesFocus);
+      this.confirmNotesFocus = null;
+      // Restore focus to the board trigger that opened the drawer.
+      this.closeDialog(this.detailFocus);
+      this.detailFocus = null;
       this.detailOpen = false;
     },
 
@@ -1470,6 +1540,8 @@ export function crowbanApp() {
     /** The close/switch held behind the unsaved-notes confirmation — null when
      *  no prompt is on screen. */
     unsavedNotesAction: null as { kind: "close" } | { kind: "open"; taskId: string } | null,
+    /** Focus session for the confirm modal (stacked above the drawer's). */
+    confirmNotesFocus: null as DialogFocus | null,
 
     /** Clear the notes scratchpad so a closed or abandoned drawer can never
      *  leak its draft into another task (AC 1 + AC 2). */
@@ -1479,16 +1551,32 @@ export function crowbanApp() {
       this.notesDraftOwner = null;
     },
 
-    /** "Keep editing" — dismiss the unsaved-notes prompt, draft untouched. */
-    cancelUnsavedNotes(): void {
-      this.unsavedNotesAction = null;
+    /** Show the unsaved-notes confirm and open its focus session. "Keep
+     *  editing" (least destructive) receives initial focus. */
+    promptUnsavedNotes(action: { kind: "close" } | { kind: "open"; taskId: string }): void {
+      this.unsavedNotesAction = action;
+      this.confirmNotesFocus = this.openDialog("cb-notes-confirm", "button.btn-ghost");
     },
 
-    /** "Discard changes" — drop the draft, then run the deferred close/switch. */
+    /** "Keep editing" — dismiss the prompt, draft untouched. Focus returns to
+     *  whatever had focus inside the drawer when the prompt opened (stacked
+     *  session: only THIS layer is closed). */
+    cancelUnsavedNotes(): void {
+      this.unsavedNotesAction = null;
+      this.closeDialog(this.confirmNotesFocus);
+      this.confirmNotesFocus = null;
+    },
+
+    /** "Discard changes" — drop the draft, then run the deferred close/switch.
+     *  The confirm session is closed first; a drawer close afterwards restores
+     *  focus to the original board trigger (the switch path re-focuses the new
+     *  drawer content via openTask). */
     async confirmUnsavedNotes(): Promise<void> {
       const action = this.unsavedNotesAction;
       this.unsavedNotesAction = null;
       this.resetNotesDraft();
+      this.closeDialog(this.confirmNotesFocus);
+      this.confirmNotesFocus = null;
       if (action?.kind === "open") await this.openTask(action.taskId);
       else if (action?.kind === "close") this.closeDetail();
     },
@@ -1977,8 +2065,8 @@ export function crowbanApp() {
     /** Escape key: close the top-most overlay or cancel edit mode. */
     dismissTop(): void {
       if (this.unsavedNotesAction) this.cancelUnsavedNotes(); // Escape = "keep editing"
-      else if (this.showAuthModal) this.showAuthModal = false;
-      else if (this.showProjectSettings) this.showProjectSettings = false;
+      else if (this.showAuthModal) this.closeAuthModal();
+      else if (this.showProjectSettings) this.closeProjectSettings();
       else if (this.editingAcSeq !== 0) this.cancelEditingAc();
       else if (this.editingTask) this.cancelEditing();
       else if (this.detailOpen) this.requestCloseDetail();
