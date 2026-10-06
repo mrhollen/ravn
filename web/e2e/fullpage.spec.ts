@@ -225,21 +225,22 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     await expect(page.locator('article', { hasText: 'Full page fixture A' })).toBeVisible();
   }
 
-  test('AC1+AC3: card click keeps the drawer; "Open full page" renders every sidebar section at /tasks/<id>', async ({
+  test('AC1+AC3: card click keeps the centered modal; "Open full page" renders every section at /tasks/<id>', async ({
     page,
   }) => {
     await openBoard(page);
     const cardA = page.locator('article', { hasText: 'Full page fixture A' });
 
-    // Regression: a plain card click still opens the RIGHT-HAND DRAWER and
-    // never changes the URL (card-click behavior is unchanged by this task).
+    // Regression: a plain card click still opens the detail overlay (now the
+    // WIDE CENTERED MODAL — modal.spec.ts asserts its geometry) and never
+    // changes the URL.
     await cardA.click();
     const wrapper = page.locator('#cb-detail-drawer');
     await expect(wrapper).toBeVisible();
     await expect(wrapper).toHaveCSS('position', 'fixed');
-    // A plain card click never touches the URL (drawer behavior is unchanged).
+    // A plain card click never touches the URL (modal behavior is unchanged by this task).
     expect(new URL(page.url()).pathname).toBe('/');
-    // The board stays visible behind the drawer.
+    // The board stays visible behind the modal.
     await expect(page.locator('main')).toBeVisible();
 
     // AC3: clearly visible "Open full page" affordance from the task detail view.
@@ -306,7 +307,7 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     const eventKinds = await panel.locator('li code').allTextContents();
     expect(eventKinds).toContain('created');
 
-    // The drawer-only entry point disappears on the page; back affordance appears.
+    // The modal-only entry point disappears on the page; back affordance appears.
     await expect(page.locator('[data-testid="open-fullpage-btn"]')).toBeHidden();
     await expect(page.locator('[data-testid="fullpage-back-btn"]')).toBeVisible();
   });
