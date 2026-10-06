@@ -206,10 +206,27 @@ test.describe('Mobile experience (375px, touch)', () => {
     // The mobile hamburger toggle is present...
     const menuToggle = page.getByRole('button', { name: 'Board menu' });
     await expect(menuToggle).toBeVisible();
-    // ...and the secondary controls (Settings + live indicator) are collapsed
-    // away behind it. The Projects dropdown trigger stays in row 1 (a primary
-    // control); project creation lives INSIDE its panel, not in the strip.
-    await expect(page.getByTestId('project-select')).toBeVisible();
+    // ...and the secondary control (live indicator) collapses away behind it.
+    // The Projects dropdown — now a SPLIT control of select trigger + attached
+    // settings gear — stays in row 1 (a primary control); project creation lives
+    // INSIDE its panel, not in the strip. Project settings moved out of the
+    // strip into the gear, so the compact row still fits at 375px with no
+    // horizontal overflow.
+    const projectTrigger = page.getByTestId('project-select');
+    await expect(projectTrigger).toBeVisible();
+    const gear = page.getByTestId('project-settings-btn');
+    await expect(gear).toBeVisible();
+    // The gear is ATTACHED to the right edge of the select (same unit, same row):
+    // it starts at/after the trigger's right edge and shares its vertical span.
+    const sbox = await projectTrigger.boundingBox();
+    const gbox = await gear.boundingBox();
+    expect(sbox).not.toBeNull();
+    expect(gbox).not.toBeNull();
+    expect(gbox!.x, 'gear starts at the select\'s right edge').toBeGreaterThanOrEqual(sbox!.x + sbox!.width - 2);
+    expect(Math.abs(gbox!.y - sbox!.y), 'gear shares the trigger\'s top').toBeLessThanOrEqual(1);
+    expect(Math.abs(gbox!.height - sbox!.height), 'gear matches the trigger\'s height').toBeLessThanOrEqual(1);
+    // …and the gear stays within the 375px viewport (no horizontal overflow).
+    expect(gbox!.x + gbox!.width).toBeLessThanOrEqual(MOBILE_VIEWPORT.width);
     await expect(page.getByTestId('new-project-item')).not.toBeVisible();
 
     // The consolidated settings-menu trigger is REACHABLE IN ROW 1 at 375px
@@ -238,7 +255,8 @@ test.describe('Mobile experience (375px, touch)', () => {
     expect(collapsed).not.toBeNull();
     expect(collapsed!.height).toBeLessThanOrEqual(96);
 
-    // Expanding the strip reveals Settings + the live indicator below row 1…
+    // Expanding the strip reveals the live indicator below row 1 (project
+    // settings no longer live here — they moved into the gear on the dropdown)…
     await menuToggle.click();
     await expect(menuToggle).toHaveAttribute('aria-expanded', 'true');
     await expect(page.locator('[data-testid="live-indicator"]')).toBeVisible();

@@ -498,10 +498,12 @@ test.describe('Web E2E test suite', () => {
     await expect(page.locator('h3', { hasText: 'Alpha Critical Task' })).toBeVisible();
 
     // -------------------------------------------------------------------------
-    // AC 1: Project settings modal / edit
+    // AC 1: Project settings modal / edit — opened from the gear icon attached
+    // to the Projects dropdown (the old spelled-out "Settings" button is gone)
     // -------------------------------------------------------------------------
-    const settingsBtn = page.locator('button[aria-label="Project settings"]');
+    const settingsBtn = page.getByTestId('project-settings-btn');
     await expect(settingsBtn).toBeVisible();
+    await expect(settingsBtn).toBeEnabled();
     await settingsBtn.click();
 
     // Check modal opens with existing name
@@ -1167,8 +1169,9 @@ test.describe('Web E2E test suite', () => {
 
       // -----------------------------------------------------------------------
       // AC 1: Project settings modal allows configuring OpenCode Server URL & dir
+      // (opened from the gear icon attached to the Projects dropdown)
       // -----------------------------------------------------------------------
-      const settingsBtn = page.getByRole('button', { name: 'Project settings' });
+      const settingsBtn = page.getByTestId('project-settings-btn');
       await expect(settingsBtn).toBeVisible();
       await settingsBtn.click();
 
