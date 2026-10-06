@@ -421,10 +421,152 @@ export function crowbanApp() {
       return `${p.name}  (${c.todo}·${c.doing}·${c.done})`;
     },
 
+    // -------------------------------------------------- projects dropdown (custom)
+    // The header's Projects control is a custom dropdown — trigger button plus an
+    // Alpine-managed menu — instead of a native <select>, which cannot host the
+    // trailing "+ New project…" action item. Keyboard: Enter/Space or ArrowDown
+    // on the trigger opens it; arrows (+Home/End) move between items; Enter
+    // activates the focused item; Escape closes and returns focus to the
+    // trigger (closeProjectMenu(true)). Clicks outside the whole control close
+    // it WITHOUT stealing focus.
+    projectMenuOpen: false,
+    /** Flips on at the end of init(); gates the trigger so a pre-boot click
+     *  can't open an empty, inert menu (and e2e can wait for it to enable). */
+    appBooted: false,
+    _projectMenuOutsideHandler: null as ((e: Event) => void) | null,
+
+    projectSelectLabel(): string {
+      const p = this.projects.find((x) => x.id === this.selectedProjectId);
+      return p ? this.projectOptionLabel(p) : "Select a project…";
+    },
+
+    toggleProjectMenu(): void {
+      if (this.projectMenuOpen) this.closeProjectMenu();
+      else this.openProjectMenu("selected");
+    },
+
+    /** Open the menu and focus an option: "selected" = current project (or the
+     *  first one when nothing is selected), "first"/"last" for ArrowDown/Up on
+     *  a closed trigger. The capture-phase outside-click listener lives exactly
+     *  as long as the menu is open (removed in closeProjectMenu). */
+    openProjectMenu(focusTarget: "selected" | "first" | "last" = "selected"): void {
+      if (this.projectMenuOpen) return;
+      this.projectMenuOpen = true;
+      if (typeof document !== "undefined") {
+        const onDocClick = (e: Event): void => {
+          // Inside the control (trigger or items): their own handlers decide.
+          const wrap = document.querySelector<HTMLElement>('[data-testid="project-dropdown"]');
+          if (wrap && e.target instanceof Node && wrap.contains(e.target)) return;
+          this.closeProjectMenu(); // outside click — no focus restore
+        };
+        this._projectMenuOutsideHandler = onDocClick;
+        document.addEventListener("click", onDocClick, true);
+      }
+      if (typeof window === "undefined" || typeof document === "undefined") return;
+      // The options exist in the DOM from boot (x-for rendered once; the panel
+      // is merely x-show-hidden), so resolve the target NOW and let
+      // _focusWhenVisible wait out the display flush before focusing.
+      const root = document.querySelector<HTMLElement>('[data-testid="project-menu"]');
+      if (!root) return;
+      const items = Array.from(root.querySelectorAll<HTMLButtonElement>("button"));
+      if (items.length === 0) return;
+      let idx = 0;
+      if (focusTarget === "last") idx = items.length - 1;
+      else if (focusTarget === "selected") {
+        const i = items.findIndex((el) => el.getAttribute("data-project-id") === this.selectedProjectId);
+        if (i !== -1) idx = i;
+      }
+      this._focusWhenVisible(items[idx] ?? null);
+    },
+
+    /** Focus `el` once it is actually visible. x-show/x-cloak display updates
+     *  flush on Alpine's own schedule — measured LATER than both a single
+     *  requestAnimationFrame AND setTimeout(0) (see focus.ts) — so "focus one
+     *  tick after open" can land while the surface is still display:none and
+     *  .focus() silently no-ops forever. Instead: poll each animation frame
+     *  until visible, bounded (~20 frames ≈ 350ms) so an element that never
+     *  renders can't spin. Mirrors focusWhenReady(). */
+    _focusWhenVisible(el: HTMLElement | null): void {
+      if (!el || typeof window === "undefined" || typeof requestAnimationFrame !== "function") return;
+      const isVisible = (n: HTMLElement): boolean =>
+        typeof n.checkVisibility === "function"
+          ? n.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true })
+          : n.offsetParent !== null || getComputedStyle(n).position === "fixed";
+      let frames = 0;
+      const step = (): void => {
+        if (isVisible(el)) {
+          el.focus();
+          return;
+        }
+        if (++frames >= 20) return; // never rendered — stop, don't focus blind
+        requestAnimationFrame(step);
+      };
+      step();
+    },
+
+    /** Close the menu. `restoreFocus` sends focus back to the trigger (Esc / a
+     *  pick); outside clicks close WITHOUT restoring — focus is already where
+     *  the user clicked. */
+    closeProjectMenu(restoreFocus = false): void {
+      if (!this.projectMenuOpen) return;
+      this.projectMenuOpen = false;
+      if (this._projectMenuOutsideHandler && typeof document !== "undefined") {
+        document.removeEventListener("click", this._projectMenuOutsideHandler, true);
+        this._projectMenuOutsideHandler = null;
+      }
+      if (restoreFocus && typeof window !== "undefined" && typeof document !== "undefined") {
+        this._focusWhenVisible(document.querySelector<HTMLElement>('[data-testid="project-select"]'));
+      }
+    },
+
+    /** Arrow/Home/End navigation between menu items (buttons in DOM order —
+     *  project options, then the "+ New project…" action). */
+    moveProjectFocus(dir: number | "home" | "end"): void {
+      const root =
+        typeof document === "undefined" ? null : document.querySelector<HTMLElement>('[data-testid="project-menu"]');
+      if (!root) return;
+      const items = Array.from(root.querySelectorAll<HTMLButtonElement>("button"));
+      if (items.length === 0) return;
+      const active = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
+      let next: number;
+      if (dir === "home") next = 0;
+      else if (dir === "end") next = items.length - 1;
+      else {
+        const idx = active ? items.indexOf(active) : -1;
+        next = idx === -1 ? (dir > 0 ? 0 : items.length - 1) : Math.min(items.length - 1, Math.max(0, idx + dir));
+      }
+      items[next]?.focus();
+    },
+
+    /** Pick a project from the menu: same semantics as the old native select's
+     *  @change (x-model write + selectProject persist/reload), then close with
+     *  focus back on the trigger. Re-picking the current one just collapses. */
+    pickProject(id: string): void {
+      if (id !== this.selectedProjectId) {
+        this.selectedProjectId = id;
+        this.selectProject();
+      }
+      this.closeProjectMenu(true);
+    },
+
     // ------------------------------------------------------------ new project
     showNewProject: false,
     newProject: { name: "", description: "" },
     projectBusy: false,
+
+    /** "+ New project…" menu item: closes the dropdown and opens the existing
+     *  form bar below the header, focusing the name field. The `newProject`
+     *  draft is deliberately NOT reset here — a dismissed/cancelled form must
+     *  keep its typed input (no phantom creation on submit, no loss on return);
+     *  the draft clears only on successful create. */
+    openNewProject(): void {
+      this.closeProjectMenu();
+      this.showNewProject = true;
+      if (typeof window === "undefined" || typeof document === "undefined") return;
+      // The name input exists from boot (static markup under an x-show bar);
+      // wait out the display flush before focusing.
+      this._focusWhenVisible(document.getElementById("cb-new-project-name-input"));
+    },
 
     async createProject(): Promise<void> {
       const name = this.newProject.name.trim();
@@ -2499,6 +2641,7 @@ export function crowbanApp() {
       else if (this.editingTask) this.cancelEditing();
       else if (this.detailOpen) this.requestCloseDetail();
       else if (this.showNewTask) this.closeNewTask();
+      else if (this.projectMenuOpen) this.closeProjectMenu(true); // header dropdown is topmost
       else if (this.showNewProject) this.showNewProject = false;
       else if (this.cardMenuTaskId) this.cardMenuTaskId = null;
       else if (this.showMobileMenu) this.showMobileMenu = false;
@@ -2585,6 +2728,10 @@ export function crowbanApp() {
         this.showNewProject = true;
       }
       if (this.polling) this.startPolling();
+      // Boot finished: the Projects dropdown trigger may now be clicked
+      // (e2e helpers wait on it becoming enabled). Set last so a failed
+      // early load can't unlock an inert control.
+      this.appBooted = true;
     },
   };
 }

@@ -54,16 +54,57 @@
           <p class="text-[11px] text-zinc-500">MCP-first kanban &middot; visibility UI</p>
         </div>
 
-        <label class="flex min-w-0 flex-1 items-center gap-2 text-sm md:flex-initial">
+        <!-- Projects dropdown: custom trigger button + Alpine-managed menu
+             (a native <select> can't host the trailing "+ New project…" action).
+             Keyboard: Enter/Space or ArrowDown on the trigger opens it; arrows
+             move between items, Enter picks, Escape closes and returns focus
+             to the trigger. -->
+        <div class="flex min-w-0 flex-1 items-center gap-2 text-sm md:flex-initial">
           <span class="hidden text-zinc-500 sm:inline">Project</span>
-          <select x-model="selectedProjectId" @change="selectProject()" :disabled="projects.length === 0"
-                  class="field min-w-0 flex-1 disabled:opacity-50 md:max-w-xs">
-            <option value="" disabled>Select a project…</option>
-            <template x-for="p in projects" :key="p.id">
-              <option :value="p.id" x-text="projectOptionLabel(p)"></option>
-            </template>
-          </select>
-        </label>
+          <div class="relative min-w-0 flex-1 md:max-w-xs" data-testid="project-dropdown">
+            <button type="button" data-testid="project-select"
+                    aria-haspopup="true" :aria-expanded="projectMenuOpen ? 'true' : 'false'"
+                    :aria-label="'Projects: ' + projectSelectLabel()"
+                    :disabled="!appBooted"
+                    @click="toggleProjectMenu()"
+                    @keydown.down.prevent="openProjectMenu('first')"
+                    @keydown.up.prevent="openProjectMenu('last')"
+                    class="field flex w-full items-center justify-between gap-2 text-left disabled:cursor-not-allowed disabled:opacity-50">
+              <span class="min-w-0 truncate" x-text="projectSelectLabel()"></span>
+              <svg class="h-4 w-4 shrink-0 text-zinc-400 dark:text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            <!-- Menu panel: z-40 — above the header and board content, below
+                 the detail modal (z-[60]) and toasts (z-50). -->
+            <div data-testid="project-menu" role="menu" aria-label="Projects"
+                 x-show="projectMenuOpen" x-cloak
+                 @keydown.down.prevent="moveProjectFocus(1)"
+                 @keydown.up.prevent="moveProjectFocus(-1)"
+                 @keydown.home.prevent="moveProjectFocus('home')"
+                 @keydown.end.prevent="moveProjectFocus('end')"
+                 @keydown.escape="closeProjectMenu(true)"
+                 class="absolute left-0 right-0 top-full z-40 mt-1.5 max-h-[24rem] min-w-[15rem] overflow-auto rounded-md border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
+              <template x-for="p in projects" :key="p.id">
+                <button type="button" role="menuitem" data-testid="project-option" :data-project-id="p.id"
+                        @click="pickProject(p.id)"
+                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:hover:bg-zinc-800"
+                        :class="p.id === selectedProjectId ? 'font-semibold' : ''">
+                  <span class="min-w-0 flex-1 truncate" :title="projectOptionLabel(p)" x-text="projectOptionLabel(p)"></span>
+                  <svg x-show="p.id === selectedProjectId" x-cloak class="h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
+                  </svg>
+                </button>
+              </template>
+              <div class="my-1 border-t border-zinc-200 dark:border-zinc-700"></div>
+              <button type="button" role="menuitem" data-testid="new-project-item" @click="openNewProject()"
+                      class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm font-medium hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:hover:bg-zinc-800">
+                + New project…
+              </button>
+            </div>
+          </div>
+        </div>
 
         <button type="button" @click="openNewTask('todo')" :disabled="!selectedProjectId" class="btn-primary disabled:opacity-40">
           + New task
@@ -81,13 +122,12 @@
         <!-- secondary controls: inline on md+, collapsible full-width strip on mobile -->
         <div class="flex flex-wrap items-center gap-x-5 gap-y-2"
              :class="showMobileMenu ? 'w-full' : 'hidden w-full md:flex md:ml-auto'">
-          <button type="button" @click="openProjectSettings()" :disabled="!selectedProjectId"
-                  class="btn-ghost disabled:opacity-40" title="Project settings" aria-label="Project settings">
-            Settings
-          </button>
-          <button type="button" @click="showNewProject = !showNewProject" class="btn-ghost">New project</button>
+           <button type="button" @click="openProjectSettings()" :disabled="!selectedProjectId"
+                   class="btn-ghost disabled:opacity-40" title="Project settings" aria-label="Project settings">
+             Settings
+           </button>
 
-          <!-- theme toggle: Light / Dark / System (persisted in localStorage) -->
+           <!-- theme toggle: Light / Dark / System (persisted in localStorage) -->
           <div role="group" aria-label="Theme" data-testid="theme-toggle"
                class="flex items-center overflow-hidden rounded-md border border-zinc-300 shadow-sm dark:border-zinc-700">
             <button type="button" data-testid="theme-light" @click="setTheme('light')"
@@ -170,7 +210,7 @@
         <form @submit.prevent="createProject()" class="flex flex-wrap items-end gap-x-4 gap-y-2">
           <label class="flex min-w-56 flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
             Name *
-            <input x-model="newProject.name" class="field mt-1 w-64" placeholder="Website Redesign" required />
+            <input id="cb-new-project-name-input" x-model="newProject.name" class="field mt-1 w-64" placeholder="Website Redesign" required />
           </label>
           <label class="flex min-w-52 flex-1 flex-col text-xs font-medium text-zinc-500 dark:text-zinc-400">
             Description (markdown, optional)
