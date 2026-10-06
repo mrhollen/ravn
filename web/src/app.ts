@@ -115,6 +115,32 @@ function readStoredSort(): { key: SortKey; dir: SortDir } {
   }
 }
 
+/** Last-resort clipboard write for non-secure contexts (plain http on a LAN),
+ *  where navigator.clipboard is unavailable: hidden textarea + execCommand.
+ *  Returns true only when the browser reports the copy succeeded. */
+function copyViaExecCommand(text: string): boolean {
+  if (typeof document === "undefined" || !document.body) return false;
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  // Keep it out of the flow, off-screen, and unfocusable by tab order.
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.top = "-9999px";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  } finally {
+    ta.remove();
+  }
+  return ok;
+}
+
 /** Comparator for one criterion + direction. Ties always break by id (ascending)
  *  so the order is deterministic regardless of direction. */
 function compareTasks(a: TaskSummary, b: TaskSummary, key: SortKey, dir: SortDir): number {
@@ -1071,6 +1097,27 @@ export function crowbanApp() {
       } finally {
         this.startingOpenCode = false;
       }
+    },
+
+    // ------------------------------------------------------------------ copy id
+    /** Copy the FULL task ID to the clipboard from the truncated header badge.
+     *  Prefers the Async Clipboard API and falls back to execCommand for plain-
+     *  http deployments where it is unavailable (see copyViaExecCommand). */
+    async copyTaskId(id: string): Promise<void> {
+      if (!id) return;
+      let copied = false;
+      try {
+        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(id);
+          copied = true;
+        } else {
+          copied = copyViaExecCommand(id);
+        }
+      } catch {
+        copied = false; // e.g. permission denied — try the legacy path once
+      }
+      if (!copied) copied = copyViaExecCommand(id);
+      this.toast(copied ? "Copied task ID to clipboard" : "Couldn't copy the task ID", copied ? "info" : "error");
     },
 
     /** Fetch GET /tasks/{id} (full resume payload, comment tail 50) and apply it.

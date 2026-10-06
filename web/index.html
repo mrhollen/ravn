@@ -665,7 +665,8 @@
                     Due <time :title="detail.due_at" x-text="dueLabel(detail.due_at)"></time>
                   </span>
                   <span title="Optimistic-concurrency version — writes are guarded by it">v<span x-text="detail.version"></span></span>
-                  <code class="rounded bg-zinc-100 px-1 py-0.5 text-[10px] dark:bg-zinc-800" :title="detail.id" x-text="shortId(detail.id)"></code>
+                  <code class="cursor-pointer select-none rounded bg-zinc-100 px-1 py-0.5 text-[10px] transition hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700"
+                        :title="'Copy full ID: ' + detail.id" @click="copyTaskId(detail.id)" data-testid="task-id-badge" x-text="shortId(detail.id)"></code>
                   <span>updated</span>
                   <time :title="detail.updated_at" x-text="relTime(detail.updated_at)"></time>
                 </div>
