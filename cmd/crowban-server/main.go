@@ -48,6 +48,8 @@ func main() {
 		token  = flag.String("token", os.Getenv("CROWBAN_TOKEN"), "bearer token gating /api/v1 routes; empty disables auth (dev default)")
 		static = flag.String("static", envOr("CROWBAN_STATIC_DIR", "./web/dist"),
 			"directory holding the built web UI (Vite dist); placeholder root is served when it has no index.html")
+		artifacts = flag.String("artifacts-dir", envOr("CROWBAN_ARTIFACTS_DIR", defaultArtifactsDir()),
+			"directory holding stored artifact uploads")
 		logLevel = flag.String("log-level", envOr("LOG_LEVEL", envOr("CROWBAN_LOG_LEVEL", "info")),
 			"log level: debug, info, warn, error")
 	)
@@ -59,7 +61,12 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 	logger.Info("crowban-server starting",
-		"version", version, "addr", *addr, "data", *data, "token_set", *token != "", "static_dir", *static, "log_level", lvl.String())
+		"version", version, "addr", *addr, "data", *data, "token_set", *token != "", "static_dir", *static, "artifacts_dir", *artifacts, "log_level", lvl.String())
+
+	if err := os.MkdirAll(*artifacts, 0o755); err != nil {
+		logger.Error("failed to create artifacts dir", "dir", *artifacts, "err", err)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -77,7 +84,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newRouter(db, *static, *token),
+		Handler:           newRouter(db, *static, *token, *artifacts),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -120,7 +127,7 @@ type healthResponse struct {
 // "GET /" catch-all; Go 1.22 mux resolution always prefers the specific one
 // regardless of registration order, so static serving can never shadow them
 // (proved by TestStaticServingDoesNotShadowAPIAndHealthz).
-func newRouter(db *sql.DB, staticDir, token string) http.Handler {
+func newRouter(db *sql.DB, staticDir, token, artifactsDir string) http.Handler {
 	mux := http.NewServeMux()
 
 	// Slice 3 composition: one shared transactional seam, clock, and idgen —
@@ -140,13 +147,14 @@ func newRouter(db *sql.DB, staticDir, token string) http.Handler {
 	}
 
 	app := httpapi.NewApp(httpapi.Deps{
-		Projects:   application.NewProjects(uow, now, mint),
-		Tasks:      application.NewTasks(uow, now, mint),
-		Comments:   application.NewComments(uow, now, mint),
-		Artifacts:  application.NewArtifacts(uow, now, mint),
-		Acceptance: application.NewAcceptance(uow, now, mint),
-		Relations:  application.NewRelations(uow, now, mint),
-		Broker:     broker,
+		Projects:     application.NewProjects(uow, now, mint),
+		Tasks:        application.NewTasks(uow, now, mint),
+		Comments:     application.NewComments(uow, now, mint),
+		Artifacts:    application.NewArtifacts(uow, now, mint),
+		Acceptance:   application.NewAcceptance(uow, now, mint),
+		Relations:    application.NewRelations(uow, now, mint),
+		Broker:       broker,
+		ArtifactsDir: artifactsDir,
 	})
 	httpapi.RegisterRoutes(mux, app)
 
@@ -211,7 +219,7 @@ func spaFallback(static fs.FS) http.Handler {
 			return
 		}
 		p := r.URL.Path
-		if p == "/api" || strings.HasPrefix(p, "/api/") || p == "/healthz" || strings.HasPrefix(p, "/healthz/") || p == "/metrics" || strings.HasPrefix(p, "/metrics/") {
+		if p == "/api" || strings.HasPrefix(p, "/api/") || p == "/healthz" || strings.HasPrefix(p, "/healthz/") || p == "/metrics" || strings.HasPrefix(p, "/metrics/") || p == "/artifacts" || strings.HasPrefix(p, "/artifacts/") {
 			http.NotFound(w, r)
 			return
 		}
@@ -221,6 +229,15 @@ func spaFallback(static fs.FS) http.Handler {
 		spa.URL = &u
 		fileServer.ServeHTTP(w, spa)
 	})
+}
+
+// defaultArtifactsDir returns "/artifacts" if present as a directory (e.g. In Docker),
+// else "./artifacts" for local development.
+func defaultArtifactsDir() string {
+	if fi, err := os.Stat("/artifacts"); err == nil && fi.IsDir() {
+		return "/artifacts"
+	}
+	return "./artifacts"
 }
 
 // parseLogLevel parses a log level string into a slog.Level.
@@ -259,3 +276,4 @@ func envOr(key, def string) string {
 	}
 	return def
 }
+

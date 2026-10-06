@@ -55,15 +55,16 @@ FROM alpine:3.21 AS server-runtime
 RUN apk add --no-cache ca-certificates \
  && addgroup -g 10001 app \
  && adduser -D -u 10001 -G app app \
- && mkdir -p /data \
- && chown app:app /data
+ && mkdir -p /data /artifacts \
+ && chown app:app /data /artifacts
 COPY --from=go-build  /out/crowban-server /usr/local/bin/
 COPY --from=web-build /web/dist           /app/public
 USER app
 ENV CROWBAN_ADDR=:8080 \
     CROWBAN_DATA=/data/crowban.db \
-    CROWBAN_STATIC_DIR=/app/public
-VOLUME ["/data"]
+    CROWBAN_STATIC_DIR=/app/public \
+    CROWBAN_ARTIFACTS_DIR=/artifacts
+VOLUME ["/data", "/artifacts"]
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1

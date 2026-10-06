@@ -31,3 +31,6 @@ go.work.sum
 # Local binaries
 /bin/
 
+# Uploaded artifacts (local development)
+/artifacts/
+

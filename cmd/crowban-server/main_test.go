@@ -43,7 +43,7 @@ func newTestDB(t *testing.T) *sql.DB {
 // httptest port so tests never collide with anything else.
 func startTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-such-dist"), ""))
+	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-such-dist"), "", t.TempDir()))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -62,7 +62,7 @@ func startStaticTestServer(t *testing.T) *httptest.Server {
 	if err := os.WriteFile(filepath.Join(staticDir, "assets", "app.js"), []byte(appJS), 0o644); err != nil {
 		t.Fatalf("write app.js: %v", err)
 	}
-	srv := httptest.NewServer(newRouter(newTestDB(t), staticDir, ""))
+	srv := httptest.NewServer(newRouter(newTestDB(t), staticDir, "", t.TempDir()))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -214,7 +214,7 @@ func TestNoStaticDirKeepsPlaceholderRoot(t *testing.T) {
 		"empty":   t.TempDir(), // exists but holds no index.html
 	} {
 		t.Run(name, func(t *testing.T) {
-			srv := httptest.NewServer(newRouter(newTestDB(t), dir, ""))
+			srv := httptest.NewServer(newRouter(newTestDB(t), dir, "", t.TempDir()))
 			t.Cleanup(srv.Close)
 
 			code, body := get(t, srv.URL+"/")
@@ -263,7 +263,7 @@ func reqWithAuth(t *testing.T, method, url, authHeader, body string) (int, strin
 
 func TestAuthGatingWithToken(t *testing.T) {
 	const secret = "production-secret-token"
-	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-dist"), secret))
+	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-dist"), secret, t.TempDir()))
 	t.Cleanup(srv.Close)
 
 	// 1. /healthz is NEVER gated: without auth, with invalid auth, and with valid auth
@@ -320,7 +320,7 @@ func TestAuthGatingWithToken(t *testing.T) {
 }
 
 func TestAuthUnsetLeavesAPIUnauthenticated(t *testing.T) {
-	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-dist"), ""))
+	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-dist"), "", t.TempDir()))
 	t.Cleanup(srv.Close)
 
 	// GET /api/v1/projects without auth -> 200
@@ -338,7 +338,7 @@ func TestAuthUnsetLeavesAPIUnauthenticated(t *testing.T) {
 }
 
 func TestRouterRealtimeEventsEndToEnd(t *testing.T) {
-	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-dist"), ""))
+	srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-dist"), "", t.TempDir()))
 	t.Cleanup(srv.Close)
 
 	// 1. Create a project
@@ -564,7 +564,7 @@ func TestMetricsEndpointInRouter(t *testing.T) {
 
 func TestMetricsTaskCountsAndActiveClaims(t *testing.T) {
 	db := newTestDB(t)
-	srv := httptest.NewServer(newRouter(db, filepath.Join(t.TempDir(), "no-dist"), ""))
+	srv := httptest.NewServer(newRouter(db, filepath.Join(t.TempDir(), "no-dist"), "", t.TempDir()))
 	t.Cleanup(srv.Close)
 
 	// Create a project

@@ -29,7 +29,8 @@ type Deps struct {
 	Acceptance *application.Acceptance // routed in slice 3b
 	Relations  *application.Relations  // routed in slice 3b
 	Broker     application.EventBroker // realtime pub-sub for SSE events
-	HTTPClient *http.Client            // optional HTTP client for external integrations (e.g. OpenCode)
+	HTTPClient   *http.Client            // optional HTTP client for external integrations (e.g. OpenCode)
+	ArtifactsDir string                  // directory holding stored artifact files
 }
 
 type noopBroker struct{}
@@ -60,6 +61,9 @@ func NewApp(d Deps) *App {
 	}
 	if d.HTTPClient == nil {
 		d.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+	}
+	if d.ArtifactsDir == "" {
+		d.ArtifactsDir = "./artifacts"
 	}
 	return &App{Deps: d}
 }

@@ -33,6 +33,11 @@ func NewArtifacts(uow UnitOfWork, clock Clock, idgen IDGenerator) *Artifacts {
 	return &Artifacts{uow: uow, clock: clock, idgen: idgen}
 }
 
+// NewID mints a fresh artifact identifier using the configured IDGenerator.
+func (s *Artifacts) NewID() domain.ID {
+	return s.idgen.NewID()
+}
+
 // Attach validates kind (must be one of log|screenshot|command-output|trace|
 // url|other), confirms the reference is non-empty (domain.ErrInvalid
 // otherwise — a reference-less artifact carries no evidence), and confirms the
@@ -41,6 +46,13 @@ func NewArtifacts(uow UnitOfWork, clock Clock, idgen IDGenerator) *Artifacts {
 // ref, and summary. The parent task's version is NOT bumped (child-row rule);
 // nothing is written on validation failure.
 func (s *Artifacts) Attach(ctx context.Context, actor domain.Actor, taskID domain.ID, kind domain.ArtifactKind, ref string, summary string) (domain.Artifact, error) {
+	return s.AttachWithID(ctx, s.idgen.NewID(), actor, taskID, kind, ref, summary)
+}
+
+// AttachWithID is Attach with a caller-supplied artifact ID (e.g. For uploads where
+// the stored file on disk is named after the minted ULID before database insertion).
+// A zero-value id causes NewID to be minted.
+func (s *Artifacts) AttachWithID(ctx context.Context, id domain.ID, actor domain.Actor, taskID domain.ID, kind domain.ArtifactKind, ref string, summary string) (domain.Artifact, error) {
 	a, err := normalizeActor(actor)
 	if err != nil {
 		return domain.Artifact{}, err
@@ -52,10 +64,13 @@ func (s *Artifacts) Attach(ctx context.Context, actor domain.Actor, taskID domai
 	if ref == "" {
 		return domain.Artifact{}, fmt.Errorf("%w: artifact ref must not be empty", domain.ErrInvalid)
 	}
+	if id.IsZero() {
+		id = s.idgen.NewID()
+	}
 
 	now := s.clock.Now()
 	art := domain.Artifact{
-		ID:        s.idgen.NewID(),
+		ID:        id,
 		TaskID:    taskID,
 		Kind:      kind,
 		Ref:       ref,

@@ -15,6 +15,7 @@ import type {
   AcRow,
   ActorInput,
   ArtifactKind,
+  ArtifactRow,
   Board,
   CommentKind,
   CommentRow,
@@ -2014,30 +2015,95 @@ export function crowbanApp() {
     },
 
     // ---------------------------------------------------------------- artifacts
-    artifactForm: { open: false, kind: "url" as ArtifactKind, ref: "", summary: "" },
+    artifactForm: { open: false, kind: "url" as ArtifactKind, ref: "", summary: "", file: null as File | null },
     attachingArtifact: false,
+    previewModal: { open: false, src: "", alt: "" },
+
+    onArtifactFileSelected(event: Event): void {
+      const target = event.target as HTMLInputElement;
+      const file = target.files?.[0] || null;
+      this.artifactForm.file = file;
+      if (file) {
+        if (file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(file.name)) {
+          this.artifactForm.kind = "screenshot";
+        } else {
+          this.artifactForm.kind = "other";
+        }
+      }
+    },
+
+    resetArtifactForm(): void {
+      this.artifactForm = { open: false, kind: "url", ref: "", summary: "", file: null };
+      const fileInput = document.getElementById("artifactFileInput") as HTMLInputElement | null;
+      if (fileInput) fileInput.value = "";
+    },
 
     async attachArtifact(): Promise<void> {
       const t = this.detail;
+      const file = this.artifactForm.file;
       const ref = this.artifactForm.ref.trim();
-      if (!t || !ref || this.attachingArtifact) return;
+      if (!t || (!file && !ref) || this.attachingArtifact) return;
       this.attachingArtifact = true;
       try {
-        const a = await api.addArtifact(
-          t.id,
-          this.artifactForm.kind,
-          ref,
-          this.artifactForm.summary.trim() || undefined,
-          this.actor(),
-        );
+        let a: ArtifactRow;
+        if (file) {
+          a = await api.uploadArtifact(
+            t.id,
+            file,
+            this.artifactForm.kind,
+            this.artifactForm.summary.trim() || undefined,
+            this.actor(),
+          );
+        } else {
+          a = await api.addArtifact(
+            t.id,
+            this.artifactForm.kind,
+            ref,
+            this.artifactForm.summary.trim() || undefined,
+            this.actor(),
+          );
+        }
         const d = this.detail;
         if (d && d.id === t.id) this.detail = { ...d, artifacts: [...d.artifacts, a] };
-        this.artifactForm = { open: false, kind: "url", ref: "", summary: "" };
+        this.resetArtifactForm();
       } catch (e) {
         this.toast(errMsg(e), "error");
       } finally {
         this.attachingArtifact = false;
       }
+    },
+
+    openImagePreview(src: string, alt: string): void {
+      this.previewModal = { open: true, src, alt };
+      const dialog = document.getElementById("artifactPreviewDialog") as HTMLDialogElement | null;
+      if (dialog && typeof dialog.showModal === "function") {
+        if (!dialog.open) {
+          dialog.showModal();
+        }
+      }
+    },
+
+    closeImagePreview(): void {
+      this.previewModal.open = false;
+      const dialog = document.getElementById("artifactPreviewDialog") as HTMLDialogElement | null;
+      if (dialog && dialog.open && typeof dialog.close === "function") {
+        dialog.close();
+      }
+    },
+
+    isStoredArtifact(ref: string | null | undefined): boolean {
+      return typeof ref === "string" && (ref.startsWith("/artifacts/") || ref.startsWith("/api/v1/artifacts/"));
+    },
+
+    isStoredImage(a: { kind: string; ref: string; summary?: string }): boolean {
+      if (!this.isStoredArtifact(a.ref)) return false;
+      if (a.kind === "screenshot") return true;
+      const imageExt = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+      return imageExt.test(a.ref) || imageExt.test(a.summary || "");
+    },
+
+    isStoredNonImage(a: { kind: string; ref: string; summary?: string }): boolean {
+      return this.isStoredArtifact(a.ref) && !this.isStoredImage(a);
     },
 
     // ---------------------------------------------------------------- claims
@@ -2248,7 +2314,8 @@ export function crowbanApp() {
 
     /** Escape key: close the top-most overlay or cancel edit mode. */
     dismissTop(): void {
-      if (this.unsavedNotesAction) this.cancelUnsavedNotes(); // Escape = "keep editing"
+      if (this.previewModal && this.previewModal.open) this.closeImagePreview();
+      else if (this.unsavedNotesAction) this.cancelUnsavedNotes(); // Escape = "keep editing"
       else if (this.showAuthModal) this.closeAuthModal();
       else if (this.showProjectSettings) this.closeProjectSettings();
       else if (this.editingAcSeq !== 0) this.cancelEditingAc();

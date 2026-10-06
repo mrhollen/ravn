@@ -216,8 +216,9 @@ export function errMsg(e: unknown): string {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAuthToken();
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...((init?.headers as Record<string, string>) ?? {}),
   };
@@ -263,7 +264,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function post<T>(path: string, payload: unknown): Promise<T> {
-  return request<T>(path, { method: "POST", body: JSON.stringify(payload) });
+  const body = typeof FormData !== "undefined" && payload instanceof FormData
+    ? payload
+    : JSON.stringify(payload);
+  return request<T>(path, { method: "POST", body });
 }
 
 function put<T>(path: string, payload: unknown): Promise<T> {
@@ -383,6 +387,17 @@ export const api = {
     const body: ArtifactReq = { actor, kind, ref };
     if (summary) body.summary = summary;
     return post<ArtifactRow>(`/tasks/${taskId}/artifacts`, body);
+  },
+
+  uploadArtifact(taskId: string, file: File, kind: ArtifactKind, summary: string | undefined, actor: ActorInput): Promise<ArtifactRow> {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("kind", kind);
+    if (summary) fd.append("summary", summary);
+    fd.append("actor_name", actor.name);
+    fd.append("actor_type", actor.type || "human");
+    fd.append("actor", JSON.stringify(actor));
+    return post<ArtifactRow>(`/tasks/${taskId}/artifacts`, fd);
   },
 
   // --- opencode autonomous integration --------------------------------------

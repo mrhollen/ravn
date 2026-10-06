@@ -992,16 +992,35 @@
                         <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
                           <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
                                 :class="artifactKindClass(a.kind)" x-text="a.kind"></span>
-                          <template x-if="isWebHref(a.ref)">
+                          <!-- Non-image stored file: new tab link -->
+                          <template x-if="isStoredNonImage(a)">
                             <a :href="a.ref" target="_blank" rel="noreferrer noopener"
                                class="break-all font-mono text-xs text-sky-700 underline decoration-sky-300 hover:decoration-sky-500 dark:text-sky-400 dark:decoration-sky-700"
                                x-text="a.ref"></a>
                           </template>
-                          <code x-show="!isWebHref(a.ref)" class="break-all rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300"
-                                x-text="a.ref"></code>
+                          <!-- Back-compat: existing web hrefs (http/https/mailto) -->
+                          <template x-if="!isStoredArtifact(a.ref) && isWebHref(a.ref)">
+                            <a :href="a.ref" target="_blank" rel="noreferrer noopener"
+                               class="break-all font-mono text-xs text-sky-700 underline decoration-sky-300 hover:decoration-sky-500 dark:text-sky-400 dark:decoration-sky-700"
+                               x-text="a.ref"></a>
+                          </template>
+                          <!-- Back-compat: existing non-web ref (e.g. /home/... path) -->
+                          <template x-if="!isStoredArtifact(a.ref) && !isWebHref(a.ref)">
+                            <code class="break-all rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300"
+                                  x-text="a.ref"></code>
+                          </template>
                           <span class="ml-auto"><span x-text="actorLabel(a.actor)"></span>
                             <time class="text-zinc-400" :title="a.created_at" x-text="relTime(a.created_at)"></time></span>
                         </div>
+                        <!-- Stored image: inline <img> capped max-w / max-h, object-contain, click for preview -->
+                        <template x-if="isStoredImage(a)">
+                          <div class="mt-2">
+                            <img :src="a.ref"
+                                 :alt="a.summary || a.kind"
+                                 @click="openImagePreview(a.ref, a.summary || a.kind)"
+                                 class="max-w-full max-h-48 rounded object-contain cursor-pointer hover:opacity-90 transition-opacity border border-zinc-200 dark:border-zinc-700" />
+                          </div>
+                        </template>
                         <p x-show="a.summary" x-cloak class="mt-1 text-xs text-zinc-600 dark:text-zinc-400" x-text="a.summary"></p>
                       </li>
                     </template>
@@ -1009,22 +1028,31 @@
                   <p x-show="(detail ? detail.artifacts.length : 0) === 0" x-cloak
                      class="text-sm italic text-zinc-400">No artifacts attached.</p>
 
-                  <button type="button" @click="artifactForm.open = !artifactForm.open"
+                  <button type="button" @click="if (artifactForm.open) resetArtifactForm(); else artifactForm.open = true;"
                           class="btn-ghost mt-2" x-text="artifactForm.open ? 'Cancel' : '+ Attach artifact'"></button>
-                      <form x-show="artifactForm.open" x-cloak @submit.prevent="attachArtifact()"
-                            class="mt-2 flex flex-col gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800">
+                  <form x-show="artifactForm.open" x-cloak @submit.prevent="attachArtifact()"
+                        class="mt-2 flex flex-col gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800">
                     <div class="flex flex-wrap gap-2">
                       <select x-model="artifactForm.kind" class="field w-auto text-xs">
-                        <template x-for="k in ['url', 'log', 'screenshot', 'command-output', 'trace', 'other']" :key="k">
+                        <template x-for="k in ['screenshot', 'url', 'log', 'command-output', 'trace', 'other']" :key="k">
                           <option :value="k" x-text="k"></option>
                         </template>
                       </select>
                     </div>
-                    <input x-model="artifactForm.ref" class="field font-mono text-xs"
-                           placeholder="https://… or /path/to/file" />
+                    <div>
+                      <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Choose file to upload</label>
+                      <input type="file" id="artifactFileInput" @change="onArtifactFileSelected($event)"
+                             class="field text-xs w-full file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-zinc-200 dark:file:bg-zinc-700 file:text-zinc-700 dark:file:text-zinc-200 hover:file:cursor-pointer" />
+                    </div>
+                    <div x-show="!artifactForm.file">
+                      <label class="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">Or enter URL / file path</label>
+                      <input x-model="artifactForm.ref" class="field font-mono text-xs w-full"
+                             placeholder="https://… or /path/to/file" />
+                    </div>
                     <input x-model="artifactForm.summary" class="field text-xs" placeholder="One-line summary (optional)" />
-                    <div class="flex justify-end">
-                      <button type="submit" :disabled="attachingArtifact || !artifactForm.ref.trim()" class="btn-primary"
+                    <div class="flex justify-end gap-2">
+                      <button type="button" @click="resetArtifactForm()" class="btn-ghost text-xs">Cancel</button>
+                      <button type="submit" :disabled="attachingArtifact || (!artifactForm.file && !artifactForm.ref.trim())" class="btn-primary"
                               x-text="attachingArtifact ? 'Attaching…' : 'Attach'"></button>
                     </div>
                   </form>
@@ -1130,6 +1158,25 @@
           </div>
         </div>
       </div>
+
+      <!-- ====================================================== artifact image preview dialog -->
+      <dialog id="artifactPreviewDialog"
+              closedby="any"
+              @close="previewModal.open = false"
+              @cancel.prevent="closeImagePreview()"
+              @click="if ($event.target === $el) closeImagePreview()"
+              class="fixed inset-0 m-auto max-w-4xl max-h-[90vh] rounded-xl border border-zinc-200 bg-white p-4 shadow-2xl backdrop:bg-black/60 dark:border-zinc-700 dark:bg-zinc-900 overflow-hidden text-zinc-900 dark:text-zinc-100">
+        <div class="flex flex-col max-h-[85vh]">
+          <header class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+            <div class="truncate text-xs font-mono text-zinc-600 dark:text-zinc-400" x-text="previewModal.alt || 'Image preview'"></div>
+            <button type="button" @click="closeImagePreview()" aria-label="Close preview"
+                    class="rounded p-1 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 dark:hover:text-zinc-200 dark:hover:bg-zinc-800 text-lg leading-none transition">✕</button>
+          </header>
+          <div class="mt-3 flex items-center justify-center overflow-auto max-h-[75vh]">
+            <img :src="previewModal.src" :alt="previewModal.alt" class="max-w-full max-h-[75vh] object-contain rounded" />
+          </div>
+        </div>
+      </dialog>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

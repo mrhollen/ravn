@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/mrhollen/crowban/internal/application"
 	"github.com/mrhollen/crowban/internal/domain"
@@ -351,8 +355,122 @@ func (a *App) handleRemoveAC(w http.ResponseWriter, r *http.Request) {
 
 // --- artifacts -----------------------------------------------------------------------
 
+const maxArtifactUploadSize = 10 << 20 // 10MB
+
+var fallbackMimeTypes = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+	".svg":  "image/svg+xml",
+	".bmp":  "image/bmp",
+	".ico":  "image/x-icon",
+	".avif": "image/avif",
+	".pdf":  "application/pdf",
+	".txt":  "text/plain; charset=utf-8",
+	".log":  "text/plain; charset=utf-8",
+	".json": "application/json",
+	".csv":  "text/csv",
+	".md":   "text/markdown; charset=utf-8",
+	".html": "text/html",
+	".htm":  "text/html",
+	".js":   "text/javascript",
+	".mp4":  "video/mp4",
+	".webm": "video/webm",
+	".mp3":  "audio/mpeg",
+	".wav":  "audio/wav",
+	".zip":  "application/zip",
+	".tar":  "application/x-tar",
+	".gz":   "application/gzip",
+}
+
+func isSafeImageContentType(ct string) bool {
+	switch ct {
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/x-icon", "image/avif":
+		return true
+	default:
+		return false
+	}
+}
+
+func isImageExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif", ".svg":
+		return true
+	default:
+		return false
+	}
+}
+
+func cleanExt(ext string) string {
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	if ext == "" || ext == "." {
+		return ""
+	}
+	if !strings.HasPrefix(ext, ".") {
+		ext = "." + ext
+	}
+	for i := 1; i < len(ext); i++ {
+		c := ext[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')) {
+			return ""
+		}
+	}
+	return ext
+}
+
+func validArtifactID(id string) bool {
+	baseID := strings.TrimSuffix(id, filepath.Ext(id))
+	if len(baseID) != 26 {
+		return false
+	}
+	for i := 0; i < len(baseID); i++ {
+		c := baseID[i]
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
+			return false
+		}
+	}
+	return true
+}
+
+func detectMimeType(ext string, r io.ReadSeeker) string {
+	if ext != "" {
+		if ct, ok := fallbackMimeTypes[ext]; ok {
+			return ct
+		}
+		if ct := mime.TypeByExtension(ext); ct != "" {
+			return ct
+		}
+	}
+	if r != nil {
+		buf := make([]byte, 512)
+		n, err := r.Read(buf)
+		_, _ = r.Seek(0, io.SeekStart)
+		if n > 0 && (err == nil || err == io.EOF) {
+			return http.DetectContentType(buf[:n])
+		}
+	}
+	return "application/octet-stream"
+}
+
+func findArtifactFile(artifactsDir, id string) (string, error) {
+	baseID := strings.TrimSuffix(id, filepath.Ext(id))
+	pattern := filepath.Join(artifactsDir, baseID+".*")
+	matches, err := filepath.Glob(pattern)
+	if err == nil && len(matches) > 0 {
+		return matches[0], nil
+	}
+	exact := filepath.Join(artifactsDir, baseID)
+	if fi, err := os.Stat(exact); err == nil && !fi.IsDir() {
+		return exact, nil
+	}
+	return "", nil
+}
+
 // handleAttachArtifact → POST /api/v1/tasks/{id}/artifacts. Evidence attach:
-// typed kind + ref (URL or filesystem path) + optional one-line summary.
+// typed kind + ref (URL or filesystem path) + optional one-line summary, OR
+// multipart/form-data simple file upload.
 // Append-only with one `artifact-added` event in the same unit of work;
 // child-row rule — no task version bump. 201 fresh artifact; bad kind or empty
 // ref → 400; unknown task → 404.
@@ -362,6 +480,14 @@ func (a *App) handleAttachArtifact(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	ct := r.Header.Get("Content-Type")
+	mediaType, _, _ := mime.ParseMediaType(ct)
+	if mediaType == "multipart/form-data" {
+		a.handleUploadArtifact(w, r, id)
+		return
+	}
+
 	var req artifactReq
 	if !decodeJSON(w, r, &req) {
 		return
@@ -377,6 +503,215 @@ func (a *App) handleAttachArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, toArtifact(art))
+}
+
+func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskID domain.ID) {
+	ctx := r.Context()
+
+	// Enforce max upload size limit
+	r.Body = http.MaxBytesReader(w, r.Body, maxArtifactUploadSize)
+	if err := r.ParseMultipartForm(maxArtifactUploadSize); err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": "upload exceeds maximum size limit (10MB) or malformed multipart data",
+		})
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": "missing file field in upload request",
+		})
+		return
+	}
+	defer file.Close()
+
+	if header.Size == 0 {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": "uploaded file is empty",
+		})
+		return
+	}
+
+	// Read initial chunk to detect empty files even when client does not set header.Size
+	buf := make([]byte, 512)
+	n, readErr := file.Read(buf)
+	if (readErr == io.EOF && n == 0) || (readErr == nil && n == 0) {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": "uploaded file is empty",
+		})
+		return
+	}
+
+	// Extract actor
+	var actInput actorInput
+	if rawActor := r.FormValue("actor"); rawActor != "" {
+		if strings.HasPrefix(strings.TrimSpace(rawActor), "{") {
+			_ = json.Unmarshal([]byte(rawActor), &actInput)
+		} else {
+			actInput.Name = rawActor
+		}
+	}
+	if actInput.Name == "" {
+		actInput.Name = r.FormValue("actor_name")
+	}
+	if actInput.Type == "" {
+		actInput.Type = r.FormValue("actor_type")
+	}
+	actor, err := actInput.toDomain()
+	if err != nil {
+		writeAppError(w, err, "task", taskID)
+		return
+	}
+
+	// Kind and extension
+	ext := cleanExt(filepath.Ext(header.Filename))
+	kindStr := strings.TrimSpace(r.FormValue("kind"))
+	var kind domain.ArtifactKind
+	if kindStr == "" {
+		if isImageExt(ext) {
+			kind = domain.ArtifactScreenshot
+		} else {
+			kind = domain.ArtifactOther
+		}
+	} else {
+		kind = domain.ArtifactKind(kindStr)
+	}
+	if !kind.Valid() {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": fmt.Sprintf("unknown artifact kind %q", kindStr),
+		})
+		return
+	}
+
+	summary := strings.TrimSpace(r.FormValue("summary"))
+
+	if err := os.MkdirAll(a.ArtifactsDir, 0755); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, map[string]any{
+			"error":   "internal error",
+			"message": "cannot create artifacts directory",
+		})
+		return
+	}
+
+	artifactID := a.Artifacts.NewID()
+	storedFilename := artifactID.String() + ext
+	destPath := filepath.Join(a.ArtifactsDir, storedFilename)
+
+	dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, map[string]any{
+			"error":   "internal error",
+			"message": "failed to store artifact file",
+		})
+		return
+	}
+
+	if _, err := dst.Write(buf[:n]); err != nil {
+		dst.Close()
+		_ = os.Remove(destPath)
+		writeJSONError(w, http.StatusInternalServerError, map[string]any{
+			"error":   "internal error",
+			"message": "failed to write file content",
+		})
+		return
+	}
+
+	if _, err := io.Copy(dst, file); err != nil {
+		dst.Close()
+		_ = os.Remove(destPath)
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": "failed reading upload content or exceeds maximum size limit",
+		})
+		return
+	}
+	_ = dst.Close()
+
+	ref := "/artifacts/" + artifactID.String()
+	art, err := a.Artifacts.AttachWithID(ctx, artifactID, actor, taskID, kind, ref, summary)
+	if err != nil {
+		_ = os.Remove(destPath)
+		writeAppError(w, err, "task", taskID)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, toArtifact(art))
+}
+
+func (a *App) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !validArtifactID(id) {
+		writeJSONError(w, http.StatusNotFound, map[string]any{
+			"error":   "not found",
+			"message": "artifact not found",
+		})
+		return
+	}
+
+	filePath, err := findArtifactFile(a.ArtifactsDir, id)
+	if err != nil || filePath == "" {
+		writeJSONError(w, http.StatusNotFound, map[string]any{
+			"error":   "not found",
+			"message": "artifact not found",
+		})
+		return
+	}
+
+	// Path traversal guard
+	cleanDir := filepath.Clean(a.ArtifactsDir)
+	cleanPath := filepath.Clean(filePath)
+	rel, err := filepath.Rel(cleanDir, cleanPath)
+	if err != nil || strings.HasPrefix(rel, "..") || strings.Contains(rel, "/") || strings.Contains(rel, "\\") {
+		writeJSONError(w, http.StatusNotFound, map[string]any{
+			"error":   "not found",
+			"message": "artifact not found",
+		})
+		return
+	}
+
+	info, err := os.Stat(cleanPath)
+	if err != nil || info.IsDir() {
+		writeJSONError(w, http.StatusNotFound, map[string]any{
+			"error":   "not found",
+			"message": "artifact not found",
+		})
+		return
+	}
+
+	f, err := os.Open(cleanPath)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, map[string]any{
+			"error":   "internal error",
+			"message": "failed to read artifact",
+		})
+		return
+	}
+	defer f.Close()
+
+	ext := filepath.Ext(cleanPath)
+	contentType := detectMimeType(ext, f)
+
+	// Keep-it-safe headers:
+	// 1. nosniff to prevent mime-sniffing exploits
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
+	// 2. Safe raster images: inline
+	//    Non-images (HTML, JS, text, etc.): attachment (force download, preventing execution on origin)
+	if isSafeImageContentType(contentType) {
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", "inline")
+	} else {
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filepath.Base(cleanPath)))
+	}
+
+	http.ServeContent(w, r, filepath.Base(cleanPath), info.ModTime(), f)
 }
 
 // --- relations -----------------------------------------------------------------------
