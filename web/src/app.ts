@@ -138,6 +138,21 @@ export function taskRoutePath(id: string): string {
   return "/tasks/" + encodeURIComponent(id);
 }
 
+// ---------------------------------------------------------------- detail surface
+/** Tailwind's `md` breakpoint (px). Below this width the task-detail view has
+ *  no room for the centered modal, so card clicks open the FULL-PAGE route
+ *  (/tasks/<id>) instead — same code path "Open full page" uses, keeping the
+ *  URL deep-linkable and browser-back consistent on phones. */
+export const MOBILE_DETAIL_MAX_WIDTH = 768;
+
+/** True when the current viewport is below the md breakpoint (mobile).
+ *  `width` defaults to window.innerWidth; passed explicitly in unit tests.
+ *  Returns false without a window (Node) so the modal/desktop path is used. */
+export function isMobileDetailViewport(width?: number): boolean {
+  const w = width ?? (typeof window !== "undefined" ? window.innerWidth : Number.POSITIVE_INFINITY);
+  return w < MOBILE_DETAIL_MAX_WIDTH;
+}
+
 /** Last-resort clipboard write for non-secure contexts (plain http on a LAN),
  *  where navigator.clipboard is unavailable: hidden textarea + execCommand.
  *  Returns true only when the browser reports the copy succeeded. */
@@ -286,7 +301,9 @@ export function crowbanApp() {
     toast(msg: string, kind: "error" | "info" = "info"): void {
       const id = ++this.toastSeq;
       this.toasts = [...this.toasts, { id, msg, kind }];
-      window.setTimeout(() => {
+      // Global setTimeout (not window.setTimeout): identical in the browser,
+      // but keeps async error paths unit-testable without a full window mock.
+      setTimeout(() => {
         this.toasts = this.toasts.filter((t) => t.id !== id);
       }, 6500);
     },
@@ -1036,9 +1053,11 @@ export function crowbanApp() {
     detailFocus: null as DialogFocus | null,
 
     // ------------------------------------------- full-page view (/tasks/<id>)
-    /** Whether the open detail is rendered as a FULL PAGE instead of the right-
-     *  hand drawer overlay (task 01M47MWHWW0M1Q3WZYFGFHXTYZ). The same markup
-     *  and every edit op are shared; only the surrounding chrome differs. */
+    /** Whether the open detail is rendered as a FULL PAGE instead of the wide
+     *  centered modal (task 01M47MWHWW0M1Q3WZYFGFHXTYZ). On phones (<md,
+     *  <768px) card clicks open directly in this mode — the full page is the
+     *  mobile fallback for the detail view. The same markup and every edit op
+     *  are shared; only the surrounding chrome differs. */
     fullPageOpen: false,
     /** True when WE created the current /tasks/<id> history entry via pushState
      *  (or replaced an entry of ours). Deep-linked opens arrive with a URL but
@@ -1065,6 +1084,13 @@ export function crowbanApp() {
       if (this.fullPageOpen && typeof window !== "undefined" && this.detailId !== id) {
         window.history.replaceState(null, "", taskRoutePath(id));
       }
+      // Mobile fallback (task 01M47MWSTTPS14M6XB1A8HFPV1): below md (768px) a
+      // card click opens the FULL-PAGE view via the same /tasks/<id> route the
+      // "Open full page" button pushes, so phones get deep-link + browser-back
+      // semantics for free. At ≥md the wide centered modal is the default.
+      if (!this.fullPageOpen && isMobileDetailViewport()) {
+        this.openFullPage(id);
+      }
       // In-drawer switch (discard-&-switch): keep the existing session so focus
       // restoration still targets the element that originally opened the drawer.
       const switching = this.detailOpen && this.detailFocus !== null;
@@ -1090,8 +1116,9 @@ export function crowbanApp() {
       this.detailFocus?.focusInitial();
     },
 
-    /** Drawer-close entry point for the backdrop, × buttons and Escape: asks
-     *  first when notes have unsaved edits (AC 3). */
+    /** Detail-close entry point for the backdrop, × buttons and Escape —
+     *  valid from BOTH skins (centered modal and full page): asks first when
+     *  notes have unsaved edits (AC 3). */
     requestCloseDetail(): void {
       if (this.notesDirty) {
         this.promptUnsavedNotes({ kind: "close" });
@@ -1139,16 +1166,17 @@ export function crowbanApp() {
       }
     },
 
-    /** Switch the open task's detail from the drawer to the FULL-PAGE view.
-     *  Pushes /tasks/<id> so browser back returns to the board; a URL that is
-     *  already on a task route (deep link) is adopted as-is instead of piling
-     *  another entry on top. */
-    openFullPage(): void {
-      const t = this.detail;
-      if (!t || typeof window === "undefined") return;
+    /** Switch the open task's detail to the FULL-PAGE view. Pushes /tasks/<id>
+     *  so browser back returns to the board; a URL that is already on a task
+     *  route (deep link) is adopted as-is instead of piling another entry on
+     *  top. `id` defaults to the loaded detail's id — openTask() passes it
+     *  explicitly for mobile opens, where the fetch has not landed yet. */
+    openFullPage(id?: string): void {
+      const taskId = id ?? this.detail?.id;
+      if (!taskId || typeof window === "undefined") return;
       this.fullPageOpen = true;
-      if (taskRouteIdFromPath(window.location.pathname) !== t.id) {
-        window.history.pushState(null, "", taskRoutePath(t.id));
+      if (taskRouteIdFromPath(window.location.pathname) !== taskId) {
+        window.history.pushState(null, "", taskRoutePath(taskId));
         this.fullPagePushed = true;
       } else {
         this.fullPagePushed = false; // deep link — no entry of ours to pop later

@@ -13,7 +13,7 @@ import {
   safeStorage,
 } from "../src/util.ts";
 import { escapeHtml, renderMarkdown } from "../src/md.ts";
-import { crowbanApp, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
+import { crowbanApp, isMobileDetailViewport, MOBILE_DETAIL_MAX_WIDTH, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
 import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, shouldApplyBoard } from "../src/refresh.ts";
@@ -918,4 +918,85 @@ test("FullPage: the app boots in drawer mode and openFullPage is a safe no-op wi
   // No window (Node) and no loaded task — must not throw.
   assert.doesNotThrow(() => app.openFullPage());
   assert.equal(app.fullPageOpen, false, "nothing to switch without a loaded task");
+});
+
+// ---------------------------------------------------------------------------
+// Task 01M47MWSTTPS14M6XB1A8HFPV1: default detail surface is a WIDE CENTERED
+// MODAL at ≥md; below md (<768px) card clicks open the /tasks/<id> full page.
+
+test("Modal: isMobileDetailViewport sits just below Tailwind's md (768px) breakpoint", () => {
+  assert.equal(MOBILE_DETAIL_MAX_WIDTH, 768);
+  assert.equal(isMobileDetailViewport(375), true, "phone width is mobile");
+  assert.equal(isMobileDetailViewport(767), true, "one px below md is still mobile");
+  assert.equal(isMobileDetailViewport(768), false, "md itself is the modal/desktop side");
+  assert.equal(isMobileDetailViewport(1280), false);
+});
+
+test("Modal: without a window (Node) openTask takes the desktop path, not the full page", async () => {
+  // No window mock at all — isMobileDetailViewport() must report false so a
+  // card click can never force the /tasks/<id> route in non-browser contexts.
+  const app = crowbanApp();
+  assert.equal(isMobileDetailViewport(), false);
+  await app.openTask("01M47MWSTTPS14M6XB1A8HFPV1"); // detail fetch fails (no server) — expected, non-fatal
+  assert.equal(app.detailOpen, true);
+  assert.equal(app.fullPageOpen, false, "no mobile fallback without a viewport");
+});
+
+test("Modal: openTask below 768px enters the full-page route via a pushed /tasks/<id> entry", async () => {
+  const app = crowbanApp();
+  const origWindow = (globalThis as any).window;
+  const pushed: string[] = [];
+  try {
+    (globalThis as any).window = {
+      innerWidth: MOBILE_DETAIL_MAX_WIDTH - 1, // 767 — mobile side of the boundary
+      location: { pathname: "/", search: "", hash: "" },
+      history: {
+        pushState(_state: unknown, _title: string, url: string) {
+          pushed.push(url);
+        },
+        replaceState(_state: unknown, _title: string, url: string) {
+          pushed.push("replace:" + url);
+        },
+      },
+      setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
+    };
+    await app.openTask("01M47MWSTTPS14M6XB1A8HFPV1");
+
+    assert.equal(app.detailOpen, true);
+    assert.equal(app.fullPageOpen, true, "mobile opens the FULL PAGE, not the modal");
+    assert.equal(app.fullPagePushed, true, "we pushed the entry — close must history.back()");
+    assert.deepEqual(pushed, ["/tasks/01M47MWSTTPS14M6XB1A8HFPV1"], "one pushState to /tasks/<id>");
+  } finally {
+    if (origWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = origWindow;
+  }
+});
+
+test("Modal: openTask at ≥768px keeps the modal (no URL change)", async () => {
+  const app = crowbanApp();
+  const origWindow = (globalThis as any).window;
+  const pushed: string[] = [];
+  try {
+    (globalThis as any).window = {
+      innerWidth: MOBILE_DETAIL_MAX_WIDTH, // 768 — desktop side of the boundary
+      location: { pathname: "/", search: "", hash: "" },
+      history: {
+        pushState(_state: unknown, _title: string, url: string) {
+          pushed.push(url);
+        },
+        replaceState(_state: unknown, _title: string, url: string) {
+          pushed.push("replace:" + url);
+        },
+      },
+      setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
+    };
+    await app.openTask("01M47MWSTTPS14M6XB1A8HFPV1");
+
+    assert.equal(app.detailOpen, true);
+    assert.equal(app.fullPageOpen, false, "at md the default surface is the centered modal");
+    assert.deepEqual(pushed, [], "a plain card click must never touch the URL");
+  } finally {
+    if (origWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = origWindow;
+  }
 });

@@ -28,7 +28,7 @@
       class="flex h-full min-h-screen flex-col"
     >
       <!-- ============================================================ toasts -->
-      <div class="pointer-events-none fixed right-4 top-4 z-50 flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2">
+      <div data-testid="toast-stack" class="pointer-events-none fixed right-4 top-4 z-50 flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2">
         <template x-for="t in toasts" :key="t.id">
           <div
             x-show="true"
@@ -622,23 +622,30 @@
       </div>
 
       <!-- ====================================================== task detail -->
-      <!-- Two skins, one panel: the right-hand drawer overlay (default) or the
-           FULL-PAGE view for /tasks/<id> (fullPageOpen). In page mode this
+      <!-- Two skins, one panel: the WIDE CENTERED MODAL overlay (default at
+           ≥md) or the FULL-PAGE view for /tasks/<id> (fullPageOpen — which is
+           ALSO the mobile fallback below md; see openTask()). In page mode this
            wrapper becomes an in-flow flex child under the header — the board
-           <main> above it is hidden while a task page is open. -->
+           <main> above it is hidden while a task page is open. The modal lives
+           at z-[60], ABOVE the toasts (z-50), so notifications can never cover
+           its controls. -->
       <div id="cb-detail-drawer" x-show="detailOpen" x-cloak
-           :class="fullPageOpen ? 'relative flex min-h-0 flex-1 flex-col' : 'fixed inset-0 z-40'"
+           :class="fullPageOpen ? 'relative flex min-h-0 flex-1 flex-col' : 'fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6'"
            @click.self="requestCloseDetail()">
-        <div class="absolute inset-0 bg-black/30" x-show="!fullPageOpen" x-cloak></div>
+        <!-- Modal backdrop: a click anywhere outside the panel closes it. -->
+        <div class="absolute inset-0 bg-black/30" x-show="!fullPageOpen" x-cloak
+             @click="requestCloseDetail()"></div>
         <aside :class="fullPageOpen
              ? 'mx-auto flex w-full max-w-3xl min-h-0 flex-1 flex-col border-x border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900'
-             : 'absolute inset-y-0 right-0 flex w-full max-w-xl flex-col border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900'">
+             : 'relative flex w-[80vw] max-w-5xl max-h-full flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900'">
           <div x-show="!detail" x-cloak class="flex flex-1 items-center justify-center text-sm text-zinc-400">
             Loading task…
           </div>
 
           <template x-if="detail">
-            <div class="h-full overflow-y-auto">
+            <!-- Modal skin: min-h-0 flex child so long content scrolls inside the
+                 max-height-capped panel; full page keeps filling its region. -->
+            <div :class="fullPageOpen ? 'h-full overflow-y-auto' : 'min-h-0 flex-1 overflow-y-auto'">
               <!-- header (view mode) -->
               <div x-show="!editingTask" class="border-b border-zinc-100 dark:border-zinc-800 px-5 py-4">
                 <div class="flex flex-wrap items-start justify-between gap-3">
@@ -1172,9 +1179,9 @@
       </div>
 
       <!-- ====================================================== unsaved notes prompt -->
-      <!-- z-50: sits above the detail drawer (z-40) it guards. Backdrop click
+      <!-- z-[70]: sits above the detail modal (z-[60]) it guards. Backdrop click
            and Escape both mean "keep editing" (same convention as other modals). -->
-      <div id="cb-notes-confirm" x-show="unsavedNotesAction" x-cloak class="fixed inset-0 z-50 bg-black/40 p-4 backdrop-blur-sm" @click.self="cancelUnsavedNotes()">
+      <div id="cb-notes-confirm" x-show="unsavedNotesAction" x-cloak class="fixed inset-0 z-[70] bg-black/40 p-4 backdrop-blur-sm" @click.self="cancelUnsavedNotes()">
         <div class="mx-auto mt-24 w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
           <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Unsaved note changes</h2>
           <p class="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
