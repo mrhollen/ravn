@@ -287,9 +287,9 @@ test.describe('Consolidated header settings menu', () => {
     await expect(trigger).toHaveAttribute('aria-expanded', 'true');
     await expect.poll(() => focusInfo(), { timeout: 3000 }).toBe('theme-light');
 
-    // Arrows walk the six controls in DOM order (theme buttons, auto-refresh,
-    // actor input, token item)…
-    for (const next of ['theme-dark', 'theme-system', 'auto-refresh-toggle', 'actor-name-input', 'token-item']) {
+    // Arrows walk the six controls in DOM order — section by section: theme
+    // buttons, actor input (Identity), auto-refresh + token (Data)…
+    for (const next of ['theme-dark', 'theme-system', 'actor-name-input', 'auto-refresh-toggle', 'token-item']) {
       await page.keyboard.press('ArrowDown');
       await expect.poll(() => focusInfo(), { timeout: 3000 }).toBe(next);
     }

@@ -624,7 +624,7 @@ export function crowbanApp() {
     },
 
     /** Arrow/Home/End navigation between the panel's focusable controls in DOM
-     *  order (theme buttons, auto-refresh checkbox, actor input, token item).
+     *  order (theme buttons, actor input, auto-refresh checkbox, token item).
      *  The actor input is single-line: Up/Down have no caret role there
      *  (Left/Right do), so arrows uniformly hop controls — same contract as
      *  the Projects dropdown. */
