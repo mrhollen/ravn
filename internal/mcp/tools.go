@@ -11,10 +11,15 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -41,6 +46,7 @@ type Client interface {
 	UpdateNotes(ctx context.Context, id string, actor apiclient.Actor, notes string) (*apiclient.TaskSummary, error)
 	CompleteAC(ctx context.Context, id string, seq int, req apiclient.ACToggleRequest) (*apiclient.AcceptanceCriterion, error)
 	AttachArtifact(ctx context.Context, id string, req apiclient.ArtifactRequest) (*apiclient.Artifact, error)
+	UploadArtifact(ctx context.Context, id string, filename string, r io.Reader, kind, summary string, actor apiclient.Actor) (*apiclient.Artifact, error)
 	RelateTasks(ctx context.Context, id string, req apiclient.RelationRequest) (*apiclient.Relation, error)
 	UnrelateTasks(ctx context.Context, id string, actor apiclient.Actor, otherID, kind string) error
 }
@@ -624,7 +630,7 @@ func registerCompleteAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("attach_artifact",
 		mcpgo.WithDescription(
-			"Attach a typed piece of evidence to a task: kind log | screenshot | command-output | trace | url | other; ref is a URL or filesystem path (required); summary is an optional one-line description. Returns the created artifact row (201). Append-only and NOT idempotent — after an error, check artifacts via get_task before re-attaching or you may duplicate. RECOMMENDED for verification: when your work includes running tests or verification commands, attach that evidence (kind \"command-output\", \"log\" or \"screenshot\") so a human can verify it — encouraged, never required."+actorHint),
+			"Attach a typed piece of evidence to a task: kind log | screenshot | command-output | trace | url | other; ref is a URL or filesystem path (required); summary is an optional one-line description. If data_base64 is provided (or ref is an accessible local file on the server), the file bytes are uploaded to the storage volume and ref becomes /artifacts/{id}. Returns the created artifact row (201). Append-only and NOT idempotent — after an error, check artifacts via get_task before re-attaching or you may duplicate. RECOMMENDED for verification: when your work includes running tests or verification commands, attach that evidence (kind \"command-output\", \"log\" or \"screenshot\") so a human can verify it — encouraged, never required."+actorHint),
 		mcpgo.WithString("id", mcpgo.Required(),
 			mcpgo.Description("Task ULID to attach the artifact to.")),
 		mcpgo.WithString("kind", mcpgo.Required(), mcpgo.Enum("log", "screenshot", "command-output", "trace", "url", "other"),
@@ -633,6 +639,8 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 			mcpgo.Description("URL or filesystem path of the evidence (required, non-empty).")),
 		mcpgo.WithString("summary",
 			mcpgo.Description("Optional one-line description of what the artifact shows.")),
+		mcpgo.WithString("data_base64",
+			mcpgo.Description("Optional base64-encoded file bytes to upload to the server volume (e.g. for remote agents).")),
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -644,12 +652,40 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 		if ref == "" {
 			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"attach_artifact: \"ref\" must be a non-empty URL or path"}`), nil
 		}
-		row, err := c.AttachArtifact(ctx, id, apiclient.ArtifactRequest{
-			Actor:   resolveActor(req.GetArguments(), defaultActor),
-			Kind:    strings.TrimSpace(req.GetString("kind", "")),
-			Ref:     ref,
-			Summary: strings.TrimSpace(req.GetString("summary", "")),
-		})
+		kind := strings.TrimSpace(req.GetString("kind", ""))
+		summary := strings.TrimSpace(req.GetString("summary", ""))
+		dataBase64 := strings.TrimSpace(req.GetString("data_base64", ""))
+		actor := resolveActor(req.GetArguments(), defaultActor)
+
+		var row *apiclient.Artifact
+		var err error
+
+		if dataBase64 != "" {
+			raw, decErr := base64.StdEncoding.DecodeString(dataBase64)
+			if decErr != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid input","message":"attach_artifact: invalid base64 in data_base64: %s"}`, decErr.Error())), nil
+			}
+			filename := filepath.Base(ref)
+			if filename == "" || filename == "." || filename == "/" {
+				filename = "artifact.bin"
+			}
+			row, err = c.UploadArtifact(ctx, id, filename, bytes.NewReader(raw), kind, summary, actor)
+		} else if fi, statErr := os.Stat(ref); statErr == nil && !fi.IsDir() {
+			f, openErr := os.Open(ref)
+			if openErr != nil {
+				return fail(c, fmt.Errorf("open file: %w", openErr)), nil
+			}
+			defer f.Close()
+			row, err = c.UploadArtifact(ctx, id, filepath.Base(ref), f, kind, summary, actor)
+		} else {
+			row, err = c.AttachArtifact(ctx, id, apiclient.ArtifactRequest{
+				Actor:   actor,
+				Kind:    kind,
+				Ref:     ref,
+				Summary: summary,
+			})
+		}
+
 		if err != nil {
 			return fail(c, err), nil
 		}

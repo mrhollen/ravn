@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -214,6 +215,73 @@ func (c *Client) AttachArtifact(ctx context.Context, id string, req ArtifactRequ
 	path := "/tasks/" + url.PathEscape(id) + "/artifacts"
 	if err := c.do(ctx, "AttachArtifact", http.MethodPost, path, nil, &req, &out); err != nil {
 		return nil, err
+	}
+	return &out, nil
+}
+
+// UploadArtifact uploads a file via POST /tasks/{id}/artifacts with multipart/form-data.
+// Returns the created Artifact row (201).
+func (c *Client) UploadArtifact(ctx context.Context, id string, filename string, r io.Reader, kind, summary string, actor Actor) (*Artifact, error) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+
+	part, err := w.CreateFormFile("file", filename)
+	if err != nil {
+		return nil, fmt.Errorf("UploadArtifact: create form file: %w", err)
+	}
+	if _, err := io.Copy(part, r); err != nil {
+		return nil, fmt.Errorf("UploadArtifact: copy file body: %w", err)
+	}
+
+	if err := w.WriteField("kind", kind); err != nil {
+		return nil, fmt.Errorf("UploadArtifact: write kind: %w", err)
+	}
+	if summary != "" {
+		if err := w.WriteField("summary", summary); err != nil {
+			return nil, fmt.Errorf("UploadArtifact: write summary: %w", err)
+		}
+	}
+	if actor.Name != "" {
+		if err := w.WriteField("actor_name", actor.Name); err != nil {
+			return nil, fmt.Errorf("UploadArtifact: write actor_name: %w", err)
+		}
+		if err := w.WriteField("actor_type", string(actor.Type)); err != nil {
+			return nil, fmt.Errorf("UploadArtifact: write actor_type: %w", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("UploadArtifact: close multipart writer: %w", err)
+	}
+
+	u := c.base + apiPrefix + "/tasks/" + url.PathEscape(id) + "/artifacts"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &body)
+	if err != nil {
+		return nil, fmt.Errorf("UploadArtifact: building request: %w", err)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("UploadArtifact: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("UploadArtifact: reading response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &APIError{Op: "UploadArtifact", StatusCode: resp.StatusCode, URL: u, Body: data}
+	}
+
+	var out Artifact
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("UploadArtifact: decoding %d response: %w", resp.StatusCode, err)
 	}
 	return &out, nil
 }

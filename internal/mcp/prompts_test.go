@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -88,6 +89,10 @@ func (m *mockClient) CompleteAC(ctx context.Context, id string, seq int, req api
 }
 
 func (m *mockClient) AttachArtifact(ctx context.Context, id string, req apiclient.ArtifactRequest) (*apiclient.Artifact, error) {
+	return nil, errors.New("unimplemented")
+}
+
+func (m *mockClient) UploadArtifact(ctx context.Context, id string, filename string, r io.Reader, kind, summary string, actor apiclient.Actor) (*apiclient.Artifact, error) {
 	return nil, errors.New("unimplemented")
 }
 

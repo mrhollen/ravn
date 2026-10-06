@@ -2,12 +2,14 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -293,7 +295,29 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 		writeJSON(w, http.StatusOK, string(data))
 	})
 	mux.HandleFunc("POST /api/v1/tasks/{id}/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		ct := r.Header.Get("Content-Type")
 		b := record(r)
+		if strings.HasPrefix(ct, "multipart/form-data") {
+			r.Body = io.NopCloser(strings.NewReader(b))
+			if err := r.ParseMultipartForm(10 << 20); err != nil {
+				t.Errorf("upstream: ParseMultipartForm error: %v", err)
+			}
+			kind := r.FormValue("kind")
+			summary := r.FormValue("summary")
+			actorType := r.FormValue("actor_type")
+			actorName := r.FormValue("actor_name")
+			row := apiclient.Artifact{
+				ID:        "AUPLOAD",
+				Kind:      kind,
+				Ref:       "/artifacts/AUPLOAD",
+				Summary:   summary,
+				Actor:     apiclient.Actor{Type: actorType, Name: actorName},
+				CreatedAt: "2026-09-26T15:52:00Z",
+			}
+			data, _ := json.Marshal(row)
+			writeJSON(w, http.StatusCreated, string(data))
+			return
+		}
 		var req apiclient.ArtifactRequest
 		if err := json.Unmarshal([]byte(b), &req); err != nil {
 			t.Errorf("upstream: POST /artifacts body not JSON: %v (%s)", err, b)
@@ -1020,6 +1044,51 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 		}
 		if sent.Kind != "url" || sent.Ref != "https://example.com/reports/deploy.json" || sent.Actor.Name != "runner-2" {
 			t.Errorf("attach_artifact upstream body = %s", cc.body)
+		}
+	})
+
+	t.Run("attach_artifact_base64", func(t *testing.T) {
+		payload := base64.StdEncoding.EncodeToString([]byte("fake-image-bytes"))
+		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
+			"id":          "T1",
+			"actor":       map[string]any{"name": "runner-2", "type": "agent"},
+			"kind":        "screenshot",
+			"ref":         "evidence.png",
+			"summary":     "evidence screenshot",
+			"data_base64": payload,
+		})
+		if res.IsError {
+			t.Fatalf("attach_artifact returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		if row["id"] != "AUPLOAD" || row["kind"] != "screenshot" ||
+			row["ref"] != "/artifacts/AUPLOAD" || row["summary"] != "evidence screenshot" {
+			t.Errorf("attach_artifact result = %s", firstText(t, res))
+		}
+	})
+
+	t.Run("attach_artifact_local_file", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp(t.TempDir(), "screenshot-*.png")
+		if err != nil {
+			t.Fatalf("CreateTemp: %v", err)
+		}
+		_, _ = tmpFile.Write([]byte("fake-file-bytes"))
+		_ = tmpFile.Close()
+
+		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
+			"id":      "T1",
+			"actor":   map[string]any{"name": "runner-2", "type": "agent"},
+			"kind":    "screenshot",
+			"ref":     tmpFile.Name(),
+			"summary": "local file screenshot",
+		})
+		if res.IsError {
+			t.Fatalf("attach_artifact returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		if row["id"] != "AUPLOAD" || row["kind"] != "screenshot" ||
+			row["ref"] != "/artifacts/AUPLOAD" || row["summary"] != "local file screenshot" {
+			t.Errorf("attach_artifact result = %s", firstText(t, res))
 		}
 	})
 }

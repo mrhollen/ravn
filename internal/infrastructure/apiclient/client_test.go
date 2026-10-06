@@ -579,6 +579,32 @@ func TestAttachArtifact_201AndBody(t *testing.T) {
 	}
 }
 
+func TestUploadArtifact_201AndMultipart(t *testing.T) {
+	c, _ := newTestServer(t, "test-token", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		if cap.method != http.MethodPost || cap.path != "/api/v1/tasks/T1/artifacts" {
+			t.Errorf("got %s %s", cap.method, cap.path)
+		}
+		ct := cap.header.Get("Content-Type")
+		if !strings.HasPrefix(ct, "multipart/form-data") {
+			t.Errorf("got Content-Type %s", ct)
+		}
+		auth := cap.header.Get("Authorization")
+		if auth != "Bearer test-token" {
+			t.Errorf("got Authorization %s", auth)
+		}
+		writeJSONTest(w, http.StatusCreated, `{"id":"AUPLOAD","kind":"screenshot","ref":"/artifacts/AUPLOAD","summary":"my screenshot","actor":{"type":"agent","name":"runner-2"},"created_at":"2026-09-26T15:48:00Z"}`)
+	}))
+
+	fileContent := strings.NewReader("fake-png-bytes")
+	a, err := c.UploadArtifact(context.Background(), "T1", "screen.png", fileContent, "screenshot", "my screenshot", Actor{Type: "agent", Name: "runner-2"})
+	if err != nil {
+		t.Fatalf("UploadArtifact: %v", err)
+	}
+	if a.ID != "AUPLOAD" || a.Ref != "/artifacts/AUPLOAD" || a.Summary != "my screenshot" {
+		t.Errorf("artifact = %+v", a)
+	}
+}
+
 // --- RelateTasks / UnrelateTasks -----------------------------------------------------------------
 
 func TestRelateTasks_BodyDecode(t *testing.T) {
