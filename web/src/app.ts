@@ -553,8 +553,8 @@ export function crowbanApp() {
     // Theme, identity (actor name), auto-refresh and the auth-token entry are
     // consolidated in ONE compact dropdown at the right edge of the header.
     // The trigger is an avatar circle with the actor's initial ("You" when
-    // unset) — deliberately not a gear glyph: the Projects dropdown gets its
-    // own gear in a follow-up, so adjacent glyphs must stay distinct.
+    // unset) — deliberately not a gear glyph: the Projects dropdown has its own
+    // attached project-settings gear, so the two controls stay distinct.
     // Keyboard mirrors the Projects dropdown: ArrowDown/ArrowUp on the closed
     // trigger opens it (first/last control); inside, arrows (+Home/End) move
     // between the panel's focusable controls; Escape closes and returns focus

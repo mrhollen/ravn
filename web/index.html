@@ -45,14 +45,15 @@
       </div>
 
       <!-- ============================================================== top bar -->
-       <!-- Mobile: row 1 = [project select][+ New task][hamburger][settings
-            menu trigger]; the secondary controls (Settings + live indicator)
-            collapse behind the hamburger into a strip below row 1. When that
-            strip expands to its own full-width row, order-first pulls the
-            trigger back into row 1 so it never drops to a third line. On md+
-            the strip is inline again — Settings and the live indicator sit
-            just left of the settings-menu trigger at the right edge (the
-            toggle button is hidden). -->
+       <!-- Mobile: row 1 = [project dropdown (select + attached settings
+            gear)][+ New task][hamburger][settings menu trigger]; the secondary
+            control (live indicator) collapses behind the hamburger into a strip
+            below row 1. When that strip expands to its own full-width row,
+            order-first pulls the trigger back into row 1 so it never drops to a
+            third line. On md+ the strip is inline again — the live indicator
+            sits just left of the settings-menu trigger at the right edge (the
+            toggle button is hidden). Project settings live in the gear attached
+            to the Projects dropdown, not in the strip. -->
       <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-white px-4 py-3 shadow-sm md:gap-x-4 dark:border-zinc-800 dark:bg-zinc-900">
         <div class="mr-1 hidden leading-tight sm:block">
           <h1 class="text-base font-semibold tracking-tight">crowban</h1>
@@ -61,28 +62,62 @@
 
         <!-- Projects dropdown: custom trigger button + Alpine-managed menu
              (a native <select> can't host the trailing "+ New project…" action).
-             Keyboard: Enter/Space or ArrowDown on the trigger opens it; arrows
-             move between items, Enter picks, Escape closes and returns focus
-             to the trigger. -->
+             SPLIT CONTROL: the select trigger and the attached project-settings
+             gear share ONE bordered unit — identical height/border via .field,
+             the select keeps its left corners (rounded-r-none + border-r-0) and
+             the gear takes the right corner with a hairline divider at its own
+             left border. Keyboard: Enter/Space or ArrowDown on the trigger opens
+             it; arrows move between items, Enter picks, Escape closes and returns
+             focus to the trigger. The settings gear opens a MODAL (not a header
+             menu): Tab reaches it, Enter/Space opens the modal, Escape closes it
+             via the existing top-level dismiss chain. -->
         <div class="flex min-w-0 flex-1 items-center gap-2 text-sm md:flex-initial">
           <span class="hidden text-zinc-500 sm:inline">Project</span>
           <div class="relative min-w-0 flex-1 md:max-w-xs" data-testid="project-dropdown">
-            <button type="button" data-testid="project-select"
-                    aria-haspopup="true" :aria-expanded="projectMenuOpen ? 'true' : 'false'"
-                    :aria-label="'Projects: ' + projectSelectLabel()"
-                    :disabled="!appBooted"
-                    @click="toggleProjectMenu()"
-                    @keydown.down.prevent="openProjectMenu('first')"
-                    @keydown.up.prevent="openProjectMenu('last')"
-                    class="field flex w-full items-center justify-between gap-2 text-left disabled:cursor-not-allowed disabled:opacity-50">
-              <span class="min-w-0 truncate" x-text="projectSelectLabel()"></span>
-              <svg class="h-4 w-4 shrink-0 text-zinc-400 dark:text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
+            <div class="flex items-stretch">
+              <button type="button" data-testid="project-select"
+                      aria-haspopup="true" :aria-expanded="projectMenuOpen ? 'true' : 'false'"
+                      :aria-label="'Projects: ' + projectSelectLabel()"
+                      :disabled="!appBooted"
+                      @click="toggleProjectMenu()"
+                      @keydown.down.prevent="openProjectMenu('first')"
+                      @keydown.up.prevent="openProjectMenu('last')"
+                      class="field flex min-w-0 flex-1 items-center justify-between gap-2 rounded-r-none border-r-0 text-left disabled:cursor-not-allowed disabled:opacity-50">
+                <span class="min-w-0 truncate" x-text="projectSelectLabel()"></span>
+                <svg class="h-4 w-4 shrink-0 text-zinc-400 dark:text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              <!-- Project settings gear — opens the EXISTING project settings
+                   modal; it is a plain modal button, NOT a header menu (no
+                   aria-haspopup/expanded state). Fixed w-11 (44px) so its
+                   main-axis size never inherits .field's w-full (a flex item
+                   with flex-basis:auto would otherwise claim 100% of the row);
+                   the select keeps the rest via flex-1. Disabled while !appBooted
+                   (same gate as the adjacent trigger, so the whole unit stays
+                   inert during startup) OR until a project is selected
+                   (openProjectSettings() guards on this too). If the Projects
+                   dropdown is still open when the gear activates, close it first —
+                   the gear sits INSIDE the control's wrapper, so the outside-click
+                   handler would otherwise leave the panel open under the modal. -->
+              <button type="button" data-testid="project-settings-btn"
+                      aria-label="Project settings" title="Project settings"
+                      :disabled="!appBooted || !selectedProjectId"
+                      @click="closeProjectMenu(); openProjectSettings()"
+                      class="field flex w-11 shrink-0 items-center justify-center rounded-l-none text-zinc-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400">
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.406l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.406l-1.298 2.247a1.125 1.125 0 01-1.369.49l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.406l1.004-.827c.292-.24.437-.613.43-.991a7.723 7.723 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.406l1.297-2.247a1.125 1.125 0 011.37-.49l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </button>
+            </div>
 
             <!-- Menu panel: z-40 — above the header and board content, below
-                 the detail modal (z-[60]) and toasts (z-50). -->
+                 the detail modal (z-[60]) and toasts (z-50). Anchored to the
+                 WHOLE split unit (left-0/right-0 on the wrapper): it deliberately
+                 spans select + gear so the menu matches the compound control's
+                 footprint. -->
             <div data-testid="project-menu" role="menu" aria-label="Projects"
                  x-show="projectMenuOpen" x-cloak
                  @keydown.down.prevent="moveProjectFocus(1)"
@@ -127,15 +162,12 @@
         <!-- secondary controls: inline on md+, collapsible full-width strip on mobile -->
         <!-- On md+ this is the right-aligned inline cluster (ml-auto) that ends
              with the settings-menu trigger after it — one header row. Below md
-             it becomes the full-width collapsible strip below row 1. -->
+             it becomes the full-width collapsible strip below row 1. Project
+             settings moved out of the strip into the gear attached to the
+             Projects dropdown — this strip now carries only the live indicator. -->
         <div class="flex flex-wrap items-center gap-x-5 gap-y-2"
              :class="showMobileMenu ? 'w-full' : 'hidden md:flex md:ml-auto'">
-           <button type="button" @click="openProjectSettings()" :disabled="!selectedProjectId"
-                   class="btn-ghost disabled:opacity-40" title="Project settings" aria-label="Project settings">
-             Settings
-           </button>
-
-           <!-- realtime SSE live status indicator — deliberately OUTSIDE the
+            <!-- realtime SSE live status indicator — deliberately OUTSIDE the
                 consolidated menu; on md+ it sits immediately left of the menu
                 trigger. Click still triggers a manual reconnect. -->
            <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none"
@@ -164,13 +196,14 @@
         <!-- ================================================== header settings menu -->
         <!-- Consolidates the theme selector, actor identity ("Who are you?"),
              auto-refresh toggle and the auth-token entry into ONE compact
-             dropdown anchored at the right edge of the header. The trigger is
-             an avatar-style circle showing the actor's initial ("You" when
-             unset) — deliberately NOT a gear glyph: the Projects dropdown gets
-             its own gear in a follow-up, and adjacent glyphs must stay distinct.
-             DOM-placed after the collapsible strip: on md+ it renders flush
-             right (the strip's ml-auto pushes Settings + live indicator just
-             left of it); below md it stays in row 1 next to the hamburger so
+              dropdown anchored at the right edge of the header. The trigger is
+              an avatar-style circle showing the actor's initial ("You" when
+              unset) — deliberately NOT a gear glyph: the Projects dropdown has
+              its own attached project-settings gear, and the two adjacent
+              controls must stay distinct.
+DOM-placed after the collapsible strip: on md+ it renders flush
+              right (the strip's ml-auto pushes the live indicator just left of
+              it); below md it stays in row 1 next to the hamburger so
              the controls remain reachable at 375px. Keyboard mirrors the
              Projects dropdown: ArrowDown/Up on the trigger opens it; arrows
              (+Home/End) move between the panel's controls; Escape closes and

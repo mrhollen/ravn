@@ -1181,3 +1181,70 @@ test("HeaderMenu: toggle opens/closes; Escape chain and mutual exclusion with th
   assert.equal(app.headerMenuOpen, false, "menu closes on the token entry");
   assert.equal(app.showAuthModal, true, "auth modal opens");
 });
+
+// Task 01M47NPQHY5CR2VPG14HVDM02P: the spelled-out "Settings" ghost button is
+// replaced by a gear icon VISUALLY ATTACHED to the right edge of the Projects
+// dropdown (a split control sharing one bordered unit).
+
+test("ProjectSettingsGear: index.html wires the gear into the project-dropdown split control", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+
+  // AC1 — the old spelled-out button is gone from the header.
+  assert.ok(
+    !/<button[^>]*>\s*Settings\s*<\/button>/.test(html),
+    'spelled-out "Settings" ghost button must be removed',
+  );
+
+  // The gear lives INSIDE the project-dropdown wrapper (so it is visually
+  // attached) and keeps a stable testid + accessible name.
+  const ddStart = html.indexOf('data-testid="project-dropdown"');
+  assert.ok(ddStart !== -1, "project-dropdown wrapper must exist");
+  const unit = html.slice(ddStart, html.indexOf("</header>", ddStart));
+  const selectIdx = unit.indexOf('data-testid="project-select"');
+  const gearIdx = unit.indexOf('data-testid="project-settings-btn"');
+  assert.ok(selectIdx !== -1 && gearIdx !== -1, "trigger and gear must both live in the split control");
+  assert.ok(gearIdx > selectIdx, "gear sits to the RIGHT of the select trigger");
+
+  const gearTag = unit.slice(Math.max(0, gearIdx - 300), gearIdx + 500);
+  assert.match(gearTag, /aria-label="Project settings"/, "gear needs an accessible name");
+  assert.match(
+    gearTag,
+    /@click="closeProjectMenu\(\);\s*openProjectSettings\(\)"/,
+    "gear opens the EXISTING settings modal (closing any open dropdown first)",
+  );
+  // Gating: disabled while !appBooted (same boot gate as the adjacent trigger —
+  // the whole unit stays inert during startup) OR when no project is selected.
+  assert.match(gearTag, /:disabled="!appBooted \|\| !selectedProjectId"/);
+
+  // Split-control shape: the select drops its right corner + border, the gear
+  // takes the right corner and supplies the hairline divider as its own left
+  // border; both halves share .field for identical height/border.
+  const selectTag = unit.slice(Math.max(0, selectIdx - 300), selectIdx + 700);
+  assert.match(selectTag, /rounded-r-none border-r-0/, "select keeps only its LEFT corners");
+  assert.match(gearTag, /rounded-l-none/, "gear takes only the RIGHT corner");
+});
+
+test("ProjectSettingsGear: openProjectSettings() no-ops without a selection; opens + populates with one", async () => {
+  const app = crowbanApp() as any;
+
+  // No project selected → the guard bails before touching the DOM (in the UI the
+  // gear is disabled in this state, so the click can't even fire).
+  app.selectedProjectId = "";
+  await app.openProjectSettings();
+  assert.equal(app.showProjectSettings, false, "no project selected → modal must not open");
+
+  // With a selection it populates the form from the list row and opens the
+  // modal. (In Node, openDialog() returns null and the getProject() refetch
+  // rejects harmlessly — the timeout guard is cleaned up in its finally.)
+  app.selectedProjectId = "p1";
+  app.projects = [
+    { id: "p1", name: "Gear Project", description: "d", opencode_server_url: "", opencode_directory: "", opencode_model: "" },
+  ];
+  await app.openProjectSettings();
+  assert.equal(app.showProjectSettings, true, "selection present → modal opens");
+  assert.equal(app.projectSettingsForm.name, "Gear Project", "form seeded from the list row");
+
+  // Single close path resets the flag (UI Escape / × / Cancel all call this).
+  app.closeProjectSettings();
+  assert.equal(app.showProjectSettings, false);
+});
