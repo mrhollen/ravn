@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>crowban</title>
+    <!-- Favicons: OS color scheme is the baseline; the pre-paint script below
+         overrides these media attributes when the user's stored theme choice
+         (localStorage["crowban.theme"]) differs from the OS preference. -->
+    <link id="favicon-light" rel="icon" type="image/svg+xml" href="/logo-mascot.svg" media="(prefers-color-scheme: light)" />
+    <link id="favicon-dark" rel="icon" type="image/svg+xml" href="/logo-mascot-dark.svg" media="(prefers-color-scheme: dark)" />
     <script>
       // Apply the stored theme before first paint to avoid a light-mode flash.
       (function () {
@@ -14,6 +19,12 @@
             t === "dark" ||
             (t === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
           document.documentElement.classList.toggle("dark", dark);
+          // Favicon follows the user's theme choice, not the OS preference.
+          if (t === "light" || t === "dark") {
+            var off = "(max-width: 0)";
+            document.getElementById("favicon-light").setAttribute("media", t === "light" ? "all" : off);
+            document.getElementById("favicon-dark").setAttribute("media", t === "dark" ? "all" : off);
+          }
         } catch (e) {
           /* private mode — leave the default light theme */
         }
@@ -55,9 +66,20 @@
             toggle button is hidden). Project settings live in the gear attached
             to the Projects dropdown, not in the strip. -->
       <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-white px-4 py-3 shadow-sm md:gap-x-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <!-- Wordmark (EXPERIMENT): the mascot logo replaces BOTH the name and the
+             tagline. The sr-only h1 preserves the page's main heading for screen
+             readers. Visibility behavior unchanged: hidden below sm.
+             THEME SIBLINGS: one img per mode — class-driven dark mode (@custom-variant
+             dark on html.dark, toggled pre-paint by the head script) shows
+             logo-mascot.svg in light and logo-mascot-dark.svg (transparent bg + coral
+             ring) when .dark. Exactly one is visible in every state: the full alt rides
+             on the visible-in-its-mode img, the hidden twin is aria-hidden. -->
         <div class="mr-1 hidden leading-tight sm:block">
-          <h1 class="text-base font-semibold tracking-tight">crowban</h1>
-          <p class="text-[11px] text-zinc-500">MCP-first kanban &middot; visibility UI</p>
+          <img src="/logo-mascot.svg" alt="CrowBan — MCP-first kanban · visibility UI"
+               class="h-9 w-auto dark:hidden" />
+          <img src="/logo-mascot-dark.svg" aria-hidden="true"
+               class="hidden h-9 w-auto dark:block" />
+          <h1 class="sr-only">crowban</h1>
         </div>
 
         <!-- Projects dropdown: custom trigger button + Alpine-managed menu

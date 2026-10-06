@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
+  <title>CrowBan — badge/sticker: an angular pixel-adjacent crow perched on a stack of three offset kanban cards inside a thick die-cut ring</title>
+  <desc>Concept #5 "Bold Badge / Sticker". A cream die-cut sticker disc with a chunky ink ring; inside, three kanban cards cascade diagonally and a blocky, right-angled crow with a stepped tail perches on the front card. Palette: ink #1F1833, paper #FFF4DC, orange #FF5A1F (3 colors). At 16px the cream disc + ink ring survive as the badge outline and the crow reads as a solid mass.</desc>
+
+  <!-- Sticker paper die-cut base -->
+  <circle cx="128" cy="128" r="120" fill="#FFF4DC"/>
+
+  <!-- Thick die-cut sticker ring (ink) -->
+  <circle cx="128" cy="128" r="103" fill="none" stroke="#1F1833" stroke-width="15"/>
+
+  <!-- Kanban card stack: three cards cascading diagonally (back -> front, each +12x/+14y) -->
+  <rect x="70" y="102" width="88" height="52" rx="8" fill="#FFF4DC" stroke="#1F1833" stroke-width="8"/>
+  <rect x="82" y="118" width="88" height="52" rx="8" fill="#FFF4DC" stroke="#1F1833" stroke-width="8"/>
+
+  <!-- Front card: the perch -->
+  <rect x="94" y="134" width="88" height="52" rx="8" fill="#FFF4DC" stroke="#1F1833" stroke-width="8"/>
+  <!-- Front card details: status chip + two task lines -->
+  <rect x="104" y="146" width="13" height="13" rx="3" fill="#FF5A1F"/>
+  <rect x="126" y="147" width="42" height="5" rx="2.5" fill="#1F1833"/>
+  <rect x="126" y="157" width="32" height="5" rx="2.5" fill="#1F1833"/>
+
+  <!-- Crow: all right-angles (pixel-art-adjacent), perched on the front card edge -->
+  <!-- Tail: stepped staircase rising to a slanted tip, base fused into the body -->
+  <polygon points="150,134 150,114 162,114 162,102 174,102 174,90 198,90 190,134" fill="#1F1833"/>
+  <!-- Body block -->
+  <rect x="112" y="102" width="56" height="32" fill="#1F1833"/>
+  <!-- Head block (square = pixel vibe) -->
+  <rect x="104" y="82" width="36" height="32" fill="#1F1833"/>
+  <!-- Talons wrapping over the card edge -->
+  <rect x="122" y="134" width="9" height="7" fill="#1F1833"/>
+  <rect x="146" y="134" width="9" height="7" fill="#1F1833"/>
+  <!-- Beak wedge (orange accent) -->
+  <polygon points="104,88 84,97 104,106" fill="#FF5A1F"/>
+  <!-- Eye: cream dot with a left-facing pupil -->
+  <circle cx="114" cy="94" r="5" fill="#FFF4DC"/>
+  <circle cx="112.5" cy="94" r="2" fill="#1F1833"/>
+</svg>

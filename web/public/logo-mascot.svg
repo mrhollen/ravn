@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
+  <title>CrowBan — friendly flat mascot: a rounded crow perched on a branch beside two kanban columns, wing outstretched, carrying a task card in its beak mid-drag</title>
+
+  <!-- Palette (3 colors, no gradients):
+       ink #1F2937 (crow, cards, branch) / white #FFFFFF (chip, belly, eye) / coral #FF7A45 (beak, card, talons) -->
+
+  <!-- App-icon chip -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#FFFFFF"/>
+
+  <!-- Kanban columns as two stacks of rounded task cards.
+       Left column holds three cards; right column holds two, its top slot empty — the drop target. -->
+  <rect x="158" y="122" width="32" height="16" rx="4" fill="#1F2937"/>
+  <rect x="158" y="148" width="32" height="16" rx="4" fill="#1F2937"/>
+  <rect x="158" y="174" width="32" height="16" rx="4" fill="#1F2937"/>
+  <rect x="206" y="148" width="32" height="16" rx="4" fill="#1F2937"/>
+  <rect x="206" y="174" width="32" height="16" rx="4" fill="#1F2937"/>
+
+  <!-- Branch the mascot perches on (branch = crow, baseline = board) -->
+  <rect x="26" y="192" width="108" height="8" rx="4" fill="#1F2937"/>
+
+  <!-- Tail, root buried under the body -->
+  <polygon points="56,172 24,189 54,190" fill="#1F2937"/>
+
+  <!-- Talons gripping the branch (tops hidden by the body) -->
+  <rect x="68" y="178" width="7" height="15" rx="3.5" fill="#FF7A45"/>
+  <rect x="94" y="178" width="7" height="15" rx="3.5" fill="#FF7A45"/>
+
+  <!-- Beak (drawn under the head so only the wedge protrudes) -->
+  <path d="M100,84 Q122,89 130,93 Q122,97 100,103 Z" fill="#FF7A45"/>
+
+  <!-- Body -->
+  <ellipse cx="82" cy="154" rx="34" ry="30" fill="#1F2937"/>
+
+  <!-- Belly patch -->
+  <ellipse cx="72" cy="161" rx="18" ry="15" fill="#FFFFFF"/>
+
+  <!-- Neck bridge fusing head and body (corners verified inside the union) -->
+  <rect x="60" y="94" width="34" height="40" fill="#1F2937"/>
+
+  <!-- Head -->
+  <circle cx="76" cy="92" r="30" fill="#1F2937"/>
+
+  <!-- Wing reaching forward toward the card: root buried in the body, tip free in space = the drag gesture -->
+  <ellipse cx="119" cy="120" rx="23" ry="9" transform="rotate(-35 119 120)" fill="#1F2937"/>
+
+  <!-- Eye: white with a right-facing pupil, gazing at the columns -->
+  <circle cx="88" cy="86" r="9" fill="#FFFFFF"/>
+  <circle cx="91.5" cy="86" r="4" fill="#1F2937"/>
+
+  <!-- The task card in mid-flight: coral, tilted, pinched between beak tip and wing -->
+  <rect x="121" y="84" width="30" height="20" rx="4" transform="rotate(-10 136 94)" fill="#FF7A45"/>
+</svg>

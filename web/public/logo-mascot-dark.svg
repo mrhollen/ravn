@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
+  <title>CrowBan — dark mascot: near-white crow perched on a branch beside two kanban columns, wing outstretched, carrying a coral task card in its beak mid-drag; coral badge ring, transparent background for dark surfaces</title>
+
+  <!-- Palette (2 colors + transparent background):
+       paper #F4F4F5 = zinc-100, the SAME token as dark-mode body text — crow, branch, cards /
+       coral #FF7A45 — badge ring, beak, talons, eye, card in flight /
+       background transparent: sits directly on dark surfaces (target ≈ zinc-900 #18181b) -->
+
+  <!-- Badge ring: the light chip's silhouette (same position and corner ratio, rx≈51/236 ≈ 52/240),
+       outline instead of fill. Inset so the full stroke stays inside the viewBox; sw=14 →
+       ≈2px at the 36px header render, ≈1px hairline at 16×16 (the outlined mark survives). -->
+  <rect x="10" y="10" width="236" height="236" rx="50" fill="none" stroke="#FF7A45" stroke-width="14"/>
+
+  <!-- Kanban columns as two stacks of rounded task cards, shifted 6u left so the whole
+       artwork is optically centered inside the ring (content spans x=24..232 → center 128).
+       Left column holds three cards; right column holds two, its top slot empty — the drop target. -->
+  <rect x="152" y="122" width="32" height="16" rx="4" fill="#F4F4F5"/>
+  <rect x="152" y="148" width="32" height="16" rx="4" fill="#F4F4F5"/>
+  <rect x="152" y="174" width="32" height="16" rx="4" fill="#F4F4F5"/>
+  <rect x="200" y="148" width="32" height="16" rx="4" fill="#F4F4F5"/>
+  <rect x="200" y="174" width="32" height="16" rx="4" fill="#F4F4F5"/>
+
+  <!-- Branch the mascot perches on (branch = crow, baseline = board) -->
+  <rect x="26" y="192" width="108" height="8" rx="4" fill="#F4F4F5"/>
+
+  <!-- Tail, root buried under the body -->
+  <polygon points="56,172 24,189 54,190" fill="#F4F4F5"/>
+
+  <!-- Talons gripping the branch (tops hidden by the body) -->
+  <rect x="68" y="178" width="7" height="15" rx="3.5" fill="#FF7A45"/>
+  <rect x="94" y="178" width="7" height="15" rx="3.5" fill="#FF7A45"/>
+
+  <!-- Beak (drawn under the head so only the wedge protrudes) -->
+  <path d="M100,84 Q122,89 130,93 Q122,97 100,103 Z" fill="#FF7A45"/>
+
+  <!-- Body -->
+  <ellipse cx="82" cy="154" rx="34" ry="30" fill="#F4F4F5"/>
+
+  <!-- Belly patch: dropped — it was white-on-ink in the light version; on a near-white
+       body there is no tonal difference to carry, so the silhouette stays clean -->
+
+  <!-- Neck bridge fusing head and body (corners verified inside the union) -->
+  <rect x="60" y="94" width="34" height="40" fill="#F4F4F5"/>
+
+  <!-- Head -->
+  <circle cx="76" cy="92" r="30" fill="#F4F4F5"/>
+
+  <!-- Wing reaching forward toward the card: root buried in the body, tip free in space = the drag gesture -->
+  <ellipse cx="119" cy="120" rx="23" ry="9" transform="rotate(-35 119 120)" fill="#F4F4F5"/>
+
+  <!-- Eye: single coral dot at the light version's pupil position. The white sclera would be
+       invisible on a near-white head, so the eye joins the accent system — it reads as "lit" in dark mode -->
+  <circle cx="91.5" cy="86" r="4" fill="#FF7A45"/>
+
+  <!-- The task card in mid-flight: coral, tilted, pinched between beak tip and wing -->
+  <rect x="121" y="84" width="30" height="20" rx="4" transform="rotate(-10 136 94)" fill="#FF7A45"/>
+</svg>
