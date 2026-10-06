@@ -116,6 +116,28 @@ function readStoredSort(): { key: SortKey; dir: SortDir } {
   }
 }
 
+// ------------------------------------------------------ full-page task route
+/** Parse the client-side full-page task route `/tasks/<id>` out of a pathname.
+ *  Returns null for the board route ("") or anything that is not exactly one
+ *  non-empty id segment (no nested slashes, no whitespace-only ids). The server
+ *  already deep-links these paths to index.html (SPA fallback in
+ *  cmd/crowban-server), so the pathname can be trusted as-is. */
+export function taskRouteIdFromPath(pathname: string): string | null {
+  const m = /^\/tasks\/([^/]+)$/.exec(pathname);
+  if (!m) return null;
+  try {
+    const id = decodeURIComponent(m[1]);
+    return id.trim() === "" ? null : id;
+  } catch {
+    return m[1]; // malformed %-sequence — use the raw segment rather than throw
+  }
+}
+
+/** Pathname for task `id`'s full-page route. */
+export function taskRoutePath(id: string): string {
+  return "/tasks/" + encodeURIComponent(id);
+}
+
 /** Last-resort clipboard write for non-secure contexts (plain http on a LAN),
  *  where navigator.clipboard is unavailable: hidden textarea + execCommand.
  *  Returns true only when the browser reports the copy succeeded. */
@@ -1013,6 +1035,17 @@ export function crowbanApp() {
      *  switches so focus still returns to the original board trigger. */
     detailFocus: null as DialogFocus | null,
 
+    // ------------------------------------------- full-page view (/tasks/<id>)
+    /** Whether the open detail is rendered as a FULL PAGE instead of the right-
+     *  hand drawer overlay (task 01M47MWHWW0M1Q3WZYFGFHXTYZ). The same markup
+     *  and every edit op are shared; only the surrounding chrome differs. */
+    fullPageOpen: false,
+    /** True when WE created the current /tasks/<id> history entry via pushState
+     *  (or replaced an entry of ours). Deep-linked opens arrive with a URL but
+     *  no board entry behind them — closing those must replaceState('/') and
+     *  never history.back(), which would navigate out of the app. */
+    fullPagePushed: false,
+
     async openTask(id: string): Promise<void> {
       // Unsaved notes belong to the task being left — ask before dropping them
       // (AC 3). Re-opening the SAME task is just a refresh: its in-progress
@@ -1025,6 +1058,12 @@ export function crowbanApp() {
       // front so it can never surface inside the drawer about to open (AC 2).
       if (this.notesDraftOwner !== null && this.notesDraftOwner !== id) {
         this.resetNotesDraft();
+      }
+      // A task switch while the full page is open keeps the URL pointing at the
+      // NEW task (the deep link stays truthful and shareable) without growing
+      // history — replaceState, never push.
+      if (this.fullPageOpen && typeof window !== "undefined" && this.detailId !== id) {
+        window.history.replaceState(null, "", taskRoutePath(id));
       }
       // In-drawer switch (discard-&-switch): keep the existing session so focus
       // restoration still targets the element that originally opened the drawer.
@@ -1062,6 +1101,8 @@ export function crowbanApp() {
     },
 
     closeDetail(): void {
+      const wasFullPage = this.fullPageOpen;
+      const pushedEntry = this.fullPagePushed;
       this.editingTask = false;
       this.editingAcSeq = 0;
       this.editingAcText = "";
@@ -1080,6 +1121,114 @@ export function crowbanApp() {
       this.closeDialog(this.detailFocus);
       this.detailFocus = null;
       this.detailOpen = false;
+      this.fullPageOpen = false;
+      this.fullPagePushed = false;
+      // History sync: a FULL-PAGE close must leave the URL honest. An entry we
+      // pushed is popped — the resulting popstate lands on "/" and is a no-op
+      // because state is already closed. A deep-linked open has NO board entry
+      // behind it, so popping would navigate OUT of the app: replace instead.
+      // (When closing from a popstate-driven back, the pathname is already "/"
+      // and neither branch fires — idempotent.)
+      if (
+        wasFullPage &&
+        typeof window !== "undefined" &&
+        taskRouteIdFromPath(window.location.pathname) !== null
+      ) {
+        if (pushedEntry) window.history.back();
+        else window.history.replaceState(null, "", "/");
+      }
+    },
+
+    /** Switch the open task's detail from the drawer to the FULL-PAGE view.
+     *  Pushes /tasks/<id> so browser back returns to the board; a URL that is
+     *  already on a task route (deep link) is adopted as-is instead of piling
+     *  another entry on top. */
+    openFullPage(): void {
+      const t = this.detail;
+      if (!t || typeof window === "undefined") return;
+      this.fullPageOpen = true;
+      if (taskRouteIdFromPath(window.location.pathname) !== t.id) {
+        window.history.pushState(null, "", taskRoutePath(t.id));
+        this.fullPagePushed = true;
+      } else {
+        this.fullPagePushed = false; // deep link — no entry of ours to pop later
+      }
+    },
+
+    /** Reconcile app state with the URL after a browser navigation (back /
+     *  forward). The pathname is the source of truth for the full-page view:
+     *  `/tasks/<id>` opens that task as a full page (adopting its project for
+     *  board/SSE context); anything else closes an open full page. Never
+     *  writes history here — the navigation already happened. */
+    onPopState(): void {
+      if (typeof window === "undefined") return;
+      const id = taskRouteIdFromPath(window.location.pathname);
+      if (id) {
+        if (!this.detailOpen || this.detailId !== id) {
+          void (async (): Promise<void> => {
+            try {
+              const t = await api.getTask(id, { commentLimit: 50 });
+              if (this.selectedProjectId !== t.project_id) {
+                this.selectedProjectId = t.project_id;
+                try {
+                  safeStorage.setItem(LS_PROJECT, t.project_id);
+                } catch { /* private mode */ }
+                await this.loadBoard();
+              }
+              // The entry is already in history — a close must replaceState, not back().
+              this.fullPagePushed = false;
+              if (!this.detailOpen) this.connectSse();
+              this.fullPageOpen = true;
+              await this.openTask(id);
+            } catch (e) {
+              if (ApiError.isUnauthorized(e)) this.openAuthModal();
+              else this.toast(errMsg(e), "error");
+              window.history.replaceState(null, "", "/");
+            }
+          })();
+        } else {
+          // Forward navigation onto the already-open task: just re-arm page mode.
+          this.fullPageOpen = true;
+          this.fullPagePushed = false;
+        }
+      } else if (this.fullPageOpen) {
+        this.closeDetail();
+      }
+    },
+
+    /** Deep link on first load: /tasks/<id> in the initial URL. Fetches the
+     *  task, adopts its project as the board context (so SSE/poll/relations
+     *  targets are correct), and opens it as a full page. A failed fetch resets
+     *  the URL to "/" so a dead deep link can't strand the history state, and
+     *  still lands the user on a usable board. */
+    async openDeepLinkedTask(id: string): Promise<void> {
+      let t: TaskDetail;
+      try {
+        t = await api.getTask(id, { commentLimit: 50 });
+      } catch (e) {
+        if (ApiError.isUnauthorized(e)) this.openAuthModal();
+        else this.toast(errMsg(e), "error");
+        if (typeof window !== "undefined") window.history.replaceState(null, "", "/");
+        if (this.selectedProjectId) {
+          await this.loadBoard();
+          this.connectSse();
+        } else {
+          this.showNewProject = true;
+        }
+        return;
+      }
+      if (this.selectedProjectId !== t.project_id) {
+        this.selectedProjectId = t.project_id;
+        try {
+          safeStorage.setItem(LS_PROJECT, t.project_id);
+        } catch { /* private mode */ }
+      }
+      await this.loadBoard();
+      this.connectSse();
+      // The URL was given to us by the browser — we did not push it.
+      this.fullPageOpen = true;
+      this.fullPagePushed = false;
+      await this.openTask(id);
     },
 
     // ---------------------------------------------------------------- opencode
@@ -2382,6 +2531,9 @@ export function crowbanApp() {
         this._themeMq?.addEventListener("change", () => {
           if (this.theme === "system") this.applyTheme();
         });
+        // Browser back/forward is a first-class way into and out of the full-
+        // page task view (/tasks/<id>) — reconcile on every popstate.
+        window.addEventListener("popstate", () => this.onPopState());
       }
       this.applyTheme();
       await this.loadProjects();
@@ -2389,7 +2541,12 @@ export function crowbanApp() {
       if (!known || !this.selectedProjectId) {
         this.selectedProjectId = this.projects[0]?.id ?? "";
       }
-      if (this.selectedProjectId) {
+      // Deep link: the initial URL may already be a full-page task route.
+      const deepLinkedTaskId =
+        typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
+      if (deepLinkedTaskId) {
+        await this.openDeepLinkedTask(deepLinkedTaskId);
+      } else if (this.selectedProjectId) {
         try {
           safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
         } catch { /* ignore */ }
