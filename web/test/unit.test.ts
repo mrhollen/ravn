@@ -13,7 +13,7 @@ import {
   safeStorage,
 } from "../src/util.ts";
 import { escapeHtml, renderMarkdown } from "../src/md.ts";
-import { crowbanApp } from "../src/app.ts";
+import { crowbanApp, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
 import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, shouldApplyBoard } from "../src/refresh.ts";
@@ -880,4 +880,42 @@ test("API: setApiTimeoutMsForTests — override applies and ≤0 restores the de
   setApiTimeoutMsForTests(-5);
   assert.ok(API_TIMEOUT_MS > 0, "default constant stays sane");
   setApiTimeoutMsForTests(20_000); // restore for any later tests in this file
+});
+
+// ------------------------------------------------------------- full-page route
+// Task 01M47MWHWW0M1Q3WZYFGFHXTYZ: /tasks/<id> is the client-side deep link to
+// the full-page task view. crowban-server's SPA fallback serves index.html for
+// these paths, so this pure pathname mapping owns both directions of the route.
+
+test("FullPage: taskRouteIdFromPath parses only single-segment /tasks/<id> routes", () => {
+  assert.equal(taskRouteIdFromPath("/"), null, "board route has no task");
+  assert.equal(taskRouteIdFromPath(""), null);
+  assert.equal(taskRouteIdFromPath("/tasks/01M47MWHWW0M1Q3WZYFGFHXTYZ"), "01M47MWHWW0M1Q3WZYFGFHXTYZ");
+  assert.equal(taskRouteIdFromPath("/tasks/"), null, "empty id segment is not a route");
+  assert.equal(taskRouteIdFromPath("/tasks/a/b"), null, "nested segments are not a route");
+  assert.equal(taskRouteIdFromPath("/other/x"), null);
+  assert.equal(taskRouteIdFromPath("/api/v1/tasks/abc"), null);
+  assert.equal(taskRouteIdFromPath("/tasks/%20"), null, "whitespace-only id is not a route");
+});
+
+test("FullPage: taskRouteIdFromPath decodes URI-encoded ids and survives bad %-sequences", () => {
+  assert.equal(taskRouteIdFromPath("/tasks/ab%41c"), "abAc");
+  // A malformed %-sequence makes decodeURIComponent throw — the raw segment is
+  // returned rather than letting a URL take the app down.
+  assert.equal(taskRouteIdFromPath("/tasks/%ZZ"), "%ZZ");
+});
+
+test("FullPage: taskRoutePath round-trips through the parser", () => {
+  const id = "01M47MWHWW0M1Q3WZYFGFHXTYZ";
+  assert.equal(taskRoutePath(id), "/tasks/" + id);
+  assert.equal(taskRouteIdFromPath(taskRoutePath(id)), id);
+});
+
+test("FullPage: the app boots in drawer mode and openFullPage is a safe no-op without detail", () => {
+  const app = crowbanApp();
+  assert.equal(app.fullPageOpen, false);
+  assert.equal(app.fullPagePushed, false);
+  // No window (Node) and no loaded task — must not throw.
+  assert.doesNotThrow(() => app.openFullPage());
+  assert.equal(app.fullPageOpen, false, "nothing to switch without a loaded task");
 });
