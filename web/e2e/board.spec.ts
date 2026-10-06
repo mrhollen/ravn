@@ -309,10 +309,13 @@ test.describe('Web E2E test suite', () => {
 
     await selectProjectViaDropdown(page, project.id);
 
-    // Set actor name
+    // Set actor name (lives in the consolidated header settings menu now)
+    await page.getByTestId('header-menu-trigger').click();
     const actorInput = page.getByPlaceholder('you');
+    await expect(actorInput).toBeVisible();
     await actorInput.fill('Human Tester');
     await actorInput.dispatchEvent('change');
+    await page.keyboard.press('Escape'); // close the menu (focus returns to the trigger)
 
     // -------------------------------------------------------------------------
     // Step 3: Test Claim, Heartbeat, and Release controls (AC 3)

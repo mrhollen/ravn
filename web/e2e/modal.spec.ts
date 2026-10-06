@@ -225,10 +225,14 @@ test.describe('Wide centered task-detail modal', () => {
     await page.setViewportSize({ width: 1920, height: 1080 });
     const viewport = { width: 1920, height: 1080 };
 
-    // Named actor so the claim toast text is unambiguous.
+    // Named actor so the claim toast text is unambiguous (input lives in the
+    // consolidated header settings menu now).
+    await page.getByTestId('header-menu-trigger').click();
     const actorInput = page.getByPlaceholder('you');
+    await expect(actorInput).toBeVisible();
     await actorInput.fill('e2e-modal-tester');
     await actorInput.dispatchEvent('change');
+    await page.keyboard.press('Escape'); // close the menu (focus returns to the trigger)
 
     await page.locator('article', { hasText: 'Modal fixture' }).click();
     const panel = page.locator('#cb-detail-drawer aside');

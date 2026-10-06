@@ -207,9 +207,24 @@ test.describe('theme (dark mode)', () => {
     expect(uncaughtConsoleErrors).toEqual([]);
   });
 
+  /** The theme selector moved into the consolidated header settings menu
+   *  (avatar trigger at the right edge of the header) — open it first. */
+  async function openHeaderMenu(page: import('@playwright/test').Page): Promise<void> {
+    await page.getByTestId('header-menu-trigger').click();
+    await expect(page.getByTestId('header-menu')).toBeVisible();
+  }
+
   // ------------------------------------------------------------------ AC1: toggle
   test('header exposes Light / Dark / System theme toggle (AC1)', async ({ page }) => {
     await page.goto(serverUrl);
+    // The old inline strip widget is gone: with the menu CLOSED the group and
+    // its buttons are hidden…
+    const trigger = page.getByTestId('header-menu-trigger');
+    await expect(trigger).toBeVisible();
+    await expect(page.locator('[data-testid="theme-toggle"]')).not.toBeVisible();
+
+    // …the toggle now lives inside the consolidated header settings menu.
+    await openHeaderMenu(page);
     const group = page.locator('[data-testid="theme-toggle"]');
     await expect(group).toBeVisible();
 
@@ -279,6 +294,7 @@ test.describe('theme (dark mode)', () => {
       await page.goto(serverUrl);
       expect(await hasDarkClass(page)).toBe(true); // system default under dark OS
 
+      await openHeaderMenu(page);
       await page.locator('[data-testid="theme-light"]').click();
       expect(await hasDarkClass(page)).toBe(false);
       expect(nearRgb(await pageBg(page), ZINC_100)).toBe(true);
@@ -296,11 +312,12 @@ test.describe('theme (dark mode)', () => {
     page,
   }) => {
     await seedBoard(serverUrl);
-    await page.goto(serverUrl);
-    expect(await hasDarkClass(page)).toBe(false); // system default under light OS
+      await page.goto(serverUrl);
+      expect(await hasDarkClass(page)).toBe(false); // system default under light OS
 
-    await page.locator('[data-testid="theme-dark"]').click();
-    expect(await lsTheme(page)).toBe('dark');
+      await openHeaderMenu(page);
+      await page.locator('[data-testid="theme-dark"]').click();
+      expect(await lsTheme(page)).toBe('dark');
     expect(await hasDarkClass(page)).toBe(true);
 
     await page.reload();
@@ -332,6 +349,7 @@ test.describe('theme (dark mode)', () => {
   test('new-task modal renders with a dark, high-contrast surface (AC2)', async ({ page }) => {
     await seedBoard(serverUrl);
     await page.goto(serverUrl);
+    await openHeaderMenu(page);
     await page.locator('[data-testid="theme-dark"]').click();
 
     await page.getByRole('button', { name: '+ New task' }).click();

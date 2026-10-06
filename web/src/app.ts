@@ -7,7 +7,7 @@
 // READ-ONLY here (agents manage leases via MCP).
 
 import { ApiError, api, errMsg, setApiTimeoutMsForTests } from "./api";
-import { focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
+import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { beginMove, canMove, endMove, friendlyTransitionError, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
 import { renderMarkdown } from "./md";
@@ -547,6 +547,109 @@ export function crowbanApp() {
         this.selectProject();
       }
       this.closeProjectMenu(true);
+    },
+
+    // ------------------------------------------------- header settings menu
+    // Theme, identity (actor name), auto-refresh and the auth-token entry are
+    // consolidated in ONE compact dropdown at the right edge of the header.
+    // The trigger is an avatar circle with the actor's initial ("You" when
+    // unset) — deliberately not a gear glyph: the Projects dropdown gets its
+    // own gear in a follow-up, so adjacent glyphs must stay distinct.
+    // Keyboard mirrors the Projects dropdown: ArrowDown/ArrowUp on the closed
+    // trigger opens it (first/last control); inside, arrows (+Home/End) move
+    // between the panel's focusable controls; Escape closes and returns focus
+    // to the trigger; outside clicks close WITHOUT stealing focus. The panel
+    // sits at z-40 — the dropdown tier (below toasts z-50 and the detail modal
+    // z-[60]). Theme/actor/polling persist exactly as before (setTheme →
+    // localStorage, saveActor → localStorage, pollingChanged → poll timer);
+    // only the token entry closes the menu on click (the auth modal's own
+    // focus session takes over).
+    headerMenuOpen: false,
+    _headerMenuOutsideHandler: null as ((e: Event) => void) | null,
+
+    /** Trigger glyph: the actor's initial, or "You" when no name is set. */
+    actorGlyph(): string {
+      const n = this.actorName.trim();
+      return n ? n.slice(0, 1).toUpperCase() : "You";
+    },
+
+    toggleHeaderMenu(): void {
+      if (this.headerMenuOpen) this.closeHeaderMenu();
+      else this.openHeaderMenu("first");
+    },
+
+    /** Open the menu and focus its first/last focusable control. The
+     *  capture-phase outside-click listener lives exactly as long as the menu
+     *  is open (removed in closeHeaderMenu). Opening it collapses the Projects
+     *  dropdown so at most one header menu is ever live. */
+    openHeaderMenu(focusTarget: "first" | "last" = "first"): void {
+      if (this.headerMenuOpen) return;
+      if (this.projectMenuOpen) this.closeProjectMenu();
+      this.headerMenuOpen = true;
+      if (typeof document !== "undefined") {
+        const onDocClick = (e: Event): void => {
+          // Inside the control (trigger or panel): their own handlers decide.
+          const wrap = document.querySelector<HTMLElement>('[data-testid="header-menu-anchor"]');
+          if (wrap && e.target instanceof Node && wrap.contains(e.target)) return;
+          this.closeHeaderMenu(); // outside click — no focus restore
+        };
+        this._headerMenuOutsideHandler = onDocClick;
+        document.addEventListener("click", onDocClick, true);
+      }
+      if (typeof window === "undefined" || typeof document === "undefined") return;
+      // The controls exist in the DOM from boot (the panel is merely
+      // x-show-hidden), so resolve the target NOW and let _focusWhenVisible
+      // wait out the display flush before focusing.
+      const root = document.querySelector<HTMLElement>('[data-testid="header-menu"]');
+      if (!root) return;
+      const items = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+      if (items.length === 0) return;
+      const idx = focusTarget === "last" ? items.length - 1 : 0;
+      this._focusWhenVisible(items[idx] ?? null);
+    },
+
+    /** Close the menu. `restoreFocus` sends focus back to the trigger (Esc /
+     *  programmatic close); outside clicks close WITHOUT restoring — focus is
+     *  already where the user clicked. */
+    closeHeaderMenu(restoreFocus = false): void {
+      if (!this.headerMenuOpen) return;
+      this.headerMenuOpen = false;
+      if (this._headerMenuOutsideHandler && typeof document !== "undefined") {
+        document.removeEventListener("click", this._headerMenuOutsideHandler, true);
+        this._headerMenuOutsideHandler = null;
+      }
+      if (restoreFocus && typeof window !== "undefined" && typeof document !== "undefined") {
+        this._focusWhenVisible(document.querySelector<HTMLElement>('[data-testid="header-menu-trigger"]'));
+      }
+    },
+
+    /** Arrow/Home/End navigation between the panel's focusable controls in DOM
+     *  order (theme buttons, auto-refresh checkbox, actor input, token item).
+     *  The actor input is single-line: Up/Down have no caret role there
+     *  (Left/Right do), so arrows uniformly hop controls — same contract as
+     *  the Projects dropdown. */
+    moveHeaderFocus(dir: number | "home" | "end"): void {
+      if (typeof document === "undefined") return;
+      const active = document.activeElement;
+      const root = document.querySelector<HTMLElement>('[data-testid="header-menu"]');
+      if (!root) return;
+      const items = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+      if (items.length === 0) return;
+      let next: number;
+      if (dir === "home") next = 0;
+      else if (dir === "end") next = items.length - 1;
+      else {
+        const idx = active instanceof HTMLElement ? items.indexOf(active) : -1;
+        next = idx === -1 ? (dir > 0 ? 0 : items.length - 1) : Math.min(items.length - 1, Math.max(0, idx + dir));
+      }
+      items[next]?.focus();
+    },
+
+    /** "Token: set/none" menu item: close WITHOUT restoring focus — the auth
+     *  modal opens and its own focus session takes over. */
+    openTokenFromMenu(): void {
+      this.closeHeaderMenu();
+      this.openAuthModal();
     },
 
     // ------------------------------------------------------------ new project
@@ -2641,7 +2744,8 @@ export function crowbanApp() {
       else if (this.editingTask) this.cancelEditing();
       else if (this.detailOpen) this.requestCloseDetail();
       else if (this.showNewTask) this.closeNewTask();
-      else if (this.projectMenuOpen) this.closeProjectMenu(true); // header dropdown is topmost
+      else if (this.projectMenuOpen) this.closeProjectMenu(true); // header dropdowns are topmost
+      else if (this.headerMenuOpen) this.closeHeaderMenu(true);
       else if (this.showNewProject) this.showNewProject = false;
       else if (this.cardMenuTaskId) this.cardMenuTaskId = null;
       else if (this.showMobileMenu) this.showMobileMenu = false;

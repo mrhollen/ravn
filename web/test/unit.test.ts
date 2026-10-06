@@ -1077,3 +1077,107 @@ test("Dropdown: Escape chain closes the dropdown BEFORE the new-project bar", ()
   app.dismissTop(); // second Esc now closes the bar (draft untouched)
   assert.equal(app.showNewProject, false);
 });
+
+// Task 01M47NPF5YK99MVGD8K4ZRS81R: theme / identity / auto-refresh / token
+// consolidated into ONE compact header settings menu (avatar trigger + panel).
+
+test("HeaderMenu: index.html wires the consolidated trigger + panel at the dropdown tier", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+
+  // Avatar-style trigger (deliberately NOT a gear glyph) + its panel exist.
+  assert.match(html, /data-testid="header-menu-trigger"/, "menu trigger must exist");
+  assert.match(html, /data-testid="header-menu-anchor"/, "anchor wrapper for positioning/outside-clicks");
+  assert.match(html, /<div id="header-menu-panel" data-testid="header-menu"/, "panel with stable id + testid");
+  // The trigger mirrors the Projects dropdown's keyboard wiring.
+  assert.match(
+    html,
+    /data-testid="header-menu-trigger"[\s\S]{0,900}?@keydown\.down\.prevent="openHeaderMenu\('first'\)"/,
+    "ArrowDown on the closed trigger must open the menu",
+  );
+  // All four consolidated controls live INSIDE the panel…
+  const panelStart = html.indexOf('data-testid="header-menu"');
+  assert.ok(panelStart !== -1);
+  const panel = html.slice(panelStart, html.indexOf("</header>", panelStart));
+  for (const needle of [
+    'data-testid="theme-toggle"',
+    'data-testid="theme-light"',
+    'data-testid="theme-dark"',
+    'data-testid="theme-system"',
+    'data-testid="actor-name-input"',
+    'x-model="actorName"',
+    '@change="saveActor()"',
+    'data-testid="auto-refresh-toggle"',
+    'x-model="polling"',
+    '@change="pollingChanged()"',
+    'data-testid="token-item"',
+    "@click=\"openTokenFromMenu()\"",
+  ]) {
+    assert.ok(panel.includes(needle), `panel must contain ${needle}`);
+  }
+  // …and the old inline widgets are gone from the strip (unique fragments of
+  // the pre-consolidation markup).
+  assert.ok(!/class="field w-32"/.test(html), "old 128px inline actor input must be gone");
+  assert.ok(
+    !/Auth token configured\. Click to edit\./.test(html),
+    "old inline token button title must be gone",
+  );
+  // The live indicator stays OUT of the menu, in the header (left of trigger on md+).
+  assert.match(html, /data-testid="live-indicator"/);
+  assert.ok(!panel.includes('data-testid="live-indicator"'), "live indicator must NOT be inside the panel");
+  // Panel sits at the dropdown tier: above header/board content, BELOW toasts
+  // (z-50) and the detail modal (z-[60]).
+  const panelClass = html.match(/<div id="header-menu-panel"[\s\S]{0,2000}?class="([^"]*)"/)?.[1];
+  assert.ok(panelClass, "panel div found");
+  assert.match(panelClass, /z-40/, "menu panel must be z-40 (under modal z-[60] and toasts z-50)");
+});
+
+test("HeaderMenu: actorGlyph maps the actor name to its initial (or You)", () => {
+  const app = crowbanApp() as any;
+  app.actorName = "";
+  assert.equal(app.actorGlyph(), "You", "empty name → You");
+  app.actorName = "   ";
+  assert.equal(app.actorGlyph(), "You", "whitespace-only name → You");
+  app.actorName = "ada";
+  assert.equal(app.actorGlyph(), "A", "lowercase initial is uppercased");
+  app.actorName = " Ada Lovelace ";
+  assert.equal(app.actorGlyph(), "A", "leading whitespace trimmed, first word used");
+});
+
+test("HeaderMenu: toggle opens/closes; Escape chain and mutual exclusion with the project menu", () => {
+  const app = crowbanApp() as any;
+
+  // Plain toggle cycle (no document in Node — state machine only).
+  assert.equal(app.headerMenuOpen, false);
+  app.toggleHeaderMenu();
+  assert.equal(app.headerMenuOpen, true, "toggle opens");
+  app.toggleHeaderMenu();
+  assert.equal(app.headerMenuOpen, false, "toggle closes again");
+
+  // Escape chain: the settings menu is a topmost header surface — it closes
+  // BEFORE the new-project bar and the mobile strip collapse.
+  app.headerMenuOpen = true;
+  app.showNewProject = true;
+  app.showMobileMenu = true;
+  app.dismissTop();
+  assert.equal(app.headerMenuOpen, false, "first Esc closes the settings menu");
+  assert.equal(app.showNewProject, true, "bar is below the menu in the chain");
+  app.dismissTop();
+  assert.equal(app.showNewProject, false, "second Esc closes the bar");
+  app.dismissTop();
+  assert.equal(app.showMobileMenu, false, "third Esc collapses the mobile strip");
+
+  // At most one header menu is live: opening the settings menu collapses the
+  // Projects dropdown first (document-dependent path skipped in Node).
+  app.projectMenuOpen = true;
+  app._projectMenuOutsideHandler = null;
+  app.openHeaderMenu("first");
+  assert.equal(app.headerMenuOpen, true);
+  assert.equal(app.projectMenuOpen, false, "opening the settings menu closes the project menu");
+
+  // The token item closes the menu and hands off to the auth modal.
+  app.closeHeaderMenu(true);
+  assert.equal(app.showAuthModal, false);
+  app.openTokenFromMenu();
+  assert.equal(app.headerMenuOpen, false, "menu closes on the token entry");
+  assert.equal(app.showAuthModal, true, "auth modal opens");
+});

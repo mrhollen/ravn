@@ -200,34 +200,64 @@ test.describe('Mobile experience (375px, touch)', () => {
     await dispatch('touchEnd', null);
   }
 
-  test('top bar is one compact row at 375px and collapses secondary controls', async ({ browser }) => {
+  test('top bar is one compact row at 375px with the settings trigger; secondary strip collapses', async ({ browser }) => {
     const { context, page } = await openMobileBoard(browser);
 
     // The mobile hamburger toggle is present...
     const menuToggle = page.getByRole('button', { name: 'Board menu' });
     await expect(menuToggle).toBeVisible();
-    // ...and the secondary controls are collapsed away. The Projects dropdown
-    // trigger stays in row 1 (a primary control); project creation lives INSIDE
-    // its panel, not in the secondary strip.
-    await expect(page.getByPlaceholder('you')).not.toBeVisible();
+    // ...and the secondary controls (Settings + live indicator) are collapsed
+    // away behind it. The Projects dropdown trigger stays in row 1 (a primary
+    // control); project creation lives INSIDE its panel, not in the strip.
     await expect(page.getByTestId('project-select')).toBeVisible();
     await expect(page.getByTestId('new-project-item')).not.toBeVisible();
 
-    // The primary top bar (select + New task + hamburger) fits in a single row:
-    // 44px control height + py-3 padding = ~68px, well under the two-row budget (~96px).
+    // The consolidated settings-menu trigger is REACHABLE IN ROW 1 at 375px
+    // with no horizontal overflow (the chosen mobile mapping: visible in the
+    // compact header row, not hidden behind the hamburger).
+    const trigger = page.getByTestId('header-menu-trigger');
+    await expect(trigger).toBeVisible();
+    const tbox = await trigger.boundingBox();
+    expect(tbox).not.toBeNull();
+    expect(tbox!.x).toBeGreaterThanOrEqual(0);
+    expect(tbox!.x + tbox!.width).toBeLessThanOrEqual(MOBILE_VIEWPORT.width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      MOBILE_VIEWPORT.width,
+      'row-1 trigger must not widen the document',
+    );
+
+    // The inline actor input is gone from the strip: hidden while the menu is closed…
+    await expect(page.getByPlaceholder('you')).not.toBeVisible();
+
+    // …and the primary top bar (select + New task + hamburger + settings trigger)
+    // still fits a single row: 44px control height + py-3 padding = ~68px, well
+    // under the two-row budget (~96px).
     const header = page.locator('header').first();
     await expect(header).toBeVisible();
     const collapsed = await header.boundingBox();
     expect(collapsed).not.toBeNull();
     expect(collapsed!.height).toBeLessThanOrEqual(96);
 
-    // Expanding the menu reveals every secondary control below row 1...
+    // Expanding the strip reveals Settings + the live indicator below row 1…
     await menuToggle.click();
     await expect(menuToggle).toHaveAttribute('aria-expanded', 'true');
-    await expect(page.getByPlaceholder('you')).toBeVisible();
     await expect(page.locator('[data-testid="live-indicator"]')).toBeVisible();
 
-    // ...and Escape collapses it again.
+    // …and the settings menu opens from its row-1 trigger: theme, identity and
+    // data controls appear inside the panel (not in the strip), staying within
+    // the 375px viewport.
+    await trigger.click();
+    const panel = page.getByTestId('header-menu');
+    await expect(panel).toBeVisible();
+    await expect(page.getByPlaceholder('you')).toBeVisible();
+    const mbox = await panel.boundingBox();
+    expect(mbox).not.toBeNull();
+    expect(mbox!.x).toBeGreaterThanOrEqual(0);
+    expect(mbox!.x + mbox!.width).toBeLessThanOrEqual(MOBILE_VIEWPORT.width);
+
+    // Escape closes the menu first; a second Escape collapses the strip.
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
     await page.keyboard.press('Escape');
     await expect(menuToggle).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByPlaceholder('you')).not.toBeVisible();

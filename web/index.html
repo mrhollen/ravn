@@ -45,9 +45,12 @@
       </div>
 
       <!-- ============================================================== top bar -->
-      <!-- Mobile: row 1 = [project select][+ New task][hamburger]; the secondary
-           controls collapse behind the hamburger into a strip below row 1. On
-           md+ everything is inline again (the toggle button is hidden). -->
+       <!-- Mobile: row 1 = [project select][+ New task][hamburger][settings
+            menu trigger]; the secondary controls (Settings + live indicator)
+            collapse behind the hamburger into a strip below row 1. On md+ the
+            strip is inline again — Settings and the live indicator sit just
+            left of the settings-menu trigger at the right edge (the toggle
+            button is hidden). -->
       <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-white px-4 py-3 shadow-sm md:gap-x-4 dark:border-zinc-800 dark:bg-zinc-900">
         <div class="mr-1 hidden leading-tight sm:block">
           <h1 class="text-base font-semibold tracking-tight">crowban</h1>
@@ -127,81 +130,153 @@
              Settings
            </button>
 
-           <!-- theme toggle: Light / Dark / System (persisted in localStorage) -->
-          <div role="group" aria-label="Theme" data-testid="theme-toggle"
-               class="flex items-center overflow-hidden rounded-md border border-zinc-300 shadow-sm dark:border-zinc-700">
-            <button type="button" data-testid="theme-light" @click="setTheme('light')"
-                    :aria-pressed="theme === 'light'" title="Always use the light theme"
-                    class="px-2.5 py-1 text-xs font-medium transition-colors"
-                    :class="theme === 'light'
-                      ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
-              Light
-            </button>
-            <span class="h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
-            <button type="button" data-testid="theme-dark" @click="setTheme('dark')"
-                    :aria-pressed="theme === 'dark'" title="Always use the dark theme"
-                    class="px-2.5 py-1 text-xs font-medium transition-colors"
-                    :class="theme === 'dark'
-                      ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
-              Dark
-            </button>
-            <span class="h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
-            <button type="button" data-testid="theme-system" @click="setTheme('system')"
-                    :aria-pressed="theme === 'system'" title="Follow the operating system color scheme"
-                    class="px-2.5 py-1 text-xs font-medium transition-colors"
-                    :class="theme === 'system'
-                      ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
-              System
-            </button>
-          </div>
+           <!-- realtime SSE live status indicator — deliberately OUTSIDE the
+                consolidated menu; on md+ it sits immediately left of the menu
+                trigger. Click still triggers a manual reconnect. -->
+           <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none"
+                @click="connectSse()"
+                :class="{
+                  'text-emerald-700 dark:text-emerald-400': sseStatus === 'connected',
+                  'text-amber-700 dark:text-amber-400': sseStatus === 'connecting',
+                  'text-zinc-500': sseStatus === 'disconnected'
+                }"
+                :title="sseStatus === 'connected' ? 'Live' : (sseStatus === 'connecting' ? 'Reconnecting…' : (polling ? 'Polling (fallback)' : 'Disconnected'))"
+                data-testid="live-indicator"
+           >
+             <span class="relative flex h-2 w-2">
+               <span x-show="sseStatus === 'connected'" class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+               <span class="relative inline-flex h-2 w-2 rounded-full"
+                     :class="{
+                       'bg-emerald-500': sseStatus === 'connected',
+                       'bg-amber-500': sseStatus === 'connecting',
+                       'bg-zinc-400': sseStatus === 'disconnected'
+                     }"></span>
+             </span>
+             <span x-text="sseStatus === 'connected' ? 'Live' : (sseStatus === 'connecting' ? 'Reconnecting' : (polling ? 'Polling' : 'Offline'))"></span>
+           </div>
+        </div>
 
-          <!-- realtime SSE live status indicator -->
-          <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none"
-               @click="connectSse()"
-               :class="{
-                 'text-emerald-700 dark:text-emerald-400': sseStatus === 'connected',
-                 'text-amber-700 dark:text-amber-400': sseStatus === 'connecting',
-                 'text-zinc-500': sseStatus === 'disconnected'
-               }"
-               :title="sseStatus === 'connected' ? 'Live' : (sseStatus === 'connecting' ? 'Reconnecting…' : (polling ? 'Polling (fallback)' : 'Disconnected'))"
-               data-testid="live-indicator"
-          >
-            <span class="relative flex h-2 w-2">
-              <span x-show="sseStatus === 'connected'" class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-              <span class="relative inline-flex h-2 w-2 rounded-full"
-                    :class="{
-                      'bg-emerald-500': sseStatus === 'connected',
-                      'bg-amber-500': sseStatus === 'connecting',
-                      'bg-zinc-400': sseStatus === 'disconnected'
-                    }"></span>
-            </span>
-            <span x-text="sseStatus === 'connected' ? 'Live' : (sseStatus === 'connecting' ? 'Reconnecting' : (polling ? 'Polling' : 'Offline'))"></span>
-          </div>
-
-          <label class="tap-target flex cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300" title="Re-fetches the board every 15 seconds">
-            <input type="checkbox" x-model="polling" @change="pollingChanged()"
-                   class="h-4 w-4 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
-            Auto-refresh
-          </label>
-          <label class="flex items-center gap-2 text-sm" title="Identity sent with every write (actor name)">
-            <span class="text-zinc-500">Who are you?</span>
-            <input type="text" x-model="actorName" @change="saveActor()" placeholder="you" autocomplete="off"
-                   class="field w-32" />
-          </label>
-          <button type="button" @click="openAuthModal()"
-                  class="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium shadow-sm transition-colors"
-                   :class="authToken
-                     ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 dark:hover:bg-emerald-900'
-                     : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'"
-                  :title="authToken ? 'Auth token configured. Click to edit.' : 'No auth token set. Click to configure.'">
-            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-            </svg>
-            <span x-text="authToken ? 'Token: set' : 'Token: none'"></span>
+        <!-- ================================================== header settings menu -->
+        <!-- Consolidates the theme selector, actor identity ("Who are you?"),
+             auto-refresh toggle and the auth-token entry into ONE compact
+             dropdown anchored at the right edge of the header. The trigger is
+             an avatar-style circle showing the actor's initial ("You" when
+             unset) — deliberately NOT a gear glyph: the Projects dropdown gets
+             its own gear in a follow-up, and adjacent glyphs must stay distinct.
+             DOM-placed after the collapsible strip: on md+ it renders flush
+             right (the strip's ml-auto pushes Settings + live indicator just
+             left of it); below md it stays in row 1 next to the hamburger so
+             the controls remain reachable at 375px. Keyboard mirrors the
+             Projects dropdown: ArrowDown/Up on the trigger opens it; arrows
+             (+Home/End) move between the panel's controls; Escape closes and
+             returns focus to the trigger; outside clicks close without
+             stealing focus. Panel sits at z-40 — the dropdown tier (below
+             toasts z-50 and the detail modal z-[60]). -->
+        <div class="relative" data-testid="header-menu-anchor">
+          <button type="button" data-testid="header-menu-trigger" aria-controls="header-menu-panel"
+                  aria-haspopup="true" :aria-expanded="headerMenuOpen ? 'true' : 'false'"
+                  :aria-label="'Preferences — theme, identity and token. Acting as ' + (actorName.trim() || 'You')"
+                  :title="'Preferences (acting as ' + (actorName.trim() || 'You') + ')'"
+                  @click="toggleHeaderMenu()"
+                  @keydown.down.prevent="openHeaderMenu('first')"
+                  @keydown.up.prevent="openHeaderMenu('last')"
+                  class="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border text-xs font-semibold shadow-sm transition-colors"
+                  :class="headerMenuOpen
+                    ? 'border-indigo-400 bg-indigo-600 text-white ring-2 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-700'
+                    : 'border-zinc-300 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'">
+            <span x-text="actorGlyph()" aria-hidden="true"></span>
           </button>
+
+          <div id="header-menu-panel" data-testid="header-menu" aria-label="Preferences"
+               x-show="headerMenuOpen" x-cloak
+               @keydown.down.prevent="moveHeaderFocus(1)"
+               @keydown.up.prevent="moveHeaderFocus(-1)"
+               @keydown.home.prevent="moveHeaderFocus('home')"
+               @keydown.end.prevent="moveHeaderFocus('end')"
+               @keydown.escape="closeHeaderMenu(true)"
+               class="absolute right-0 top-full z-40 mt-1.5 w-72 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
+            <!-- identity summary: mirrors the trigger glyph -->
+            <div class="flex items-center gap-2.5 px-3 pb-2 pt-1.5">
+              <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white"
+                    x-text="actorGlyph()" aria-hidden="true"></span>
+              <div class="min-w-0 leading-tight">
+                <p class="truncate text-sm font-semibold" :title="actorName.trim() || 'You'"
+                   x-text="actorName.trim() || 'You'"></p>
+                <p class="text-[11px] text-zinc-500 dark:text-zinc-400">Actor for this browser</p>
+              </div>
+            </div>
+            <div class="my-1 border-t border-zinc-200 dark:border-zinc-700"></div>
+
+            <!-- Appearance: theme segmented control (persisted in localStorage) -->
+            <section aria-label="Appearance" class="px-3 pb-2.5">
+              <h3 class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Appearance</h3>
+              <div role="group" aria-label="Theme" data-testid="theme-toggle"
+                   class="flex w-full items-center overflow-hidden rounded-md border border-zinc-300 shadow-sm dark:border-zinc-700">
+                <button type="button" data-testid="theme-light" @click="setTheme('light')"
+                        :aria-pressed="theme === 'light'" title="Always use the light theme"
+                        class="flex-1 justify-center px-2.5 py-1 text-xs font-medium transition-colors"
+                        :class="theme === 'light'
+                          ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                          : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+                  Light
+                </button>
+                <span class="h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
+                <button type="button" data-testid="theme-dark" @click="setTheme('dark')"
+                        :aria-pressed="theme === 'dark'" title="Always use the dark theme"
+                        class="flex-1 justify-center px-2.5 py-1 text-xs font-medium transition-colors"
+                        :class="theme === 'dark'
+                          ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                          : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+                  Dark
+                </button>
+                <span class="h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
+                <button type="button" data-testid="theme-system" @click="setTheme('system')"
+                        :aria-pressed="theme === 'system'" title="Follow the operating system color scheme"
+                        class="flex-1 justify-center px-2.5 py-1 text-xs font-medium transition-colors"
+                        :class="theme === 'system'
+                          ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                          : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+                  System
+                </button>
+              </div>
+            </section>
+            <div class="my-1 border-t border-zinc-200 dark:border-zinc-700"></div>
+
+            <!-- Identity: the actor name sent with every write -->
+            <section aria-label="Identity" class="px-3 pb-2.5">
+              <h3 class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Identity</h3>
+              <label class="flex flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400" title="Identity sent with every write (actor name)">
+                Who are you?
+                <input type="text" data-testid="actor-name-input" x-model="actorName" @change="saveActor()"
+                       placeholder="you" autocomplete="off" class="field" />
+              </label>
+            </section>
+            <div class="my-1 border-t border-zinc-200 dark:border-zinc-700"></div>
+
+            <!-- Data: auto-refresh + auth token entry -->
+            <section aria-label="Data" class="px-3 pb-1.5">
+              <h3 class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Data</h3>
+              <label class="tap-target flex cursor-pointer items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300" title="Re-fetches the board every 15 seconds">
+                <input type="checkbox" data-testid="auto-refresh-toggle" x-model="polling" @change="pollingChanged()"
+                       class="h-4 w-4 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
+                Auto-refresh <span class="text-xs text-zinc-400 dark:text-zinc-500">(every 15 s)</span>
+              </label>
+              <button type="button" data-testid="token-item" @click="openTokenFromMenu()"
+                      class="mt-1.5 flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-xs font-medium shadow-sm transition-colors"
+                      :class="authToken
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 dark:hover:bg-emerald-900'
+                        : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'"
+                      :title="authToken ? 'Auth token configured — click to edit' : 'No auth token set — click to configure'">
+                <svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                </svg>
+                <span x-text="authToken ? 'Token: set' : 'Token: none'"></span>
+                <svg class="ml-auto h-3.5 w-3.5 shrink-0 text-zinc-400 dark:text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </section>
+          </div>
         </div>
       </header>
 
