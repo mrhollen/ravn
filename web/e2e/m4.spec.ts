@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { selectProjectViaDropdown } from './helpers';
 import { spawn, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import net from 'net';
@@ -117,8 +118,8 @@ test.describe('Milestone 4: R8, R9, R10 Frontend Verification', () => {
       await createProjectBtn.click();
     }
 
-    // Verify project name appears in the project selector
-    await expect(page.locator('select').first()).toContainText('Restricted Env Project');
+    // Verify project name appears in the custom Projects dropdown trigger
+    await expect(page.getByTestId('project-select')).toContainText('Restricted Env Project');
   });
 
   test('R9: renderMarkdown renders blockquotes, code blocks, and sanitizes XSS in UI', async ({ page }) => {
@@ -173,8 +174,7 @@ test.describe('Milestone 4: R8, R9, R10 Frontend Verification', () => {
     });
 
     await page.goto(serverUrl);
-    const select = page.locator('select').first();
-    await select.selectOption(proj.id);
+    await selectProjectViaDropdown(page, proj.id);
 
     // Verify Blockquote rendering
     const bqCard = page.locator('article', { hasText: 'Task With Blockquote' });
@@ -247,8 +247,7 @@ test.describe('Milestone 4: R8, R9, R10 Frontend Verification', () => {
     });
 
     await page.goto(serverUrl);
-    const select = page.locator('select').first();
-    await select.selectOption(proj.id);
+    await selectProjectViaDropdown(page, proj.id);
 
     // 1. Locate the card container: must be an <article>
     const card = page.locator('article', { hasText: 'A11y Semantic Card Task' });

@@ -6,6 +6,7 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { selectProjectViaDropdown } from './helpers';
 
 // E2E coverage for the "click to copy task ID" feature: clicking the truncated
 // task-ID badge in the detail drawer header copies the FULL id to the clipboard.
@@ -152,8 +153,7 @@ test.describe('click-to-copy task ID badge', () => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
 
     await page.goto(serverUrl);
-    const projectSelect = page.locator('select').first();
-    await projectSelect.selectOption(projectId);
+    await selectProjectViaDropdown(page, projectId);
 
     const taskCard = page.locator('article', { hasText: 'Task for Copy ID' });
     await expect(taskCard).toBeVisible();

@@ -5,6 +5,7 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { expectProjectSelected } from './helpers';
 
 // Wide centered task-detail modal — CrowBan task 01M47MWSTTPS14M6XB1A8HFPV1.
 // The default detail surface (>=md) is a WIDE CENTERED MODAL (80vw, max-w-5xl)
@@ -160,8 +161,8 @@ test.describe('Wide centered task-detail modal', () => {
   async function openBoard(page: import('@playwright/test').Page): Promise<void> {
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('crowban');
-    const projectSelect = page.locator('header select').first();
-    await expect(projectSelect).toHaveValue(projectId);
+    // The custom Projects dropdown trigger shows the auto-selected seeded project.
+    await expectProjectSelected(page, 'Modal E2E project');
     await expect(page.locator('article', { hasText: 'Modal fixture' })).toBeVisible();
   }
 

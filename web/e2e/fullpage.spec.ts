@@ -5,6 +5,7 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { expectProjectSelected } from './helpers';
 
 // Full-page task view (/tasks/<id>) — CrowBan task 01M47MWHWW0M1Q3WZYFGFHXTYZ.
 // Self-contained like the other specs: ephemeral crowban-server on a random high
@@ -220,8 +221,8 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
   async function openBoard(page: import('@playwright/test').Page): Promise<void> {
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('crowban');
-    const projectSelect = page.locator('header select').first();
-    await expect(projectSelect).toHaveValue(projectId);
+    // The custom Projects dropdown trigger shows the auto-selected seeded project.
+    await expectProjectSelected(page, 'Full page E2E project');
     await expect(page.locator('article', { hasText: 'Full page fixture A' })).toBeVisible();
   }
 
@@ -319,8 +320,8 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     const panel = page.locator('#cb-detail-drawer aside');
     await expect(panel.locator('h2').first()).toHaveText('Full page fixture A');
 
-    // The task's project was adopted as the board context.
-    await expect(page.locator('header select').first()).toHaveValue(projectId);
+    // The task's project was adopted as the board context (dropdown trigger label).
+    await expectProjectSelected(page, 'Full page E2E project');
 
     // Page chrome: back affordance present, drawer-only button absent.
     await expect(page.locator('[data-testid="fullpage-back-btn"]')).toBeVisible();

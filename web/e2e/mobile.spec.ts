@@ -160,10 +160,11 @@ test.describe('Mobile experience (375px, touch)', () => {
     });
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('crowban');
-    // The seeded project is auto-selected by the app on load.
-    const projectSelect = page.locator('select').first();
-    await expect(projectSelect).toBeVisible();
-    await expect(projectSelect).toHaveValue(projectId);
+    // The seeded project is auto-selected by the app on load — the custom
+    // Projects dropdown trigger shows it.
+    const trigger = page.getByTestId('project-select');
+    await expect(trigger).toBeVisible();
+    await expect(trigger).toContainText('Mobile E2E Project');
     return { context, page, cdp };
   }
 
@@ -205,9 +206,12 @@ test.describe('Mobile experience (375px, touch)', () => {
     // The mobile hamburger toggle is present...
     const menuToggle = page.getByRole('button', { name: 'Board menu' });
     await expect(menuToggle).toBeVisible();
-    // ...and the secondary controls are collapsed away.
+    // ...and the secondary controls are collapsed away. The Projects dropdown
+    // trigger stays in row 1 (a primary control); project creation lives INSIDE
+    // its panel, not in the secondary strip.
     await expect(page.getByPlaceholder('you')).not.toBeVisible();
-    await expect(page.getByRole('button', { name: 'New project' })).not.toBeVisible();
+    await expect(page.getByTestId('project-select')).toBeVisible();
+    await expect(page.getByTestId('new-project-item')).not.toBeVisible();
 
     // The primary top bar (select + New task + hamburger) fits in a single row:
     // 44px control height + py-3 padding = ~68px, well under the two-row budget (~96px).
@@ -221,13 +225,49 @@ test.describe('Mobile experience (375px, touch)', () => {
     await menuToggle.click();
     await expect(menuToggle).toHaveAttribute('aria-expanded', 'true');
     await expect(page.getByPlaceholder('you')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'New project' })).toBeVisible();
     await expect(page.locator('[data-testid="live-indicator"]')).toBeVisible();
 
     // ...and Escape collapses it again.
     await page.keyboard.press('Escape');
     await expect(menuToggle).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByPlaceholder('you')).not.toBeVisible();
+
+    await context.close();
+  });
+
+  test('Projects dropdown opens at 375px and reaches "+ New project…" inside it', async ({ browser }) => {
+    const { context, page } = await openMobileBoard(browser);
+
+    // The trigger is part of row 1 and meets the tap-target minimum.
+    const trigger = page.getByTestId('project-select');
+    await expect(trigger).toBeEnabled();
+    const tbox = await trigger.boundingBox();
+    expect(tbox).not.toBeNull();
+    expect(tbox!.height).toBeGreaterThanOrEqual(44);
+    expect(tbox!.width).toBeGreaterThanOrEqual(44);
+
+    // Open the dropdown.
+    await trigger.click();
+    const menu = page.getByTestId('project-menu');
+    await expect(menu).toBeVisible();
+    // The panel stays within the 375px viewport (no horizontal overflow).
+    const mbox = await menu.boundingBox();
+    expect(mbox).not.toBeNull();
+    expect(mbox!.x).toBeGreaterThanOrEqual(0);
+    expect(mbox!.x + mbox!.width).toBeLessThanOrEqual(MOBILE_VIEWPORT.width);
+
+    // The trailing action item opens the new-project form bar below the header.
+    await page.getByTestId('new-project-item').click();
+    await expect(menu).toBeHidden();
+    const nameInput = page.locator('#cb-new-project-name-input');
+    await expect(nameInput).toBeVisible();
+    const nbox = await nameInput.boundingBox();
+    expect(nbox).not.toBeNull();
+    expect(nbox!.height).toBeGreaterThanOrEqual(44);
+
+    // Cancel closes the bar without creating anything.
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(nameInput).not.toBeVisible();
 
     await context.close();
   });

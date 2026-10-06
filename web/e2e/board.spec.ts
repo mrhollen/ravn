@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import http from 'http';
+import { expectProjectSelected, selectProjectViaDropdown } from './helpers';
 import net from 'net';
 import os from 'os';
 import path from 'path';
@@ -171,10 +172,8 @@ test.describe('Web E2E test suite', () => {
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('crowban');
 
-    // Header and project dropdown should reflect seeded project
-    const projectSelect = page.locator('select').first();
-    await expect(projectSelect).toBeVisible();
-    await expect(projectSelect).toHaveValue(project.id);
+    // Header: the custom Projects dropdown reflects the auto-selected seeded project
+    await expectProjectSelected(page, 'Browser E2E Project');
 
     // Columns should be present
     const todoCol = page.locator('section', { has: page.getByRole('heading', { name: 'To Do' }) });
@@ -308,8 +307,7 @@ test.describe('Web E2E test suite', () => {
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('crowban');
 
-    const projectSelect = page.locator('select').first();
-    await projectSelect.selectOption(project.id);
+    await selectProjectViaDropdown(page, project.id);
 
     // Set actor name
     const actorInput = page.getByPlaceholder('you');
@@ -493,8 +491,7 @@ test.describe('Web E2E test suite', () => {
 
     // Load UI and select the project
     await page.goto(serverUrl);
-    const projectSelect = page.locator('select').first();
-    await projectSelect.selectOption(project.id);
+    await selectProjectViaDropdown(page, project.id);
     await expect(page.locator('h3', { hasText: 'Alpha Critical Task' })).toBeVisible();
 
     // -------------------------------------------------------------------------
@@ -514,14 +511,13 @@ test.describe('Web E2E test suite', () => {
     await page.getByPlaceholder('Project description…').fill('Updated project description');
     await page.getByRole('button', { name: 'Save changes' }).click();
 
-    // Toast and selector update
+    // Toast and selector update (the dropdown trigger now shows the new name)
     await expect(page.getByText('Project updated')).toBeVisible();
-    await expect(projectSelect).toContainText('Renamed Project E2E');
+    await expect(page.getByTestId('project-select')).toContainText('Renamed Project E2E');
 
     // Reload page and verify persisted
     await page.reload();
-    await expect(projectSelect).toHaveValue(project.id);
-    await expect(projectSelect).toContainText('Renamed Project E2E');
+    await expect(page.getByTestId('project-select')).toContainText('Renamed Project E2E');
 
     // -------------------------------------------------------------------------
     // AC 2: Assignee selector & durable owner chip distinct from claimer
@@ -677,8 +673,7 @@ test.describe('Web E2E test suite', () => {
 
     // Load UI and open the task detail drawer
     await page.goto(serverUrl);
-    const projectSelect = page.locator('select').first();
-    await projectSelect.selectOption(project.id);
+    await selectProjectViaDropdown(page, project.id);
 
     const taskCard = page.locator('article', { hasText: 'Task with ACs' });
     await expect(taskCard).toBeVisible();
@@ -833,8 +828,7 @@ test.describe('Web E2E test suite', () => {
     // AC 1 & 2: Open drawer - verify default tail (50), count, order, badges
     // -------------------------------------------------------------------------
     await page.goto(serverUrl);
-    const projectSelect = page.locator('select').first();
-    await projectSelect.selectOption(project.id);
+    await selectProjectViaDropdown(page, project.id);
 
     const taskCard = page.locator('article', { hasText: 'Task with 55 Comments' });
     await expect(taskCard).toBeVisible();
@@ -943,8 +937,7 @@ test.describe('Web E2E test suite', () => {
     const proj = await projRes.json();
 
     await page.goto(`${serverUrl}`);
-    const projectSelect = page.locator('select').first();
-    await projectSelect.selectOption(proj.id);
+    await selectProjectViaDropdown(page, proj.id);
 
     // Verify live status indicator is connected
     const liveIndicator = page.locator('[data-testid="live-indicator"]');
@@ -1167,8 +1160,7 @@ test.describe('Web E2E test suite', () => {
       const { task } = await taskRes.json();
 
       await page.goto(`${serverUrl}`);
-      const projectSelect = page.locator('select').first();
-      await projectSelect.selectOption(proj.id);
+      await selectProjectViaDropdown(page, proj.id);
 
       // -----------------------------------------------------------------------
       // AC 1: Project settings modal allows configuring OpenCode Server URL & dir
@@ -1299,8 +1291,7 @@ test.describe('Web E2E test suite', () => {
     // Step 2: Open UI, select project, verify baseline server order (priority DESC)
     // -------------------------------------------------------------------------
     await page.goto(serverUrl);
-    const projectSelect = page.locator('select').first();
-    await projectSelect.selectOption(project.id);
+    await selectProjectViaDropdown(page, project.id);
 
     const todoCol = page.locator('section', { has: page.getByRole('heading', { name: 'To Do' }) });
     await expect(todoCol).toBeVisible();
@@ -1366,7 +1357,8 @@ test.describe('Web E2E test suite', () => {
 
     await page.reload();
     await expect(page).toHaveTitle('crowban');
-    await expect(projectSelect).toHaveValue(project.id);
+    // Project selection persists across reload (localStorage), shown on the trigger.
+    await expect(page.getByTestId('project-select')).toContainText('Sorting Test Project');
     await expect(sortKeySelect).toHaveValue('created_at');
     await expect(sortDirBtn).toContainText('↓ Descending');
     await expect.poll(cardTitles).toEqual(['Gamma', 'Beta', 'Alpha']);

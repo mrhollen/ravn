@@ -1000,3 +1000,80 @@ test("Modal: openTask at ≥768px keeps the modal (no URL change)", async () => 
     else (globalThis as any).window = origWindow;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Task 01M47NDGZR47NR1Z6SKQJ3BDP2: "New project" moved INTO a custom Projects
+// dropdown (trigger button + Alpine-managed menu) replacing the native select.
+
+test("Dropdown: index.html has no standalone New project button and wires the custom control", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  // The old header ghost button (and its toggle expression) is gone.
+  assert.ok(!/@click="showNewProject = !showNewProject"/.test(html), "standalone toggle handler must be gone");
+  assert.ok(!/>New project<\/button>/.test(html), "no standalone 'New project' <button> remains");
+  // Custom trigger + menu panel + in-panel creation action exist.
+  assert.match(html, /data-testid="project-select"/);
+  assert.match(html, /data-testid="project-menu"/);
+  assert.match(html, /data-testid="new-project-item"[\s\S]*?@click="openNewProject\(\)"/);
+  // Panel sits above board content but BELOW the detail modal (z-[60]) and
+  // toasts (z-50).
+  const panelClass = html.match(/<div data-testid="project-menu"[\s\S]{0,2000}?class="([^"]*)"/)?.[1];
+  assert.ok(panelClass, "menu panel div found");
+  assert.match(panelClass, /z-40/, "menu panel must be z-40 (under modal z-[60] and toasts z-50)");
+});
+
+test("Dropdown: pickProject switches + persists the project and closes the menu", () => {
+  const app = crowbanApp() as any;
+  assert.equal(app.appBooted, false, "trigger gated until init() completes");
+  const a = { id: "pa", name: "Alpha", task_counts: { todo: 1, doing: 0, done: 2 } };
+  const b = { id: "pb", name: "Beta", task_counts: { todo: 0, doing: 3, done: 0 } };
+  app.projects = [a, b];
+  app.selectedProjectId = a.id;
+  app.board = { project_id: a.id, tasks: {} as any };
+  app.projectMenuOpen = true;
+
+  assert.equal(app.projectSelectLabel(), "Alpha  (1·0·2)");
+  app.projects = []; // no selection → placeholder label
+  app.selectedProjectId = "";
+  assert.equal(app.projectSelectLabel(), "Select a project…");
+  app.projects = [a, b];
+
+  app.pickProject(b.id);
+  assert.equal(app.selectedProjectId, b.id);
+  assert.equal(app.projectMenuOpen, false, "menu closes after a pick");
+  assert.equal(app.board, null, "previous project's board is dropped for reload");
+  assert.equal(safeStorage.getItem("crowban.project"), b.id, "selection persists via safeStorage");
+
+  // Re-picking the CURRENT project just collapses — no reload churn.
+  app.board = { project_id: b.id, tasks: {} as any };
+  app.pickProject(b.id);
+  assert.equal(app.selectedProjectId, b.id);
+  assert.notEqual(app.board, null, "same-id pick must not drop the current board");
+});
+
+test("Dropdown: openNewProject opens the existing bar WITHOUT resetting the typed draft", () => {
+  const app = crowbanApp() as any;
+  app.newProject = { name: "Keep Me", description: "draft" };
+  app.projectMenuOpen = true;
+
+  app.openNewProject();
+  assert.equal(app.showNewProject, true, "the existing form bar opens");
+  assert.equal(app.projectMenuOpen, false);
+  assert.deepEqual(
+    app.newProject,
+    { name: "Keep Me", description: "draft" },
+    "re-opening must not lose typed input (no phantom creation, no data loss)",
+  );
+});
+
+test("Dropdown: Escape chain closes the dropdown BEFORE the new-project bar", () => {
+  const app = crowbanApp() as any;
+  app.showNewProject = true;
+  app.projectMenuOpen = true;
+
+  app.dismissTop(); // first Esc closes the topmost header surface — the menu
+  assert.equal(app.projectMenuOpen, false);
+  assert.equal(app.showNewProject, true, "bar is below the menu in the chain");
+
+  app.dismissTop(); // second Esc now closes the bar (draft untouched)
+  assert.equal(app.showNewProject, false);
+});

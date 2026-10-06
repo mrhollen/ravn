@@ -7,6 +7,7 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import zlib from 'zlib';
+import { selectProjectViaDropdown } from './helpers';
 
 // E2E test suite for task 01M3WA51KRSQ1AKYSE9MZEJJ8P:
 // Artifacts: store file uploads on a mountable volume; images inline (click for bigger view),
@@ -232,8 +233,7 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
     fs.writeFileSync(textFilePath, 'Sample log content line 1\nline 2\n');
 
     await page.goto(serverUrl);
-    const projectSelect = page.locator('select').first();
-    await projectSelect.selectOption(projectId);
+    await selectProjectViaDropdown(page, projectId);
 
     // Open task detail drawer
     const taskCard = page.locator('article', { hasText: 'Task with Artifacts' });
@@ -364,8 +364,7 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
     fs.writeFileSync(imageFilePath, PNG_BYTES);
 
     await page.goto(serverUrl);
-    const projectSelect = page.locator('select').first();
-    await projectSelect.selectOption(projectId);
+    await selectProjectViaDropdown(page, projectId);
 
     const taskCard = page.locator('article', { hasText: 'Task with Artifacts' });
     await taskCard.click();
