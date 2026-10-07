@@ -234,6 +234,10 @@ export interface Toast {
   id: number;
   msg: string;
   kind: "error" | "info";
+  /** True while the leave transition plays (x-show hides it), then the row is
+   *  dropped from the list. x-for removes nodes instantly, so the exit
+   *  animation has to be driven through x-show first. */
+  leaving?: boolean;
 }
 
 interface RelationView {
@@ -304,8 +308,19 @@ export function crowbanApp() {
       // Global setTimeout (not window.setTimeout): identical in the browser,
       // but keeps async error paths unit-testable without a full window mock.
       setTimeout(() => {
-        this.toasts = this.toasts.filter((t) => t.id !== id);
+        this.dismissToast(id);
       }, 6500);
+    },
+
+    /** Manually drop one toast (its × button). Same removal path as auto-expiry.
+     *  Two-phase: mark it `leaving` so the x-show leave transition (slide + fade)
+     *  plays, then drop the row once that animation has finished — Alpine's
+     *  x-for removes nodes instantly, so a direct filter would kill the exit. */
+    dismissToast(id: number): void {
+      this.toasts = this.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t));
+      setTimeout(() => {
+        this.toasts = this.toasts.filter((t) => t.id !== id);
+      }, 280); // leave transition is duration-200; keep the margin generous
     },
 
     // ------------------------------------------------------------------ auth token

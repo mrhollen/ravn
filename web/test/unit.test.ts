@@ -1248,3 +1248,63 @@ test("ProjectSettingsGear: openProjectSettings() no-ops without a selection; ope
   app.closeProjectSettings();
   assert.equal(app.showProjectSettings, false);
 });
+
+// ---------------------------------------------------------------------------
+// Toast notifications: dismiss button, slide+fade transitions, kind icons.
+
+function toastBlock(): string {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  const block = html.match(/data-testid="toast-stack"[\s\S]*?<\/template>\s*<\/div>/);
+  assert.ok(block, "toast stack markup found in index.html");
+  return block[0];
+}
+
+test("Toasts: dismiss button, slide+fade enter/leave transitions, and kind icons", () => {
+  const t = toastBlock();
+  // AC1 — explicit × dismiss button on every toast (single removal path).
+  assert.match(
+    t,
+    /<button type="button" @click="dismissToast\(t\.id\)" aria-label="Dismiss notification"[^>]*>\s*&times;\s*<\/button>/,
+    "toast must carry an &times; dismiss button wired to dismissToast(t.id)",
+  );
+  // AC2 — slide (translate-y) + fade (opacity) on BOTH enter and leave, not a
+  // bare opacity-only transition.
+  assert.match(t, /x-transition:enter="transition ease-out duration-200"/);
+  assert.match(t, /x-transition:enter-start="opacity-0 translate-y-2 scale-95"/);
+  assert.match(t, /x-transition:enter-end="opacity-100 translate-y-0 scale-100"/);
+  assert.match(t, /x-transition:leave="transition ease-in duration-200"/);
+  assert.match(t, /x-transition:leave-start="opacity-100 translate-y-0 scale-100"/);
+  assert.match(t, /x-transition:leave-end="opacity-0 -translate-y-2 scale-95"/);
+  assert.ok(!/x-transition\.opacity/.test(t), "old opacity-only transition must be gone");
+  // Two-phase exit: x-show off (leave animation) before the row leaves the array.
+  assert.match(t, /x-show="!t\.leaving"/);
+  // AC3 — one inline SVG per kind (warning triangle for error, check circle
+  // for info) plus an a11y role per kind.
+  assert.match(t, /<svg x-show="t\.kind === 'error'"[\s\S]*?M9\.401 3\.003[\s\S]*?<\/svg>/);
+  assert.match(t, /<svg x-show="t\.kind !== 'error'"[\s\S]*?M21 12a9 9 0 11-18 0 9 9 0 0118 0z[\s\S]*?<\/svg>/);
+  assert.match(t, /:role="t\.kind === 'error' \? 'alert' : 'status'"/);
+});
+
+test("Toasts: dismissToast plays the leave phase, then drops only the targeted toast", async () => {
+  const app = crowbanApp() as any;
+  app.toasts = [];
+  app.toastSeq = 0;
+  app.toast("first");
+  app.toast("second", "error");
+  assert.equal(app.toasts.length, 2);
+
+  app.dismissToast(1);
+  // Phase 1 — the toast stays mounted (x-show off → leave transition plays) and
+  // is flagged `leaving`; siblings are untouched.
+  assert.deepEqual(
+    app.toasts.map((t: { id: number; kind: string; leaving?: boolean }) => [t.id, t.kind, !!t.leaving]),
+    [[1, "info", true], [2, "error", false]],
+    "dismiss marks the target `leaving` without touching siblings",
+  );
+  app.dismissToast(999); // unknown id → no-op, nothing else marked or removed
+  assert.equal(app.toasts.filter((t: { leaving?: boolean }) => t.leaving).length, 1);
+
+  // Phase 2 — once the leave window (280ms) elapses, only that toast is gone.
+  await new Promise((r) => setTimeout(r, 320));
+  assert.deepEqual(app.toasts.map((t: { id: number }) => t.id), [2], "only the dismissed toast is dropped");
+});
