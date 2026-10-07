@@ -573,15 +573,45 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       >
                         <div class="flex items-start justify-between gap-2">
                           <h3 class="min-w-0 break-words text-sm font-medium leading-snug" x-text="task.title"></h3>
-                          <!-- explicit touch alternative to drag-and-drop: pick a target status -->
-                          <button type="button" @click.stop="toggleCardMenu(task.id)"
-                                  data-testid="card-menu-toggle" aria-label="Move task to another status"
-                                   title="Move task" :class="cardMenuTaskId === task.id ? 'text-zinc-900 dark:text-zinc-100' : ''"
-                                   class="-my-1 -mr-1 shrink-0 rounded-md p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:text-zinc-500 dark:hover:bg-zinc-700 dark:hover:text-zinc-200">
-                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                              <path d="M12 8a2 2 0 100-4 2 2 0 000 4zm0 6a2 2 0 100-4 2 2 0 000 4zm0 6a2 2 0 100-4 2 2 0 000 4z"/>
-                            </svg>
-                          </button>
+                          <!-- explicit touch alternative to drag-and-drop: pick a target status.
+                               The ⋮ trigger and its dropdown share ONE relative wrapper: any click that
+                               misses both dismisses the menu (@click.outside → AC1), and the dropdown is
+                               absolutely positioned OUT of the card's flow, so opening it never reflows
+                               the card or pushes the cards below it down (AC2/AC3). -->
+                          <div class="relative shrink-0" data-testid="card-menu-anchor" @click.outside="cardMenuTaskId = null">
+                            <button type="button" @click.stop="toggleCardMenu(task.id)"
+                                    data-testid="card-menu-toggle" aria-label="Move task to another status"
+                                    :aria-expanded="cardMenuTaskId === task.id ? 'true' : 'false'"
+                                    title="Move task" :class="cardMenuTaskId === task.id ? 'text-zinc-900 dark:text-zinc-100' : ''"
+                                    class="-my-1 -mr-1 shrink-0 rounded-md p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:text-zinc-500 dark:hover:bg-zinc-700 dark:hover:text-zinc-200">
+                              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M12 8a2 2 0 100-4 2 2 0 000 4zm0 6a2 2 0 100-4 2 2 0 000 4zm0 6a2 2 0 100-4 2 2 0 000 4z"/>
+                              </svg>
+                            </button>
+                            <!-- move-to dropdown: floating popover below the ⋮ trigger. Same status list,
+                                 canMove rules and testids as the previous inline row; @click.stop keeps a
+                                 click inside it from reaching the card's own openTask handler. -->
+                            <div data-testid="card-move-menu" @click.stop
+                                 x-show="cardMenuTaskId === task.id" x-cloak
+                                 class="absolute right-0 top-full z-20 mt-2 flex w-max flex-col gap-1 rounded-lg border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                              <span class="px-1 text-[11px] font-medium text-zinc-400">Move to</span>
+                              <template x-for="st in STATUSES" :key="st">
+                                <!-- Convention: statuses stay VISIBLE; illegal destinations are disabled + dimmed
+                                     (same muted styling as the card's current column), with a title explaining why. -->
+                                <button type="button" @click.stop="moveCardTo(task.id, st)"
+                                        :data-testid="'card-move-' + st"
+                                        :disabled="st !== col.status && !canMove(col.status, st)"
+                                        :title="st !== col.status && !canMove(col.status, st)
+                                          ? 'Not an allowed step from ' + statusLabel(col.status) : ''"
+                                        class="flex w-full items-center gap-2 rounded-md border px-2 py-1 text-left text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                                        :class="st === col.status || !canMove(col.status, st)
+                                          ? 'cursor-default border-zinc-200 bg-zinc-50 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-500'
+                                          : 'border-zinc-300 bg-white text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-zinc-500 dark:hover:bg-zinc-700'">
+                                  <span x-text="statusLabel(st)"></span>
+                                </button>
+                              </template>
+                            </div>
+                          </div>
                           <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1"
                                 :class="priorityClass(task.priority)" x-text="'P' + task.priority"></span>
                         </div>
@@ -590,26 +620,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                              :class="swipeDirection(task.id) === 'right' ? 'right-1.5' : 'left-1.5'"
                              x-text="(swipeDirection(task.id) === 'right' ? '→ ' : '← ') + swipeTargetLabel(task.id)">
                         </div>
-                        <!-- move-to row (explicit status picker, touch-first alternative to DnD) -->
-                         <div x-show="cardMenuTaskId === task.id" x-cloak
-                              class="mt-2 flex items-center gap-1.5 border-t border-zinc-100 pt-2 dark:border-zinc-700">
-                           <span class="mr-auto text-[11px] font-medium text-zinc-400">Move to</span>
-                            <template x-for="st in STATUSES" :key="st">
-                              <!-- Convention: statuses stay VISIBLE; illegal destinations are disabled + dimmed
-                                   (same muted styling as the card's current column), with a title explaining why. -->
-                              <button type="button" @click.stop="moveCardTo(task.id, st)"
-                                      :data-testid="'card-move-' + st"
-                                      :disabled="st !== col.status && !canMove(col.status, st)"
-                                      :title="st !== col.status && !canMove(col.status, st)
-                                        ? 'Not an allowed step from ' + statusLabel(col.status) : ''"
-                                      class="rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                                      :class="st === col.status || !canMove(col.status, st)
-                                        ? 'cursor-default border-zinc-200 bg-zinc-50 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-500'
-                                        : 'border-zinc-300 bg-white text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-zinc-500 dark:hover:bg-zinc-700'">
-                               <span x-text="statusLabel(st)"></span>
-                             </button>
-                           </template>
-                        </div>
+
                         <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
                           <span x-show="isBlocked(task.id)" x-cloak title="Has an open blocker"
                                 class="inline-flex items-center gap-1 font-semibold text-red-600 dark:text-red-400">

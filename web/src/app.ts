@@ -1898,8 +1898,10 @@ export function crowbanApp() {
     // ---------------------------------- touch: swipe-to-status + per-card move menu
     // Explicit touch alternative to HTML5 drag-and-drop (which never fires on
     // touch devices). A mostly-horizontal swipe moves the card one column in
-    // that direction; the ⋮ button opens a "Move to" status picker row. Both
-    // funnel into moveTaskStatus(), so 409-rebase + rollback behaviour is shared.
+    // that direction; the ⋮ button opens a floating "Move to" dropdown anchored
+    // to the trigger (absolutely positioned, dismissed by outside clicks and
+    // Escape). Both funnel into moveTaskStatus(), so 409-rebase + rollback
+    // behaviour is shared.
     showMobileMenu: false,
     cardMenuTaskId: null as string | null,
     swipeState: {
