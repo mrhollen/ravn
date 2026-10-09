@@ -24,6 +24,19 @@ jobs:
 
       - name: Check formatting (gofmt)
         run: |
+          echo "Active Go version:"
+          go version
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "The following files are not formatted with gofmt:"
+            echo "$UNFORMATTED"
+            echo "--- Formatting Diff ---"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: Check formatting (gofmt)
+        run: |
           UNFORMATTED=$(gofmt -l .)
           if [ -n "$UNFORMATTED" ]; then
             echo "The following files are not formatted with gofmt:"
