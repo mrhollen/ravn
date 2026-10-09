@@ -236,6 +236,7 @@ func TestProjectsUpdate_EmptyNameOrNoFieldsReturnsErrInvalid(t *testing.T) {
 }
 
 func TestProjectsUpdate_OpenCodeSettings(t *testing.T) {
+	t.Setenv("OPENCODE_ALLOW_PRIVATE_IPS", "true")
 	ctx := context.Background()
 	svc, fc, fp, fe := newProjectTestEnv(t)
 

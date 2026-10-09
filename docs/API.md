@@ -688,9 +688,17 @@ Each setting resolves project row → env var → default:
 | OpenCode server base URL | `opencode_server_url` | `OPENCODE_SERVER_URL` | `http://localhost:4444` |
 | Session working directory | `opencode_directory` | `OPENCODE_DIRECTORY` | `/home/hollen/Code/crowban` |
 | Model ref (`providerID/modelID`) | `opencode_model` | `OPENCODE_MODEL` | `llama.cpp/Qwen Medium Long Context` |
+| Allowed host allowlist | - | `OPENCODE_ALLOWED_HOSTS` | (empty; default denies private/loopback/metadata) |
+| Allow private IP networks | - | `OPENCODE_ALLOW_PRIVATE_IPS` | `false` |
+| Allowed directories | - | `OPENCODE_ALLOWED_DIRECTORIES` | (empty; any clean absolute path allowed) |
+
+Security & Validation:
+- Server URL: requires `http` or `https` scheme. Targets to cloud metadata services (e.g. `169.254.169.254`, `metadata.google.internal`) and private/loopback IP ranges are blocked by default to prevent Server-Side Request Forgery (SSRF). Legitimate internal endpoints (such as `10.0.0.5:4444` or `localhost`) can be explicitly allowed via `OPENCODE_ALLOWED_HOSTS` or `OPENCODE_ALLOW_PRIVATE_IPS=true`.
+- Working Directory: must be an absolute path without path traversal (`..`). If `OPENCODE_ALLOWED_DIRECTORIES` is set, the path must reside within an allowed directory.
+- Response Leakage: non-2xx responses from upstream OpenCode servers sanitize errors and do not echo raw upstream response body snippets.
 
 Errors: unknown task or project → `404`; malformed model ref (must look like
-`"providerID/modelID"`) or server URL → `400 invalid input`; unreachable
+`"providerID/modelID"`), prohibited/malformed server URL, or path traversal directory → `400 invalid input`; unreachable
 OpenCode server, non-2xx upstream response, or an unparsable session reply →
 `502 {"error": "opencode_error", "message": "…"}`.
 

@@ -11,6 +11,7 @@ import (
 )
 
 func TestUpdateProject_OpenCodeSettings(t *testing.T) {
+	t.Setenv("OPENCODE_ALLOW_PRIVATE_IPS", "true")
 	stk := newStack(t)
 	p := createProject(t, stk, "Project OpenCode Settings")
 
@@ -150,6 +151,7 @@ func TestOpenCodeStart_Success(t *testing.T) {
 	defer mockServer.Close()
 
 	stk := newStack(t)
+	t.Setenv("OPENCODE_ALLOW_PRIVATE_IPS", "true")
 	stk.App.HTTPClient = mockServer.Client()
 
 	// 1. Create project with opencode settings pointing to mock server
@@ -268,6 +270,7 @@ func TestOpenCodeStart_DoesNotOverwriteExistingClaim(t *testing.T) {
 	defer mockServer.Close()
 
 	stk := newStack(t)
+	t.Setenv("OPENCODE_ALLOW_PRIVATE_IPS", "true")
 	stk.App.HTTPClient = mockServer.Client()
 
 	p := createProject(t, stk, "Claim Preservation Test")
@@ -403,6 +406,7 @@ func TestOpenCodeStart_InvalidModelRef(t *testing.T) {
 }
 
 func TestOpenCodeStart_ErrorHandling(t *testing.T) {
+	t.Setenv("OPENCODE_ALLOW_PRIVATE_IPS", "true")
 	stk := newStack(t)
 
 	// 1. Task not found -> 404
@@ -413,7 +417,7 @@ func TestOpenCodeStart_ErrorHandling(t *testing.T) {
 
 	// 2. OpenCode server returns 500 on create session -> 502 Bad Gateway
 	mockFailServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "server crashed", http.StatusInternalServerError)
+		http.Error(w, "server crashed with sensitive stack trace", http.StatusInternalServerError)
 	}))
 	defer mockFailServer.Close()
 
@@ -430,4 +434,124 @@ func TestOpenCodeStart_ErrorHandling(t *testing.T) {
 	if code != http.StatusBadGateway {
 		t.Fatalf("POST with failing OpenCode server = %d, want 502 (body %s)", code, string(body))
 	}
+	if strings.Contains(string(body), "sensitive stack trace") {
+		t.Fatalf("502 response leaked body snippet from upstream: %s", string(body))
+	}
 }
+
+func TestOpenCode_SSRFProtection(t *testing.T) {
+	stk := newStack(t)
+	p := createProject(t, stk, "SSRF Project")
+
+	// 1. Prohibited cloud metadata
+	code, body := doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":               actor("admin"),
+		"opencode_server_url": "http://169.254.169.254/latest/meta-data/",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("PUT metadata IP = %d, want 400 (body %s)", code, string(body))
+	}
+	if !strings.Contains(string(body), "prohibited metadata") {
+		t.Errorf("expected prohibited metadata error, got %s", string(body))
+	}
+
+	// 2. Private IP rejected by default
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":               actor("admin"),
+		"opencode_server_url": "http://10.0.0.5:4444",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("PUT unconfigured private IP = %d, want 400 (body %s)", code, string(body))
+	}
+
+	// 3. Private IP allowed when in OPENCODE_ALLOWED_HOSTS
+	t.Setenv("OPENCODE_ALLOWED_HOSTS", "10.0.0.5:4444")
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":               actor("admin"),
+		"opencode_server_url": "http://10.0.0.5:4444",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("PUT allowlisted private IP = %d, want 200 (body %s)", code, string(body))
+	}
+
+	// 4. Invalid scheme rejected
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":               actor("admin"),
+		"opencode_server_url": "file:///etc/passwd",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("PUT file:// scheme = %d, want 400 (body %s)", code, string(body))
+	}
+}
+
+func TestOpenCode_PathTraversalProtection(t *testing.T) {
+	stk := newStack(t)
+	p := createProject(t, stk, "Path Traversal Project")
+
+	// 1. Directory with .. rejected
+	code, body := doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":              actor("admin"),
+		"opencode_directory": "../../etc",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("PUT directory with .. = %d, want 400 (body %s)", code, string(body))
+	}
+	if !strings.Contains(string(body), "path traversal") {
+		t.Errorf("expected path traversal error, got %s", string(body))
+	}
+
+	// 2. Relative directory rejected
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":              actor("admin"),
+		"opencode_directory": "relative/path",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("PUT relative directory = %d, want 400 (body %s)", code, string(body))
+	}
+
+	// 3. Clean absolute directory accepted
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":              actor("admin"),
+		"opencode_directory": "/home/test/workspace",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("PUT absolute directory = %d, want 200 (body %s)", code, string(body))
+	}
+}
+
+func TestOpenCodeStart_PromptAsyncErrorNoLeakage(t *testing.T) {
+	t.Setenv("OPENCODE_ALLOW_PRIVATE_IPS", "true")
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/session":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "session-xyz"})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/prompt_async"):
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("DATABASE_CONNECTION_ERROR_SECRET_KEY=supersecret123"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockServer.Close()
+
+	stk := newStack(t)
+	stk.App.HTTPClient = mockServer.Client()
+
+	p := createProject(t, stk, "Leakage Project")
+	_, _ = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":               actor("admin"),
+		"opencode_server_url": mockServer.URL,
+	})
+	taskID := makeTask(t, stk, p.ID, "Prompt Fail Task", nil).ID
+
+	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskID+"/opencode/start", nil)
+	if code != http.StatusBadGateway {
+		t.Fatalf("POST prompt fail = %d, want 502 (body %s)", code, string(body))
+	}
+	if strings.Contains(string(body), "supersecret123") {
+		t.Fatalf("502 response leaked body snippet from prompt_async: %s", string(body))
+	}
+}
+

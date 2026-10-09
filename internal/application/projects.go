@@ -182,10 +182,20 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 	newServerURL, hasServerURL := "", false
 	if u.OpenCodeServerURL != nil {
 		newServerURL, hasServerURL = strings.TrimSpace(*u.OpenCodeServerURL), true
+		if newServerURL != "" {
+			if err := ValidateOpenCodeServerURL(newServerURL); err != nil {
+				return domain.Project{}, err
+			}
+		}
 	}
 	newDir, hasDir := "", false
 	if u.OpenCodeDirectory != nil {
 		newDir, hasDir = strings.TrimSpace(*u.OpenCodeDirectory), true
+		if newDir != "" {
+			if err := ValidateOpenCodeDirectory(newDir); err != nil {
+				return domain.Project{}, err
+			}
+		}
 	}
 	newModel, hasModel := "", false
 	if u.OpenCodeModel != nil {

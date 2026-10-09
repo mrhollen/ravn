@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/mrhollen/crowban/internal/application"
 	"github.com/mrhollen/crowban/internal/domain"
 )
 
@@ -111,7 +113,21 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serverURL := resolveOpenCodeServerURL(proj.OpenCodeServerURL)
+	if err := application.ValidateOpenCodeServerURL(serverURL); err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": fmt.Sprintf("invalid opencode server URL: %v", err),
+		})
+		return
+	}
 	dir := resolveOpenCodeDirectory(proj.OpenCodeDirectory)
+	if err := application.ValidateOpenCodeDirectory(dir); err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": fmt.Sprintf("invalid opencode directory: %v", err),
+		})
+		return
+	}
 	modelRef := resolveOpenCodeModel(proj.OpenCodeModel)
 	var modelProviderID, modelID string
 	if modelRef != "" {
@@ -174,9 +190,10 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := a.HTTPClient.Do(createReq)
 	if err != nil {
+		slog.Warn("failed to connect to opencode server", "err", err)
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
 			"error":   "opencode_error",
-			"message": fmt.Sprintf("failed to connect to opencode server: %v", err),
+			"message": "failed to connect to opencode server",
 		})
 		return
 	}
@@ -184,9 +201,10 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		slog.Warn("opencode create session returned non-2xx status", "status", resp.StatusCode, "snippet", string(bodySnippet))
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
 			"error":   "opencode_error",
-			"message": fmt.Sprintf("opencode create session returned status %d: %s", resp.StatusCode, string(bodySnippet)),
+			"message": fmt.Sprintf("opencode create session returned status %d", resp.StatusCode),
 		})
 		return
 	}
@@ -245,9 +263,10 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 
 	dispatchResp, err := a.HTTPClient.Do(dispatchReq)
 	if err != nil {
+		slog.Warn("failed to dispatch prompt to opencode", "err", err)
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
 			"error":   "opencode_error",
-			"message": fmt.Sprintf("failed to dispatch prompt to opencode: %v", err),
+			"message": "failed to dispatch prompt to opencode",
 		})
 		return
 	}
@@ -255,9 +274,10 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 
 	if dispatchResp.StatusCode < 200 || dispatchResp.StatusCode >= 300 {
 		bodySnippet, _ := io.ReadAll(io.LimitReader(dispatchResp.Body, 1024))
+		slog.Warn("opencode prompt_async returned non-2xx status", "status", dispatchResp.StatusCode, "snippet", string(bodySnippet))
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
 			"error":   "opencode_error",
-			"message": fmt.Sprintf("opencode prompt_async returned status %d: %s", dispatchResp.StatusCode, string(bodySnippet)),
+			"message": fmt.Sprintf("opencode prompt_async returned status %d", dispatchResp.StatusCode),
 		})
 		return
 	}

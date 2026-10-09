@@ -79,6 +79,7 @@ test.describe('Web E2E test suite', () => {
         CROWBAN_DATA: dbPath,
         CROWBAN_STATIC_DIR: staticDir,
         CROWBAN_TOKEN: '', // Zero-config local mode
+        OPENCODE_ALLOW_PRIVATE_IPS: 'true',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
