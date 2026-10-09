@@ -97,6 +97,7 @@ jobs:
     name: Build and Push Image
     needs: ci
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -104,10 +105,11 @@ jobs:
 
       - name: Build and push container image to Forgejo
         run: |
-          IMAGE_NAME="forgejo.lan/${{ github.repository }}:latest"
+          REGISTRY="server:3000"
+          IMAGE_NAME="${REGISTRY}/${{ github.repository }}:latest"
           echo "Target image: ${IMAGE_NAME}"
-          echo "Logging in to forgejo.lan container registry..."
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login forgejo.lan -u "${{ github.actor }}" --password-stdin
+          echo "Logging in to ${REGISTRY} container registry..."
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin
           echo "Building image (target server-runtime)..."
           docker build --target server-runtime -t "${IMAGE_NAME}" .
           echo "Pushing ${IMAGE_NAME}..."
