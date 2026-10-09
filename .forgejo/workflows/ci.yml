@@ -24,19 +24,6 @@ jobs:
 
       - name: Check formatting (gofmt)
         run: |
-          echo "Active Go version:"
-          go version
-          UNFORMATTED=$(gofmt -l .)
-          if [ -n "$UNFORMATTED" ]; then
-            echo "The following files are not formatted with gofmt:"
-            echo "$UNFORMATTED"
-            echo "--- Formatting Diff ---"
-            gofmt -d .
-            exit 1
-          fi
-
-      - name: Check formatting (gofmt)
-        run: |
           UNFORMATTED=$(gofmt -l .)
           if [ -n "$UNFORMATTED" ]; then
             echo "The following files are not formatted with gofmt:"
@@ -67,6 +54,15 @@ jobs:
           cd web
           npm ci
           npm run build
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          # This key ensures the cache invalidates if you update Playwright in your package-lock.json
+          key: ${{ runner.os }}-playwright-${{ hashFiles('web/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
       - name: Install Playwright Chromium
         run: |
