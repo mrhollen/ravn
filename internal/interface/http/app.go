@@ -22,13 +22,13 @@ import (
 // use-case structs are passed (never the UnitOfWork): the adapter is a thin
 // presentation layer and must not manage transactions itself.
 type Deps struct {
-	Projects   *application.Projects
-	Tasks      *application.Tasks
-	Comments   *application.Comments   // routed in slice 3b
-	Artifacts  *application.Artifacts  // routed in slice 3b
-	Acceptance *application.Acceptance // routed in slice 3b
-	Relations  *application.Relations  // routed in slice 3b
-	Broker     application.EventBroker // realtime pub-sub for SSE events
+	Projects     *application.Projects
+	Tasks        *application.Tasks
+	Comments     *application.Comments   // routed in slice 3b
+	Artifacts    *application.Artifacts  // routed in slice 3b
+	Acceptance   *application.Acceptance // routed in slice 3b
+	Relations    *application.Relations  // routed in slice 3b
+	Broker       application.EventBroker // realtime pub-sub for SSE events
 	HTTPClient   *http.Client            // optional HTTP client for external integrations (e.g. OpenCode)
 	ArtifactsDir string                  // directory holding stored artifact files
 }
