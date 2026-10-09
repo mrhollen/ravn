@@ -317,7 +317,7 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 				return fmt.Errorf("%w: cannot transition status from %q to %q", domain.ErrInvalid, cur.Status, *in.Status)
 			}
 
-			if cur.Status == domain.StatusDoing && *in.Status != domain.StatusDoing {
+			if (cur.Status == domain.StatusDoing && *in.Status != domain.StatusDoing) || *in.Status == domain.StatusDone {
 				next.ClaimedBy = nil
 				next.ClaimedAt = nil
 				next.ClaimExpiry = nil
@@ -732,6 +732,12 @@ func (s *Tasks) Claim(ctx context.Context, actor domain.Actor, id domain.ID, ttl
 		if gerr != nil {
 			return gerr // ErrNotFound for unknown IDs; read and CAS share this one tx
 		}
+		if cur.Archived {
+			return fmt.Errorf("%w: cannot claim archived task %s", domain.ErrInvalid, id)
+		}
+		if cur.Status == domain.StatusDone {
+			return fmt.Errorf("%w: cannot claim completed task %s", domain.ErrInvalid, id)
+		}
 		outcome := claimOutcome(cur, a, now)
 		st, cerr := r.Tasks.Claim(ctx, id, a, int(ttl.Seconds()), now)
 		if cerr != nil {
@@ -849,6 +855,16 @@ func (s *Tasks) Heartbeat(ctx context.Context, actor domain.Actor, id domain.ID)
 	var stored domain.Task
 	var r Repos
 	err = s.uow.Run(ctx, &r, func() error {
+		cur, gerr := r.Tasks.Get(ctx, id)
+		if gerr != nil {
+			return gerr
+		}
+		if cur.Archived {
+			return fmt.Errorf("%w: cannot heartbeat archived task %s", domain.ErrInvalid, id)
+		}
+		if cur.Status == domain.StatusDone {
+			return fmt.Errorf("%w: cannot heartbeat completed task %s", domain.ErrInvalid, id)
+		}
 		st, herr := r.Tasks.Heartbeat(ctx, id, a, now)
 		if herr != nil {
 			return herr // *domain.ClaimConflictError — propagate verbatim; never append events here

@@ -262,6 +262,12 @@ func (f *fakeTasks) Claim(_ context.Context, id domain.ID, actor domain.Actor, t
 	if !ok {
 		return domain.Task{}, domain.ErrNotFound
 	}
+	if cur.Archived {
+		return domain.Task{}, fmt.Errorf("%w: cannot claim archived task %s", domain.ErrInvalid, id)
+	}
+	if cur.Status == domain.StatusDone {
+		return domain.Task{}, fmt.Errorf("%w: cannot claim completed task %s", domain.ErrInvalid, id)
+	}
 	switch {
 	case cur.ClaimedBy == nil || cur.ClaimExpiry == nil: // free
 	case cur.ClaimExpiry.Before(now): // expired → takeover (any claimant)
@@ -301,7 +307,9 @@ func (f *fakeTasks) Release(_ context.Context, id domain.ID, actor domain.Actor,
 		return domain.Task{}, &domain.ClaimConflictError{Holder: *cur.ClaimedBy, ExpiresAt: *cur.ClaimExpiry}
 	}
 	start := now
-	cur.Status = domain.StatusTodo
+	if cur.Status != domain.StatusDone {
+		cur.Status = domain.StatusTodo
+	}
 	cur.ClaimedBy = nil
 	cur.ClaimedAt = nil
 	cur.ClaimExpiry = nil
@@ -321,6 +329,12 @@ func (f *fakeTasks) Heartbeat(_ context.Context, id domain.ID, actor domain.Acto
 	cur, ok := f.byID[id]
 	if !ok {
 		return domain.Task{}, domain.ErrNotFound
+	}
+	if cur.Archived {
+		return domain.Task{}, fmt.Errorf("%w: cannot heartbeat archived task %s", domain.ErrInvalid, id)
+	}
+	if cur.Status == domain.StatusDone {
+		return domain.Task{}, fmt.Errorf("%w: cannot heartbeat completed task %s", domain.ErrInvalid, id)
 	}
 	if cur.ClaimedBy == nil || cur.ClaimExpiry == nil {
 		return domain.Task{}, &domain.ClaimConflictError{Holder: domain.Actor{}, ExpiresAt: time.Time{}}

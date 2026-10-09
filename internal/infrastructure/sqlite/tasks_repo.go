@@ -217,6 +217,8 @@ func (r *taskRepo) Claim(ctx context.Context, taskID domain.ID, actor domain.Act
 			claimed_at = ?, claim_expires_at = ?, claim_ttl_sec = ?,
 			status = 'doing', version = version + 1, updated_at = ?
 		WHERE id = ?
+		  AND archived = 0
+		  AND status != 'done'
 		  AND (claimed_by_name IS NULL
 		       OR claim_expires_at < ?
 		       OR claimed_by_name = ?)
@@ -226,10 +228,16 @@ func (r *taskRepo) Claim(ctx context.Context, taskID domain.ID, actor domain.Act
 		formatTS(now),
 		string(taskID), formatTS(now), actor.Name)
 	t, err := scanTask(row)
-	if errors.Is(err, sql.ErrNoRows) { // CAS lost: a different live holder won
+	if errors.Is(err, sql.ErrNoRows) { // CAS lost: a different live holder won or task is done/archived
 		current, gerr := r.Get(ctx, taskID)
 		if gerr != nil {
 			return domain.Task{}, gerr // ErrNotFound if the row vanished entirely
+		}
+		if current.Archived {
+			return domain.Task{}, fmt.Errorf("%w: cannot claim archived task %s", domain.ErrInvalid, taskID)
+		}
+		if current.Status == domain.StatusDone {
+			return domain.Task{}, fmt.Errorf("%w: cannot claim completed task %s", domain.ErrInvalid, taskID)
 		}
 		if current.ClaimedBy == nil || current.ClaimExpiry == nil {
 			// Unreachable: a 0-row claim requires a non-expired different holder.
@@ -243,7 +251,7 @@ func (r *taskRepo) Claim(ctx context.Context, taskID domain.ID, actor domain.Act
 	return t, nil // the RETURNING row IS the stored result of the CAS
 }
 
-// Release clears the lease and moves status back to todo, bumping version. The
+// Release clears the lease and moves status back to todo (or preserves done), bumping version. The
 // WHERE enforces holder-only release against an ACTIVE lease (name key +
 // claim_expires_at >= now); a foreign holder or an EXPIRED self-lease loses with
 // *domain.ClaimConflictError{Holder, ExpiresAt} and nothing is mutated. A task
@@ -255,7 +263,8 @@ func (r *taskRepo) Release(ctx context.Context, taskID domain.ID, actor domain.A
 		UPDATE task SET
 			claimed_by_type = NULL, claimed_by_name = NULL,
 			claimed_at = NULL, claim_expires_at = NULL, claim_ttl_sec = NULL,
-			status = 'todo', version = version + 1, updated_at = ?
+			status = CASE WHEN status = 'done' THEN 'done' ELSE 'todo' END,
+			version = version + 1, updated_at = ?
 		WHERE id = ? AND claimed_by_name = ? AND claim_expires_at >= ?`,
 		formatTS(now), string(taskID), actor.Name, formatTS(now))
 	if err != nil {
@@ -296,18 +305,26 @@ func (r *taskRepo) Release(ctx context.Context, taskID domain.ID, actor domain.A
 // Returns the fresh row; one call doubles as a health check.
 func (r *taskRepo) Heartbeat(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time) (domain.Task, error) {
 	var (
-		ttl    *int
-		expiry *string
-		holder *string
+		ttl      *int
+		expiry   *string
+		holder   *string
+		status   string
+		archived int
 	)
 	err := r.q.QueryRowContext(ctx,
-		`SELECT claimed_by_name, claim_ttl_sec, claim_expires_at FROM task WHERE id = ?`,
-		string(taskID)).Scan(&holder, &ttl, &expiry)
+		`SELECT claimed_by_name, claim_ttl_sec, claim_expires_at, status, archived FROM task WHERE id = ?`,
+		string(taskID)).Scan(&holder, &ttl, &expiry, &status, &archived)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Task{}, domain.ErrNotFound
 	}
 	if err != nil {
 		return domain.Task{}, fmt.Errorf("read lease for heartbeat on task %s: %w", taskID, err)
+	}
+	if archived != 0 {
+		return domain.Task{}, fmt.Errorf("%w: cannot heartbeat archived task %s", domain.ErrInvalid, taskID)
+	}
+	if status == string(domain.StatusDone) {
+		return domain.Task{}, fmt.Errorf("%w: cannot heartbeat completed task %s", domain.ErrInvalid, taskID)
 	}
 	if holder == nil || ttl == nil { // row exists but carries no lease at all
 		return domain.Task{}, &domain.ClaimConflictError{Holder: domain.Actor{}, ExpiresAt: time.Time{}} // "claim it first"
@@ -315,7 +332,7 @@ func (r *taskRepo) Heartbeat(ctx context.Context, taskID domain.ID, actor domain
 	newExpiry := formatTS(now.Add(time.Duration(*ttl) * time.Second))
 	res, uerr := r.q.ExecContext(ctx, `
 		UPDATE task SET claim_expires_at = ?
-		WHERE id = ? AND claimed_by_name = ? AND claim_expires_at >= ?`,
+		WHERE id = ? AND claimed_by_name = ? AND claim_expires_at >= ? AND archived = 0 AND status != 'done'`,
 		newExpiry, string(taskID), actor.Name, formatTS(now))
 	if uerr != nil {
 		return domain.Task{}, fmt.Errorf("heartbeat task %s: %w", taskID, uerr)

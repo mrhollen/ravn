@@ -728,6 +728,78 @@ func TestClaimLifecycle(t *testing.T) {
 	}
 }
 
+func TestClaimAndHeartbeat_DoneAndArchived_HTTP(t *testing.T) {
+	t.Parallel()
+	stk := newStack(t)
+	p := createProject(t, stk, "Claims Guards")
+
+	// 1. Task completed
+	taskDone := newTask(t, stk, p.ID, "completed task")
+	// Claim as agent-a
+	code, _ := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskDone.ID+"/claim", map[string]any{
+		"actor": actor("agent-a"),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("claim: %d", code)
+	}
+	// Mark done
+	code, _ = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+taskDone.ID, map[string]any{
+		"actor":   actor("agent-a"),
+		"status":  "done",
+		"version": 2,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("patch done: %d", code)
+	}
+
+	// Claiming done task returns 400 invalid input and does not mutate status
+	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskDone.ID+"/claim", map[string]any{
+		"actor": actor("agent-b"),
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("claim done task = %d, want 400 (body %s)", code, string(body))
+	}
+	d := getDetail(t, stk, taskDone.ID)
+	if d.Status != "done" {
+		t.Errorf("status = %q, want done", d.Status)
+	}
+
+	// Heartbeat on done task returns 400 invalid input
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskDone.ID+"/heartbeat", map[string]any{
+		"actor": actor("agent-a"),
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("heartbeat done task = %d, want 400 (body %s)", code, string(body))
+	}
+
+	// 2. Task archived
+	taskArchived := newTask(t, stk, p.ID, "archived task")
+	code, _ = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+taskArchived.ID, map[string]any{
+		"actor":    actor("agent-a"),
+		"archived": true,
+		"version":  1,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("patch archived: %d", code)
+	}
+
+	// Claiming archived task returns 400 invalid input
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskArchived.ID+"/claim", map[string]any{
+		"actor": actor("agent-a"),
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("claim archived task = %d, want 400 (body %s)", code, string(body))
+	}
+
+	// Heartbeat on archived task returns 400 invalid input
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskArchived.ID+"/heartbeat", map[string]any{
+		"actor": actor("agent-a"),
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("heartbeat archived task = %d, want 400 (body %s)", code, string(body))
+	}
+}
+
 func TestCommentsAddListAndErrors(t *testing.T) {
 	t.Parallel()
 	stk := newStack(t)

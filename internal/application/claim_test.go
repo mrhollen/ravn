@@ -441,3 +441,142 @@ func TestTasksClaim_TTLDefaultOverrideAndCap(t *testing.T) {
 		t.Errorf("expiry with injected 30s default = %v, want now + 30s", got.ClaimExpiry)
 	}
 }
+
+func TestTasksClaim_CompletedOrArchived_ReturnsErrInvalidAndNoMutation(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+
+	// 1. Claiming a completed task returns ErrInvalid and does not mutate status
+	doneTask := mustCreateTask(t, svc, "Done Task", 1, nil)
+	// Transition to doing, then done
+	_, err := svc.Claim(ctx, claimAgent, doneTask.ID, 600)
+	if err != nil {
+		t.Fatalf("setup claim: %v", err)
+	}
+	doneStatus := domain.StatusDone
+	_, err = svc.Update(ctx, claimAgent, doneTask.ID, TaskUpdateInput{Status: &doneStatus})
+	if err != nil {
+		t.Fatalf("setup mark done: %v", err)
+	}
+
+	beforeEvCount := len(uow.events.events)
+	fc.SetNow(fc.now.Add(time.Minute))
+	otherAgent := domain.Actor{Type: domain.ActorAgent, Name: "worker-other"}
+	_, err = svc.Claim(ctx, otherAgent, doneTask.ID, 600)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("claim done task err = %v, want domain.ErrInvalid", err)
+	}
+
+	stored, err := svc.Get(ctx, doneTask.ID)
+	if err != nil {
+		t.Fatalf("get done task: %v", err)
+	}
+	if stored.Status != domain.StatusDone {
+		t.Errorf("stored status = %q, want done (must not be mutated to doing)", stored.Status)
+	}
+	if stored.ClaimedBy != nil {
+		t.Errorf("stored ClaimedBy = %+v, want nil", stored.ClaimedBy)
+	}
+	if len(uow.events.events) != beforeEvCount {
+		t.Errorf("no events should be emitted on rejected claim (got %d events, want %d)", len(uow.events.events), beforeEvCount)
+	}
+
+	// 2. Claiming an archived task returns ErrInvalid and does not mutate status
+	archivedTask := mustCreateTask(t, svc, "Archived Task", 1, nil)
+	arch := true
+	_, err = svc.Update(ctx, claimAgent, archivedTask.ID, TaskUpdateInput{Archived: &arch})
+	if err != nil {
+		t.Fatalf("setup archive: %v", err)
+	}
+
+	beforeEvCount = len(uow.events.events)
+	fc.SetNow(fc.now.Add(time.Minute))
+	_, err = svc.Claim(ctx, claimAgent, archivedTask.ID, 600)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("claim archived task err = %v, want domain.ErrInvalid", err)
+	}
+
+	stored, err = svc.Get(ctx, archivedTask.ID)
+	if err != nil {
+		t.Fatalf("get archived task: %v", err)
+	}
+	if !stored.Archived {
+		t.Error("archived task must remain archived")
+	}
+	if stored.Status != domain.StatusTodo {
+		t.Errorf("stored status = %q, want todo", stored.Status)
+	}
+	if stored.ClaimedBy != nil {
+		t.Errorf("stored ClaimedBy = %+v, want nil", stored.ClaimedBy)
+	}
+	if len(uow.events.events) != beforeEvCount {
+		t.Errorf("no events should be emitted on rejected claim (got %d events, want %d)", len(uow.events.events), beforeEvCount)
+	}
+}
+
+func TestTasksHeartbeat_CompletedOrArchived_ReturnsErrInvalidAndNoMutation(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, _ := newTaskTestEnv(t)
+
+	// 1. Heartbeat on completed task returns ErrInvalid
+	task := mustCreateTask(t, svc, "Heartbeat Done Task", 1, nil)
+	_, err := svc.Claim(ctx, claimAgent, task.ID, 600)
+	if err != nil {
+		t.Fatalf("setup claim: %v", err)
+	}
+	doneStatus := domain.StatusDone
+	_, err = svc.Update(ctx, claimAgent, task.ID, TaskUpdateInput{Status: &doneStatus})
+	if err != nil {
+		t.Fatalf("setup mark done: %v", err)
+	}
+
+	fc.SetNow(fc.now.Add(time.Minute))
+	_, err = svc.Heartbeat(ctx, claimAgent, task.ID)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("heartbeat done task err = %v, want domain.ErrInvalid", err)
+	}
+
+	// 2. Heartbeat on archived task returns ErrInvalid
+	archTask := mustCreateTask(t, svc, "Heartbeat Archived Task", 1, nil)
+	arch := true
+	_, err = svc.Update(ctx, claimAgent, archTask.ID, TaskUpdateInput{Archived: &arch})
+	if err != nil {
+		t.Fatalf("setup archive: %v", err)
+	}
+
+	fc.SetNow(fc.now.Add(time.Minute))
+	_, err = svc.Heartbeat(ctx, claimAgent, archTask.ID)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("heartbeat archived task err = %v, want domain.ErrInvalid", err)
+	}
+}
+
+func TestTasksRelease_DoneStatusPreserved(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, _ := newTaskTestEnv(t)
+
+	task := mustCreateTask(t, svc, "Done Release Task", 1, nil)
+	_, err := svc.Claim(ctx, claimAgent, task.ID, 600)
+	if err != nil {
+		t.Fatalf("setup claim: %v", err)
+	}
+
+	// Manually set task to done while keeping lease (e.g. legacy/direct)
+	cur, _ := svc.Get(ctx, task.ID)
+	cur.Status = domain.StatusDone
+	uow := svc.uow.(*fakeUoW)
+	uow.tasks.byID[task.ID] = cur
+
+	fc.SetNow(fc.now.Add(time.Minute))
+	released, err := svc.Release(ctx, claimAgent, task.ID, "completed work")
+	if err != nil {
+		t.Fatalf("release done task: %v", err)
+	}
+	if released.Status != domain.StatusDone {
+		t.Errorf("released status = %q, want done (must NOT revert to todo)", released.Status)
+	}
+	if released.ClaimedBy != nil {
+		t.Errorf("released ClaimedBy = %+v, want nil", released.ClaimedBy)
+	}
+}
+
