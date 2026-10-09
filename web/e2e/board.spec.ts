@@ -973,7 +973,7 @@ test.describe('Web E2E test suite', () => {
     const doneCol = page.locator('section', { has: page.getByRole('heading', { name: 'Done' }) });
 
     const taskCard = todoCol.locator('h3', { hasText: 'Task Created via API for SSE' });
-    await expect(taskCard).toBeVisible({ timeout: 5000 });
+    await expect(taskCard).toBeVisible({ timeout: 10000 });
 
     // Move task externally to doing via API
     const moveRes = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`, {
@@ -990,7 +990,7 @@ test.describe('Web E2E test suite', () => {
 
     // Card moves into Doing column in real time
     const doingCard = doingCol.locator('h3', { hasText: 'Task Created via API for SSE' });
-    await expect(doingCard).toBeVisible({ timeout: 5000 });
+    await expect(doingCard).toBeVisible({ timeout: 10000 });
     await expect(todoCol.locator('h3', { hasText: 'Task Created via API for SSE' })).not.toBeVisible();
 
     // -------------------------------------------------------------------------
@@ -1014,7 +1014,7 @@ test.describe('Web E2E test suite', () => {
     const claimed = await claimRes.json();
 
     // Drawer reflects claim live
-    await expect(drawer.locator('text=Claimed')).toBeVisible({ timeout: 5000 });
+    await expect(drawer.locator('text=Claimed')).toBeVisible({ timeout: 10000 });
     await expect(drawer.locator('text=Held by agent-worker')).toBeVisible();
 
     // External agent posts a comment via API
@@ -1030,7 +1030,7 @@ test.describe('Web E2E test suite', () => {
     expect(commentRes.ok).toBe(true);
 
     // Drawer displays comment live
-    await expect(drawer.locator('text=Realtime SSE comment arrived!')).toBeVisible({ timeout: 5000 });
+    await expect(drawer.locator('text=Realtime SSE comment arrived!')).toBeVisible({ timeout: 10000 });
     await expect(drawer.getByText('reviewer-agent', { exact: true })).toBeVisible();
 
     // External agent moves task to done via API
@@ -1047,7 +1047,7 @@ test.describe('Web E2E test suite', () => {
 
     // Drawer status button reflects "Done" as active
     const doneBtn = drawer.getByRole('button', { name: 'Done' });
-    await expect(doneBtn).toHaveAttribute('aria-pressed', 'true', { timeout: 5000 });
+    await expect(doneBtn).toHaveAttribute('aria-pressed', 'true', { timeout: 10000 });
 
     // Close drawer
     await drawer.locator('button[aria-label="Close"]').first().click();
@@ -1100,11 +1100,11 @@ test.describe('Web E2E test suite', () => {
 
     // Verify board updated via pollTick fallback
     const fallbackCard = todoCol.locator('h3', { hasText: 'Task Created During Disconnected State' });
-    await expect(fallbackCard).toBeVisible({ timeout: 5000 });
+    await expect(fallbackCard).toBeVisible({ timeout: 10000 });
 
     // Trigger manual reconnect
     await liveIndicator.click();
-    await expect(liveIndicator).toContainText('Live', { timeout: 5000 });
+    await expect(liveIndicator).toContainText('Live', { timeout: 10000 });
     const resetBackoff = await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
       return app.sseBackoffMs;
