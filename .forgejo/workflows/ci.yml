@@ -49,12 +49,6 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
-      - name: Build web application
-        run: |
-          cd web
-          npm ci
-          npm run build
-
       - name: Cache Playwright Chromium
         uses: actions/cache@v4
         with:
@@ -64,10 +58,30 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
-      - name: Install Playwright Chromium and dependencies
+      - name: Build web application and install Playwright dependencies
         run: |
+          cd web
+          npm ci
+
+          echo "Starting web build and Playwright install concurrently..."
+          npm run build &
+          BUILD_PID=$!
+
+          PW_PID=""
           if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
-            cd web && npx playwright install --with-deps chromium
+            npx playwright install --with-deps chromium &
+            PW_PID=$!
+          fi
+
+          FAILED=0
+          if [ -n "$PW_PID" ]; then
+            wait "$PW_PID" || FAILED=1
+          fi
+          wait "$BUILD_PID" || FAILED=1
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo "Frontend build or Playwright dependency installation failed."
+            exit 1
           fi
 
       - name: Run browser E2E tests
