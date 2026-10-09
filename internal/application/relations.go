@@ -131,10 +131,11 @@ func (s *Relations) Relate(ctx context.Context, actor domain.Actor, aID, bID dom
 // addEdge implements RelateAdd inside the caller's unit of work. It first
 // distinguishes the idempotent no-op (identical edge already stored → return
 // it, no event) from a real change; for child edges it then enforces the
-// ≤1-parent rule against the current edge set before upserting. The repository
-// additionally backstops the parent rule with the partial unique index (its
-// ErrParentConflict is propagated verbatim if a concurrent writer wins the
-// check-then-write race).
+// ≤1-parent rule against the current edge set before upserting. For blocked-by
+// and child relations, it enforces cycle detection so circular dependencies
+// or hierarchies cannot be formed. The repository additionally backstops the
+// parent rule with the partial unique index (its ErrParentConflict is propagated
+// verbatim if a concurrent writer wins the check-then-write race).
 func (s *Relations) addEdge(ctx context.Context, r *Repos, actor domain.Actor, src, dst domain.ID, kind domain.RelationKind, now time.Time, srcTask domain.Task, out *domain.Relation) error {
 	edges, err := r.Relations.ListByTask(ctx, src)
 	if err != nil {
@@ -147,6 +148,16 @@ func (s *Relations) addEdge(ctx context.Context, r *Repos, actor domain.Actor, s
 			return nil
 		case e.TaskID == src && e.Kind == domain.RelationChild && kind == domain.RelationChild && e.OtherTaskID != dst:
 			return fmt.Errorf("%w: task %s already has a parent (%s)", domain.ErrParentConflict, src, e.OtherTaskID)
+		}
+	}
+
+	if kind == domain.RelationBlockedBy || kind == domain.RelationChild {
+		reachable, err := s.isReachable(ctx, r, dst, src, kind)
+		if err != nil {
+			return err
+		}
+		if reachable {
+			return fmt.Errorf("%w: cycle detected: adding %s relation between %s and %s would create a circular dependency", domain.ErrInvalid, kind, src, dst)
 		}
 	}
 
@@ -238,3 +249,37 @@ func normalizeRelation(aID, bID domain.ID, kind domain.RelationKind) (src, dst d
 	}
 	return aID, bID, kind
 }
+
+// isReachable checks whether target can be reached from start via a directed chain
+// of edges of the given kind using breadth-first search.
+func (s *Relations) isReachable(ctx context.Context, r *Repos, start, target domain.ID, kind domain.RelationKind) (bool, error) {
+	if start == target {
+		return true, nil
+	}
+	visited := make(map[domain.ID]bool)
+	queue := []domain.ID{start}
+	visited[start] = true
+
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+
+		edges, err := r.Relations.ListByTask(ctx, curr)
+		if err != nil {
+			return false, err
+		}
+		for _, e := range edges {
+			if e.TaskID == curr && e.Kind == kind {
+				if e.OtherTaskID == target {
+					return true, nil
+				}
+				if !visited[e.OtherTaskID] {
+					visited[e.OtherTaskID] = true
+					queue = append(queue, e.OtherTaskID)
+				}
+			}
+		}
+	}
+	return false, nil
+}
+

@@ -208,6 +208,39 @@ func (c *Client) CompleteAC(ctx context.Context, id string, seq int, req ACToggl
 	return &out, nil
 }
 
+// AddAC → POST /tasks/{id}/acceptance-criteria. Appends a new criterion at
+// next seq (max(seq)+1). 201 with the fresh AC row. Child-row rule: no task
+// version bump.
+func (c *Client) AddAC(ctx context.Context, id string, req ACAddRequest) (*AcceptanceCriterion, error) {
+	var out AcceptanceCriterion
+	path := fmt.Sprintf("/tasks/%s/acceptance-criteria", url.PathEscape(id))
+	if err := c.do(ctx, "AddAC", http.MethodPost, path, nil, &req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RemoveAC → DELETE /tasks/{id}/acceptance-criteria/{seq}. seq is the 1-based
+// criterion sequence. 204 on success (no body). Unknown task OR unknown seq → 404.
+// Child-row rule: no task version bump. Surviving criteria keep their seqs.
+func (c *Client) RemoveAC(ctx context.Context, id string, seq int, actor Actor) error {
+	req := ACRemoveRequest{Actor: actor}
+	path := fmt.Sprintf("/tasks/%s/acceptance-criteria/%d", url.PathEscape(id), seq)
+	return c.do(ctx, "RemoveAC", http.MethodDelete, path, nil, &req, nil)
+}
+
+// EditACText → PATCH /tasks/{id}/acceptance-criteria/{seq}. seq is the 1-based
+// criterion sequence. Rewords the criterion text. 200 with the updated AC row.
+// Child-row rule: no task version bump.
+func (c *Client) EditACText(ctx context.Context, id string, seq int, req ACEditTextRequest) (*AcceptanceCriterion, error) {
+	var out AcceptanceCriterion
+	path := fmt.Sprintf("/tasks/%s/acceptance-criteria/%d", url.PathEscape(id), seq)
+	if err := c.do(ctx, "EditACText", http.MethodPatch, path, nil, &req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // AttachArtifact → POST /tasks/{id}/artifacts. 201 with the fresh artifact row.
 // Appends are NOT idempotent.
 func (c *Client) AttachArtifact(ctx context.Context, id string, req ArtifactRequest) (*Artifact, error) {

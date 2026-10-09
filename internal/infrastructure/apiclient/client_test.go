@@ -555,6 +555,75 @@ func TestCompleteAC_PathAndBody(t *testing.T) {
 	}
 }
 
+func TestAddAC_PathAndBody(t *testing.T) {
+	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		if cap.method != http.MethodPost || cap.path != "/api/v1/tasks/T1/acceptance-criteria" {
+			t.Errorf("got %s %s", cap.method, cap.path)
+		}
+		var req ACAddRequest
+		if err := json.Unmarshal(cap.body, &req); err != nil {
+			t.Fatalf("body not JSON: %v (%s)", err, cap.body)
+		}
+		if req.Text != "verify password length" || req.Actor.Name != "runner-2" {
+			t.Errorf("request = %+v", req)
+		}
+		writeJSONTest(w, http.StatusCreated, `{"seq":3,"text":"verify password length","done":false}`)
+	}))
+
+	ac, err := c.AddAC(context.Background(), "T1", ACAddRequest{Actor: Actor{Type: "agent", Name: "runner-2"}, Text: "verify password length"})
+	if err != nil {
+		t.Fatalf("AddAC: %v", err)
+	}
+	if ac.Seq != 3 || ac.Text != "verify password length" || ac.Done {
+		t.Errorf("ac = %+v", ac)
+	}
+}
+
+func TestRemoveAC_PathAndBody_204(t *testing.T) {
+	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		if cap.method != http.MethodDelete || cap.path != "/api/v1/tasks/T1/acceptance-criteria/2" {
+			t.Errorf("got %s %s", cap.method, cap.path)
+		}
+		var req ACRemoveRequest
+		if err := json.Unmarshal(cap.body, &req); err != nil {
+			t.Fatalf("body not JSON: %v (%s)", err, cap.body)
+		}
+		if req.Actor.Name != "runner-2" {
+			t.Errorf("request = %+v", req)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	err := c.RemoveAC(context.Background(), "T1", 2, Actor{Type: "agent", Name: "runner-2"})
+	if err != nil {
+		t.Fatalf("RemoveAC: %v", err)
+	}
+}
+
+func TestEditACText_PathAndBody(t *testing.T) {
+	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		if cap.method != http.MethodPatch || cap.path != "/api/v1/tasks/T1/acceptance-criteria/2" {
+			t.Errorf("got %s %s", cap.method, cap.path)
+		}
+		var req ACEditTextRequest
+		if err := json.Unmarshal(cap.body, &req); err != nil {
+			t.Fatalf("body not JSON: %v (%s)", err, cap.body)
+		}
+		if req.Text != "logout works safely" || req.Actor.Name != "ada" {
+			t.Errorf("request = %+v", req)
+		}
+		writeJSONTest(w, http.StatusOK, `{"seq":2,"text":"logout works safely","done":false}`)
+	}))
+
+	ac, err := c.EditACText(context.Background(), "T1", 2, ACEditTextRequest{Actor: Actor{Name: "ada"}, Text: "logout works safely"})
+	if err != nil {
+		t.Fatalf("EditACText: %v", err)
+	}
+	if ac.Seq != 2 || ac.Text != "logout works safely" {
+		t.Errorf("ac = %+v", ac)
+	}
+}
+
 func TestAttachArtifact_201AndBody(t *testing.T) {
 	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
 		if cap.method != http.MethodPost || cap.path != "/api/v1/tasks/T1/artifacts" {

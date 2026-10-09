@@ -45,6 +45,9 @@ type Client interface {
 	AddComment(ctx context.Context, id string, req apiclient.CommentRequest) (*apiclient.Comment, error)
 	UpdateNotes(ctx context.Context, id string, actor apiclient.Actor, notes string) (*apiclient.TaskSummary, error)
 	CompleteAC(ctx context.Context, id string, seq int, req apiclient.ACToggleRequest) (*apiclient.AcceptanceCriterion, error)
+	AddAC(ctx context.Context, id string, req apiclient.ACAddRequest) (*apiclient.AcceptanceCriterion, error)
+	RemoveAC(ctx context.Context, id string, seq int, actor apiclient.Actor) error
+	EditACText(ctx context.Context, id string, seq int, req apiclient.ACEditTextRequest) (*apiclient.AcceptanceCriterion, error)
 	AttachArtifact(ctx context.Context, id string, req apiclient.ArtifactRequest) (*apiclient.Artifact, error)
 	UploadArtifact(ctx context.Context, id string, filename string, r io.Reader, kind, summary string, actor apiclient.Actor) (*apiclient.Artifact, error)
 	RelateTasks(ctx context.Context, id string, req apiclient.RelationRequest) (*apiclient.Relation, error)
@@ -64,7 +67,7 @@ func ServerOptions() []mcpsrv.ServerOption {
 	}
 }
 
-// RegisterTools wires every crowban MCP tool onto s (the full 14-tool surface,
+// RegisterTools wires every crowban MCP tool onto s (the full 17-tool surface,
 // docs/API.md route table). defaultActor is the container-default identity
 // (from CROWBAN_AGENT_NAME) used whenever a mutating call arrives without a
 // usable `actor` object.
@@ -81,6 +84,9 @@ func RegisterTools(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) 
 	registerAddComment(s, c, defaultActor)
 	registerUpdateNotes(s, c, defaultActor)
 	registerCompleteAC(s, c, defaultActor)
+	registerAddAC(s, c, defaultActor)
+	registerRemoveAC(s, c, defaultActor)
+	registerEditAC(s, c, defaultActor)
 	registerAttachArtifact(s, c, defaultActor)
 	registerRelateTasks(s, c, defaultActor)
 }
@@ -595,7 +601,7 @@ func registerUpdateNotes(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 func registerCompleteAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("complete_ac",
 		mcpgo.WithDescription(
-			"Check or uncheck ONE acceptance criterion by its 1-based seq (from get_task's acceptance_criteria). done=true records completed_by/completed_at; done=false clears both (uncheck is free). Optional note. A child-row mutation: NO task version bump. Returns the updated AC row. Unknown task OR unknown seq → isError not-found verbatim."+actorHint),
+			"Check or uncheck ONE acceptance criterion by its 1-based seq (from get_task's acceptance_criteria). done=true records completed_by/completed_at; done=false clears both (uncheck is free). Optional note. Optional text rewords the criterion (taking precedence). A child-row mutation: NO task version bump. Returns the updated AC row. Unknown task OR unknown seq → isError not-found verbatim."+actorHint),
 		mcpgo.WithString("id", mcpgo.Required(),
 			mcpgo.Description("Task ULID owning the criterion.")),
 		mcpgo.WithInteger("seq", mcpgo.Required(), mcpgo.Min(1),
@@ -604,6 +610,8 @@ func registerCompleteAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 			mcpgo.Description("true = check it off; false = uncheck (clears completed_by/completed_at).")),
 		mcpgo.WithString("note",
 			mcpgo.Description("Optional note, e.g. how the criterion was verified.")),
+		mcpgo.WithString("text",
+			mcpgo.Description("Optional new text to reword the criterion (takes precedence over done/note).")),
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -615,10 +623,112 @@ func registerCompleteAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		if seq < 1 {
 			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"complete_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
 		}
+		var textPtr *string
+		if t := strings.TrimSpace(req.GetString("text", "")); t != "" {
+			textPtr = &t
+		}
 		row, err := c.CompleteAC(ctx, id, seq, apiclient.ACToggleRequest{
 			Actor: resolveActor(req.GetArguments(), defaultActor),
 			Done:  req.GetBool("done", false),
 			Note:  strings.TrimSpace(req.GetString("note", "")),
+			Text:  textPtr,
+		})
+		if err != nil {
+			return fail(c, err), nil
+		}
+		return textResult(row)
+	})
+}
+
+func registerAddAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+	tool := mcpgo.NewTool("add_ac",
+		mcpgo.WithDescription(
+			"Append a new acceptance criterion to an existing task at max(seq)+1 (callers never choose the seq). text is required markdown wording (non-empty after trimming). A child-row mutation: NO task version bump. Returns the created AC row. Unknown task → isError not-found verbatim."+actorHint),
+		mcpgo.WithString("id", mcpgo.Required(),
+			mcpgo.Description("Task ULID to append the criterion to.")),
+		mcpgo.WithString("text", mcpgo.Required(),
+			mcpgo.Description("Acceptance criterion wording (required markdown, non-empty).")),
+		actorProp(),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id := strings.TrimSpace(req.GetString("id", ""))
+		text := strings.TrimSpace(req.GetString("text", ""))
+		if id == "" {
+			return invalidInput("add_ac", "id"), nil
+		}
+		if text == "" {
+			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"add_ac: \"text\" must not be empty"}`), nil
+		}
+		row, err := c.AddAC(ctx, id, apiclient.ACAddRequest{
+			Actor: resolveActor(req.GetArguments(), defaultActor),
+			Text:  text,
+		})
+		if err != nil {
+			return fail(c, err), nil
+		}
+		return textResult(row)
+	})
+}
+
+func registerRemoveAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+	tool := mcpgo.NewTool("remove_ac",
+		mcpgo.WithDescription(
+			"Remove an acceptance criterion by its 1-based seq. The remaining criteria keep their seqs (no renumbering). A child-row mutation: NO task version bump. Returns {\"removed\":true,\"task_id\":id,\"seq\":seq}. Unknown task OR unknown seq → isError not-found verbatim."+actorHint),
+		mcpgo.WithString("id", mcpgo.Required(),
+			mcpgo.Description("Task ULID owning the criterion.")),
+		mcpgo.WithInteger("seq", mcpgo.Required(), mcpgo.Min(1),
+			mcpgo.Description("1-based acceptance-criterion sequence (acceptance_criteria[].seq).")),
+		actorProp(),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id := strings.TrimSpace(req.GetString("id", ""))
+		if id == "" {
+			return invalidInput("remove_ac", "id"), nil
+		}
+		seq := req.GetInt("seq", 0)
+		if seq < 1 {
+			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"remove_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
+		}
+		actor := resolveActor(req.GetArguments(), defaultActor)
+		if err := c.RemoveAC(ctx, id, seq, actor); err != nil {
+			return fail(c, err), nil
+		}
+		return textResult(map[string]any{
+			"removed": true,
+			"task_id": id,
+			"seq":     seq,
+		})
+	})
+}
+
+func registerEditAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+	tool := mcpgo.NewTool("edit_ac",
+		mcpgo.WithDescription(
+			"Reword or edit the text of an existing acceptance criterion by its 1-based seq. text is required markdown wording (non-empty after trimming). A child-row mutation: NO task version bump. Returns the updated AC row. Unknown task OR unknown seq → isError not-found verbatim."+actorHint),
+		mcpgo.WithString("id", mcpgo.Required(),
+			mcpgo.Description("Task ULID owning the criterion.")),
+		mcpgo.WithInteger("seq", mcpgo.Required(), mcpgo.Min(1),
+			mcpgo.Description("1-based acceptance-criterion sequence (acceptance_criteria[].seq).")),
+		mcpgo.WithString("text", mcpgo.Required(),
+			mcpgo.Description("New acceptance criterion wording (required markdown, non-empty).")),
+		actorProp(),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id := strings.TrimSpace(req.GetString("id", ""))
+		text := strings.TrimSpace(req.GetString("text", ""))
+		if id == "" {
+			return invalidInput("edit_ac", "id"), nil
+		}
+		seq := req.GetInt("seq", 0)
+		if seq < 1 {
+			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"edit_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
+		}
+		if text == "" {
+			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"edit_ac: \"text\" must not be empty"}`), nil
+		}
+		row, err := c.EditACText(ctx, id, seq, apiclient.ACEditTextRequest{
+			Actor: resolveActor(req.GetArguments(), defaultActor),
+			Text:  text,
 		})
 		if err != nil {
 			return fail(c, err), nil

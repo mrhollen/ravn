@@ -91,9 +91,12 @@ func (r *taskRepo) List(ctx context.Context, f application.TaskFilter) ([]domain
 	if f.Limit > 0 { // <= 0 = unbounded when called directly; the use case always clamps
 		query += ` LIMIT ?`
 		args = append(args, f.Limit)
-	}
-	if f.Offset > 0 {
-		query += ` OFFSET ?`
+		if f.Offset > 0 {
+			query += ` OFFSET ?`
+			args = append(args, f.Offset)
+		}
+	} else if f.Offset > 0 {
+		query += ` LIMIT -1 OFFSET ?`
 		args = append(args, f.Offset)
 	}
 

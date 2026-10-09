@@ -221,7 +221,7 @@ plus:
 
 ## Route table
 
-14 MCP tools map onto the endpoints marked with a tool name; the rest are UI
+17 MCP tools map onto the endpoints marked with a tool name; the rest are UI
 extras (the web frontend uses them directly).
 
 | Method & path | Purpose | MCP tool |
@@ -246,9 +246,9 @@ extras (the web frontend uses them directly).
 | `POST /tasks/{id}/comments`           | append a typed comment → 201                             | `add_comment` |
 | `GET  /tasks/{id}/comments`           | paged comment thread + total (UI)                        | — |
 | `PUT  /tasks/{id}/notes`              | replace the notes blob                                   | `update_notes` |
-| `POST /tasks/{id}/acceptance-criteria`            | append a new AC at next seq → 201          | — (UI) |
-| `PATCH /tasks/{id}/acceptance-criteria/{seq}`     | toggle one AC, or reword it via `text`    | `complete_ac` |
-| `DELETE /tasks/{id}/acceptance-criteria/{seq}`    | remove one AC → 204 (actor required)      | — (UI) |
+| `POST /tasks/{id}/acceptance-criteria`            | append a new AC at next seq → 201          | `add_ac` |
+| `PATCH /tasks/{id}/acceptance-criteria/{seq}`     | toggle one AC, or reword it via `text`    | `complete_ac`, `edit_ac` |
+| `DELETE /tasks/{id}/acceptance-criteria/{seq}`    | remove one AC → 204 (actor required)      | `remove_ac` |
 | `POST /tasks/{id}/artifacts`          | attach evidence → 201                                    | `attach_artifact` |
 | `POST /tasks/{id}/opencode/start`     | dispatch an autonomous OpenCode session → 200 session id + url (UI/ops) | — |
 | `POST   /tasks/{id}/relations`        | add a relation edge (upsert)                             | `relate_tasks` (add) |
@@ -591,7 +591,7 @@ every edit would only add round-trips:
 `200` with the fresh summary row (notes are visible via `get_task`). Unknown
 task → `404`.
 
-### PATCH /tasks/{id}/acceptance-criteria/{seq} → `complete_ac` (+ text edit)
+### PATCH /tasks/{id}/acceptance-criteria/{seq} → `complete_ac` · `edit_ac`
 
 `{seq}` is the **1-based** criterion sequence in the URL. Non-numeric or < 1 →
 `400`; unknown task **or** unknown seq → `404`.
@@ -602,7 +602,7 @@ Two shapes share the endpoint:
 // toggle (complete_ac): done sets/clears the checkbox, note records why
 { "actor": { "name": "ada" }, "done": true, "note": "manual test passed" }
 
-// reword: "text" takes precedence — done/note are ignored in that case
+// reword (edit_ac): "text" takes precedence — done/note are ignored in that case
 { "actor": { "name": "ada" }, "text": "login works (hardened)" }
 ```
 
@@ -616,7 +616,7 @@ task version bump. `200` with the updated AC row:
 { "seq": 1, "text": "login works", "done": true, "note": "manual test passed", "completed_by": { "type": "human", "name": "ada" }, "completed_at": "2026-09-26T15:40:12Z" }
 ```
 
-### POST /tasks/{id}/acceptance-criteria (UI)
+### POST /tasks/{id}/acceptance-criteria → `add_ac`
 
 Appends a new criterion to an existing task. The seq is minted server-side as
 **max(seq)+1** — callers never choose it, and surviving seqs are never
@@ -630,7 +630,7 @@ event in the same transaction, no version bump. `201` with the fresh AC row:
 { "seq": 3, "text": "reset works", "done": false }
 ```
 
-### DELETE /tasks/{id}/acceptance-criteria/{seq} (UI)
+### DELETE /tasks/{id}/acceptance-criteria/{seq} → `remove_ac`
 
 Removes exactly the criterion at the **1-based** `{seq}`. The body is optional
 JSON but MUST carry a valid `actor` — a removal appends an `ac-removed` event

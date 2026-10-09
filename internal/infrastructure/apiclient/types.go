@@ -286,10 +286,32 @@ type NotesRequest struct {
 
 // ACToggleRequest is PATCH /tasks/{id}/acceptance-criteria/{seq}. Done=true
 // records completed_by/completed_at; false clears both (uncheck is free).
+// Text optionally rewords the criterion; when present, it takes precedence over Done/Note.
 type ACToggleRequest struct {
+	Actor Actor   `json:"actor"`
+	Done  bool    `json:"done"`
+	Note  string  `json:"note,omitempty"`
+	Text  *string `json:"text,omitempty"`
+}
+
+// ACAddRequest is POST /tasks/{id}/acceptance-criteria. Text is the criterion's
+// markdown wording and must be non-empty after trimming (else 400).
+type ACAddRequest struct {
 	Actor Actor  `json:"actor"`
-	Done  bool   `json:"done"`
-	Note  string `json:"note,omitempty"`
+	Text  string `json:"text"`
+}
+
+// ACRemoveRequest is the body of DELETE /tasks/{id}/acceptance-criteria/{seq}.
+// The actor is required (else 400) for activity log attribution.
+type ACRemoveRequest struct {
+	Actor Actor `json:"actor"`
+}
+
+// ACEditTextRequest is PATCH /tasks/{id}/acceptance-criteria/{seq} for editing
+// criterion text. Text must be non-empty after trimming (else 400).
+type ACEditTextRequest struct {
+	Actor Actor  `json:"actor"`
+	Text  string `json:"text"`
 }
 
 // ArtifactRequest is POST /tasks/{id}/artifacts. Kind must be one of

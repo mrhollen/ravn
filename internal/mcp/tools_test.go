@@ -280,6 +280,20 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 		data, _ := json.Marshal(row)
 		writeJSON(w, http.StatusOK, string(data))
 	})
+	mux.HandleFunc("POST /api/v1/tasks/{id}/acceptance-criteria", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.ACAddRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: POST /acceptance-criteria body not JSON: %v (%s)", err, b)
+		}
+		row := apiclient.AcceptanceCriterion{Seq: 2, Text: req.Text, Done: false}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusCreated, string(data))
+	})
+	mux.HandleFunc("DELETE /api/v1/tasks/{id}/acceptance-criteria/{seq}", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}/acceptance-criteria/{seq}", func(w http.ResponseWriter, r *http.Request) {
 		b := record(r)
 		var req apiclient.ACToggleRequest
@@ -290,7 +304,11 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 		if err != nil {
 			t.Errorf("upstream: seq path value = %q, want number", r.PathValue("seq"))
 		}
-		row := apiclient.AcceptanceCriterion{Seq: seq, Text: "login works", Done: req.Done, Note: req.Note}
+		text := "login works"
+		if req.Text != nil {
+			text = *req.Text
+		}
+		row := apiclient.AcceptanceCriterion{Seq: seq, Text: text, Done: req.Done, Note: req.Note}
 		data, _ := json.Marshal(row)
 		writeJSON(w, http.StatusOK, string(data))
 	})
@@ -367,7 +385,7 @@ func jsonString(s string) string {
 var wantToolNames = []string{
 	"list_projects", "create_project", "list_tasks", "get_task", "create_task",
 	"update_task", "claim_task", "release_task", "heartbeat_task", "add_comment",
-	"update_notes", "complete_ac", "attach_artifact", "relate_tasks",
+	"update_notes", "complete_ac", "add_ac", "remove_ac", "edit_ac", "attach_artifact", "relate_tasks",
 }
 
 func startMCPStack(t *testing.T, upstreamURL string) *httptest.Server {
@@ -1018,6 +1036,93 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 		}
 		if !sent.Done || sent.Note != "manual test passed" {
 			t.Errorf("complete_ac upstream body = %s", cc.body)
+		}
+	})
+
+	t.Run("complete_ac_text", func(t *testing.T) {
+		res := callTool(t, c, ctx, "complete_ac", map[string]any{
+			"id":   "T1",
+			"seq":  2,
+			"done": false,
+			"text": "reworded via complete_ac",
+		})
+		if res.IsError {
+			t.Fatalf("complete_ac (text) returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		if row["text"] != "reworded via complete_ac" {
+			t.Errorf("complete_ac (text) result = %s", firstText(t, res))
+		}
+	})
+
+	t.Run("add_ac", func(t *testing.T) {
+		res := callTool(t, c, ctx, "add_ac", map[string]any{
+			"id":    "T1",
+			"actor": map[string]any{"name": "runner-2", "type": "agent"},
+			"text":  "verify logout works",
+		})
+		if res.IsError {
+			t.Fatalf("add_ac returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		seq, _ := row["seq"].(float64)
+		if int(seq) != 2 || row["text"] != "verify logout works" || row["done"] != false {
+			t.Errorf("add_ac result = %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/acceptance-criteria")
+		var sent apiclient.ACAddRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("add_ac upstream body not JSON: %v (%s)", err, cc.body)
+		}
+		if sent.Text != "verify logout works" || sent.Actor.Name != "runner-2" || sent.Actor.Type != "agent" {
+			t.Errorf("add_ac upstream body = %s", cc.body)
+		}
+	})
+
+	t.Run("remove_ac", func(t *testing.T) {
+		res := callTool(t, c, ctx, "remove_ac", map[string]any{
+			"id":    "T1",
+			"seq":   2,
+			"actor": map[string]any{"name": "runner-2", "type": "agent"},
+		})
+		if res.IsError {
+			t.Fatalf("remove_ac returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		if row["removed"] != true || row["task_id"] != "T1" || int(row["seq"].(float64)) != 2 {
+			t.Errorf("remove_ac result = %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodDelete, "/api/v1/tasks/T1/acceptance-criteria/2")
+		var sent apiclient.ACRemoveRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("remove_ac upstream body not JSON: %v (%s)", err, cc.body)
+		}
+		if sent.Actor.Name != "runner-2" || sent.Actor.Type != "agent" {
+			t.Errorf("remove_ac upstream body = %s", cc.body)
+		}
+	})
+
+	t.Run("edit_ac", func(t *testing.T) {
+		res := callTool(t, c, ctx, "edit_ac", map[string]any{
+			"id":    "T1",
+			"seq":   1,
+			"actor": map[string]any{"name": "runner-2", "type": "agent"},
+			"text":  "login works flawlessly",
+		})
+		if res.IsError {
+			t.Fatalf("edit_ac returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		if row["text"] != "login works flawlessly" || int(row["seq"].(float64)) != 1 {
+			t.Errorf("edit_ac result = %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1/acceptance-criteria/1")
+		var sent apiclient.ACEditTextRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("edit_ac upstream body not JSON: %v (%s)", err, cc.body)
+		}
+		if sent.Text != "login works flawlessly" || sent.Actor.Name != "runner-2" || sent.Actor.Type != "agent" {
+			t.Errorf("edit_ac upstream body = %s", cc.body)
 		}
 	})
 

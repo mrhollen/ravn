@@ -2,7 +2,7 @@
 
 This is the reference an **MCP client (or the agent behind one)** needs to work
 on a crowban board. The full wire contract lives in [API.md](API.md); this doc
-covers how to connect, the actor convention, all 14 tools with their exact
+covers how to connect, the actor convention, all 17 tools with their exact
 arguments, plus the workflow prompts and read-only resources.
 
 ## What it is
@@ -80,7 +80,7 @@ Every mutating tool accepts an optional `actor` object:
   fallback still attributes to that shared name — pass your own name whenever
   you can.
 
-## Tools (14)
+## Tools (17)
 
 All tools return **compact JSON text** on success. All failures come back as an
 `isError` tool result whose text is the upstream error body **verbatim** — its
@@ -100,7 +100,10 @@ All tools return **compact JSON text** on success. All failures come back as an
 | `heartbeat_task` | Keep the lease alive during long silent work; NO version bump, NO `updated_at` change. The fresh row doubles as a health/state check. Non-holder or no lease → 409 (empty `holder.type` = "claim first"). | `id` (required), `actor?` | Fresh summary row (new `claim_expires_at`) |
 | `add_comment` | Append a typed markdown comment (no version bump). `kind: "question"` signals **needs human input**. Not idempotent — after an error, check the tail before re-posting. | `id`, `kind` (required; progress\|question\|decision\|handoff\|note), `body` (required markdown), `actor?` | The created comment row |
 | `update_notes` | Replace the DURABLE resume-context blob — "write down what you found / what's next so a fresh session can pick up". **Replace-on-write**: send the complete new notes, not an append. No version field; identical content is a no-op. | `id`, `notes` (both required), `actor?` | Fresh summary row (read notes back via `get_task`) |
-| `complete_ac` | Check/uncheck one acceptance criterion by its 1-based seq. Uncheck clears `completed_by`/`completed_at` (free). No version bump. | `id`, `seq` (number ≥ 1, required), `done` (bool, required), `note?`, `actor?` | The updated AC row |
+| `complete_ac` | Check/uncheck one acceptance criterion by its 1-based seq, or reword via optional `text`. Uncheck clears `completed_by`/`completed_at` (free). No version bump. | `id`, `seq` (number ≥ 1, required), `done` (bool, required), `note?`, `text?`, `actor?` | The updated AC row |
+| `add_ac` | Append a new acceptance criterion at `max(seq)+1`. No version bump. | `id` (required), `text` (required markdown, non-empty), `actor?` | The created AC row |
+| `remove_ac` | Remove an acceptance criterion by its 1-based seq. Surviving criteria keep their seqs (no renumbering). No version bump. | `id` (required), `seq` (number ≥ 1, required), `actor?` | `{"removed":true, "task_id", "seq"}` |
+| `edit_ac` | Reword or edit the text of an existing acceptance criterion by its 1-based seq. No version bump. | `id` (required), `seq` (number ≥ 1, required), `text` (required markdown, non-empty), `actor?` | The updated AC row |
 | `attach_artifact` | Attach typed evidence. **Recommended for testing work:** when you run tests or verification commands, attach the output (`command-output`/`log`/`screenshot`) so a human can verify your work — encouraged, never required. Not idempotent — check artifacts via `get_task` before re-attaching after an error. | `id`, `kind` (required; log\|screenshot\|command-output\|trace\|url\|other), `ref` (required URL/path), `summary?`, `actor?` | The created artifact row |
 | `relate_tasks` | Add or remove a relation edge between two tasks in the same project. | `id`, `other_id`, `kind` (all required; child\|parent\|blocked-by\|duplicate-of\|related), `action?` ("add" default \| "remove"), `actor?` | add: stored relation row (a `parent` input is stored/returned as the inverse `child` edge); remove: `{"removed":true, task_id, other_task_id, kind}` |
 
@@ -111,7 +114,7 @@ conflict. Edges are child rows (no version bump). The `blocked` flag on
 
 ## Prompts & resources
 
-Beyond the 14 tools, the server registers two workflow **prompts** and read-only
+Beyond the 17 tools, the server registers two workflow **prompts** and read-only
 **resources** (both show up in your client's prompt/resource listings).
 
 ### Prompts

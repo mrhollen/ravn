@@ -88,6 +88,18 @@ func (m *mockClient) CompleteAC(ctx context.Context, id string, seq int, req api
 	return nil, errors.New("unimplemented")
 }
 
+func (m *mockClient) AddAC(ctx context.Context, id string, req apiclient.ACAddRequest) (*apiclient.AcceptanceCriterion, error) {
+	return nil, errors.New("unimplemented")
+}
+
+func (m *mockClient) RemoveAC(ctx context.Context, id string, seq int, actor apiclient.Actor) error {
+	return errors.New("unimplemented")
+}
+
+func (m *mockClient) EditACText(ctx context.Context, id string, seq int, req apiclient.ACEditTextRequest) (*apiclient.AcceptanceCriterion, error) {
+	return nil, errors.New("unimplemented")
+}
+
 func (m *mockClient) AttachArtifact(ctx context.Context, id string, req apiclient.ArtifactRequest) (*apiclient.Artifact, error) {
 	return nil, errors.New("unimplemented")
 }

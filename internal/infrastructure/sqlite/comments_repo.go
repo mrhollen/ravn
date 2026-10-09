@@ -53,9 +53,12 @@ func (r *commentRepo) ListByTask(ctx context.Context, taskID domain.ID, limit, o
 	if limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, limit)
-	}
-	if offset > 0 {
-		query += ` OFFSET ?`
+		if offset > 0 {
+			query += ` OFFSET ?`
+			args = append(args, offset)
+		}
+	} else if offset > 0 {
+		query += ` LIMIT -1 OFFSET ?`
 		args = append(args, offset)
 	}
 

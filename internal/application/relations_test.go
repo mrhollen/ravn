@@ -469,3 +469,348 @@ func mapsEqual(got, want map[string]any) bool {
 	}
 	return true
 }
+
+// TestRelate_CycleDetection_BlockedByDirectAndTransitive satisfies AC 1:
+// Attempting to create a circular blocked-by dependency (direct A<->B or
+// transitive A->B->C->A or longer chains) returns ErrInvalid, writes nothing,
+// and appends no events.
+func TestRelate_CycleDetection_BlockedByDirectAndTransitive(t *testing.T) {
+	t.Run("direct cycle A<->B", func(t *testing.T) {
+		rels, _, uow, events := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B")
+		a, b := ids[0], ids[1]
+
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("first relation (A blocked-by B): %v", err)
+		}
+
+		_, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationBlockedBy, RelateAdd)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("direct cycle error = %v, want domain.ErrInvalid", err)
+		}
+		if !strings.Contains(err.Error(), "cycle detected") || !strings.Contains(err.Error(), "blocked-by") {
+			t.Errorf("error message %q should mention cycle detected and blocked-by", err)
+		}
+
+		if len(uow.relations.edges) != 1 {
+			t.Errorf("stored edges = %d, want exactly 1 after rejected cycle", len(uow.relations.edges))
+		}
+		if len(events.events) != 1 {
+			t.Errorf("events = %d, want exactly 1 after rejected cycle", len(events.events))
+		}
+	})
+
+	t.Run("transitive cycle A->B->C->A", func(t *testing.T) {
+		rels, _, uow, events := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B", "C")
+		a, b, c := ids[0], ids[1], ids[2]
+
+		// A is blocked by B, B is blocked by C
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("A blocked-by B: %v", err)
+		}
+		if _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("B blocked-by C: %v", err)
+		}
+
+		// C is blocked by A completes the cycle: A -> B -> C -> A
+		_, err := rels.Relate(ctx, relateTestActor, c, a, domain.RelationBlockedBy, RelateAdd)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("transitive cycle error = %v, want domain.ErrInvalid", err)
+		}
+		if !strings.Contains(err.Error(), "cycle detected") || !strings.Contains(err.Error(), "blocked-by") {
+			t.Errorf("error message %q should mention cycle detected and blocked-by", err)
+		}
+
+		if len(uow.relations.edges) != 2 {
+			t.Errorf("stored edges = %d, want exactly 2 after rejected transitive cycle", len(uow.relations.edges))
+		}
+		if len(events.events) != 2 {
+			t.Errorf("events = %d, want exactly 2 after rejected transitive cycle", len(events.events))
+		}
+	})
+
+	t.Run("four-node transitive chain A->B->C->D->A", func(t *testing.T) {
+		rels, _, uow, _ := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B", "C", "D")
+		a, b, c, d := ids[0], ids[1], ids[2], ids[3]
+
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("A blocked-by B: %v", err)
+		}
+		if _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("B blocked-by C: %v", err)
+		}
+		if _, err := rels.Relate(ctx, relateTestActor, c, d, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("C blocked-by D: %v", err)
+		}
+
+		_, err := rels.Relate(ctx, relateTestActor, d, a, domain.RelationBlockedBy, RelateAdd)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("4-node cycle error = %v, want domain.ErrInvalid", err)
+		}
+		if !strings.Contains(err.Error(), "cycle detected") {
+			t.Errorf("error message %q should mention cycle detected", err)
+		}
+	})
+}
+
+// TestRelate_CycleDetection_ParentChildDirectAndTransitive satisfies AC 2:
+// Attempting to create a circular parent-child hierarchy (direct or transitive,
+// expressed via RelationChild or the RelationParent alias) returns ErrInvalid,
+// writes nothing, and appends no events.
+func TestRelate_CycleDetection_ParentChildDirectAndTransitive(t *testing.T) {
+	t.Run("direct cycle via child relation", func(t *testing.T) {
+		rels, _, uow, events := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B")
+		a, b := ids[0], ids[1]
+
+		// A is child of B
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd); err != nil {
+			t.Fatalf("A child-of B: %v", err)
+		}
+
+		// Attempt B is child of A (making B parent of A and child of A)
+		_, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationChild, RelateAdd)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("direct child cycle error = %v, want domain.ErrInvalid", err)
+		}
+		if !strings.Contains(err.Error(), "cycle detected") || !strings.Contains(err.Error(), "child") {
+			t.Errorf("error message %q should mention cycle detected and child", err)
+		}
+
+		if len(uow.relations.edges) != 1 {
+			t.Errorf("stored edges = %d, want exactly 1 after rejected child cycle", len(uow.relations.edges))
+		}
+		if len(events.events) != 1 {
+			t.Errorf("events = %d, want exactly 1 after rejected child cycle", len(events.events))
+		}
+	})
+
+	t.Run("direct cycle via parent alias", func(t *testing.T) {
+		rels, _, uow, events := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B")
+		a, b := ids[0], ids[1]
+
+		// B is parent of A (stored: A is child of B)
+		if _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationParent, RelateAdd); err != nil {
+			t.Fatalf("B parent-of A: %v", err)
+		}
+
+		// Attempt A is parent of B (stored: B is child of A)
+		_, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateAdd)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("direct parent cycle error = %v, want domain.ErrInvalid", err)
+		}
+		if !strings.Contains(err.Error(), "cycle detected") {
+			t.Errorf("error message %q should mention cycle detected", err)
+		}
+
+		if len(uow.relations.edges) != 1 {
+			t.Errorf("stored edges = %d, want exactly 1 after rejected parent cycle", len(uow.relations.edges))
+		}
+		if len(events.events) != 1 {
+			t.Errorf("events = %d, want exactly 1 after rejected parent cycle", len(events.events))
+		}
+	})
+
+	t.Run("transitive cycle via child relation", func(t *testing.T) {
+		rels, _, uow, events := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B", "C")
+		a, b, c := ids[0], ids[1], ids[2]
+
+		// A is child of B, B is child of C (C -> B -> A)
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd); err != nil {
+			t.Fatalf("A child-of B: %v", err)
+		}
+		if _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationChild, RelateAdd); err != nil {
+			t.Fatalf("B child-of C: %v", err)
+		}
+
+		// Attempt C is child of A (cycle: C child of A, A child of B, B child of C)
+		_, err := rels.Relate(ctx, relateTestActor, c, a, domain.RelationChild, RelateAdd)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("transitive child cycle error = %v, want domain.ErrInvalid", err)
+		}
+		if !strings.Contains(err.Error(), "cycle detected") || !strings.Contains(err.Error(), "child") {
+			t.Errorf("error message %q should mention cycle detected and child", err)
+		}
+
+		if len(uow.relations.edges) != 2 {
+			t.Errorf("stored edges = %d, want exactly 2 after rejected transitive child cycle", len(uow.relations.edges))
+		}
+		if len(events.events) != 2 {
+			t.Errorf("events = %d, want exactly 2 after rejected transitive child cycle", len(events.events))
+		}
+	})
+
+	t.Run("transitive cycle via parent alias", func(t *testing.T) {
+		rels, _, uow, _ := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B", "C")
+		a, b, c := ids[0], ids[1], ids[2]
+
+		// C is parent of B, B is parent of A
+		if _, err := rels.Relate(ctx, relateTestActor, c, b, domain.RelationParent, RelateAdd); err != nil {
+			t.Fatalf("C parent-of B: %v", err)
+		}
+		if _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationParent, RelateAdd); err != nil {
+			t.Fatalf("B parent-of A: %v", err)
+		}
+
+		// Attempt A is parent of C
+		_, err := rels.Relate(ctx, relateTestActor, a, c, domain.RelationParent, RelateAdd)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("transitive parent alias cycle error = %v, want domain.ErrInvalid", err)
+		}
+		if !strings.Contains(err.Error(), "cycle detected") {
+			t.Errorf("error message %q should mention cycle detected", err)
+		}
+	})
+
+	t.Run("mixed child and parent alias transitive cycle", func(t *testing.T) {
+		rels, _, uow, _ := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B", "C")
+		a, b, c := ids[0], ids[1], ids[2]
+
+		// B parent of A (parent alias) -> A child of B
+		if _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationParent, RelateAdd); err != nil {
+			t.Fatalf("B parent-of A: %v", err)
+		}
+		// B child of C (child kind) -> B child of C
+		if _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationChild, RelateAdd); err != nil {
+			t.Fatalf("B child-of C: %v", err)
+		}
+
+		// Attempt C child of A
+		_, err := rels.Relate(ctx, relateTestActor, c, a, domain.RelationChild, RelateAdd)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("mixed transitive cycle error = %v, want domain.ErrInvalid", err)
+		}
+		if !strings.Contains(err.Error(), "cycle detected") {
+			t.Errorf("error message %q should mention cycle detected", err)
+		}
+	})
+}
+
+// TestRelate_CycleDetection_NonCyclicRelationsSucceed satisfies AC 3:
+// Non-cyclic relations (diamond DAGs, multiple children per parent, multi-step chains,
+// idempotent re-adds, and non-cyclic relations after removal) continue to add
+// successfully without regression.
+func TestRelate_CycleDetection_NonCyclicRelationsSucceed(t *testing.T) {
+	t.Run("blocked-by diamond DAG", func(t *testing.T) {
+		rels, _, uow, _ := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B", "C", "D")
+		a, b, c, d := ids[0], ids[1], ids[2], ids[3]
+
+		// A blocked-by B and C
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("A blocked-by B: %v", err)
+		}
+		if _, err := rels.Relate(ctx, relateTestActor, a, c, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("A blocked-by C: %v", err)
+		}
+
+		// B and C both blocked-by D (DAG diamond)
+		if _, err := rels.Relate(ctx, relateTestActor, b, d, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("B blocked-by D: %v", err)
+		}
+		if _, err := rels.Relate(ctx, relateTestActor, c, d, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("C blocked-by D: %v", err)
+		}
+
+		if len(uow.relations.edges) != 4 {
+			t.Fatalf("diamond DAG edges = %d, want 4", len(uow.relations.edges))
+		}
+	})
+
+	t.Run("multiple children under same parent", func(t *testing.T) {
+		rels, _, uow, _ := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "Parent", "Child1", "Child2")
+		p, c1, c2 := ids[0], ids[1], ids[2]
+
+		if _, err := rels.Relate(ctx, relateTestActor, c1, p, domain.RelationChild, RelateAdd); err != nil {
+			t.Fatalf("c1 child-of p: %v", err)
+		}
+		if _, err := rels.Relate(ctx, relateTestActor, c2, p, domain.RelationChild, RelateAdd); err != nil {
+			t.Fatalf("c2 child-of p: %v", err)
+		}
+
+		if len(uow.relations.edges) != 2 {
+			t.Fatalf("sibling children edges = %d, want 2", len(uow.relations.edges))
+		}
+	})
+
+	t.Run("idempotent re-add succeeds", func(t *testing.T) {
+		rels, _, uow, _ := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B")
+		a, b := ids[0], ids[1]
+
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("first add: %v", err)
+		}
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("idempotent second add should succeed, got: %v", err)
+		}
+
+		if len(uow.relations.edges) != 1 {
+			t.Fatalf("edges = %d, want 1", len(uow.relations.edges))
+		}
+	})
+
+	t.Run("edge removal allows previously cyclic direction", func(t *testing.T) {
+		rels, _, uow, _ := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B")
+		a, b := ids[0], ids[1]
+
+		// A blocked-by B
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("A blocked-by B: %v", err)
+		}
+
+		// Remove A blocked-by B
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateRemove); err != nil {
+			t.Fatalf("remove A blocked-by B: %v", err)
+		}
+
+		// Now B blocked-by A must succeed (no cycle exists anymore)
+		if _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationBlockedBy, RelateAdd); err != nil {
+			t.Fatalf("B blocked-by A after removal should succeed, got: %v", err)
+		}
+
+		if len(uow.relations.edges) != 1 {
+			t.Fatalf("edges = %d, want 1", len(uow.relations.edges))
+		}
+	})
+
+	t.Run("duplicate-of and related do not enforce cycle check", func(t *testing.T) {
+		rels, _, uow, _ := newRelationEnv(t)
+		ctx := context.Background()
+		_, ids := seedRelationWorld(t, uow, "world", "A", "B")
+		a, b := ids[0], ids[1]
+
+		// Mutual related
+		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationRelated, RelateAdd); err != nil {
+			t.Fatalf("A related B: %v", err)
+		}
+		if _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationRelated, RelateAdd); err != nil {
+			t.Fatalf("B related A: %v", err)
+		}
+
+		if len(uow.relations.edges) != 2 {
+			t.Fatalf("related edges = %d, want 2", len(uow.relations.edges))
+		}
+	})
+}
+
