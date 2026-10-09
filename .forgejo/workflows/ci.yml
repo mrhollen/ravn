@@ -97,15 +97,15 @@ jobs:
     name: Build and Push Image
     needs: ci
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Build and push container image to Forgejo
+        continue-on-error: true
         run: |
-          REGISTRY="server:3000"
+          REGISTRY="forgejo.lan"
           IMAGE_NAME="${REGISTRY}/${{ github.repository }}:latest"
           echo "Target image: ${IMAGE_NAME}"
           echo "Logging in to ${REGISTRY} container registry..."
