@@ -123,10 +123,16 @@ jobs:
           REGISTRY="forgejo.lan:80"
           IMAGE_NAME="${REGISTRY}/${{ github.repository }}:latest"
           echo "Target image: ${IMAGE_NAME}"
-          echo "Logging in to ${REGISTRY} container registry..."
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin
+
+          echo "Installing crane for direct HTTP registry push..."
+          curl -sL https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz | tar -xz -C /usr/local/bin crane
+
           echo "Building image (target server-runtime)..."
-          docker build --target server-runtime -t "${IMAGE_NAME}" .
-          echo "Pushing ${IMAGE_NAME}..."
-          docker push "${IMAGE_NAME}"
+          docker build --target server-runtime -t crowban:latest .
+
+          echo "Logging in to ${REGISTRY} via crane..."
+          echo "${{ secrets.GITHUB_TOKEN }}" | crane auth login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin --insecure
+
+          echo "Pushing ${IMAGE_NAME} via crane..."
+          docker save crowban:latest | crane push - "${IMAGE_NAME}" --insecure
           echo "Successfully pushed ${IMAGE_NAME} to Forgejo container registry!"
