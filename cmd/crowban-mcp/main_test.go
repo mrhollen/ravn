@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -499,3 +500,115 @@ func TestWithAuth_EndToEndStack(t *testing.T) {
 	}
 	respHealth.Body.Close()
 }
+
+type infiniteReader struct{}
+
+func (infiniteReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'a'
+	}
+	return len(p), nil
+}
+
+func TestWithModernMCPCompat_PayloadLimits(t *testing.T) {
+	innerCalled := false
+	var capturedBody []byte
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		innerCalled = true
+		if r.Body != nil {
+			capturedBody, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := withModernMCPCompat(inner)
+
+	t.Run("normal request within limit has protocolVersion backfilled", func(t *testing.T) {
+		innerCalled = false
+		capturedBody = nil
+		payload := `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(payload))
+		req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", rec.Code)
+		}
+		if !innerCalled {
+			t.Fatal("expected inner handler to be called")
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal(capturedBody, &parsed); err != nil {
+			t.Fatalf("failed to parse backfilled body: %v", err)
+		}
+		params := parsed["params"].(map[string]any)
+		meta := params["_meta"].(map[string]any)
+		if meta["io.modelcontextprotocol/protocolVersion"] != "2026-07-28" {
+			t.Fatalf("expected protocolVersion '2026-07-28', got %v", meta["io.modelcontextprotocol/protocolVersion"])
+		}
+	})
+
+	t.Run("content length exceeding limit is rejected with 413", func(t *testing.T) {
+		innerCalled = false
+		t.Setenv("MCP_MAX_PAYLOAD_BYTES", "1024")
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(strings.Repeat("x", 2048)))
+		req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("expected 413 Payload Too Large, got %d", rec.Code)
+		}
+		if innerCalled {
+			t.Fatal("inner handler should not be called on 413")
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal 413 response: %v", err)
+		}
+		if resp["error"] != "payload_too_large" {
+			t.Fatalf("expected error 'payload_too_large', got %v", resp["error"])
+		}
+	})
+
+	t.Run("infinite streaming body bounded by LimitReader and rejected with 413", func(t *testing.T) {
+		innerCalled = false
+		t.Setenv("MCP_MAX_PAYLOAD_BYTES", "512")
+		// Unknown Content-Length (-1) with infinite stream
+		req := httptest.NewRequest(http.MethodPost, "/mcp", infiniteReader{})
+		req.ContentLength = -1
+		req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("expected 413 Payload Too Large, got %d", rec.Code)
+		}
+		if innerCalled {
+			t.Fatal("inner handler should not be called on 413")
+		}
+	})
+
+	t.Run("request exceeding default limit without env var is rejected with 413", func(t *testing.T) {
+		innerCalled = false
+		// Large payload (> 4MB)
+		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		req.ContentLength = int64(defaultMaxMCPPayloadBytes + 1)
+		req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("expected 413 Payload Too Large, got %d", rec.Code)
+		}
+		if innerCalled {
+			t.Fatal("inner handler should not be called on 413")
+		}
+	})
+}
+

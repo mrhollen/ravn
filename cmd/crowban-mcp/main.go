@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -179,17 +180,60 @@ func messageHandlerWithSessionFallback(next http.Handler) http.Handler {
 	})
 }
 
+const defaultMaxMCPPayloadBytes = 4 << 20 // 4MB
+
+func maxMCPPayloadBytes() int64 {
+	if v := os.Getenv("MCP_MAX_PAYLOAD_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxMCPPayloadBytes
+}
+
 // withModernMCPCompat ensures that incoming requests carrying Mcp-Protocol-Version
 // header have the corresponding _meta protocolVersion populated in params if missing,
 // so strict mark3labs/mcp-go modern validation does not reject client notifications
 // (such as notifications/roots/list_changed from modelcontextprotocol/go_sdk) with 400.
+// It also bounds memory consumption by enforcing maxMCPPayloadBytes on incoming bodies
+// using io.LimitReader, rejecting oversized requests with HTTP 413 Payload Too Large.
 func withModernMCPCompat(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
+			limit := maxMCPPayloadBytes()
+			if r.ContentLength > limit {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":   "payload_too_large",
+					"message": fmt.Sprintf("request payload exceeds limit of %d bytes", limit),
+				})
+				return
+			}
+
 			protoVer := r.Header.Get("Mcp-Protocol-Version")
 			if protoVer != "" && r.Body != nil {
-				bodyBytes, err := io.ReadAll(r.Body)
-				if err == nil && len(bodyBytes) > 0 {
+				bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+				if err != nil {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"error":   "bad_request",
+						"message": "failed to read request body",
+					})
+					return
+				}
+				if int64(len(bodyBytes)) > limit {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusRequestEntityTooLarge)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"error":   "payload_too_large",
+						"message": fmt.Sprintf("request payload exceeds limit of %d bytes", limit),
+					})
+					return
+				}
+
+				if len(bodyBytes) > 0 {
 					var raw map[string]any
 					if err := json.Unmarshal(bodyBytes, &raw); err == nil {
 						params, _ := raw["params"].(map[string]any)
@@ -209,10 +253,12 @@ func withModernMCPCompat(next http.Handler) http.Handler {
 							}
 						}
 					}
-					r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 					r.ContentLength = int64(len(bodyBytes))
 					r.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
 				}
+				r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			} else if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, limit)
 			}
 		}
 		next.ServeHTTP(w, r)
