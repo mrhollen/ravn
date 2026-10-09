@@ -124,6 +124,9 @@ jobs:
           IMAGE_NAME="${REGISTRY}/${{ github.repository }}:latest"
           echo "Target image: ${IMAGE_NAME}"
 
+          # Ensure forgejo.lan resolves to 10.0.0.150 inside the runner container
+          grep -q "forgejo.lan" /etc/hosts || echo "10.0.0.150 forgejo.lan" >> /etc/hosts
+
           echo "Installing crane for direct HTTP registry push..."
           curl -sL https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz | tar -xz -C /usr/local/bin crane
 
