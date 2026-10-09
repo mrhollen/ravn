@@ -133,6 +133,10 @@ jobs:
           echo "Logging in to ${REGISTRY} via crane..."
           echo "${{ secrets.GITHUB_TOKEN }}" | crane auth login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin --insecure
 
+          echo "Saving image to tarball for crane..."
+          docker save crowban:latest -o /tmp/crowban.tar
+
           echo "Pushing ${IMAGE_NAME} via crane..."
-          docker save crowban:latest | crane push - "${IMAGE_NAME}" --insecure
+          crane push /tmp/crowban.tar "${IMAGE_NAME}" --insecure
+          rm -f /tmp/crowban.tar
           echo "Successfully pushed ${IMAGE_NAME} to Forgejo container registry!"
