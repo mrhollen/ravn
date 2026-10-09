@@ -118,7 +118,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build and push container image to Forgejo
-        continue-on-error: true
         env:
           PUSH_TOKEN: ${{ secrets.PACKAGE_TOKEN || secrets.FORGEJO_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
