@@ -120,7 +120,7 @@ jobs:
       - name: Build and push container image to Forgejo
         continue-on-error: true
         run: |
-          REGISTRY="forgejo.lan"
+          REGISTRY="forgejo.lan:80"
           IMAGE_NAME="${REGISTRY}/${{ github.repository }}:latest"
           echo "Target image: ${IMAGE_NAME}"
           echo "Logging in to ${REGISTRY} container registry..."
