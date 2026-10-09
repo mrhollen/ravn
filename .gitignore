@@ -34,3 +34,6 @@ go.work.sum
 # Uploaded artifacts (local development)
 /artifacts/
 
+# Agents working directory
+.agents/
+

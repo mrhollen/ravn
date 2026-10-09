@@ -55,10 +55,10 @@ jobs:
           npm ci
           npm run build
 
-      - name: Install Playwright Chromium
+      - name: Install Playwright Chromium and dependencies
         run: |
           if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
-            cd web && npx playwright install chromium
+            cd web && npx playwright install --with-deps chromium
           fi
 
       - name: Run browser E2E tests
