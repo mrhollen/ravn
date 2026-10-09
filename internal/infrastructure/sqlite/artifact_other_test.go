@@ -13,6 +13,7 @@ import (
 // written before the rebuild survived it. Migrate itself is idempotent
 // (TestMigrateIsIdempotent covers a second full pass).
 func TestArtifactOtherKindMigration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 

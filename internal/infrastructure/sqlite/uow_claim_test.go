@@ -62,6 +62,7 @@ func eventCounts(t *testing.T, db *sql.DB, ctx context.Context, taskID domain.ID
 // --- the MANDATORY race test ---------------------------------------------------
 
 func TestClaimRacingAgents_ExactlyOneWinnerPerTask(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	const (
 		rounds  = 4 // the whole race is repeated on independent tasks/DBs; each round must show exactly one winner
@@ -154,6 +155,7 @@ func TestClaimRacingAgents_ExactlyOneWinnerPerTask(t *testing.T) {
 // --- lazy expiry (no sweeper) ---------------------------------------------------
 
 func TestClaimLazyExpiry_NoSweeper_TakeoverAfterClockAdvance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -229,6 +231,7 @@ func TestClaimLazyExpiry_NoSweeper_TakeoverAfterClockAdvance(t *testing.T) {
 // --- heartbeat over real SQL -----------------------------------------------------
 
 func TestHeartbeatRealSQL_ExtendsLeaseWithoutBumpOrEvent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -284,6 +287,7 @@ func TestHeartbeatRealSQL_ExtendsLeaseWithoutBumpOrEvent(t *testing.T) {
 // --- release over real SQL ---------------------------------------------------------
 
 func TestReleaseRealSQL_NonHolderConflictAndUnclaimedNoOp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)

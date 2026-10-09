@@ -45,6 +45,7 @@ func detailEventKinds(t *testing.T, d application.TaskDetail) []domain.EventKind
 }
 
 func TestCollab_CommentAppearsInGetDetailTailWithEventAndNoVersionBump(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects, comments, _, _ := newCollabEnv(t, db)
@@ -103,6 +104,7 @@ func TestCollab_CommentAppearsInGetDetailTailWithEventAndNoVersionBump(t *testin
 }
 
 func TestCollab_ArtifactAppearsInGetDetailWithEventAndNoVersionBump(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects, _, _, artifacts := newCollabEnv(t, db)
@@ -156,6 +158,7 @@ func TestCollab_ArtifactAppearsInGetDetailWithEventAndNoVersionBump(t *testing.T
 }
 
 func TestCollab_AcToggleShownDoneInGetDetailWithEventAndNoVersionBump(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects, _, acs, _ := newCollabEnv(t, db)
@@ -210,6 +213,7 @@ func TestCollab_AcToggleShownDoneInGetDetailWithEventAndNoVersionBump(t *testing
 }
 
 func TestCollab_UpdateNotesReplacesBumpsVersionAndEmitsNoted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects, _, _, _ := newCollabEnv(t, db)
@@ -270,6 +274,7 @@ func TestCollab_UpdateNotesReplacesBumpsVersionAndEmitsNoted(t *testing.T) {
 // their data in their transactions, and that the task row's version and
 // updated_at were never touched.
 func TestCollab_AcEditingRoundTripProvesSeqStabilityOnRealSQL(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects, _, acs, _ := newCollabEnv(t, db)
@@ -361,6 +366,7 @@ func TestCollab_AcEditingRoundTripProvesSeqStabilityOnRealSQL(t *testing.T) {
 // real SQL: a child-row write whose parent task does not exists errors out and
 // leaves NO orphan event row behind (data + event commit or roll back together).
 func TestCollab_FailedChildRowWriteCommitsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	_, _, comments, _, artifacts := newCollabEnv(t, db)

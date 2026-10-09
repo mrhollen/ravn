@@ -10,6 +10,7 @@ import (
 )
 
 func TestTasksList_CanonicalOrder_SubsecondDueDates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects := newTaskUseCase(t, db)
@@ -64,6 +65,7 @@ func TestTasksList_CanonicalOrder_SubsecondDueDates(t *testing.T) {
 }
 
 func TestClaim_SubsecondPrecision_NoPrematureStealing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	base := time.Date(2026, 10, 1, 12, 0, 0, 500000000, time.UTC)
@@ -107,6 +109,7 @@ func TestClaim_SubsecondPrecision_NoPrematureStealing(t *testing.T) {
 }
 
 func TestRelease_SubsecondActiveLease_Success(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	base := time.Date(2026, 10, 1, 12, 0, 0, 500000000, time.UTC)

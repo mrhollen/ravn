@@ -197,6 +197,7 @@ func wantIDs(t *testing.T, got, want []string, what string) {
 // --- tests ---------------------------------------------------------------------------
 
 func TestProjectsLifecycleAndCounts(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p1 := createProject(t, stk, "Alpha")
 
@@ -280,6 +281,7 @@ func TestProjectsLifecycleAndCounts(t *testing.T) {
 }
 
 func TestTaskCreateAcceptanceCriteriaAndDuplicates(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Dup Watch")
 
@@ -356,6 +358,7 @@ func TestTaskCreateAcceptanceCriteriaAndDuplicates(t *testing.T) {
 }
 
 func TestTaskListFiltersPaginationAndOrder(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Orders")
 
@@ -494,6 +497,7 @@ func pQuery(projectID string) string {
 }
 
 func TestTaskPatchVersionSemantics(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Versions")
 	task := newTask(t, stk, p.ID, "versioned work")
@@ -547,6 +551,7 @@ func TestTaskPatchVersionSemantics(t *testing.T) {
 }
 
 func TestErrorMappingBasics(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Errors")
 
@@ -603,6 +608,7 @@ func getDetail(t *testing.T, stk stack, id string) taskDetailDTO {
 }
 
 func TestClaimLifecycle(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Claims")
 	task := newTask(t, stk, p.ID, "claimable work") // version 1
@@ -723,6 +729,7 @@ func TestClaimLifecycle(t *testing.T) {
 }
 
 func TestCommentsAddListAndErrors(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Threads")
 	task := newTask(t, stk, p.ID, "discussed work")
@@ -823,6 +830,7 @@ func TestCommentsAddListAndErrors(t *testing.T) {
 }
 
 func TestNotesReplaceOnWrite(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Scratchpad")
 	task := newTask(t, stk, p.ID, "noted work") // version 1, empty notes
@@ -881,6 +889,7 @@ func TestNotesReplaceOnWrite(t *testing.T) {
 }
 
 func TestAcceptanceToggleAndErrors(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Checklist")
 	task := makeTask(t, stk, p.ID, "checklisted work", map[string]any{
@@ -946,6 +955,7 @@ func TestAcceptanceToggleAndErrors(t *testing.T) {
 }
 
 func TestAcceptanceCriteriaEditingEndpoints(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "AC editing")
 	task := makeTask(t, stk, p.ID, "edited checklist", map[string]any{
@@ -1046,6 +1056,7 @@ func TestAcceptanceCriteriaEditingEndpoints(t *testing.T) {
 }
 
 func TestArtifactAttachAndErrors(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Evidence")
 	task := newTask(t, stk, p.ID, "evidenced work")
@@ -1101,6 +1112,7 @@ func TestArtifactAttachAndErrors(t *testing.T) {
 }
 
 func TestRelationsLifecycle(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Graph")
 	parent := newTask(t, stk, p.ID, "parent task")
@@ -1231,6 +1243,7 @@ func TestRelationsLifecycle(t *testing.T) {
 }
 
 func TestBoardSnapshot(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "Board")
 

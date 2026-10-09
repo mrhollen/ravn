@@ -12,6 +12,7 @@ import (
 )
 
 func TestMetricsMiddleware_CountsRequestsAndStatuses(t *testing.T) {
+	t.Parallel()
 	metrics := httpapi.NewMetrics()
 
 	mux := http.NewServeMux()
@@ -105,6 +106,7 @@ func TestMetricsMiddleware_CountsRequestsAndStatuses(t *testing.T) {
 }
 
 func TestMetricsHandler_PrometheusFormat(t *testing.T) {
+	t.Parallel()
 	metrics := httpapi.NewMetrics()
 	handler := metrics.Handler()
 
@@ -148,6 +150,7 @@ func TestMetricsHandler_PrometheusFormat(t *testing.T) {
 }
 
 func TestMetricsHandler_JSONFormat(t *testing.T) {
+	t.Parallel()
 	metrics := httpapi.NewMetrics()
 	handler := metrics.Handler()
 
@@ -186,6 +189,7 @@ func TestMetricsHandler_JSONFormat(t *testing.T) {
 }
 
 func TestMetricsHandler_WithTaskStats(t *testing.T) {
+	t.Parallel()
 	metrics := httpapi.NewMetrics()
 	metrics.SetTaskStatsFunc(func(ctx context.Context) (map[string]int64, int64, error) {
 		return map[string]int64{

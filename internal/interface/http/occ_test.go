@@ -52,6 +52,7 @@ func patchRace(stk stack, taskID string, version int, title string) (raceOutcome
 // Now the version is checked INSIDE the write transaction: exactly one racer
 // can win, and every loser's 409 carries the winner's fresh row.
 func TestConcurrentPatchTasksSameVersion_ExactlyOneWinner(t *testing.T) {
+	t.Parallel()
 	const (
 		rounds  = 5 // repeated a few times to shake out scheduling luck (QA requirement)
 		workers = 6 // N ≥ 4
@@ -151,6 +152,7 @@ func TestConcurrentPatchTasksSameVersion_ExactlyOneWinner(t *testing.T) {
 // current version still succeeding (the rejected write must have neither
 // landed nor bumped, even though its blob was identical to the stored one).
 func TestUpdateNotesOptionalVersionGuard(t *testing.T) {
+	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "notes OCC")
 	task := newTask(t, stk, p.ID, "notes guard")

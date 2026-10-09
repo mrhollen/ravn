@@ -21,6 +21,7 @@ func openTestDB(t *testing.T) *sql.DB {
 }
 
 func TestOpenAppliesMigrationsAndSeedsStatuses(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 
@@ -151,6 +152,7 @@ func TestOpenAppliesMigrationsAndSeedsStatuses(t *testing.T) {
 }
 
 func TestMigrateIsIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "crowban-test.db")
 	db, closeDB, err := Open(ctx, path)
@@ -196,6 +198,7 @@ func TestMigrateIsIdempotent(t *testing.T) {
 }
 
 func TestHealthReportsErrorForClosedDB(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db, closeDB, err := Open(ctx, filepath.Join(t.TempDir(), "crowban-test.db"))
 	if err != nil {

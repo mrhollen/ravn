@@ -1014,7 +1014,7 @@ test.describe('Web E2E test suite', () => {
     const claimed = await claimRes.json();
 
     // Drawer reflects claim live
-    await expect(drawer.locator('text=Claimed')).toBeVisible({ timeout: 10000 });
+    await expect(drawer.getByText('Claimed', { exact: true })).toBeVisible({ timeout: 10000 });
     await expect(drawer.locator('text=Held by agent-worker')).toBeVisible();
 
     // External agent posts a comment via API

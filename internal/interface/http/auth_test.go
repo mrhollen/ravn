@@ -63,6 +63,7 @@ func jsonBytesReader(t *testing.T, v any) *bytes.Reader {
 }
 
 func TestAuthMiddleware_DisabledWhenTokenEmpty(t *testing.T) {
+	t.Parallel()
 	stk := newAuthTestStack(t, "")
 
 	// GET /api/v1/projects without auth header succeeds
@@ -81,6 +82,7 @@ func TestAuthMiddleware_DisabledWhenTokenEmpty(t *testing.T) {
 }
 
 func TestAuthMiddleware_RejectsMissingOrInvalidToken(t *testing.T) {
+	t.Parallel()
 	const secret = "production-secret-token"
 	stk := newAuthTestStack(t, secret)
 
@@ -160,6 +162,7 @@ func TestAuthMiddleware_RejectsMissingOrInvalidToken(t *testing.T) {
 }
 
 func TestAuthMiddleware_AcceptsValidBearerToken(t *testing.T) {
+	t.Parallel()
 	const secret = "correct-token-42"
 	stk := newAuthTestStack(t, secret)
 
@@ -188,6 +191,7 @@ func TestAuthMiddleware_AcceptsValidBearerToken(t *testing.T) {
 }
 
 func TestAuthMiddleware_HealthzAndNonAPINeverGated(t *testing.T) {
+	t.Parallel()
 	const secret = "production-secret-token"
 	stk := newAuthTestStack(t, secret)
 
@@ -218,6 +222,7 @@ func TestAuthMiddleware_HealthzAndNonAPINeverGated(t *testing.T) {
 }
 
 func TestValidBearerToken(t *testing.T) {
+	t.Parallel()
 	const secret = "s3cr3t"
 	tests := []struct {
 		header   string
@@ -246,6 +251,7 @@ func TestValidBearerToken(t *testing.T) {
 }
 
 func TestIsAPIRoute(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		path string
 		want bool
@@ -274,6 +280,7 @@ func TestIsAPIRoute(t *testing.T) {
 }
 
 func TestAuthMiddleware_QueryParamToken(t *testing.T) {
+	t.Parallel()
 	const secret = "query-token-123"
 	stk := newAuthTestStack(t, secret)
 

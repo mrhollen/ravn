@@ -46,6 +46,7 @@ func assertIDs(t *testing.T, rows []domain.Task, want ...domain.ID) {
 }
 
 func TestUnblockedOnlyFilterAndBlockedFlag(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects := newTaskUseCase(t, db)
@@ -109,6 +110,7 @@ func TestUnblockedOnlyFilterAndBlockedFlag(t *testing.T) {
 }
 
 func TestFindDuplicateCandidates_Integration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects := newTaskUseCase(t, db)

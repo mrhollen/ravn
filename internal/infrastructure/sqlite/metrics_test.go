@@ -10,6 +10,7 @@ import (
 )
 
 func TestCollectTaskMetrics(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "metrics-test.db"))
 	if err != nil {

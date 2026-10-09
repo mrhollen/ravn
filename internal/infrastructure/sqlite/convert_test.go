@@ -7,6 +7,7 @@ import (
 )
 
 func TestTimestampLayout_Constant(t *testing.T) {
+	t.Parallel()
 	const want = "2006-01-02T15:04:05.000000000Z"
 	if TimestampLayout != want {
 		t.Fatalf("TimestampLayout = %q, want %q", TimestampLayout, want)
@@ -14,6 +15,7 @@ func TestTimestampLayout_Constant(t *testing.T) {
 }
 
 func TestFormatTS_FixedLengthAndPadding(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   time.Time
@@ -60,6 +62,7 @@ func TestFormatTS_FixedLengthAndPadding(t *testing.T) {
 }
 
 func TestParseTS_BackwardsCompatibility(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   string
@@ -105,6 +108,7 @@ func TestParseTS_BackwardsCompatibility(t *testing.T) {
 }
 
 func TestFormatTS_LexicographicalOrderMatchesChronological(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	sequence := []time.Time{
 		base,
@@ -136,6 +140,7 @@ func TestFormatTS_LexicographicalOrderMatchesChronological(t *testing.T) {
 }
 
 func TestSQLite_TimestampLexicographicalOrdering(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 
@@ -210,6 +215,7 @@ func TestSQLite_TimestampLexicographicalOrdering(t *testing.T) {
 }
 
 func TestSQLite_ClaimExpirationComparison(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 

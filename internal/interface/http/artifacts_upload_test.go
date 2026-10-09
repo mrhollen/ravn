@@ -122,6 +122,7 @@ func createMultipartRequest(t *testing.T, url string, fieldName, filename string
 }
 
 func TestArtifactUpload_ImageSuccessAndServing(t *testing.T) {
+	t.Parallel()
 	rig := setupTestRig(t)
 
 	imgBytes := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
@@ -219,6 +220,7 @@ func TestArtifactUpload_ImageSuccessAndServing(t *testing.T) {
 }
 
 func TestArtifactUpload_NonImageAttachmentForceDownload(t *testing.T) {
+	t.Parallel()
 	rig := setupTestRig(t)
 
 	textContent := []byte("<html><script>alert('xss')</script></html>")
@@ -269,6 +271,7 @@ func TestArtifactUpload_NonImageAttachmentForceDownload(t *testing.T) {
 }
 
 func TestArtifactUpload_EmptyFileRejected(t *testing.T) {
+	t.Parallel()
 	rig := setupTestRig(t)
 
 	uploadURL := fmt.Sprintf("%s/api/v1/tasks/%s/artifacts", rig.server.URL, rig.taskID)
@@ -288,6 +291,7 @@ func TestArtifactUpload_EmptyFileRejected(t *testing.T) {
 }
 
 func TestArtifactUpload_OversizedFileRejected(t *testing.T) {
+	t.Parallel()
 	rig := setupTestRig(t)
 
 	// Max is 10MB; send 11MB
@@ -310,6 +314,7 @@ func TestArtifactUpload_OversizedFileRejected(t *testing.T) {
 }
 
 func TestArtifactGet_PathTraversalAndNotFound(t *testing.T) {
+	t.Parallel()
 	rig := setupTestRig(t)
 
 	cases := []string{
@@ -333,6 +338,7 @@ func TestArtifactGet_PathTraversalAndNotFound(t *testing.T) {
 }
 
 func TestArtifactAttach_JSONBackCompat(t *testing.T) {
+	t.Parallel()
 	rig := setupTestRig(t)
 
 	payload := `{"actor":{"name":"tester","type":"human"},"kind":"url","ref":"https://example.com/build.log","summary":"Remote build log"}`

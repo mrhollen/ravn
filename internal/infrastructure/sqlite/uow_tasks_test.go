@@ -75,6 +75,7 @@ func optTimeEqual(a, b *time.Time) bool {
 // --- tests --------------------------------------------------------------------
 
 func TestTasksUseCase_CreateRoundTripsWithACsAndEventsInOneTx(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects := newTaskUseCase(t, db)
@@ -183,6 +184,7 @@ func TestTasksUseCase_CreateRoundTripsWithACsAndEventsInOneTx(t *testing.T) {
 }
 
 func TestTasksUseCase_ListCanonicalOrderAndPaginationOverRealSQL(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects := newTaskUseCase(t, db)
@@ -294,6 +296,7 @@ func TestTasksUseCase_ListCanonicalOrderAndPaginationOverRealSQL(t *testing.T) {
 }
 
 func TestTasksRepo_UpdateStaleVersionReturnsConflictWithFreshRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects := newTaskUseCase(t, db)
@@ -346,6 +349,7 @@ func TestTasksRepo_UpdateStaleVersionReturnsConflictWithFreshRow(t *testing.T) {
 }
 
 func TestTasksUseCase_CreateRollsBackTaskACsAndEventTogether(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	uow := NewUnitOfWork(db)
@@ -392,6 +396,7 @@ func TestTasksUseCase_CreateRollsBackTaskACsAndEventTogether(t *testing.T) {
 }
 
 func TestTasksRepo_GetReturnsNotFoundForMissingID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	repo := newTaskRepo(db)

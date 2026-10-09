@@ -28,6 +28,7 @@ func newProjectUseCase(t *testing.T, db *sql.DB) *application.Projects {
 var testActor = domain.Actor{Type: domain.ActorAgent, Name: "agent-a"}
 
 func TestProjectsUseCase_RoundTripOverRealSQLite(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	svc := newProjectUseCase(t, db)
@@ -104,6 +105,7 @@ func TestProjectsUseCase_RoundTripOverRealSQLite(t *testing.T) {
 // rule end to end: the project row AND its event are written inside fn, then a
 // forced failure rolls back BOTH — nothing is committed.
 func TestUnitOfWork_RollbackOnFNFError_CommitsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	uow := NewUnitOfWork(db)
@@ -173,6 +175,7 @@ func TestUnitOfWork_RollbackOnFNFError_CommitsNothing(t *testing.T) {
 // fn (TaskRepository.Get on an unknown id — real since slice 2B) surfaces its
 // genuine domain error instead of a stub.
 func TestUnitOfWork_ReposAreBoundToTransaction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	uow := NewUnitOfWork(db)
@@ -205,6 +208,7 @@ func probeBoundRepo(r application.Repos, ctx context.Context) error {
 }
 
 func TestProjectsRepo_OpenCodeSettingsRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	uow := NewUnitOfWork(db)

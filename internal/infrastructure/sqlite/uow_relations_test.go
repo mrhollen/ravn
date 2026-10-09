@@ -60,6 +60,7 @@ func rawInsertChildEdge(t *testing.T, db *sql.DB, ctx context.Context, src, dst 
 // domain.ErrParentConflict; and the partial UNIQUE index blocks a second
 // 'child' row for A even on a raw INSERT that skips the use case entirely.
 func TestRelations_RealSQL_SecondParentBlockedAtDBLevel(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	relations, tasks, projects := newRelationUseCase(t, db)
@@ -133,6 +134,7 @@ func TestRelations_RealSQL_SecondParentBlockedAtDBLevel(t *testing.T) {
 // single row and a single event, and the composite triple unique (0001 table
 // constraint) rejects a blind duplicate INSERT.
 func TestRelations_RealSQL_UpsertIdempotentOneRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	relations, tasks, projects := newRelationUseCase(t, db)
@@ -189,6 +191,7 @@ func TestRelations_RealSQL_UpsertIdempotentOneRow(t *testing.T) {
 // updated_at ever moves (child-row rule). The parent alias stores no
 // kind='parent' row at any point.
 func TestRelations_RealSQL_AddRemoveRoundTripNoVersionBump(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openTestDB(t)
 	relations, tasks, projects := newRelationUseCase(t, db)
