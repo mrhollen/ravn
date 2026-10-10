@@ -341,4 +341,73 @@ test.describe('Wide centered task-detail modal', () => {
     await expect(wrapper).toBeHidden();
     await expect(page.locator('main')).toBeVisible();
   });
+
+  test('AC1-AC3: dialog semantics and accessibility attributes on modals and drawer', async ({
+    page,
+  }) => {
+    await openBoard(page);
+
+    // 1. Task Detail drawer (role="dialog", aria-modal="true", aria-labelledby="task-detail-title")
+    const card = page.locator('article', { hasText: 'Modal fixture' });
+    await card.click();
+    const detailDrawer = page.locator('#cb-detail-drawer');
+    await expect(detailDrawer).toBeVisible();
+    await expect(detailDrawer).toHaveAttribute('role', 'dialog');
+    await expect(detailDrawer).toHaveAttribute('aria-modal', 'true');
+    await expect(detailDrawer).toHaveAttribute('aria-labelledby', 'task-detail-title');
+    const detailTitle = page.locator('#task-detail-title');
+    await expect(detailTitle).toBeVisible();
+    await expect(detailTitle).toHaveText('Modal fixture');
+    // Screen readers announce dialog role and accessible title
+    await expect(page.getByRole('dialog', { name: 'Modal fixture' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(detailDrawer).toBeHidden();
+
+    // 2. New Task modal (role="dialog", aria-modal="true", aria-labelledby="new-task-title")
+    await page.getByRole('button', { name: '+ New task' }).click();
+    const newTaskModal = page.locator('#cb-new-task');
+    await expect(newTaskModal).toBeVisible();
+    await expect(newTaskModal).toHaveAttribute('role', 'dialog');
+    await expect(newTaskModal).toHaveAttribute('aria-modal', 'true');
+    await expect(newTaskModal).toHaveAttribute('aria-labelledby', 'new-task-title');
+    const newTaskTitle = page.locator('#new-task-title');
+    await expect(newTaskTitle).toBeVisible();
+    await expect(newTaskTitle).toContainText('New task');
+    await expect(page.getByRole('dialog', { name: /New task/i })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(newTaskModal).toBeHidden();
+
+    // 3. Project Settings modal (role="dialog", aria-modal="true", aria-labelledby="project-settings-title")
+    await page.getByTestId('project-settings-btn').click();
+    const projectSettingsModal = page.locator('#cb-project-settings');
+    await expect(projectSettingsModal).toBeVisible();
+    await expect(projectSettingsModal).toHaveAttribute('role', 'dialog');
+    await expect(projectSettingsModal).toHaveAttribute('aria-modal', 'true');
+    await expect(projectSettingsModal).toHaveAttribute('aria-labelledby', 'project-settings-title');
+    const projectSettingsTitle = page.locator('#project-settings-title');
+    await expect(projectSettingsTitle).toBeVisible();
+    await expect(projectSettingsTitle).toHaveText('Project settings');
+    await expect(page.getByRole('dialog', { name: 'Project settings' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(projectSettingsModal).toBeHidden();
+
+    // 4. Auth Token modal (role="dialog", aria-modal="true", aria-labelledby="auth-modal-title")
+    await page.getByTestId('header-menu-trigger').click();
+    await page.getByTestId('token-item').click();
+    const authModal = page.locator('#cb-auth-modal');
+    await expect(authModal).toBeVisible();
+    await expect(authModal).toHaveAttribute('role', 'dialog');
+    await expect(authModal).toHaveAttribute('aria-modal', 'true');
+    await expect(authModal).toHaveAttribute('aria-labelledby', 'auth-modal-title');
+    const authTitle = page.locator('#auth-modal-title');
+    await expect(authTitle).toBeVisible();
+    await expect(authTitle).toHaveText('API Authentication Token');
+    await expect(page.getByRole('dialog', { name: 'API Authentication Token' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(authModal).toBeHidden();
+
+    // Reopen detail drawer so QA screenshot shows the accessible dialog open
+    await card.click();
+    await expect(detailDrawer).toBeVisible();
+  });
 });

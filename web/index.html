@@ -664,11 +664,11 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       </main>
 
       <!-- ================================================== project settings modal -->
-      <div id="cb-project-settings" x-show="showProjectSettings" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="closeProjectSettings()">
+      <div id="cb-project-settings" role="dialog" aria-modal="true" aria-labelledby="project-settings-title" x-show="showProjectSettings" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="closeProjectSettings()">
         <div class="mx-auto mt-16 w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
           <header class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
             <div>
-              <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Project settings</h2>
+              <h2 id="project-settings-title" class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Project settings</h2>
               <p class="text-xs text-zinc-500">Edit project name and description</p>
             </div>
             <button type="button" @click="closeProjectSettings()" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300" aria-label="Close">
@@ -732,7 +732,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       </div>
 
       <!-- ========================================================== auth token modal -->
-      <div id="cb-auth-modal" x-show="showAuthModal" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="closeAuthModal()">
+      <div id="cb-auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" x-show="showAuthModal" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="closeAuthModal()">
         <div class="mx-auto mt-16 w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
           <header class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
             <div class="flex items-center gap-2.5">
@@ -742,7 +742,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </svg>
               </span>
               <div>
-                <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">API Authentication Token</h2>
+                <h2 id="auth-modal-title" class="text-base font-semibold text-zinc-900 dark:text-zinc-100">API Authentication Token</h2>
                 <p class="text-xs text-zinc-500">Configure credentials for production servers</p>
               </div>
             </div>
@@ -782,10 +782,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       </div>
 
       <!-- ========================================================== new task -->
-      <div id="cb-new-task" x-show="showNewTask" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/30 p-4" @click.self="closeNewTask()">
+      <div id="cb-new-task" role="dialog" aria-modal="true" aria-labelledby="new-task-title" x-show="showNewTask" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/30 p-4" @click.self="closeNewTask()">
         <div class="mx-auto mt-10 w-full max-w-lg rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
           <header class="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 px-5 py-3">
-            <h2 class="text-base font-semibold">
+            <h2 id="new-task-title" class="text-base font-semibold">
               New task
               <span class="ml-1 text-xs font-normal text-zinc-400" x-text="'→ ' + statusLabel(newTaskTarget)"></span>
             </h2>
@@ -847,7 +847,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
            <main> above it is hidden while a task page is open. The modal lives
            at z-[60], ABOVE the toasts (z-50), so notifications can never cover
            its controls. -->
-      <div id="cb-detail-drawer" x-show="detailOpen" x-cloak
+      <div id="cb-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="task-detail-title" x-show="detailOpen" x-cloak
            :class="fullPageOpen ? 'relative flex min-h-0 flex-1 flex-col' : 'fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6'"
            @click.self="requestCloseDetail()">
         <!-- Modal backdrop: a click anywhere outside the panel closes it. -->
@@ -876,7 +876,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                      where the cluster yields via the "Start Task in OpenCode"
                      truncated span instead; every other button is shrink-0. -->
                 <div class="flex items-start justify-between gap-3">
-                  <h2 class="flex-1 min-w-[4.5rem] break-words text-lg font-semibold leading-snug" x-text="detail.title"></h2>
+                  <h2 id="task-detail-title" class="flex-1 min-w-[4.5rem] break-words text-lg font-semibold leading-snug" x-text="detail.title"></h2>
                   <div class="flex min-w-0 items-center justify-end gap-2">
                     <!-- Full-page mode: back to the board (the drawer keeps its ×). -->
                     <button type="button" x-show="fullPageOpen" x-cloak @click="requestCloseDetail()"
@@ -1413,9 +1413,9 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       <!-- ====================================================== unsaved notes prompt -->
       <!-- z-[70]: sits above the detail modal (z-[60]) it guards. Backdrop click
            and Escape both mean "keep editing" (same convention as other modals). -->
-      <div id="cb-notes-confirm" x-show="unsavedNotesAction" x-cloak class="fixed inset-0 z-[70] bg-black/40 p-4 backdrop-blur-sm" @click.self="cancelUnsavedNotes()">
+      <div id="cb-notes-confirm" role="dialog" aria-modal="true" aria-labelledby="notes-confirm-title" x-show="unsavedNotesAction" x-cloak class="fixed inset-0 z-[70] bg-black/40 p-4 backdrop-blur-sm" @click.self="cancelUnsavedNotes()">
         <div class="mx-auto mt-24 w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
-          <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Unsaved note changes</h2>
+          <h2 id="notes-confirm-title" class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Unsaved note changes</h2>
           <p class="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
             The notes for this task have edits that haven't been saved. Discard them?
           </p>
