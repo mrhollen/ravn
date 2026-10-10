@@ -228,4 +228,46 @@ test.describe('toast notifications', () => {
     expect(result.distinctMotion.length).toBeGreaterThan(1,
       `motion properties must animate through intermediate values (observed: ${result.distinctMotion.join(' / ')})`);
   });
+
+  test('AC1-AC3: aria live regions for toast container, individual toasts, SSE indicator, and duplicate advisory', async ({
+    page,
+  }) => {
+    await gotoApp(page, serverUrl);
+
+    // 1. Verify toast stack container live region attributes (AC1)
+    const stack = page.locator('[data-testid="toast-stack"]');
+    await expect(stack).toHaveAttribute('role', 'status');
+    await expect(stack).toHaveAttribute('aria-live', 'polite');
+
+    // Trigger info and error toasts to verify individual role and aria-live attributes
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.toast('Test info announcement', 'info');
+      app.toast('Test error announcement', 'error');
+    });
+
+    const infoToast = stack.locator(':scope > div').filter({ hasText: 'Test info announcement' });
+    const errorToast = stack.locator(':scope > div').filter({ hasText: 'Test error announcement' });
+    await expect(infoToast).toHaveAttribute('role', 'status');
+    await expect(infoToast).toHaveAttribute('aria-live', 'polite');
+    await expect(errorToast).toHaveAttribute('role', 'alert');
+    await expect(errorToast).toHaveAttribute('aria-live', 'assertive');
+
+    // 2. Verify SSE connection indicator live region attributes (AC2)
+    const liveIndicator = page.locator('[data-testid="live-indicator"]');
+    await expect(liveIndicator).toBeVisible();
+    await expect(liveIndicator).toHaveAttribute('role', 'status');
+    await expect(liveIndicator).toHaveAttribute('aria-live', 'polite');
+    await expect(liveIndicator).toHaveAttribute('aria-atomic', 'true');
+
+    // 3. Verify duplicate task advisory live region attributes (AC3)
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.duplicates = [{ id: '01TESTDUP000000000000000000', title: 'Duplicate test task' }];
+    });
+    const duplicateBanner = page.locator('main').getByRole('alert').filter({ hasText: 'similar tasks already exist' });
+    await expect(duplicateBanner).toBeVisible();
+    await expect(duplicateBanner).toHaveAttribute('aria-live', 'polite');
+    await expect(duplicateBanner).toHaveAttribute('aria-atomic', 'true');
+  });
 });
