@@ -338,6 +338,8 @@ test.describe('Web E2E test suite', () => {
     await expect(claimBtn).toBeEnabled();
     await expect(releaseBtn).toBeDisabled();
     await expect(heartbeatBtn).toBeDisabled();
+    await expect(releaseBtn).toHaveClass(/btn-secondary/);
+    await expect(heartbeatBtn).toHaveClass(/btn-secondary/);
 
     // Click Claim
     await claimBtn.click();
