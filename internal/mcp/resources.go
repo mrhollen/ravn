@@ -66,15 +66,6 @@ func registerTaskResource(s *mcpsrv.MCPServer, c Client) {
 		}, nil
 	}
 
-	// Register as a concrete resource listed in resources/list
-	res := mcpgo.NewResource(
-		taskResourceURIScheme,
-		"Task Resume Payload",
-		mcpgo.WithMIMEType("application/json"),
-		mcpgo.WithResourceDescription("Get full resume payload of a task: status, priority, blockers, acceptance criteria, notes, comments, artifacts, and relations."),
-	)
-	s.AddResource(res, handler)
-
 	// Register as a resource template listed in resources/templates/list
 	tmpl := mcpgo.NewResourceTemplate(
 		taskResourceURIScheme,
@@ -129,15 +120,6 @@ func registerProjectResource(s *mcpsrv.MCPServer, c Client) {
 
 		return nil, fmt.Errorf("project %q not found", id)
 	}
-
-	// Register as a concrete resource listed in resources/list
-	res := mcpgo.NewResource(
-		projectResourceURIScheme,
-		"Project Summary",
-		mcpgo.WithMIMEType("application/json"),
-		mcpgo.WithResourceDescription("Get summary row of a project with task counts by status."),
-	)
-	s.AddResource(res, handler)
 
 	// Register as a resource template listed in resources/templates/list
 	tmpl := mcpgo.NewResourceTemplate(

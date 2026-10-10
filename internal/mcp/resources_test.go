@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,14 +13,16 @@ import (
 	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
 )
 
-// TestResourcesList_Discoverability validates Acceptance Criterion 1:
-// "At least one resource URI scheme (e.g., crowban://task/{id}) is listed via resources/list and readable via resources/read."
+// TestResourcesList_Discoverability validates:
+// 1. resources/list does NOT advertise parameterized template URIs containing curly braces.
+// 2. Parameterized URIs are registered exclusively as ResourceTemplates in resources/templates/list.
+// 3. Any resources listed in resources/list are concrete and readable without errors.
 func TestResourcesList_Discoverability(t *testing.T) {
 	mcs := mcpsrv.NewMCPServer("crowban", "test-version")
 	mock := &mockClient{}
 	RegisterResources(mcs, mock)
 
-	// 1. Check resources/list
+	// 1. Check resources/list: must not advertise parameterized template URIs
 	listMsg := `{"jsonrpc":"2.0","id":1,"method":"resources/list"}`
 	resp := mcs.HandleMessage(context.Background(), json.RawMessage(listMsg))
 
@@ -33,27 +36,19 @@ func TestResourcesList_Discoverability(t *testing.T) {
 		t.Fatalf("expected ListResourcesResult, got %T: %+v", jsonResp.Result, jsonResp.Result)
 	}
 
-	if len(res.Resources) == 0 {
-		t.Fatal("expected at least one resource in resources/list")
-	}
-
-	var foundTaskResource bool
 	for _, r := range res.Resources {
-		if r.URI == "crowban://task/{id}" {
-			foundTaskResource = true
-			if r.MIMEType != "application/json" {
-				t.Errorf("expected MIMEType application/json, got %q", r.MIMEType)
-			}
-			if strings.TrimSpace(r.Description) == "" {
-				t.Error("expected non-empty description for crowban://task/{id}")
-			}
+		if strings.Contains(r.URI, "{") || strings.Contains(r.URI, "}") {
+			t.Errorf("resources/list must not contain parameterized template URIs, got: %q", r.URI)
+		}
+		// Any advertised resource must be readable
+		readMsg := fmt.Sprintf(`{"jsonrpc":"2.0","id":99,"method":"resources/read","params":{"uri":%q}}`, r.URI)
+		readResp := mcs.HandleMessage(context.Background(), json.RawMessage(readMsg))
+		if _, ok := readResp.(mcpgo.JSONRPCResponse); !ok {
+			t.Errorf("advertised resource %q failed to read: %+v", r.URI, readResp)
 		}
 	}
-	if !foundTaskResource {
-		t.Errorf("expected crowban://task/{id} in resources/list, got: %+v", res.Resources)
-	}
 
-	// 2. Check resources/templates/list
+	// 2. Check resources/templates/list: parameterized URIs must be registered here
 	tmplListMsg := `{"jsonrpc":"2.0","id":2,"method":"resources/templates/list"}`
 	resp = mcs.HandleMessage(context.Background(), json.RawMessage(tmplListMsg))
 
@@ -67,14 +62,22 @@ func TestResourcesList_Discoverability(t *testing.T) {
 		t.Fatalf("expected ListResourceTemplatesResult, got %T: %+v", jsonResp.Result, jsonResp.Result)
 	}
 
-	var foundTaskTemplate bool
+	var foundTaskTemplate, foundProjectTemplate bool
 	for _, tmpl := range tmplRes.ResourceTemplates {
-		if tmpl.URITemplate != nil && tmpl.URITemplate.Raw() == "crowban://task/{id}" {
-			foundTaskTemplate = true
+		if tmpl.URITemplate != nil {
+			if tmpl.URITemplate.Raw() == "crowban://task/{id}" {
+				foundTaskTemplate = true
+			}
+			if tmpl.URITemplate.Raw() == "crowban://project/{id}" {
+				foundProjectTemplate = true
+			}
 		}
 	}
 	if !foundTaskTemplate {
 		t.Errorf("expected crowban://task/{id} in resources/templates/list, got: %+v", tmplRes.ResourceTemplates)
+	}
+	if !foundProjectTemplate {
+		t.Errorf("expected crowban://project/{id} in resources/templates/list, got: %+v", tmplRes.ResourceTemplates)
 	}
 }
 
@@ -268,8 +271,8 @@ func TestResourcesRead_UnknownIDSurfacesError(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected JSONRPCError, got %T", resp)
 	}
-	if !strings.Contains(errResp.Error.Message, "task ID required") {
-		t.Errorf("expected error message indicating missing ID, got: %s", errResp.Error.Message)
+	if !strings.Contains(errResp.Error.Message, "task ID required") && !strings.Contains(errResp.Error.Message, "not found") {
+		t.Errorf("expected error message indicating missing ID or resource not found, got: %s", errResp.Error.Message)
 	}
 }
 
