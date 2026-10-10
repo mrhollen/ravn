@@ -847,3 +847,69 @@ func TestGracefulShutdown_WithActiveSSEStreams(t *testing.T) {
 		t.Logf("client read error after shutdown: %v", readErr)
 	}
 }
+
+func TestHTTPServer_SecurityHeadersAndCORS(t *testing.T) {
+	t.Parallel()
+	const secret = "auth-token-xyz"
+	db := newTestDB(t)
+	staticDir := filepath.Join(t.TempDir(), "static")
+	if err := os.MkdirAll(staticDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("<!doctype html><html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	router := newRouterWithBrokerAndCORS(db, staticDir, secret, t.TempDir(), pubsub.NewBroker(), "http://localhost:5173")
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	// 1. All responses carry standard security headers (AC 1)
+	endpoints := []string{"/healthz", "/metrics", "/"}
+	for _, ep := range endpoints {
+		res, err := http.Get(srv.URL + ep)
+		if err != nil {
+			t.Fatalf("GET %s: %v", ep, err)
+		}
+		res.Body.Close()
+		if got := res.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("GET %s X-Content-Type-Options = %q, want nosniff", ep, got)
+		}
+		if got := res.Header.Get("X-Frame-Options"); got != "DENY" {
+			t.Errorf("GET %s X-Frame-Options = %q, want DENY", ep, got)
+		}
+		if got := res.Header.Get("Referrer-Policy"); got != "strict-origin-when-cross-origin" {
+			t.Errorf("GET %s Referrer-Policy = %q, want strict-origin-when-cross-origin", ep, got)
+		}
+	}
+
+	// 2. Preflight OPTIONS to /api/* bypasses auth, returns 204 with CORS headers (AC 2, AC 3)
+	req, err := http.NewRequest("OPTIONS", srv.URL+"/api/v1/tasks", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "Authorization, Content-Type")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("OPTIONS /api/v1/tasks status = %d, want 204", res.StatusCode)
+	}
+	if got := res.Header.Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want http://localhost:5173", got)
+	}
+	if got := res.Header.Get("Access-Control-Allow-Methods"); got == "" {
+		t.Errorf("Access-Control-Allow-Methods is empty")
+	}
+	if got := res.Header.Get("Access-Control-Allow-Headers"); got == "" {
+		t.Errorf("Access-Control-Allow-Headers is empty")
+	}
+	if got := res.Header.Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("OPTIONS X-Frame-Options = %q, want DENY", got)
+	}
+}

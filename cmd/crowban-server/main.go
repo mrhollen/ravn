@@ -52,6 +52,8 @@ func main() {
 			"directory holding stored artifact uploads")
 		logLevel = flag.String("log-level", envOr("LOG_LEVEL", envOr("CROWBAN_LOG_LEVEL", "info")),
 			"log level: debug, info, warn, error")
+		corsOrigins = flag.String("cors-origins", envOr("CROWBAN_CORS_ORIGINS", "*"),
+			"comma-separated list of allowed CORS origins or '*' for any origin")
 	)
 	flag.Parse()
 
@@ -61,7 +63,7 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 	logger.Info("crowban-server starting",
-		"version", version, "addr", *addr, "data", *data, "token_set", *token != "", "static_dir", *static, "artifacts_dir", *artifacts, "log_level", lvl.String())
+		"version", version, "addr", *addr, "data", *data, "token_set", *token != "", "static_dir", *static, "artifacts_dir", *artifacts, "log_level", lvl.String(), "cors_origins", *corsOrigins)
 
 	if err := os.MkdirAll(*artifacts, 0o755); err != nil {
 		logger.Error("failed to create artifacts dir", "dir", *artifacts, "err", err)
@@ -83,7 +85,7 @@ func main() {
 	}()
 
 	broker := pubsub.NewBroker()
-	srv := newHTTPServer(*addr, newRouterWithBroker(db, *static, *token, *artifacts, broker))
+	srv := newHTTPServer(*addr, newRouterWithBrokerAndCORS(db, *static, *token, *artifacts, broker, *corsOrigins))
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -134,6 +136,14 @@ func newRouter(db *sql.DB, staticDir, token, artifactsDir string) http.Handler {
 }
 
 func newRouterWithBroker(db *sql.DB, staticDir, token, artifactsDir string, broker application.EventBroker) http.Handler {
+	corsOrigins := os.Getenv("CROWBAN_CORS_ORIGINS")
+	if corsOrigins == "" {
+		corsOrigins = "*"
+	}
+	return newRouterWithBrokerAndCORS(db, staticDir, token, artifactsDir, broker, corsOrigins)
+}
+
+func newRouterWithBrokerAndCORS(db *sql.DB, staticDir, token, artifactsDir string, broker application.EventBroker, corsOrigins string) http.Handler {
 	mux := http.NewServeMux()
 
 	if broker == nil {
@@ -194,7 +204,13 @@ func newRouterWithBroker(db *sql.DB, staticDir, token, artifactsDir string, brok
 		})
 	}
 
-	return metrics.Middleware(httpapi.AuthMiddleware(token)(mux))
+	corsOpts := httpapi.DefaultCORSOptions()
+	corsOpts.AllowedOrigins = httpapi.ParseCORSOrigins(corsOrigins)
+
+	apiHandler := httpapi.AuthMiddleware(token)(mux)
+	meteredHandler := metrics.Middleware(apiHandler)
+	corsHandler := httpapi.CORSMiddleware(corsOpts)(meteredHandler)
+	return httpapi.SecurityHeadersMiddleware()(corsHandler)
 }
 
 // hasIndexHTML reports whether dir exists and directly contains an index.html

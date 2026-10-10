@@ -33,6 +33,12 @@ func AuthMiddleware(expectedToken string) func(http.Handler) http.Handler {
 				return
 			}
 
+			// Preflight OPTIONS requests bypass bearer authentication.
+			if r.Method == http.MethodOptions {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			auth := r.Header.Get("Authorization")
 			if !validBearerToken(auth, expectedToken) {
 				// Query parameter authentication (?token=) is permitted ONLY on GET SSE event stream routes
