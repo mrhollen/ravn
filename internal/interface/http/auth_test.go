@@ -279,24 +279,109 @@ func TestIsAPIRoute(t *testing.T) {
 	}
 }
 
+func TestIsSSEEventRoute(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		method string
+		path   string
+		want   bool
+	}{
+		{"GET", "/api/v1/events", true},
+		{"GET", "/api/events", true},
+		{"GET", "/api/v1/projects/01JNONEXISTENT/events", true},
+		{"GET", "/api/projects/01JNONEXISTENT/events", true},
+		{"POST", "/api/v1/events", false},
+		{"POST", "/api/v1/projects/01JNONEXISTENT/events", false},
+		{"GET", "/api/v1/projects", false},
+		{"GET", "/api/v1/tasks/123", false},
+		{"GET", "/api/v1/projects/01JNONEXISTENT/events/sub", false},
+		{"GET", "/api/v1/tasks/01JNONEXISTENT/events", false},
+	}
+
+	for _, tt := range tests {
+		req := httptest.NewRequest(tt.method, "http://crowban.test"+tt.path, nil)
+		got := isSSEEventRoute(req)
+		if got != tt.want {
+			t.Errorf("isSSEEventRoute(%s %q) = %v, want %v", tt.method, tt.path, got, tt.want)
+		}
+	}
+}
+
 func TestAuthMiddleware_QueryParamToken(t *testing.T) {
 	t.Parallel()
 	const secret = "query-token-123"
-	stk := newAuthTestStack(t, secret)
 
-	// Valid token in query param succeeds without Authorization header
-	req := httptest.NewRequest("GET", "http://crowban.test/api/v1/projects?token="+secret, nil)
-	res := httptest.NewRecorder()
-	stk.Handler.ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Fatalf("GET /api/v1/projects?token=... = %d, want 200", res.Code)
+	called := false
+	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := WithAuth(secret, dummyHandler)
+
+	// Valid token in query param succeeds without Authorization header for GET SSE event stream routes
+	sseRoutes := []string{
+		"http://crowban.test/api/v1/events?token=" + secret,
+		"http://crowban.test/api/v1/projects/123/events?token=" + secret,
+		"http://crowban.test/api/events?token=" + secret,
+	}
+	for _, u := range sseRoutes {
+		called = false
+		req := httptest.NewRequest("GET", u, nil)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusOK || !called {
+			t.Fatalf("GET %s = %d, want 200 (called=%v)", u, res.Code, called)
+		}
 	}
 
-	// Invalid token in query param fails with 401
-	req = httptest.NewRequest("GET", "http://crowban.test/api/v1/projects?token=wrong", nil)
-	res = httptest.NewRecorder()
-	stk.Handler.ServeHTTP(res, req)
-	if res.Code != http.StatusUnauthorized {
-		t.Fatalf("GET /api/v1/projects?token=wrong = %d, want 401", res.Code)
+	// Invalid token in query param fails with 401 on SSE routes
+	for _, u := range []string{
+		"http://crowban.test/api/v1/events?token=wrong",
+		"http://crowban.test/api/v1/projects/123/events?token=wrong",
+	} {
+		called = false
+		req := httptest.NewRequest("GET", u, nil)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusUnauthorized || called {
+			t.Fatalf("GET %s = %d, want 401 (called=%v)", u, res.Code, called)
+		}
+	}
+
+	// Non-SSE routes and mutating routes reject query token and return 401
+	nonSSERoutes := []struct {
+		method string
+		url    string
+	}{
+		{"GET", "http://crowban.test/api/v1/projects?token=" + secret},
+		{"GET", "http://crowban.test/api/v1/tasks/123?token=" + secret},
+		{"POST", "http://crowban.test/api/v1/projects?token=" + secret},
+		{"POST", "http://crowban.test/api/v1/events?token=" + secret},
+		{"POST", "http://crowban.test/api/v1/projects/123/events?token=" + secret},
+		{"POST", "http://crowban.test/api/v1/tasks?token=" + secret},
+		{"PUT", "http://crowban.test/api/v1/projects/123?token=" + secret},
+		{"PATCH", "http://crowban.test/api/v1/tasks/123?token=" + secret},
+		{"DELETE", "http://crowban.test/api/v1/tasks/123?token=" + secret},
+	}
+	for _, tc := range nonSSERoutes {
+		called = false
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusUnauthorized || called {
+			t.Fatalf("%s %s = %d, want 401 (called=%v)", tc.method, tc.url, res.Code, called)
+		}
+	}
+
+	// But when Bearer token is provided via Authorization header, all routes succeed
+	for _, tc := range nonSSERoutes {
+		called = false
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusOK || !called {
+			t.Fatalf("%s %s with Bearer = %d, want 200 (called=%v)", tc.method, tc.url, res.Code, called)
+		}
 	}
 }

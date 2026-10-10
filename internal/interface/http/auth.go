@@ -35,14 +35,21 @@ func AuthMiddleware(expectedToken string) func(http.Handler) http.Handler {
 
 			auth := r.Header.Get("Authorization")
 			if !validBearerToken(auth, expectedToken) {
-				qToken := r.URL.Query().Get("token")
-				if qToken == "" || subtle.ConstantTimeCompare([]byte(qToken), []byte(expectedToken)) != 1 {
-					writeJSONError(w, http.StatusUnauthorized, map[string]any{
-						"error":   "unauthorized",
-						"message": "missing or invalid auth token",
-					})
-					return
+				// Query parameter authentication (?token=) is permitted ONLY on GET SSE event stream routes
+				// (/api/v1/events and /api/v1/projects/{id}/events) due to browser EventSource limitations.
+				// All mutating routes and standard GET endpoints mandate Authorization: Bearer <token>.
+				if isSSEEventRoute(r) {
+					qToken := r.URL.Query().Get("token")
+					if qToken != "" && subtle.ConstantTimeCompare([]byte(qToken), []byte(expectedToken)) == 1 {
+						next.ServeHTTP(w, r)
+						return
+					}
 				}
+				writeJSONError(w, http.StatusUnauthorized, map[string]any{
+					"error":   "unauthorized",
+					"message": "missing or invalid auth token",
+				})
+				return
 			}
 
 			next.ServeHTTP(w, r)
@@ -58,6 +65,21 @@ func WithAuth(expectedToken string, handler http.Handler) http.Handler {
 func isAPIRoute(p string) bool {
 	cleaned := path.Clean(p)
 	return cleaned == "/api" || strings.HasPrefix(cleaned, "/api/")
+}
+
+func isSSEEventRoute(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	p := path.Clean(r.URL.Path)
+	if p == "/api/v1/events" || p == "/api/events" {
+		return true
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if (len(parts) == 4 || len(parts) == 5) && parts[len(parts)-1] == "events" && parts[len(parts)-3] == "projects" {
+		return true
+	}
+	return false
 }
 
 func validBearerToken(header, expected string) bool {
