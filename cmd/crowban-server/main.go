@@ -82,11 +82,7 @@ func main() {
 		}
 	}()
 
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           newRouter(db, *static, *token, *artifacts),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	srv := newHTTPServer(*addr, newRouter(db, *static, *token, *artifacts))
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -275,4 +271,27 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+const (
+	defaultReadHeaderTimeout = 5 * time.Second
+	defaultReadTimeout       = 15 * time.Second
+	defaultIdleTimeout       = 60 * time.Second
+)
+
+// newHTTPServer creates an *http.Server configured with robust timeouts to prevent
+// connection exhaustion attacks (Slowloris headers/body and indefinite idle keep-alives).
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return newHTTPServerWithTimeouts(addr, handler, defaultReadHeaderTimeout, defaultReadTimeout, defaultIdleTimeout)
+}
+
+// newHTTPServerWithTimeouts allows constructing an *http.Server with custom timeout durations (e.g. for testing).
+func newHTTPServerWithTimeouts(addr string, handler http.Handler, readHeaderTimeout, readTimeout, idleTimeout time.Duration) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
+	}
 }

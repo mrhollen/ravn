@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -661,5 +662,115 @@ func TestStaticServingDoesNotShadowMetrics(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(body), &snap); err != nil {
 		t.Fatalf("GET /api/v1/metrics returned invalid JSON: %v (%s)", err, body)
+	}
+}
+
+func TestHTTPServer_ConfiguredTimeouts(t *testing.T) {
+	srv := newHTTPServer(":8080", http.NotFoundHandler())
+	if srv.ReadHeaderTimeout < 5*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want >= 5s", srv.ReadHeaderTimeout)
+	}
+	if srv.ReadTimeout < 15*time.Second {
+		t.Errorf("ReadTimeout = %v, want >= 15s", srv.ReadTimeout)
+	}
+	if srv.IdleTimeout < 60*time.Second {
+		t.Errorf("IdleTimeout = %v, want >= 60s", srv.IdleTimeout)
+	}
+}
+
+func TestHTTPServer_IdleTimeoutClosesKeepAlive(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	srv := newHTTPServerWithTimeouts(ln.Addr().String(), handler, 5*time.Second, 15*time.Second, 100*time.Millisecond)
+	go srv.Serve(ln) //nolint:errcheck
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Send an initial request on keep-alive connection
+	req := "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write req: %v", err)
+	}
+
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, &http.Request{Method: "GET"})
+	if err != nil {
+		t.Fatalf("read resp: %v", err)
+	}
+	resp.Body.Close()
+
+	// Wait longer than IdleTimeout (100ms)
+	time.Sleep(200 * time.Millisecond)
+
+	// Connection should now be closed by server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	buf := make([]byte, 10)
+	_, err = conn.Read(buf)
+	if err == nil {
+		t.Errorf("expected connection to be closed after idle timeout, but read succeeded")
+	}
+}
+
+func TestHTTPServer_ReadTimeoutSeversSlowBody(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	var readErr error
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, readErr = io.ReadAll(r.Body)
+		if readErr != nil {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := newHTTPServerWithTimeouts(ln.Addr().String(), handler, 5*time.Second, 100*time.Millisecond, 1*time.Second)
+	go srv.Serve(ln) //nolint:errcheck
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Send headers declaring 100 bytes of body
+	req := "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write headers: %v", err)
+	}
+
+	// Send 1 byte
+	if _, err := conn.Write([]byte("a")); err != nil {
+		t.Fatalf("write 1 byte: %v", err)
+	}
+
+	// Sleep longer than ReadTimeout (100ms) before sending remaining bytes
+	time.Sleep(200 * time.Millisecond)
+
+	// Attempting to write more bytes or read should observe severed connection
+	conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+	buf := make([]byte, 128)
+	conn.Read(buf) // Drain any EOF or error
+	if readErr == nil {
+		t.Errorf("expected readErr to be non-nil due to ReadTimeout, got nil")
 	}
 }
