@@ -24,7 +24,7 @@
 #
 # Everything else — service names, environment blocks, the crowban-data
 # named volume and its /data mount — is equivalent to docker-compose.yml.
-# Host ports default to 3311 (server) and 9311 (mcp); containers ALWAYS
+# Host ports default to 127.0.0.1:3311 (server) and 127.0.0.1:9311 (mcp); containers ALWAYS
 # listen on 8080/9080 internally, so the MCP upstream URL stays stable.
 #
 # Run:
@@ -38,7 +38,7 @@ services:
       context: .
       dockerfile: Dockerfile.server
     ports:
-      - "${CROWBAN_SERVER_PORT:-3311}:8080"
+      - "${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_SERVER_PORT:-3311}:8080"
     environment:
       CROWBAN_ADDR: ":8080"
       CROWBAN_DATA: "/data/crowban.db"
@@ -60,7 +60,7 @@ services:
       context: .
       dockerfile: Dockerfile.mcp
     ports:
-      - "${CROWBAN_MCP_PORT:-9311}:9080"
+      - "${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_MCP_PORT:-9311}:9080"
     environment:
       MCP_ADDR: ":9080"
       CROWBAN_API_URL: "http://crowban-server:8080" # compose service DNS — no IPs, no host assumptions

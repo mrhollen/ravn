@@ -399,7 +399,7 @@ ENTRYPOINT ["crowban-mcp"]
 services:
   crowban-server:
     build: { context: ., target: server-runtime }
-    ports: ["${CROWBAN_SERVER_PORT:-3311}:8080"]
+    ports: ["${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_SERVER_PORT:-3311}:8080"]
     environment:
       CROWBAN_ADDR: ":8080"
       CROWBAN_DATA: "/data/crowban.db"
@@ -409,7 +409,7 @@ services:
 
   crowban-mcp:
     build: { context: ., target: mcp-runtime }
-    ports: ["${CROWBAN_MCP_PORT:-9311}:9080"]
+    ports: ["${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_MCP_PORT:-9311}:9080"]
     environment:
       MCP_ADDR: ":9080"
       CROWBAN_API_URL: "http://crowban-server:8080"   # compose service DNS — no IPs, no host assumptions
