@@ -82,7 +82,8 @@ func main() {
 		}
 	}()
 
-	srv := newHTTPServer(*addr, newRouter(db, *static, *token, *artifacts))
+	broker := pubsub.NewBroker()
+	srv := newHTTPServer(*addr, newRouterWithBroker(db, *static, *token, *artifacts, broker))
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -96,6 +97,11 @@ func main() {
 		logger.Info("shutdown signal received")
 	case err := <-errCh:
 		logger.Error("server error", "err", err)
+	}
+
+	// Close the event broker immediately upon shutdown signal to unblock active SSE streaming loops.
+	if err := broker.Close(); err != nil {
+		logger.Error("closing broker", "err", err)
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -124,13 +130,15 @@ type healthResponse struct {
 // regardless of registration order, so static serving can never shadow them
 // (proved by TestStaticServingDoesNotShadowAPIAndHealthz).
 func newRouter(db *sql.DB, staticDir, token, artifactsDir string) http.Handler {
+	return newRouterWithBroker(db, staticDir, token, artifactsDir, pubsub.NewBroker())
+}
+
+func newRouterWithBroker(db *sql.DB, staticDir, token, artifactsDir string, broker application.EventBroker) http.Handler {
 	mux := http.NewServeMux()
 
-	// Slice 3 composition: one shared transactional seam, clock, and idgen —
-	// every use case mints IDs and stamps timestamps before touching ports
-	// (ADR 2026-09-25). Comments/Artifacts/Acceptance/Relations are wired now
-	// even though slice 3b is what routes them.
-	broker := pubsub.NewBroker()
+	if broker == nil {
+		broker = pubsub.NewBroker()
+	}
 	uow := sqlite.NewUnitOfWork(db, sqlite.WithPublisher(broker))
 	now := clock.New()
 	mint := idgen.New()

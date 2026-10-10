@@ -23,6 +23,7 @@ type Broker struct {
 	mu          sync.RWMutex
 	subscribers map[*subscriber]struct{}
 	bufferSize  int
+	closed      bool
 }
 
 // Option configures a Broker instance.
@@ -61,6 +62,12 @@ func (b *Broker) Subscribe(projectID domain.ID) (<-chan domain.Event, func()) {
 	}
 
 	b.mu.Lock()
+	if b.closed {
+		sub.closed = true
+		close(sub.ch)
+		b.mu.Unlock()
+		return sub.ch, func() {}
+	}
 	b.subscribers[sub] = struct{}{}
 	b.mu.Unlock()
 
@@ -86,6 +93,10 @@ func (b *Broker) Subscribe(projectID domain.ID) (<-chan domain.Event, func()) {
 // so that a burst of writes never blocks the caller.
 func (b *Broker) Publish(e domain.Event) {
 	b.mu.RLock()
+	if b.closed {
+		b.mu.RUnlock()
+		return
+	}
 	var slowSubs []*subscriber
 	for sub := range b.subscribers {
 		// Filter by project ID when the subscriber is scoped to a specific project
@@ -120,10 +131,39 @@ func (b *Broker) Publish(e domain.Event) {
 	}
 }
 
+// Close shuts down the broker and closes all active subscriber channels,
+// unblocking any listening SSE goroutines immediately.
+func (b *Broker) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil
+	}
+	b.closed = true
+	for sub := range b.subscribers {
+		if !sub.closed {
+			sub.closed = true
+			close(sub.ch)
+		}
+		delete(b.subscribers, sub)
+	}
+	return nil
+}
+
+// IsClosed reports whether the broker has been closed.
+func (b *Broker) IsClosed() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.closed
+}
+
 // SubscriberCount returns the current count of active subscribers.
 func (b *Broker) SubscriberCount() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	if b.closed {
+		return 0
+	}
 	return len(b.subscribers)
 }
 
@@ -131,6 +171,9 @@ func (b *Broker) SubscriberCount() int {
 func (b *Broker) SubscriberCountForProject(projectID domain.ID) int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	if b.closed {
+		return 0
+	}
 	count := 0
 	for sub := range b.subscribers {
 		if sub.projectID == projectID {

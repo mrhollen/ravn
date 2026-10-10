@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrhollen/crowban/internal/infrastructure/pubsub"
 	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
 )
 
@@ -772,5 +774,76 @@ func TestHTTPServer_ReadTimeoutSeversSlowBody(t *testing.T) {
 	conn.Read(buf) // Drain any EOF or error
 	if readErr == nil {
 		t.Errorf("expected readErr to be non-nil due to ReadTimeout, got nil")
+	}
+}
+
+func TestGracefulShutdown_WithActiveSSEStreams(t *testing.T) {
+	db := newTestDB(t)
+	broker := pubsub.NewBroker()
+	router := newRouterWithBroker(db, filepath.Join(t.TempDir(), "no-dist"), "", t.TempDir(), broker)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	srv := newHTTPServer(ln.Addr().String(), router)
+	go srv.Serve(ln) //nolint:errcheck
+	defer srv.Close()
+
+	// Create a project so we can stream events for it
+	code, pBody := reqWithAuth(t, "POST", "http://"+ln.Addr().String()+"/api/v1/projects", "", `{"name":"Shutdown Project","actor":{"name":"test-actor","type":"agent"}}`)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/projects = %d (%s)", code, pBody)
+	}
+	var proj struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(pBody), &proj); err != nil {
+		t.Fatalf("unmarshal project: %v", err)
+	}
+
+	// Connect an SSE client to /api/v1/projects/{id}/events
+	resp, err := http.Get("http://" + ln.Addr().String() + "/api/v1/projects/" + proj.ID + "/events")
+	if err != nil {
+		t.Fatalf("GET /api/v1/projects/%s/events: %v", proj.ID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	// Read initial SSE message ": connected\n\n"
+	line, err := reader.ReadString('\n')
+	if err != nil || !strings.Contains(line, ": connected") {
+		t.Fatalf("expected ': connected', got %q, err: %v", line, err)
+	}
+
+	// Active SSE stream is now connected. Verify broker has subscriber.
+	if broker.SubscriberCount() != 1 {
+		t.Fatalf("subscriber count = %d, want 1", broker.SubscriberCount())
+	}
+
+	// Initiate shutdown: close the broker to unblock SSE handlers
+	if err := broker.Close(); err != nil {
+		t.Fatalf("broker.Close(): %v", err)
+	}
+
+	// srv.Shutdown should complete quickly without timing out
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	shutdownErr := srv.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		t.Fatalf("srv.Shutdown failed: %v", shutdownErr)
+	}
+
+	// SSE client should now observe end-of-stream (EOF)
+	_, readErr := io.ReadAll(resp.Body)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		t.Logf("client read error after shutdown: %v", readErr)
 	}
 }

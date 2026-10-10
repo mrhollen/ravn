@@ -299,4 +299,5 @@ type EventSubscriber interface {
 type EventBroker interface {
 	EventPublisher
 	EventSubscriber
+	Close() error
 }

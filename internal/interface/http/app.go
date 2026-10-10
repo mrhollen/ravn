@@ -41,6 +41,7 @@ func (noopBroker) Subscribe(domain.ID) (<-chan domain.Event, func()) {
 	close(ch)
 	return ch, func() {}
 }
+func (noopBroker) Close() error { return nil }
 
 // App is the stateless HTTP adapter: handlers only read its fields, all
 // per-request state lives on the request. Safe for concurrent use.

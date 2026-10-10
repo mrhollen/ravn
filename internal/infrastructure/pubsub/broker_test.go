@@ -257,3 +257,57 @@ func TestBroker_ConcurrentPublishAndSubscribe(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestBroker_CloseClosesAllSubscribersAndPreventsNew(t *testing.T) {
+	b := NewBroker()
+	p1 := domain.ID("P1")
+	p2 := domain.ID("P2")
+
+	sub1, _ := b.Subscribe(p1)
+	sub2, _ := b.Subscribe(p2)
+	sub3, _ := b.Subscribe("")
+
+	if count := b.SubscriberCount(); count != 3 {
+		t.Fatalf("SubscriberCount = %d, want 3", count)
+	}
+
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close error: %v", err)
+	}
+
+	if !b.IsClosed() {
+		t.Error("expected IsClosed to be true")
+	}
+	if count := b.SubscriberCount(); count != 0 {
+		t.Errorf("SubscriberCount after close = %d, want 0", count)
+	}
+
+	// All subscriber channels must be closed
+	for i, ch := range []<-chan domain.Event{sub1, sub2, sub3} {
+		select {
+		case _, ok := <-ch:
+			if ok {
+				t.Errorf("sub%d received value instead of channel close", i+1)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Errorf("sub%d channel was not closed after broker Close()", i+1)
+		}
+	}
+
+	// Subscribing after close should return an already-closed channel
+	subPostClose, cancelPostClose := b.Subscribe(p1)
+	defer cancelPostClose()
+	select {
+	case _, ok := <-subPostClose:
+		if ok {
+			t.Error("expected channel from Subscribe after Close to be closed, but received value")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("channel from Subscribe after Close was not closed")
+	}
+
+	// Idempotent close
+	if err := b.Close(); err != nil {
+		t.Errorf("second Close error: %v", err)
+	}
+}
