@@ -326,21 +326,24 @@ func (a *App) handleRemoveAC(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var req acRemoveReq
-	if len(rawBody) == 0 {
+	if len(strings.TrimSpace(string(rawBody))) > 0 {
+		if err := json.Unmarshal(rawBody, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, map[string]any{
+				"error":   "invalid input",
+				"message": "malformed JSON body: " + err.Error(),
+			})
+			return
+		}
+	}
+	actorIn, hasActor := extractActor(r, req.Actor)
+	if !hasActor {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
 			"error":   "invalid input",
-			"message": `actor is required for AC removal: send a JSON body with {"actor":{"name":"..."}}`,
+			"message": `actor is required for AC removal: send a JSON body with {"actor":{"name":"..."}}, X-Actor-Name header, or ?actor_name query parameter`,
 		})
 		return
 	}
-	if err := json.Unmarshal(rawBody, &req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
-			"message": "malformed JSON body: " + err.Error(),
-		})
-		return
-	}
-	actor, err := req.Actor.toDomain()
+	actor, err := actorIn.toDomain()
 	if err != nil {
 		writeAppError(w, err, "task", id)
 		return
@@ -829,21 +832,24 @@ func (a *App) handleRemoveRelation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var req removeRelationReq
-	if len(rawBody) == 0 {
+	if len(strings.TrimSpace(string(rawBody))) > 0 {
+		if err := json.Unmarshal(rawBody, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, map[string]any{
+				"error":   "invalid input",
+				"message": "malformed JSON body: " + err.Error(),
+			})
+			return
+		}
+	}
+	actorIn, hasActor := extractActor(r, req.Actor)
+	if !hasActor {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
 			"error":   "invalid input",
-			"message": "actor is required for relation removal: send a JSON body with {\"actor\":{\"name\":\"...\"}}",
+			"message": `actor is required for relation removal: send a JSON body with {"actor":{"name":"..."}}, X-Actor-Name header, or ?actor_name query parameter`,
 		})
 		return
 	}
-	if err := json.Unmarshal(rawBody, &req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
-			"message": "malformed JSON body: " + err.Error(),
-		})
-		return
-	}
-	actor, err := req.Actor.toDomain()
+	actor, err := actorIn.toDomain()
 	if err != nil {
 		writeAppError(w, err, "task", id)
 		return

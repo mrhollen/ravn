@@ -1364,3 +1364,141 @@ func TestBoardSnapshot(t *testing.T) {
 		t.Fatalf("board 404 = %+v, want not found / project", e)
 	}
 }
+
+func TestDeleteEndpoints_ActorHeadersAndQueryParams(t *testing.T) {
+	t.Parallel()
+	stk := newStack(t)
+	p := createProject(t, stk, "RFC 9110 Tests")
+
+	// Create a task with 4 ACs
+	task := makeTask(t, stk, p.ID, "Delete Tests", map[string]any{
+		"acceptance_criteria": []string{"AC 1", "AC 2", "AC 3", "AC 4"},
+	})
+
+	// 1. DELETE AC with headers (X-Actor-Name, X-Actor-Type), nil body → 204
+	req, err := http.NewRequest("DELETE", "http://crowban.test/api/v1/tasks/"+task.ID+"/acceptance-criteria/1", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("X-Actor-Name", "alice")
+	req.Header.Set("X-Actor-Type", "agent")
+	res := httptest.NewRecorder()
+	stk.Handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("DELETE AC 1 with headers = %d, want 204 (body %s)", res.Code, res.Body.String())
+	}
+	d := getDetail(t, stk, task.ID)
+	if len(d.AcceptanceCriteria) != 3 {
+		t.Fatalf("AC count after delete = %d, want 3", len(d.AcceptanceCriteria))
+	}
+	// Verify last event has alice agent attribution
+	lastEv := d.Events[0]
+	if lastEv.Kind != "ac-removed" || lastEv.Actor.Name != "alice" || lastEv.Actor.Type != "agent" {
+		t.Fatalf("event = %+v, want ac-removed by alice/agent", lastEv)
+	}
+
+	// 2. DELETE AC with query parameters (?actor_name=bob&actor_type=human), nil body → 204
+	req, err = http.NewRequest("DELETE", "http://crowban.test/api/v1/tasks/"+task.ID+"/acceptance-criteria/2?actor_name=bob&actor_type=human", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	res = httptest.NewRecorder()
+	stk.Handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("DELETE AC 2 with query params = %d, want 204 (body %s)", res.Code, res.Body.String())
+	}
+	d = getDetail(t, stk, task.ID)
+	if len(d.AcceptanceCriteria) != 2 {
+		t.Fatalf("AC count after delete = %d, want 2", len(d.AcceptanceCriteria))
+	}
+	lastEv = d.Events[0]
+	if lastEv.Kind != "ac-removed" || lastEv.Actor.Name != "bob" || lastEv.Actor.Type != "human" {
+		t.Fatalf("event = %+v, want ac-removed by bob/human", lastEv)
+	}
+
+	// 3. DELETE AC with JSON body (backward compatibility) → 204
+	code, _ := doReq(t, stk.Handler, "DELETE", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/3", map[string]any{
+		"actor": actor("charlie"),
+	})
+	if code != http.StatusNoContent {
+		t.Fatalf("DELETE AC 3 with body = %d, want 204", code)
+	}
+
+	// 4. DELETE AC with empty body and no headers/params → 400
+	code, _ = doReq(t, stk.Handler, "DELETE", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/4", nil)
+	if code != http.StatusBadRequest {
+		t.Fatalf("DELETE AC 4 without actor = %d, want 400", code)
+	}
+
+	// Test relations
+	t2 := newTask(t, stk, p.ID, "Related Task")
+
+	// Add edge
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/relations", map[string]any{
+		"actor": actor("setup"), "other_id": t2.ID, "kind": "blocked-by",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("add relation = %d, want 201", code)
+	}
+
+	// 5. DELETE relation with headers, nil body → 204
+	req, err = http.NewRequest("DELETE", "http://crowban.test/api/v1/tasks/"+task.ID+"/relations/"+t2.ID+"/blocked-by", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("X-Actor-Name", "alice")
+	req.Header.Set("X-Actor-Type", "agent")
+	res = httptest.NewRecorder()
+	stk.Handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("DELETE relation with headers = %d, want 204 (body %s)", res.Code, res.Body.String())
+	}
+	d = getDetail(t, stk, task.ID)
+	if len(d.Relations) != 0 {
+		t.Fatalf("relations = %+v, want empty", d.Relations)
+	}
+
+	// Re-add edge
+	doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/relations", map[string]any{
+		"actor": actor("setup"), "other_id": t2.ID, "kind": "blocked-by",
+	})
+
+	// 6. DELETE relation with query parameters, nil body → 204
+	req, err = http.NewRequest("DELETE", "http://crowban.test/api/v1/tasks/"+task.ID+"/relations/"+t2.ID+"/blocked-by?actor_name=bob&actor_type=human", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	res = httptest.NewRecorder()
+	stk.Handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("DELETE relation with query params = %d, want 204 (body %s)", res.Code, res.Body.String())
+	}
+	d = getDetail(t, stk, task.ID)
+	if len(d.Relations) != 0 {
+		t.Fatalf("relations = %+v, want empty", d.Relations)
+	}
+
+	// Re-add edge
+	doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/relations", map[string]any{
+		"actor": actor("setup"), "other_id": t2.ID, "kind": "blocked-by",
+	})
+
+	// 7. DELETE relation with JSON body (backward compatibility) → 204
+	code, _ = doReq(t, stk.Handler, "DELETE", "/api/v1/tasks/"+task.ID+"/relations/"+t2.ID+"/blocked-by", map[string]any{
+		"actor": actor("charlie"),
+	})
+	if code != http.StatusNoContent {
+		t.Fatalf("DELETE relation with body = %d, want 204", code)
+	}
+
+	// Re-add edge
+	doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/relations", map[string]any{
+		"actor": actor("setup"), "other_id": t2.ID, "kind": "blocked-by",
+	})
+
+	// 8. DELETE relation without body, headers, or query params → 400
+	code, _ = doReq(t, stk.Handler, "DELETE", "/api/v1/tasks/"+task.ID+"/relations/"+t2.ID+"/blocked-by", nil)
+	if code != http.StatusBadRequest {
+		t.Fatalf("DELETE relation without actor = %d, want 400", code)
+	}
+}

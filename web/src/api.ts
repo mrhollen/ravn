@@ -367,6 +367,10 @@ export const api = {
   deleteAc(taskId: string, seq: number, actor: ActorInput): Promise<void> {
     return request<void>(`/tasks/${taskId}/acceptance-criteria/${seq}`, {
       method: "DELETE",
+      headers: {
+        "X-Actor-Name": actor.name,
+        ...(actor.type ? { "X-Actor-Type": actor.type } : {}),
+      },
       body: JSON.stringify({ actor }),
     });
   },
@@ -435,6 +439,10 @@ export const api = {
   removeRelation(taskId: string, otherId: string, kind: string, actor: ActorInput): Promise<void> {
     return request<void>(`/tasks/${taskId}/relations/${otherId}/${kind}`, {
       method: "DELETE",
+      headers: {
+        "X-Actor-Name": actor.name,
+        ...(actor.type ? { "X-Actor-Type": actor.type } : {}),
+      },
       body: JSON.stringify({ actor }),
     });
   },

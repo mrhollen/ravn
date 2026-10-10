@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mrhollen/crowban/internal/application"
@@ -232,4 +233,26 @@ func parseTailLimit(v, name string) (int, error) {
 		return 0, fmt.Errorf("%w: %s must be a non-negative integer, got %q", domain.ErrInvalid, name, v)
 	}
 	return n, nil
+}
+
+// extractActor extracts actor metadata for requests where actor can be supplied
+// via body, request headers (X-Actor-Name, X-Actor-Type), or query parameters
+// (actor_name, actor_type, or actor). Returns actorInput and true if an actor was found.
+func extractActor(r *http.Request, bodyActor actorInput) (actorInput, bool) {
+	if strings.TrimSpace(bodyActor.Name) != "" {
+		return bodyActor, true
+	}
+	if name := strings.TrimSpace(r.Header.Get("X-Actor-Name")); name != "" {
+		t := strings.TrimSpace(r.Header.Get("X-Actor-Type"))
+		return actorInput{Name: name, Type: t}, true
+	}
+	if name := strings.TrimSpace(r.URL.Query().Get("actor_name")); name != "" {
+		t := strings.TrimSpace(r.URL.Query().Get("actor_type"))
+		return actorInput{Name: name, Type: t}, true
+	}
+	if name := strings.TrimSpace(r.URL.Query().Get("actor")); name != "" {
+		t := strings.TrimSpace(r.URL.Query().Get("actor_type"))
+		return actorInput{Name: name, Type: t}, true
+	}
+	return actorInput{}, false
 }

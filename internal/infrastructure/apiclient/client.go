@@ -226,7 +226,11 @@ func (c *Client) AddAC(ctx context.Context, id string, req ACAddRequest) (*Accep
 func (c *Client) RemoveAC(ctx context.Context, id string, seq int, actor Actor) error {
 	req := ACRemoveRequest{Actor: actor}
 	path := fmt.Sprintf("/tasks/%s/acceptance-criteria/%d", url.PathEscape(id), seq)
-	return c.do(ctx, "RemoveAC", http.MethodDelete, path, nil, &req, nil)
+	headers := map[string]string{
+		"X-Actor-Name": actor.Name,
+		"X-Actor-Type": string(actor.Type),
+	}
+	return c.doWithHeaders(ctx, "RemoveAC", http.MethodDelete, path, nil, headers, &req, nil)
 }
 
 // EditACText → PATCH /tasks/{id}/acceptance-criteria/{seq}. seq is the 1-based
@@ -337,7 +341,11 @@ func (c *Client) RelateTasks(ctx context.Context, id string, req RelationRequest
 func (c *Client) UnrelateTasks(ctx context.Context, id string, actor Actor, otherID, kind string) error {
 	req := UnrelateTaskRequest{Actor: actor}
 	path := fmt.Sprintf("/tasks/%s/relations/%s/%s", url.PathEscape(id), url.PathEscape(otherID), url.PathEscape(kind))
-	return c.do(ctx, "UnrelateTasks", http.MethodDelete, path, nil, &req, nil)
+	headers := map[string]string{
+		"X-Actor-Name": actor.Name,
+		"X-Actor-Type": string(actor.Type),
+	}
+	return c.doWithHeaders(ctx, "UnrelateTasks", http.MethodDelete, path, nil, headers, &req, nil)
 }
 
 // Health → GET /healthz — OUTSIDE the /api/v1 prefix (API.md) and never
@@ -355,7 +363,11 @@ func (c *Client) Health(ctx context.Context) (*Health, error) {
 // do performs one REST call against the versioned API: it prepends /api/v1 to
 // path and delegates to doPath.
 func (c *Client) do(ctx context.Context, op, method, path string, query url.Values, body any, out any) error {
-	return c.doPath(ctx, op, method, apiPrefix+path, query, body, out)
+	return c.doPathWithHeaders(ctx, op, method, apiPrefix+path, query, nil, body, out)
+}
+
+func (c *Client) doWithHeaders(ctx context.Context, op, method, path string, query url.Values, headers map[string]string, body any, out any) error {
+	return c.doPathWithHeaders(ctx, op, method, apiPrefix+path, query, headers, body, out)
 }
 
 // doPath performs one REST call: marshal the request (if any), apply auth and
@@ -364,6 +376,10 @@ func (c *Client) do(ctx context.Context, op, method, path string, query url.Valu
 // body is ALWAYS preserved verbatim on error — that channel carries the
 // agent-readable recovery instructions to the MCP layer.
 func (c *Client) doPath(ctx context.Context, op, method, path string, query url.Values, body any, out any) error {
+	return c.doPathWithHeaders(ctx, op, method, path, query, nil, body, out)
+}
+
+func (c *Client) doPathWithHeaders(ctx context.Context, op, method, path string, query url.Values, headers map[string]string, body any, out any) error {
 	u := c.base + path
 	if query != nil && len(query) > 0 {
 		u += "?" + query.Encode()
@@ -388,6 +404,9 @@ func (c *Client) doPath(ctx context.Context, op, method, path string, query url.
 	req.Header.Set("Accept", "application/json")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	resp, err := c.http.Do(req)
