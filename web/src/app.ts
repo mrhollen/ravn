@@ -1341,6 +1341,14 @@ export function crowbanApp() {
     /** Focus session for the drawer (trap + restore). Survives in-drawer task
      *  switches so focus still returns to the original board trigger. */
     detailFocus: null as DialogFocus | null,
+    /** Human-friendly message from a failed GET /tasks/{id} for the currently
+     *  open task — the drawer's error state (ticket 01M3MMYFRMAW7XM6QDTXNQA6ED).
+     *  Null while loading or when `detail` is rendered. Set in refreshDetail(),
+     *  cleared by applyDetail() and openTask(). */
+    detailLoadError: null as string | null,
+    /** True while retryDetailLoad()'s re-fetch is in flight (Retry button
+     *  shows "Retrying…" and stays disabled until the request settles). */
+    detailRetrying: false,
 
     // ------------------------------------------- full-page view (/tasks/<id>)
     /** Whether the open detail is rendered as a FULL PAGE instead of the wide
@@ -1387,6 +1395,8 @@ export function crowbanApp() {
       this.detailOpen = true;
       this.detailId = id;
       this.detail = null;
+      // Never carry a previous task's error state into the one being opened.
+      this.detailLoadError = null;
       this.editingTask = false;
       this.totalComments = 0;
       this.loadingOlderComments = false;
@@ -1397,13 +1407,25 @@ export function crowbanApp() {
         // The × button is the safe initial focus (not "Start Task in OpenCode").
         // autoFocus off: content arrives via fetch, so focus moves explicitly
         // once (below) instead of racing the render.
-        this.detailFocus = this.openDialog('cb-detail-drawer', 'button[aria-label="Close"]', false);
+        this.detailFocus = this.openDialog('cb-detail-drawer', '[data-testid="detail-close-btn"]', false);
       }
-      await this.refreshDetail(false);
+      const applied = await this.refreshDetail(false);
       void this.initComments(id);
-      // Content arrives via fetch; only move focus once the dialog actually has
-      // focusables (no-op if the user already tabbed somewhere inside).
-      this.detailFocus?.focusInitial();
+      if (!applied && this.detailOpen) {
+        // The fetch for this task failed (or the drawer closed mid-flight): the
+        // drawer shows its error state. Move focus to Retry as soon as it is
+        // rendered — the block mounts via x-if on Alpine's own schedule, so
+        // _focusWhenVisible polls frames instead of focusing blind.
+        const retryBtn =
+          typeof document === "undefined"
+            ? null
+            : document.querySelector<HTMLElement>('[data-testid="detail-retry-btn"]');
+        this._focusWhenVisible(retryBtn);
+      } else {
+        // Content arrives via fetch; only move focus once the dialog actually has
+        // focusables (no-op if the user already tabbed somewhere inside).
+        this.detailFocus?.focusInitial();
+      }
     },
 
     /** Detail-close entry point for the backdrop, × buttons and Escape —
@@ -1421,6 +1443,9 @@ export function crowbanApp() {
       const wasFullPage = this.fullPageOpen;
       const pushedEntry = this.fullPagePushed;
       this.editingTask = false;
+      // The drawer's error state never outlives its drawer (same rule as the
+      // notes scratchpad). openTask() also clears it, so a re-open starts clean.
+      this.detailLoadError = null;
       this.editingAcSeq = 0;
       this.editingAcText = "";
       this.newAcText = "";
@@ -1606,7 +1631,38 @@ export function crowbanApp() {
         return true;
       } catch (e) {
         if (!silent) this.toast(errMsg(e), "error");
+        // Drawer error state (ticket 01M3MMYFRMAW7XM6QDTXNQA6ED): a failed fetch
+        // for the task CURRENTLY open becomes a visible message in the drawer —
+        // previously it left only a bare "Loading task…" with no way out. The
+        // ownership gate mirrors canApplyDetail(): a failure for a task we no
+        // longer have open must not touch the drawer's state. Silent SSE/poll
+        // refreshes flow through here too; they cannot clobber a visible error
+        // (they only refresh its message), and a successful one clears it via
+        // applyDetail(). No automatic retry loop — re-fetching is user-driven
+        // via retryDetailLoad() (the Retry button).
+        if (this.detailOpen && this.detailId === id) {
+          this.detailLoadError =
+            e instanceof ApiError && e.status === 404
+              ? "This task was deleted or no longer exists."
+              : errMsg(e);
+        }
         return false;
+      }
+    },
+
+    /** Re-fetch the currently open task — the Retry button in the drawer's
+     *  error state (ticket 01M3MMYFRMAW7XM6QDTXNQA6ED). Non-silent, so a second
+     *  failure toasts as well. refreshDetail()'s ownership guard keeps a stale
+     *  result from landing on a task the user switched away mid-flight. */
+    async retryDetailLoad(): Promise<void> {
+      if (!this.detailOpen || this.detailRetrying) return;
+      const id = this.detailId;
+      if (!id) return;
+      this.detailRetrying = true;
+      try {
+        await this.refreshDetail(false, id);
+      } finally {
+        this.detailRetrying = false;
       }
     },
 
@@ -1618,6 +1674,10 @@ export function crowbanApp() {
       if (!canApplyDetail(t.id, this.detailId, this.detailOpen)) {
         return;
       }
+      // A payload that actually lands means the drawer recovered: clear any
+      // pending fetch-error state (ticket 01M3MMYFRMAW7XM6QDTXNQA6ED). Covers
+      // every apply path — refreshDetail success and the 409-rebase re-reads.
+      this.detailLoadError = null;
       const existingComments = (this.detail && this.detail.id === t.id) ? this.detail.comments : [];
       const map = new Map<string, CommentRow>();
       for (const c of existingComments) {

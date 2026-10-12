@@ -145,6 +145,10 @@ test.describe('Wide centered task-detail modal', () => {
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         if (msg.text().includes('status of 409')) return;
+        // The failed-detail-fetch tests deliberately 404 the task route via
+        // page.route — Chrome logs that as a resource error. Expected noise,
+        // not an app bug (the app handles it in its drawer error state).
+        if (msg.text().includes('status of 404')) return;
         uncaughtConsoleErrors.push(`[console.error] ${msg.text()}`);
       }
     });
@@ -409,5 +413,88 @@ test.describe('Wide centered task-detail modal', () => {
     // Reopen detail drawer so QA screenshot shows the accessible dialog open
     await card.click();
     await expect(detailDrawer).toBeVisible();
+  });
+
+  // -----------------------------------------------------------------------
+  // Task 01M3MMYFRMAW7XM6QDTXNQA6ED: a failed task fetch must not trap the
+  // user in "Loading task…". The header bar (title + Close) stays visible, an
+  // error state with Retry is offered, and Retry re-arms once the route works.
+
+  /** Install a page.route that 404s ONLY the fixture task's detail GET
+   *  (`/tasks/<id>?comment_limit=…` — NOT its `/comments` child route); every
+   *  other request passes through. Returns a handle to re-arm the route. */
+  function failDetailFetch(page: import('@playwright/test').Page): () => void {
+    let failing = true;
+    const detailUrl = new RegExp(`/api/v1/tasks/${fixtureTask.id}([?#]|$)`);
+    void page.route(detailUrl, (route) => {
+      if (!failing || route.request().method() !== 'GET') return route.continue();
+      return route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'not found', message: 'task not found' }),
+      });
+    });
+    return () => {
+      failing = false; // re-arm: the real server answers from here on
+    };
+  }
+
+  test('AC1+AC3: a failed task fetch keeps an always-visible header with Close', async ({ page }) => {
+    await openBoard(page);
+    failDetailFetch(page); // this test stays in the failed state end to end
+
+    await page.locator('article', { hasText: 'Modal fixture' }).click();
+    const drawer = page.locator('#cb-detail-drawer');
+    await expect(drawer).toBeVisible();
+
+    // The bare "Loading task…" trap is gone once the fetch fails…
+    await expect(page.getByText('Loading task…', { exact: true })).toBeHidden();
+
+    // …and is replaced by the error state (AC2, asserted here for visibility):
+    // friendly 404 message inside an assertive live region + a Retry button.
+    // (The headline uses a typographic apostrophe — match it via regex so the
+    // assertion doesn't depend on which quote glyph the template spells it with.)
+    const alert = drawer.getByRole('alert');
+    await expect(alert).toContainText(/Couldn.t load this task/);
+    await expect(alert).toContainText('This task was deleted or no longer exists.');
+    await expect(page.getByTestId('detail-retry-btn')).toBeVisible();
+
+    // AC1: the persistent header bar is rendered even with no detail — a Close
+    // button the user can rely on (no backdrop/Escape guessing required, AC3).
+    const closeBtn = page.getByTestId('drawer-bar-close-btn');
+    await expect(closeBtn).toBeVisible();
+
+    // Focus follows the failure into the drawer and lands on Retry.
+    await expect(page.getByTestId('detail-retry-btn')).toBeFocused();
+
+    // AC3: clicking the header Close dismisses the drawer entirely.
+    await closeBtn.click();
+    await expect(drawer).toBeHidden();
+    await expect(page.locator('main')).toBeVisible();
+  });
+
+  test('AC2: Retry re-fetches and loads the detail once the route recovers', async ({ page }) => {
+    await openBoard(page);
+    const stopFailing = failDetailFetch(page);
+
+    const drawer = page.locator('#cb-detail-drawer');
+    await page.locator('article', { hasText: 'Modal fixture' }).click();
+
+    // Failed state first (message + Retry, exactly as the previous test asserts).
+    const retryBtn = page.getByTestId('detail-retry-btn');
+    await expect(retryBtn).toBeVisible();
+    await expect(drawer.getByRole('alert')).toContainText('This task was deleted or no longer exists.');
+
+    // The route recovers; Retry must fetch the real payload and render the detail.
+    stopFailing();
+    await retryBtn.click();
+
+    await expect(page.getByRole('heading', { name: 'Modal fixture' })).toBeVisible();
+    // Both transient blocks unmount (x-if) once the detail renders…
+    await expect(page.getByTestId('detail-retry-btn')).toHaveCount(0);
+    await expect(page.getByText('Loading task…', { exact: true })).toBeHidden();
+    // …and the persistent bar yields to the loaded header's own Close button.
+    await expect(page.getByTestId('drawer-bar-close-btn')).toHaveCount(0);
+    await expect(page.getByTestId('detail-close-btn')).toBeVisible();
   });
 });

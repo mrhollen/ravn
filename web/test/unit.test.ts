@@ -1002,6 +1002,87 @@ test("Modal: openTask at ≥768px keeps the modal (no URL change)", async () => 
 });
 
 // ---------------------------------------------------------------------------
+// Task 01M3MMYFRMAW7XM6QDTXNQA6ED: a failed detail fetch must leave a visible
+// drawer error state + retry path — never the bare "Loading task…" trap.
+
+test("DrawerError: openTask with an unreachable server sets detailLoadError (non-fatal)", async () => {
+  const app = crowbanApp();
+  // No server in Node: the relative /api/v1 URL fails at fetch() → TypeError.
+  await app.openTask("01M3MMYFRMAW7XM6QDTXNQA6ED");
+  assert.equal(app.detailOpen, true, "the drawer stays open — the user is not trapped");
+  assert.equal(app.detail, null);
+  assert.ok(
+    typeof app.detailLoadError === "string" && app.detailLoadError.length > 0,
+    "a failed fetch must set a human-readable drawer error message",
+  );
+});
+
+test("DrawerError: a 404 maps to the deleted-task message", async () => {
+  const app = crowbanApp();
+  const origFetch = (globalThis as any).fetch;
+  try {
+    (globalThis as any).fetch = async () =>
+      new Response(JSON.stringify({ error: "not found", message: "task not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    await app.openTask("01M3MMYFRMAW7XM6QDTXNQA6ED");
+    assert.equal(app.detailLoadError, "This task was deleted or no longer exists.");
+  } finally {
+    if (origFetch === undefined) delete (globalThis as any).fetch;
+    else (globalThis as any).fetch = origFetch;
+  }
+});
+
+test("DrawerError: a failure for a task that is NOT open does not touch the drawer", async () => {
+  const app = crowbanApp();
+  const origFetch = (globalThis as any).fetch;
+  try {
+    (globalThis as any).fetch = async () =>
+      new Response(JSON.stringify({ error: "internal", message: "boom" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    app.detailOpen = true;
+    app.detailId = "OPEN-TASK";
+    // A stale SSE-style refresh (idToFetch ≠ detailId) fails — the open task's state is untouched.
+    const applied = await app.refreshDetail(true, "STALE-TASK");
+    assert.equal(applied, false);
+    assert.equal(app.detailLoadError, null, "ownership gate: only the OPEN task's failures surface");
+  } finally {
+    if (origFetch === undefined) delete (globalThis as any).fetch;
+    else (globalThis as any).fetch = origFetch;
+  }
+});
+
+test("DrawerError: an applied payload clears detailLoadError and re-renders the detail", () => {
+  const app = crowbanApp();
+  app.detailOpen = true;
+  app.detailId = "A";
+  app.detail = null;
+  app.detailLoadError = "boom";
+  app.applyDetail(fakeDetail("A", "notes-A"));
+  assert.equal(app.detail?.id, "A");
+  assert.equal(app.detailLoadError, null, "a landing payload must clear the drawer error state");
+});
+
+test("DrawerError: openTask clears a previous task's error state before loading", async () => {
+  const app = crowbanApp();
+  // Simulate the leftover error state from a previous failed open…
+  app.detailOpen = true;
+  app.detailId = "A";
+  app.detailLoadError = "boom";
+  // …then switching tasks must start clean: the NEW task's fetch fails (no
+  // server) and its OWN message replaces the stale one.
+  await app.openTask("01M3MMYFRMAW7XM6QDTXNQA6ED");
+  assert.equal(app.detailId, "01M3MMYFRMAW7XM6QDTXNQA6ED");
+  assert.ok(
+    typeof app.detailLoadError === "string" && !app.detailLoadError.includes("boom"),
+    "the stale error from task A must not survive the switch",
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Task 01M47NDGZR47NR1Z6SKQJ3BDP2: "New project" moved INTO a custom Projects
 // dropdown (trigger button + Alpine-managed menu) replacing the native select.
 

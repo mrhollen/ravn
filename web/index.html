@@ -862,14 +862,55 @@ DOM-placed after the collapsible strip: on md+ it renders flush
         <!-- Modal backdrop: a click anywhere outside the panel closes it. -->
         <div class="absolute inset-0 bg-black/30" x-show="!fullPageOpen" x-cloak
              @click="requestCloseDetail()"></div>
-        <aside :class="fullPageOpen
-             ? 'mx-auto flex w-full max-w-3xl min-h-0 flex-1 flex-col border-x border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900'
-             : 'relative flex w-[80vw] max-w-5xl max-h-full flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900'">
-          <div x-show="!detail" x-cloak class="flex flex-1 items-center justify-center text-sm text-zinc-400">
-            Loading task…
-          </div>
+         <aside :class="fullPageOpen
+              ? 'mx-auto flex w-full max-w-3xl min-h-0 flex-1 flex-col border-x border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900'
+              : 'relative flex w-[80vw] max-w-5xl max-h-full flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900'">
+           <!-- Persistent header bar (ticket 01M3MMYFRMAW7XM6QDTXNQA6ED): while the
+                detail is still LOADING or FAILED TO LOAD, this bar keeps a title slot
+                and a Close button visible. It is x-if (not x-show) so it fully leaves
+                the DOM once `detail` lands and the full header inside the template below
+                takes over — no duplicate headings/buttons in either state. -->
+           <template x-if="!detail">
+             <div class="flex shrink-0 items-center justify-between gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-800">
+               <h2 id="task-detail-title-loading" class="flex-1 min-w-[4.5rem] break-words text-lg font-semibold leading-snug text-zinc-400 dark:text-zinc-500">Task details</h2>
+               <div class="flex shrink-0 items-center gap-2">
+                 <!-- Full-page skin: same back-to-board affordance as the loaded header. -->
+                 <button type="button" x-show="fullPageOpen" @click="requestCloseDetail()"
+                         data-testid="drawer-bar-back-btn" aria-label="Back to board" title="Back to board"
+                         class="btn-ghost flex shrink-0 items-center gap-1.5 px-2.5 py-1 text-xs font-medium">
+                   <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                   </svg>
+                   Board
+                 </button>
+                 <button type="button" @click="requestCloseDetail()" aria-label="Close"
+                         data-testid="drawer-bar-close-btn"
+                         class="text-xl leading-none text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">&times;</button>
+               </div>
+             </div>
+           </template>
 
-          <template x-if="detail">
+           <div x-show="!detail && !detailLoadError" x-cloak class="flex flex-1 items-center justify-center text-sm text-zinc-400">
+             Loading task…
+           </div>
+
+           <!-- Fetch-failure state (ticket 01M3MMYFRMAW7XM6QDTXNQA6ED): the task fetch
+                errored — friendly message in an assertive live region + Retry. Close is
+                always one click away in the header bar above. -->
+           <template x-if="detailLoadError && !detail">
+             <div role="alert" class="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-8 text-center">
+               <svg class="h-8 w-8 text-red-500 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86l-8.02 13.9A1.5 1.5 0 003.57 20h16.86a1.5 1.5 0 001.3-2.24l-8.02-13.9a1.5 1.5 0 00-2.58 0z" />
+               </svg>
+               <p class="text-sm font-medium text-zinc-700 dark:text-zinc-200">Couldn’t load this task</p>
+               <p class="max-w-md break-words text-sm text-zinc-500 dark:text-zinc-400" x-text="detailLoadError"></p>
+               <button type="button" data-testid="detail-retry-btn" @click="retryDetailLoad()" :disabled="detailRetrying" class="btn-primary">
+                 <span x-text="detailRetrying ? 'Retrying…' : 'Retry'"></span>
+               </button>
+             </div>
+           </template>
+
+           <template x-if="detail">
             <!-- Modal skin: min-h-0 flex child so long content scrolls inside the
                  max-height-capped panel; full page keeps filling its region. -->
             <div :class="fullPageOpen ? 'h-full overflow-y-auto' : 'min-h-0 flex-1 overflow-y-auto'">
@@ -924,8 +965,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
                        </svg>
                      </button>
-                     <button type="button" @click="requestCloseDetail()" aria-label="Close"
-                             class="shrink-0 text-xl leading-none text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">&times;</button>
+                      <button type="button" @click="requestCloseDetail()" aria-label="Close" data-testid="detail-close-btn"
+                              class="shrink-0 text-xl leading-none text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">&times;</button>
                   </div>
                 </div>
                 <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
