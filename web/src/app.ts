@@ -499,21 +499,21 @@ export function crowbanApp() {
      *  requestAnimationFrame AND setTimeout(0) (see focus.ts) — so "focus one
      *  tick after open" can land while the surface is still display:none and
      *  .focus() silently no-ops forever. Instead: poll each animation frame
-     *  until visible, bounded (~20 frames ≈ 350ms) so an element that never
-     *  renders can't spin. Mirrors focusWhenReady(). */
+     *  until visible, bounded by a wall-clock deadline (1500ms) so an element
+     *  that never renders can't spin. Mirrors focusWhenReady(). */
     _focusWhenVisible(el: HTMLElement | null): void {
       if (!el || typeof window === "undefined" || typeof requestAnimationFrame !== "function") return;
       const isVisible = (n: HTMLElement): boolean =>
         typeof n.checkVisibility === "function"
           ? n.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true })
           : n.offsetParent !== null || getComputedStyle(n).position === "fixed";
-      let frames = 0;
+      const deadline = Date.now() + 1500; // ~2s wall-clock horizon, frame-rate independent
       const step = (): void => {
         if (isVisible(el)) {
           el.focus();
           return;
         }
-        if (++frames >= 20) return; // never rendered — stop, don't focus blind
+        if (Date.now() >= deadline) return; // never rendered — stop, don't focus blind
         requestAnimationFrame(step);
       };
       step();

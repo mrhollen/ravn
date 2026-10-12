@@ -166,20 +166,19 @@ export function openDialogFocus(root: HTMLElement, opts?: { initialSelector?: st
  *  LATER than a setTimeout(0) macrotask — so "focus one tick after open" can
  *  land while the surface is still display:none (and .focus() then silently
  *  no-ops forever). Instead: poll each animation frame until the root is
- *  visible, with a bounded horizon (~20 frames ≈ 350ms) so a surface that
- *  never renders can't spin. Calling focusInitial while hidden would no-op
- *  anyway, and after close() it bails on the closed flag — hence safe to run
+ *  visible, bounded by a wall-clock deadline (1500ms) so a surface that never
+ *  renders can't spin. Calling focusInitial while hidden would no-op anyway,
+ *  and after close() it bails on the closed flag — hence safe to run
  *  unattended. */
 export function focusWhenReady(f: DialogFocus, root: HTMLElement): void {
   if (typeof document === "undefined" || typeof root.checkVisibility !== "function") return;
-  let frames = 0;
-  const MAX_FRAMES = 20;
+  const deadline = Date.now() + 1500; // ~2s wall-clock horizon, frame-rate independent
   const step = (): void => {
     if (isVisible(root)) {
       f.focusInitial();
       return;
     }
-    if (++frames >= MAX_FRAMES) return; // never rendered — stop, don't focus blind
+    if (Date.now() >= deadline) return; // never rendered — stop, don't focus blind
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(step);
     else window.setTimeout(step, 16);
   };
