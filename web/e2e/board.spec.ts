@@ -115,10 +115,16 @@ test.describe('Web E2E test suite', () => {
   });
 
   test.beforeEach(async ({ page }) => {
+    const title = test.info().title;
     uncaughtConsoleErrors = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         if (msg.text().includes('status of 409')) return;
+        // The boot-failure test deliberately ABORTS the projects fetch via
+        // page.route — Chrome logs that as a resource error. Expected noise,
+        // not an app bug (the app handles it with its boot-error screen).
+        // Scoped to that test so real failures in other tests stay visible.
+        if (title.includes('transient network failure') && msg.text().includes('net::ERR_FAILED')) return;
         uncaughtConsoleErrors.push(`[console.error] ${msg.text()}`);
       }
     });
@@ -1375,6 +1381,83 @@ test.describe('Web E2E test suite', () => {
     // Blocked badges & card counts still intact on sorted columns
     const countBadge = todoCol.locator('header span.rounded-full');
     await expect(countBadge).toHaveText('3');
+  });
+
+  test('AC1-3: transient network failure on boot preserves the stored project and offers Retry', async ({
+    page,
+  }) => {
+    // -------------------------------------------------------------------------
+    // Step 1: Seed a project + task via API so the board has content to render
+    // after the connection recovers.
+    // -------------------------------------------------------------------------
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Boot Failure Fixture',
+        description: 'Seeded for the boot-failure e2e test',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    const taskRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Survives the glitch',
+        description: 'Seeded so the board renders after Retry.',
+        priority: 2,
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(taskRes.ok).toBe(true);
+
+    // -------------------------------------------------------------------------
+    // Step 2: Store the project id BEFORE page load (returning visitor) and make
+    // the boot-time projects fetch fail hard — a transient network blip.
+    // -------------------------------------------------------------------------
+    await page.addInitScript((id: string) => { localStorage.setItem('crowban.project', id); }, project.id);
+    const projectsUrl = `${serverUrl}/api/v1/projects`;
+    await page.route(projectsUrl, (route) => route.abort());
+
+    await page.goto(serverUrl);
+    await expect(page).toHaveTitle('crowban');
+
+    // -------------------------------------------------------------------------
+    // Step 3: The boot-error screen with Retry appears — NOT the New Project bar.
+    // -------------------------------------------------------------------------
+    const bootError = page.getByTestId('boot-error');
+    await expect(bootError).toBeVisible();
+    await expect(bootError).toContainText('Could not load projects', { exact: false });
+
+    // The generic board-load error block is superseded by the boot-error screen.
+    await expect(page.getByTestId('board-error')).not.toBeVisible();
+
+    const retryBtn = bootError.getByRole('button', { name: 'Retry', exact: true });
+    // Focus lands on Retry when the boot error shows (focus.ts convention).
+    await expect(retryBtn).toBeFocused();
+
+    // AC1 + AC2: stored selection intact in state AND localStorage, no modal.
+    await expect(page.locator('#cb-new-project-name-input')).toBeHidden();
+    expect(await page.evaluate(() => localStorage.getItem('crowban.project'))).toBe(project.id);
+
+    // -------------------------------------------------------------------------
+    // Step 4: The connection recovers; Retry re-runs the load + continuation.
+    // -------------------------------------------------------------------------
+    await page.unroute(projectsUrl);
+    await retryBtn.click();
+
+    // AC3: the stored project's board renders — the selection survived the glitch.
+    await expectProjectSelected(page, 'Boot Failure Fixture');
+    await expect(page.locator('article', { hasText: 'Survives the glitch' })).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem('crowban.project'))).toBe(project.id);
+
+    // Both error screens are gone once the board is up.
+    await expect(bootError).not.toBeVisible();
+    await expect(page.getByTestId('board-error')).not.toBeVisible();
   });
 });
 

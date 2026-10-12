@@ -13,6 +13,7 @@ import {
   safeStorage,
 } from "../src/util.ts";
 import { escapeHtml, renderMarkdown } from "../src/md.ts";
+import { api } from "../src/api.ts";
 import { crowbanApp, isMobileDetailViewport, MOBILE_DETAIL_MAX_WIDTH, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
 import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
@@ -1388,4 +1389,158 @@ test("Toasts: dismissToast plays the leave phase, then drops only the targeted t
   // Phase 2 — once the leave window (280ms) elapses, only that toast is gone.
   await new Promise((r) => setTimeout(r, 320));
   assert.deepEqual(app.toasts.map((t: { id: number }) => t.id), [2], "only the dismissed toast is dropped");
+});
+
+// ---------------------------------------------------------------------------
+// Ticket 01M3MMYP938G972KY8NF7RGMQR: a transient network failure on load must
+// NOT wipe the selected project ID from state/localStorage — surface a boot
+// error screen with Retry instead of opening the New Project bar.
+
+function emptyBoard(projectId: string): any {
+  return { project_id: projectId, tasks: { todo: [], doing: [], done: [] } };
+}
+
+test("BootError: index.html wires the dedicated boot-error screen (role=alert + Retry)", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  // Assertive live region with the Retry button that re-runs loadProjects +
+  // continuation — distinct from the generic board-load error block.
+  assert.match(html, /data-testid="boot-error"[\s\S]{0,400}?role="alert"/, "boot-error screen carries role=alert");
+  assert.match(html, /data-testid="boot-retry-btn"[^>]*@click="retryBoot\(\)"/, "Retry wired to retryBoot()");
+  assert.match(html, /:disabled="bootRetrying"/, "Retry disabled while its re-fetch is in flight");
+  // The generic board error block must not compete with the boot-error screen.
+  assert.match(html, /x-show="loadError && !board && !bootError"/);
+});
+
+test("Boot: failed loadProjects keeps stored selection and offers retry, not New Project", async () => {
+  safeStorage.setItem("crowban.project", "proj-stored");
+  const origListProjects = api.listProjects;
+  const origGetBoard = api.getBoard;
+  let boardFetches = 0;
+  try {
+    (api as any).listProjects = async () => { throw new TypeError("fetch failed"); };
+    (api as any).getBoard = async (pid: string) => { boardFetches++; return emptyBoard(pid); };
+
+    const app = crowbanApp() as any;
+    assert.equal(app.selectedProjectId, "proj-stored", "stored selection loaded at construction");
+    app.polling = false; // unit env: never start the 15s interval timer
+    await app.init();
+
+    // AC1 — a failed fetch must not clear state or overwrite storage.
+    assert.ok(typeof app.loadError === "string" && app.loadError.length > 0, "fetch error surfaces in loadError");
+    assert.equal(app.selectedProjectId, "proj-stored", "AC1: stored selection survives the failed boot");
+    assert.equal(app.projects.length, 0);
+    assert.equal(safeStorage.getItem("crowban.project"), "proj-stored", "AC1: localStorage is never overwritten on failure");
+    // AC2 — a dedicated retry screen, NOT the New Project bar.
+    assert.equal(app.bootError, true, "boot-error state for the dedicated retry screen");
+    assert.equal(app.showNewProject, false, "AC2: New Project bar must not open on a failed fetch");
+    assert.equal(boardFetches, 0, "no board load before projects recovered");
+
+    // A second failing retry keeps everything intact (and there is no auto-retry loop).
+    await app.retryBoot();
+    assert.equal(app.bootError, true, "failed retry keeps the error screen up");
+    assert.equal(app.selectedProjectId, "proj-stored", "AC3: selection survives a repeated failure");
+    assert.equal(safeStorage.getItem("crowban.project"), "proj-stored");
+
+    // Once the fetch recovers, Retry runs the SAME continuation as a normal boot.
+    (api as any).listProjects = async () => ({
+      projects: [{ id: "proj-stored", name: "Stored", task_counts: { todo: 0, doing: 0, done: 0 } }],
+    });
+    await app.retryBoot();
+    assert.equal(app.bootError, false, "boot-error state clears on recovery");
+    assert.equal(app.selectedProjectId, "proj-stored", "AC3: selection preserved across the glitch");
+    assert.ok(app.board, "board loaded through the success continuation");
+    assert.equal(boardFetches, 1);
+    assert.equal(safeStorage.getItem("crowban.project"), "proj-stored");
+  } finally {
+    (api as any).listProjects = origListProjects;
+    (api as any).getBoard = origGetBoard;
+    safeStorage.removeItem("crowban.project");
+  }
+});
+
+test("Boot: genuinely empty server on a successful load still opens New Project", async () => {
+  const origListProjects = api.listProjects;
+  try {
+    (api as any).listProjects = async () => ({ projects: [] });
+
+    // First visit (nothing stored) + zero projects.
+    safeStorage.removeItem("crowban.project");
+    const first = crowbanApp() as any;
+    first.polling = false;
+    await first.init();
+    assert.equal(first.bootError, false);
+    assert.equal(first.selectedProjectId, "");
+    assert.equal(first.showNewProject, true, "empty success keeps opening the New Project bar (behavior a)");
+
+    // Stored id that no longer exists + empty list: falls back to "" and invites.
+    safeStorage.setItem("crowban.project", "proj-gone");
+    const stale = crowbanApp() as any;
+    stale.polling = false;
+    await stale.init();
+    assert.equal(stale.selectedProjectId, "");
+    assert.equal(stale.showNewProject, true);
+    assert.equal(safeStorage.getItem("crowban.project"), "proj-gone", "empty success writes nothing (unchanged)");
+  } finally {
+    (api as any).listProjects = origListProjects;
+    safeStorage.removeItem("crowban.project");
+  }
+});
+
+test("Boot: stale stored id on a successful load falls back to the first project and persists it", async () => {
+  safeStorage.setItem("crowban.project", "proj-deleted");
+  const origListProjects = api.listProjects;
+  const origGetBoard = api.getBoard;
+  try {
+    (api as any).listProjects = async () => ({
+      projects: [
+        { id: "p-alpha", name: "Alpha", task_counts: { todo: 1, doing: 0, done: 0 } },
+        { id: "p-beta", name: "Beta", task_counts: { todo: 0, doing: 0, done: 2 } },
+      ],
+    });
+    (api as any).getBoard = async (pid: string) => emptyBoard(pid);
+
+    const app = crowbanApp() as any;
+    assert.equal(app.selectedProjectId, "proj-deleted");
+    app.polling = false;
+    await app.init();
+
+    assert.equal(app.bootError, false);
+    assert.equal(app.selectedProjectId, "p-alpha", "stale selection falls back to the first project (behavior b)");
+    assert.equal(safeStorage.getItem("crowban.project"), "p-alpha", "the fallback is persisted (as before)");
+    assert.equal(app.showNewProject, false);
+    assert.ok(app.board, "board of the fallback project loaded");
+  } finally {
+    (api as any).listProjects = origListProjects;
+    (api as any).getBoard = origGetBoard;
+    safeStorage.removeItem("crowban.project");
+  }
+});
+
+test("Boot: first visit (no stored id) on a successful load selects and persists the first project", async () => {
+  safeStorage.removeItem("crowban.project");
+  const origListProjects = api.listProjects;
+  const origGetBoard = api.getBoard;
+  try {
+    (api as any).listProjects = async () => ({
+      projects: [
+        { id: "p-alpha", name: "Alpha", task_counts: { todo: 0, doing: 1, done: 0 } },
+        { id: "p-beta", name: "Beta", task_counts: { todo: 2, doing: 0, done: 0 } },
+      ],
+    });
+    (api as any).getBoard = async (pid: string) => emptyBoard(pid);
+
+    const app = crowbanApp() as any;
+    assert.equal(app.selectedProjectId, "");
+    app.polling = false;
+    await app.init();
+
+    assert.equal(app.bootError, false);
+    assert.equal(app.selectedProjectId, "p-alpha", "first visit selects the first project (behavior c)");
+    assert.equal(safeStorage.getItem("crowban.project"), "p-alpha", "plain first-visit persistence kept (01M3V6Z nuance out of scope)");
+    assert.ok(app.board);
+  } finally {
+    (api as any).listProjects = origListProjects;
+    (api as any).getBoard = origGetBoard;
+    safeStorage.removeItem("crowban.project");
+  }
 });

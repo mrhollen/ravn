@@ -418,8 +418,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   class="text-lg leading-none text-amber-700 hover:text-amber-950 dark:text-amber-400 dark:hover:text-amber-100">&times;</button>
         </div>
 
-        <!-- load error -->
-        <div x-show="loadError && !board" x-cloak
+        <!-- load error (superseded by the dedicated boot-error screen below) -->
+        <div x-show="loadError && !board && !bootError" x-cloak data-testid="board-error"
              role="alert"
              aria-live="assertive"
              class="mx-auto mt-16 max-w-md rounded-xl border border-red-200 bg-white p-6 text-center shadow-sm dark:border-red-800 dark:bg-zinc-900">
@@ -427,6 +427,24 @@ DOM-placed after the collapsible strip: on md+ it renders flush
           <p class="mt-1 break-words text-xs text-zinc-500" x-text="loadError"></p>
           <div class="mt-4 flex justify-center gap-2">
             <button type="button" @click="loadBoard()" class="btn-primary">Retry</button>
+            <button type="button" @click="openAuthModal()" class="btn-ghost">Set auth token</button>
+          </div>
+        </div>
+
+        <!-- boot error (ticket 01M3MMYP938G972KY8NF7RGMQR): the initial projects
+             fetch failed — a transient glitch, NOT an empty server. The stored
+             selection is preserved as-is; Retry re-runs the load + board/SSE
+             continuation instead of wiping it or opening the New Project bar. -->
+        <div x-show="bootError" x-cloak data-testid="boot-error"
+             role="alert"
+             aria-live="assertive"
+             class="mx-auto mt-16 max-w-md rounded-xl border border-red-200 bg-white p-6 text-center shadow-sm dark:border-red-800 dark:bg-zinc-900">
+          <p class="text-sm font-semibold text-red-700 dark:text-red-400">Could not load projects</p>
+          <p class="mt-1 break-words text-xs text-zinc-500" x-text="loadError"></p>
+          <div class="mt-4 flex justify-center gap-2">
+            <button type="button" data-testid="boot-retry-btn" @click="retryBoot()" :disabled="bootRetrying" class="btn-primary">
+              <span x-text="bootRetrying ? 'Retrying…' : 'Retry'"></span>
+            </button>
             <button type="button" @click="openAuthModal()" class="btn-ghost">Set auth token</button>
           </div>
         </div>

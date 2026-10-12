@@ -390,6 +390,16 @@ export function crowbanApp() {
     // ---------------------------------------------------------------- projects
     projects: [] as ProjectWithCounts[],
     loadError: "",
+    /** Boot-error screen (ticket 01M3MMYP938G972KY8NF7RGMQR): the initial
+     *  projects fetch failed. The stored selection is kept EXACTLY as it is —
+     *  no fallback to ""/first project, no localStorage write, and the New
+     *  Project bar stays closed. Retry re-runs the load + continuation
+     *  (see init() / retryBoot()). */
+    bootError: false,
+    /** True while retryBoot()'s re-fetch is in flight (Retry shows "Retrying…"
+     *  and stays disabled until the request settles). Same convention as
+     *  detailRetrying. */
+    bootRetrying: false,
 
     /** Request-sequence guards: a response may only apply if no NEWER load was
      *  initiated after it started (see web/src/refresh.ts). Internal-only — not
@@ -2919,13 +2929,51 @@ export function crowbanApp() {
       }
       this.applyTheme();
       await this.loadProjects();
+      // Deep link: the initial URL may already be a full-page task route.
+      const deepLinkedTaskId =
+        typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
+      if (this.loadError) {
+        // Boot projects fetch failed — network blip or backend still starting.
+        // Do NOT validate the selection against an empty list that is the
+        // PRODUCT of the failure: keep selectedProjectId as-is, write nothing
+        // to storage, and open no New Project bar (ticket
+        // 01M3MMYP938G972KY8NF7RGMQR). Surface a boot-error screen with a
+        // Retry that re-runs exactly this continuation once the fetch recovers.
+        if (deepLinkedTaskId) {
+          // A full-page task open carries its own fetch + error/retry state, so
+          // it proceeds even when the projects list failed to load.
+          await this.openDeepLinkedTask(deepLinkedTaskId);
+        } else {
+          this.bootError = true;
+          // Move focus to Retry as soon as it is rendered — x-show flushes on
+          // Alpine's own schedule, so poll frames instead of focusing blind
+          // (same convention as the drawer's fetch-failure state).
+          const retryBtn =
+            typeof document === "undefined"
+              ? null
+              : document.querySelector<HTMLElement>('[data-testid="boot-retry-btn"]');
+          this._focusWhenVisible(retryBtn);
+        }
+      } else {
+        await this.continueBoot(deepLinkedTaskId);
+      }
+      if (this.polling) this.startPolling();
+      // Boot finished: the Projects dropdown trigger may now be clicked
+      // (e2e helpers wait on it becoming enabled). Set last so a failed
+      // early load can't unlock an inert control.
+      this.appBooted = true;
+    },
+
+    /** Success-path boot continuation, shared by init() and retryBoot():
+     *  validate the stored selection against the freshly loaded list (a stale
+     *  id falls back to the first project), persist it, load the board and
+     *  connect SSE — or invite creating a project when the server is genuinely
+     *  empty. Only ever called AFTER a successful projects fetch. */
+    async continueBoot(deepLinkedTaskId: string | null): Promise<void> {
       const known = this.projects.some((p) => p.id === this.selectedProjectId);
       if (!known || !this.selectedProjectId) {
         this.selectedProjectId = this.projects[0]?.id ?? "";
       }
-      // Deep link: the initial URL may already be a full-page task route.
-      const deepLinkedTaskId =
-        typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
       if (deepLinkedTaskId) {
         await this.openDeepLinkedTask(deepLinkedTaskId);
       } else if (this.selectedProjectId) {
@@ -2938,11 +2986,26 @@ export function crowbanApp() {
         // No projects yet — invite creating one.
         this.showNewProject = true;
       }
-      if (this.polling) this.startPolling();
-      // Boot finished: the Projects dropdown trigger may now be clicked
-      // (e2e helpers wait on it becoming enabled). Set last so a failed
-      // early load can't unlock an inert control.
-      this.appBooted = true;
+    },
+
+    /** Retry button on the boot-error screen (ticket 01M3MMYP938G972KY8NF7RGMQR):
+     *  re-runs the projects load and — only when it succeeds — the exact same
+     *  continuation as init()'s success path. A second failure keeps the stored
+     *  selection intact and just refreshes the error message; recovery is
+     *  user-driven (no automatic retry loop, same convention as the drawer). */
+    async retryBoot(): Promise<void> {
+      if (!this.bootError || this.bootRetrying) return;
+      this.bootRetrying = true;
+      try {
+        await this.loadProjects();
+        if (this.loadError) return; // still failing — boot-error screen stays up
+        this.bootError = false;
+        const deepLinkedTaskId =
+          typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
+        await this.continueBoot(deepLinkedTaskId);
+      } finally {
+        this.bootRetrying = false;
+      }
     },
   };
 }
