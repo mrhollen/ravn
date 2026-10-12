@@ -290,9 +290,9 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 4: If currently unclaimed, claim it for opencode with TTL 3600
+	// Step 4: If no ACTIVE lease is attached (unclaimed or zombie), claim it for opencode with TTL 3600
 	now := time.Now()
-	isClaimed := detail.Task.ClaimedBy != nil && detail.Task.ClaimExpiry != nil && detail.Task.ClaimExpiry.After(now)
+	isClaimed := detail.Task.IsClaimActive(now) // liveness check; an expired lease is takeover-eligible by Claim
 	if !isClaimed {
 		_, _ = a.Tasks.Claim(ctx, opencodeActor, detail.Task.ID, 3600)
 	}

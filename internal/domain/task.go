@@ -37,5 +37,20 @@ type Task struct {
 // Done reports whether the task is in the terminal done status.
 func (t Task) Done() bool { return t.Status == StatusDone }
 
-// Claimed reports whether a lease (live or stale) is currently attached.
-func (t Task) Claimed() bool { return t.ClaimedBy != nil && t.ClaimExpiry != nil }
+// HasLease reports whether a lease row is attached, regardless of its TTL:
+// true for both LIVE and stale ("zombie") leases. Pure presence — it never
+// consults the clock (domain entities have no time source). Use
+// IsClaimActive(now) when liveness matters.
+func (t Task) HasLease() bool { return t.ClaimedBy != nil && t.ClaimExpiry != nil }
+
+// Claimed reports whether a lease row is attached — live or stale. It is the
+// presence predicate and an alias of HasLease; callers that need to know the
+// lease is still within its TTL must call IsClaimActive(now) instead.
+func (t Task) Claimed() bool { return t.HasLease() }
+
+// IsClaimActive reports whether the lease is currently held: a holder and an
+// expiry are attached AND now is strictly before the expiry, so at exactly
+// the expiry instant the lease is already over. `now` comes from the
+// caller's application-layer clock — domain entities must never call
+// time.Now().
+func (t Task) IsClaimActive(now time.Time) bool { return t.HasLease() && now.Before(*t.ClaimExpiry) }

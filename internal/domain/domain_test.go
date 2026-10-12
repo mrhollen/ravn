@@ -117,6 +117,53 @@ func TestTaskHelpers(t *testing.T) {
 	}
 }
 
+func TestTaskIsClaimActive(t *testing.T) {
+	actor := Actor{Type: ActorAgent, Name: "builder"}
+	now := time.Date(2026, 10, 12, 7, 30, 0, 0, time.UTC)
+
+	// Absent lease: never active, and no lease row present.
+	if (Task{}).IsClaimActive(now) || (Task{}).HasLease() {
+		t.Error("unclaimed task must report neither active nor leased")
+	}
+
+	// A holder without an expiry is a half-lease: not active, not even present.
+	half := Task{ClaimedBy: &actor}
+	if half.IsClaimActive(now) || half.HasLease() {
+		t.Error("holder without expiry must count as neither active nor leased")
+	}
+
+	// Active lease: holder + future expiry ⇒ active and claimed/present.
+	active := Task{ClaimedBy: &actor, ClaimedAt: timePtr(now.Add(-time.Minute)), ClaimExpiry: timePtr(now.Add(time.Minute))}
+	if !active.IsClaimActive(now) || !active.HasLease() || !active.Claimed() {
+		t.Error("live lease must report active, leased and claimed")
+	}
+
+	// Boundary: at exactly the expiry instant the lease is already over —
+	// presence yes, liveness no (strict now.Before).
+	boundary := Task{ClaimedBy: &actor, ClaimExpiry: timePtr(now)}
+	if boundary.IsClaimActive(now) {
+		t.Error("lease at exactly its expiry must not be active")
+	}
+	if !boundary.HasLease() || !boundary.Claimed() {
+		t.Error("the lease row is still attached at the expiry instant (presence)")
+	}
+
+	// Expired (zombie) lease: present but not active.
+	stale := Task{ClaimedBy: &actor, ClaimExpiry: timePtr(now.Add(-time.Nanosecond))}
+	if stale.IsClaimActive(now) {
+		t.Error("expired lease must not be active")
+	}
+	if !stale.HasLease() || !stale.Claimed() {
+		t.Error("zombie lease must still count as leased/claimed (presence)")
+	}
+
+	// IsClaimActive consults the passed instant, not the wall clock: the same
+	// row is active for an earlier `now` and stale for a later one.
+	if !active.IsClaimActive(now.Add(-2*time.Minute)) || active.IsClaimActive(now.Add(2*time.Minute)) {
+		t.Error("IsClaimActive must be relative to the supplied now")
+	}
+}
+
 func TestRelationKindValidVsStored(t *testing.T) {
 	// Every stored kind is also acceptable at the tool boundary…
 	for _, k := range []RelationKind{RelationChild, RelationBlockedBy, RelationDuplicateOf, RelationRelated} {
