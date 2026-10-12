@@ -12,7 +12,7 @@ import {
   localCalendarToday,
   safeStorage,
 } from "../src/util.ts";
-import { escapeHtml, renderMarkdown } from "../src/md.ts";
+import { escapeHtml, isAllowedHref, renderMarkdown } from "../src/md.ts";
 import { api } from "../src/api.ts";
 import { crowbanApp, isMobileDetailViewport, MOBILE_DETAIL_MAX_WIDTH, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
@@ -169,6 +169,58 @@ test("R9: renderMarkdown handles empty and fallback without crashing", () => {
   const res = renderMarkdown("Hello *world*");
   assert.ok(res.length > 0);
   assert.ok(res.includes("Hello"));
+});
+
+// ---------------------------------------------------------------------------
+// Markdown href allow-list — ticket 01M3MMYWX96KGGYRZTCXD4FNVG
+// isAllowedHref() is the single classifier sanitizeHtml uses for every URL-typed
+// attribute (anchor/area href, src, …). We test it directly because the unit
+// suite runs in Node without DOMParser; renderMarkdown delegates to it verbatim.
+// ---------------------------------------------------------------------------
+
+test("MdHref: protocol-relative URLs are rejected (the core fix)", () => {
+  assert.equal(isAllowedHref("//evil.com"), false, "//evil.com must be stripped");
+  assert.equal(isAllowedHref("//evil.com/phish?x=1"), false);
+  assert.equal(isAllowedHref("///x"), false, "triple-slash resolves to host x — strip");
+  assert.equal(isAllowedHref("  //evil.com  "), false, "whitespace-padded protocol-relative");
+  assert.equal(isAllowedHref("//\t/evil.com"), false, "tab between the slashes still starts with //");
+});
+
+test("MdHref: backslash smuggling into a relative path is rejected", () => {
+  // Browsers normalize "\" to "/" in special-scheme contexts, so "/\evil.com"
+  // would navigate cross-origin to https://evil.com.
+  assert.equal(isAllowedHref("/\\evil.com"), false);
+  assert.equal(isAllowedHref("\\\\evil.com"), false);
+});
+
+test("MdHref: root-relative and fragment links keep working", () => {
+  assert.equal(isAllowedHref("/tasks/123"), true, "root-relative path is kept");
+  assert.equal(isAllowedHref("/"), true, "site root is kept");
+  assert.equal(isAllowedHref("/a/b?c=d#e"), true, "path with query+hash is kept");
+  assert.equal(isAllowedHref("#section"), true, "fragment-only is kept");
+});
+
+test("MdHref: http(s), mailto and fragments are allowed; schemes are case-insensitive", () => {
+  assert.equal(isAllowedHref("https://example.com"), true);
+  assert.equal(isAllowedHref("http://example.com/a?b=c#d"), true);
+  assert.equal(isAllowedHref("HTTPS://EXAMPLE.COM"), true, "uppercase scheme + host is allowed");
+  assert.equal(isAllowedHref("mailto:x@y"), true);
+  assert.equal(isAllowedHref("MAILTO:X@Y"), true, "uppercase mailto is allowed");
+});
+
+test("MdHref: disallowed schemes are rejected (no regression)", () => {
+  assert.equal(isAllowedHref("javascript:alert(1)"), false);
+  assert.equal(isAllowedHref("java&#x09;script:alert(1)".replace("&#x09;", "\t")), false, "tab (C0) inside the scheme token");
+  assert.equal(isAllowedHref("data:text/html,<script>alert(1)</script>"), false);
+  assert.equal(isAllowedHref("vbscript:MsgBox(1)"), false);
+  assert.equal(isAllowedHref("ftp://files.example.com/x"), false);
+  assert.equal(isAllowedHref("file:///etc/passwd"), false);
+});
+
+test("MdHref: empty and bare-relative strings stay rejected (legacy behavior)", () => {
+  assert.equal(isAllowedHref(""), false, "empty was stripped before too");
+  assert.equal(isAllowedHref("   "), false, "whitespace-only");
+  assert.equal(isAllowedHref("tasks/123"), false, "bare relative without leading / was stripped before");
 });
 
 // --------------------------------------------------------------------------- R10: Accessible Card Semantics

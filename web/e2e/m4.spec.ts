@@ -223,6 +223,55 @@ test.describe('Milestone 4: R8, R9, R10 Frontend Verification', () => {
     await expect(drawer.locator('.md-body form')).toHaveCount(0);
   });
 
+  test('R9b: protocol-relative markdown links render as non-clickable text (security)', async ({ page }) => {
+    // Ticket 01M3MMYWX96KGGYRZTCXD4FNVG: //evil.com must NOT survive sanitization
+    // as a clickable href, while root-relative paths stay real anchors.
+    const pRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Protocol Relative Link Project',
+        actor: { name: 'test', type: 'human' },
+      }),
+    });
+    const proj = await pRes.json();
+
+    await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: proj.id,
+        title: 'Task With Protocol Relative Link',
+        // Markdown link + raw-HTML anchor with protocol-relative URLs, plus a safe root-relative one.
+        description: '[phish](//evil.com/p) and <a href="///x">triple slash</a> and [ok](/tasks/123)',
+        priority: 2,
+        actor: { name: 'test', type: 'human' },
+      }),
+    });
+
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, proj.id);
+
+    const card = page.locator('article', { hasText: 'Task With Protocol Relative Link' });
+    await expect(card).toBeVisible();
+    await card.click();
+
+    const drawer = page.locator('aside');
+    await expect(drawer).toBeVisible();
+    const mdBody = drawer.locator('.md-body').first();
+
+    // AC1 — no protocol-relative href survives (neither markdown nor raw-HTML anchors).
+    await expect(mdBody.locator('a[href^="//"]')).toHaveCount(0);
+    // The link text is still shown, as plain non-clickable text (no href attribute at all).
+    await expect(mdBody).toContainText('phish');
+    await expect(mdBody).toContainText('triple slash');
+    const phishLink = mdBody.locator('a', { hasText: 'phish' }).first();
+    await expect(phishLink).not.toHaveAttribute('href');
+
+    // AC2 — root-relative links stay real anchors.
+    await expect(mdBody.locator('a[href="/tasks/123"]')).toHaveCount(1);
+  });
+
   test('R10: Kanban cards use <article> container, no role="button", and scoped keyboard handlers', async ({ page }) => {
     // 1. Seed project with a task
     const pRes = await fetch(`${serverUrl}/api/v1/projects`, {

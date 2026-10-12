@@ -7,19 +7,55 @@
 //   2. The rendered HTML is post-processed in a detached DOM (DOMParser):
 //      forbidden elements (script, noscript, iframe, form, style, svg, math,
 //      template, input, button, select, textarea, dialog, etc.) and images are
-//      stripped entirely, URL-typed attributes (href/src/data/…) carrying
-//      javascript:/data: values are neutralized, anchor hrefs are restricted to
-//      safe schemes (http(s), mailto, relative, #), and inline event handlers
-//      and unsafe style values are removed.
+//      stripped entirely, URL-typed attributes (href/src/data/…) that fail the
+//      href allow-list below are neutralized, and inline event handlers and
+//      unsafe style values are removed.
 //
 // The pipeline can never throw out of normal operation: any parse or DOM
 // failure degrades safely to escaped plain text.
 
 import { marked } from "marked";
 
-// URL-typed attributes whose values must never carry an active scheme.
+// URL-typed attributes whose values must pass the href allow-list below.
 const URL_ATTRS = new Set(["HREF", "SRC", "DATA", "POSTER", "ACTION", "FORMACTION", "XLINK:HREF"]);
-const UNSAFE_URL_SCHEME = /^\s*(javascript|vbscript|data)\s*:/i;
+
+// The only schemes an outbound link may carry. Everything else (javascript:,
+// data:, vbscript:, ftp:, file:, …) fails closed and the attribute is removed.
+const ALLOWED_SCHEMES = new Set(["http", "https", "mailto"]);
+
+/**
+ * Allow-list check for URL-typed attribute values (anchor/area href, src,
+ * poster, …). Exactly three shapes are permitted:
+ *   1. fragment-only references:     #section
+ *   2. root-relative paths:          /tasks/123   (a single leading slash)
+ *   3. absolute URLs with an explicit scheme from ALLOWED_SCHEMES (case-insensitive)
+ *
+ * Everything else fails closed so the attribute is stripped and any link text
+ * renders as plain text. In particular:
+ *   - protocol-relative URLs (//evil.com, ///x) are rejected UP FRONT — before
+ *     any URL resolution could rewrite them to https://evil.com.
+ *   - root-relative paths containing a backslash are rejected: the WHATWG URL
+ *     parser normalizes "\" to "/" in special-scheme contexts, so "/\evil.com"
+ *     would navigate cross-origin to https://evil.com.
+ *   - "schemes" whose token carries whitespace or control characters (e.g.
+ *     "java\tscript:") are not clean RFC 3986 scheme tokens; browsers strip
+ *     such C0/control chars before navigation, so we fail closed instead of
+ *     resolving them.
+ */
+export function isAllowedHref(raw: string): boolean {
+  const v = raw.trim();
+  if (v === "") return false; // empty href was never allowed — keep stripping it
+  if (v.startsWith("//")) return false; // protocol-relative — reject BEFORE resolution
+  if (v.startsWith("#")) return true; // fragment-only: cannot leave the document
+  const colon = v.indexOf(":");
+  if (colon !== -1 && /^[A-Za-z][A-Za-z0-9+.-]*$/.test(v.slice(0, colon))) {
+    // Clean scheme token directly before the ':' → absolute URL: allow-list only.
+    return ALLOWED_SCHEMES.has(v.slice(0, colon).toLowerCase());
+  }
+  // Otherwise a relative reference (or opaque string): only a root-relative path
+  // with a single leading slash is allowed, and it must contain no backslash.
+  return v.startsWith("/") && !v.includes("\\");
+}
 
 const FORBIDDEN_TAGS = new Set([
   "SCRIPT",
@@ -61,11 +97,11 @@ function sanitizeHtml(html: string): string {
     for (const attr of Array.from(el.attributes)) {
       if (/^on/i.test(attr.name)) el.removeAttribute(attr.name);
     }
-    // Neutralize javascript:/data:/vbscript: URLs in URL-typed attributes.
-    // <img>/<iframe>/<object>/<embed> are already gone above, but raw source
-    // markup can still smuggle these onto surviving elements (e.g. <area>).
+    // Neutralize URL-typed attributes that fail the href allow-list — including
+    // javascript:/data: values AND protocol-relative URLs on surviving elements
+    // (e.g. <area>). <img>/<iframe>/<object>/<embed> are already gone above.
     for (const attr of Array.from(el.attributes)) {
-      if (URL_ATTRS.has(attr.name.toUpperCase()) && UNSAFE_URL_SCHEME.test(attr.value)) {
+      if (URL_ATTRS.has(attr.name.toUpperCase()) && !isAllowedHref(attr.value)) {
         el.removeAttribute(attr.name);
       }
     }
@@ -75,11 +111,12 @@ function sanitizeHtml(html: string): string {
     }
     if (tag === "A") {
       const href = el.getAttribute("href") ?? "";
-      if (/^(https?:|mailto:|\/|#)/i.test(href.trim())) {
+      if (isAllowedHref(href)) {
         el.setAttribute("rel", "noreferrer noopener");
         el.setAttribute("target", "_blank");
       } else {
-        // unknown scheme (javascript:, data:, …) — render as plain text link
+        // disallowed scheme or protocol-relative URL (javascript:, data:,
+        // //evil.com, …) — render as plain text link
         el.removeAttribute("href");
       }
     }
