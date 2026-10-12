@@ -29,6 +29,7 @@ type Deps struct {
 	Acceptance   *application.Acceptance // routed in slice 3b
 	Relations    *application.Relations  // routed in slice 3b
 	Broker       application.EventBroker // realtime pub-sub for SSE events
+	Events       application.EventStore  // OPTIONAL: activity-log read path behind SSE Last-Event-ID replay; nil = live-only streams (no replay)
 	HTTPClient   *http.Client            // optional HTTP client for external integrations (e.g. OpenCode)
 	ArtifactsDir string                  // directory holding stored artifact files
 }

@@ -154,7 +154,9 @@ func newRouterWithBrokerAndCORS(db *sql.DB, staticDir, token, artifactsDir strin
 	mint := idgen.New()
 
 	metrics := httpapi.NewMetrics()
+	var events application.EventStore // SSE Last-Event-ID replay (nil = live-only)
 	if db != nil {
+		events = sqlite.NewEventStore(db)
 		metrics.SetTaskStatsFunc(func(ctx context.Context) (map[string]int64, int64, error) {
 			return sqlite.CollectTaskMetrics(ctx, db, time.Now())
 		})
@@ -168,6 +170,7 @@ func newRouterWithBrokerAndCORS(db *sql.DB, staticDir, token, artifactsDir strin
 		Acceptance:   application.NewAcceptance(uow, now, mint),
 		Relations:    application.NewRelations(uow, now, mint),
 		Broker:       broker,
+		Events:       events,
 		ArtifactsDir: artifactsDir,
 	})
 	httpapi.RegisterRoutes(mux, app)

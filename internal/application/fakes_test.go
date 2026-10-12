@@ -651,6 +651,22 @@ func (f *fakeEvents) ListByProject(_ context.Context, projectID domain.ID, limit
 	return tailBy(func(e domain.Event) bool { return e.ProjectID != nil && *e.ProjectID == projectID }, f.events, limit, offset)
 }
 
+// ListAfterProject returns the project's events strictly after (by id), oldest
+// first, up to limit — the SSE replay path over the in-memory log. The recorded
+// slice is append-ordered, which mirrors chronological order.
+func (f *fakeEvents) ListAfterProject(_ context.Context, projectID domain.ID, after domain.ID, limit int) ([]domain.Event, error) {
+	out := make([]domain.Event, 0)
+	for _, e := range f.events {
+		if e.ProjectID != nil && *e.ProjectID == projectID && e.ID > after {
+			out = append(out, e)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func tailBy(match func(domain.Event) bool, events []domain.Event, limit, offset int) ([]domain.Event, error) {
 	matched := make([]domain.Event, 0, len(events))
 	for i := len(events) - 1; i >= 0; i-- { // newest first

@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/mrhollen/crowban/internal/application"
@@ -18,6 +19,13 @@ type eventStore struct {
 func newEventStore(q querier) *eventStore { return &eventStore{q: q} }
 
 var _ application.EventStore = (*eventStore)(nil)
+
+// NewEventStore returns an application.EventStore bound directly to the
+// connection pool (autocommit reads, no transaction). It serves read paths
+// that need the activity log OUTSIDE a UnitOfWork.Run — today the SSE
+// Last-Event-ID replay in the HTTP adapter. Mutation work always goes through
+// the transaction-bound store built inside Run.
+func NewEventStore(db *sql.DB) application.EventStore { return newEventStore(db) }
 
 // eventColumns is the single source of truth for SELECT column order — it must
 // stay aligned with scanEvent's Scan targets. Nullable columns (project_id,
@@ -58,6 +66,37 @@ func (s *eventStore) ListByTask(ctx context.Context, taskID domain.ID, limit, of
 // offset. limit <= 0 means unbounded.
 func (s *eventStore) ListByProject(ctx context.Context, projectID domain.ID, limit, offset int) ([]domain.Event, error) {
 	return s.list(ctx, "project_id", string(projectID), limit, offset)
+}
+
+// ListAfterProject returns the project's events strictly after after, oldest
+// first (id ASC — event ids are ULIDs, so lexicographic order IS
+// chronological order), up to limit. It backs SSE Last-Event-ID replay: a
+// client reconnecting after a drop asks for exactly what it missed since its
+// last delivered event id. Events with no project never match; the cursor is
+// exclusive (id > after). limit <= 0 means unbounded.
+func (s *eventStore) ListAfterProject(ctx context.Context, projectID domain.ID, after domain.ID, limit int) ([]domain.Event, error) {
+	query := `SELECT ` + eventColumns + ` FROM event WHERE project_id = ? AND id > ? ORDER BY id ASC`
+	args := []any{string(projectID), string(after)}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+
+	rows, err := s.q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list events after %s for project %s: %w", after, projectID, err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.Event, 0)
+	for rows.Next() {
+		ev, err := scanEvent(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan event row: %w", err)
+		}
+		out = append(out, ev)
+	}
+	return out, rows.Err()
 }
 
 func (s *eventStore) list(ctx context.Context, column, value string, limit, offset int) ([]domain.Event, error) {

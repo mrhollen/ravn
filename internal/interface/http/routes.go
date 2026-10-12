@@ -14,8 +14,8 @@ const apiPrefix = "/api/v1"
 //	GET   /api/v1/projects/{id}         get project (404 when unknown)
 //	PUT   /api/v1/projects/{id}         update name/description
 //	GET   /api/v1/projects/{id}/board   whole-project board snapshot (UI extra)
-//	GET   /api/v1/projects/{id}/events  realtime SSE event stream scoped to project
-//	GET   /api/v1/events                realtime SSE event stream scoped to ?project_id=
+//	GET   /api/v1/projects/{id}/events  realtime SSE stream for the project; replays events missed since Last-Event-ID (header or ?last_event_id) on reconnect
+//	GET   /api/v1/events                same stream scoped by ?project_id= (+ the same replay cursor)
 //	GET   /api/v1/tasks                 list task summaries: filters + offset/limit pagination + total
 //	POST  /api/v1/tasks                 create task (+ACs) → 201 with possible_duplicates advisory
 //	GET   /api/v1/tasks/{id}            one-call resume payload (task+ACs+comments+artifacts+relations+events+blocked)

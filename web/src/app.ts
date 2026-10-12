@@ -1036,6 +1036,13 @@ export function crowbanApp() {
     sseStatus: "disconnected" as SseConnectionStatus,
     sseBackoffMs: 2000,
     sseReconnectTimer: 0 as number,
+    // Replay cursor (server-side Last-Event-ID): the last frame id received on
+    // THIS connection + the project it belongs to. Reconnects send it as the
+    // last_event_id query param so the server replays events missed while we
+    // were disconnected; the project match guards against replaying an old
+    // project's backlog after a switch.
+    sseLastEventId: "" as string,
+    sseLastEventProjectId: "" as string,
 
     connectSse(): void {
       this.disconnectSse(false);
@@ -1052,8 +1059,18 @@ export function crowbanApp() {
       this.sseStatus = "connecting";
 
       const token = this.authToken || api.getAuthToken();
+      const params: string[] = [];
+      if (token) {
+        params.push(`token=${encodeURIComponent(token)}`);
+      }
+      // This client reconnects manually on error (see handleSseDisconnect), so
+      // the browser's native Last-Event-ID auto-reconnect never fires — pass the
+      // cursor ourselves and the server replays whatever we missed.
+      if (this.sseLastEventId && this.sseLastEventProjectId === this.selectedProjectId) {
+        params.push(`last_event_id=${encodeURIComponent(this.sseLastEventId)}`);
+      }
       const url = `/api/v1/projects/${encodeURIComponent(this.selectedProjectId)}/events${
-        token ? `?token=${encodeURIComponent(token)}` : ""
+        params.length ? `?${params.join("&")}` : ""
       }`;
 
       let es: EventSource;
@@ -1097,6 +1114,13 @@ export function crowbanApp() {
         // Project scoping check
         if (data.project_id && data.project_id !== this.selectedProjectId) {
           return;
+        }
+
+        // Advance the replay cursor: MessageEvent.lastEventId carries the SSE
+        // frame id, which is exactly what a reconnect needs to catch up.
+        if (e.lastEventId) {
+          this.sseLastEventId = e.lastEventId;
+          this.sseLastEventProjectId = this.selectedProjectId;
         }
 
         // Coalesced silent reload: a burst of events (agent batch ops) within
@@ -1169,6 +1193,12 @@ export function crowbanApp() {
       if (resetBackoff) {
         this.sseBackoffMs = 2000;
         this.sseStatus = "disconnected";
+        // Intentional teardown (project switch, logout): drop the replay cursor
+        // so a later reconnect starts fresh instead of bursting a stale
+        // backlog. Error-driven reconnects go through disconnectSse(false) and
+        // keep the cursor on purpose.
+        this.sseLastEventId = "";
+        this.sseLastEventProjectId = "";
       }
     },
 

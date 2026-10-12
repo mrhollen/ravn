@@ -281,6 +281,13 @@ type EventStore interface {
 	// ListByProject returns up to limit events project-wide, newest first
 	// (ts DESC), skipping offset.
 	ListByProject(ctx context.Context, projectID domain.ID, limit, offset int) ([]domain.Event, error)
+
+	// ListAfterProject returns the project's events strictly AFTER after
+	// (id > after — ULID order is chronological), oldest first, up to limit.
+	// It backs SSE Last-Event-ID replay: a reconnecting client asks for
+	// exactly what it missed since its last delivered event id. Events with
+	// no project never match. limit <= 0 means unbounded.
+	ListAfterProject(ctx context.Context, projectID domain.ID, after domain.ID, limit int) ([]domain.Event, error)
 }
 
 // EventPublisher receives committed domain events for fan-out.
