@@ -282,4 +282,3 @@ func (s *Relations) isReachable(ctx context.Context, r *Repos, start, target dom
 	}
 	return false, nil
 }
-

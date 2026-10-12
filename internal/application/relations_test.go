@@ -813,4 +813,3 @@ func TestRelate_CycleDetection_NonCyclicRelationsSucceed(t *testing.T) {
 		}
 	})
 }
-

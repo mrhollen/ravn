@@ -579,4 +579,3 @@ func TestTasksRelease_DoneStatusPreserved(t *testing.T) {
 		t.Errorf("released ClaimedBy = %+v, want nil", released.ClaimedBy)
 	}
 }
-

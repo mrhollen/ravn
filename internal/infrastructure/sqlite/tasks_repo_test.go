@@ -246,4 +246,3 @@ func TestRelease_DoneTask_PreservesDoneStatusOnSQLite(t *testing.T) {
 		t.Errorf("holder after release = %+v, want nil", released.ClaimedBy)
 	}
 }
-

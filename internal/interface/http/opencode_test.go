@@ -554,4 +554,3 @@ func TestOpenCodeStart_PromptAsyncErrorNoLeakage(t *testing.T) {
 		t.Fatalf("502 response leaked body snippet from prompt_async: %s", string(body))
 	}
 }
-
