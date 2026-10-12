@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -232,6 +233,96 @@ func TestMetricsHandler_WithTaskStats(t *testing.T) {
 	}
 	if snap.ActiveClaims == nil || *snap.ActiveClaims != 2 {
 		t.Errorf("expected 2 active claims, got %v", snap.ActiveClaims)
+	}
+}
+
+// TestMetricsMiddleware_UnknownMethodFoldsToOther verifies that non-standard HTTP
+// methods map to the fixed "OTHER" counter and never create their own map key.
+func TestMetricsMiddleware_UnknownMethodFoldsToOther(t *testing.T) {
+	t.Parallel()
+	metrics := httpapi.NewMetrics()
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := metrics.Middleware(inner)
+
+	for _, method := range []string{"GET", "POST", "CUSTOM", "PUT", "TRACE", "FETCH_123"} {
+		req := httptest.NewRequest(method, "/x", nil)
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	snap := metrics.Snapshot(context.Background())
+
+	for _, standard := range []string{"GET", "POST", "PUT"} {
+		if got := snap.HTTPRequestsByMethod[standard]; got != 1 {
+			t.Errorf("expected 1 %s, got %d", standard, got)
+		}
+	}
+	// CUSTOM, TRACE and FETCH_123 are all outside the tracked verb set.
+	if got := snap.HTTPRequestsByMethod["OTHER"]; got != 3 {
+		t.Errorf("expected 3 OTHER, got %d", got)
+	}
+	for _, forbidden := range []string{"CUSTOM", "TRACE", "FETCH_123"} {
+		if _, ok := snap.HTTPRequestsByMethod[forbidden]; ok {
+			t.Errorf("unexpected unbounded method key %q in snapshot: %+v", forbidden, snap.HTTPRequestsByMethod)
+		}
+	}
+}
+
+// TestMetrics_BoundedCardinalityUnderFlooding simulates an attacker sending a large
+// number of distinct arbitrary method names and asserts the method cardinality stays
+// bounded (only OTHER accumulates) so memory cannot be exhausted.
+func TestMetrics_BoundedCardinalityUnderFlooding(t *testing.T) {
+	t.Parallel()
+	metrics := httpapi.NewMetrics()
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := metrics.Middleware(inner)
+
+	const n = 5000
+	for i := 0; i < n; i++ {
+		method := "MALICIOUS_METHOD_" + strconv.Itoa(i) // distinct name per request
+		req := httptest.NewRequest(method, "/flood", nil)
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	snap := metrics.Snapshot(context.Background())
+
+	if got := snap.HTTPRequestsByMethod["OTHER"]; got != n {
+		t.Errorf("expected all %d malicious methods folded into OTHER, got %d", n, got)
+	}
+	const maxExpected = 8 // 7 tracked verbs + OTHER
+	if len(snap.HTTPRequestsByMethod) > maxExpected {
+		t.Errorf("method cardinality unbounded: %d keys > %d allowed; got %+v",
+			len(snap.HTTPRequestsByMethod), maxExpected, snap.HTTPRequestsByMethod)
+	}
+}
+
+// TestMetricsHandler_EscapesPrometheusLabelValues verifies that a label value containing
+// a double quote, a backslash and a newline is escaped so it cannot break the exposition
+// format or inject fake metric lines.
+func TestMetricsHandler_EscapesPrometheusLabelValues(t *testing.T) {
+	t.Parallel()
+	metrics := httpapi.NewMetrics()
+	evil := "quote\" here\nFAKE_METRIC_12345 999" // contains a quote and a real newline
+	metrics.SetTaskStatsFunc(func(ctx context.Context) (map[string]int64, int64, error) {
+		return map[string]int64{evil: 7}, 0, nil
+	})
+
+	req := httptest.NewRequest("GET", "/metrics?format=prometheus", nil)
+	rec := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	if !strings.Contains(body, `tasks_by_status{status="quote\" here\nFAKE_METRIC_12345 999"} 7`) {
+		t.Errorf("expected fully escaped label line, got:\n%s", body)
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "FAKE_METRIC_12345") {
+			t.Fatalf("metric injection: newline not escaped; a fake metric line was produced:\n%s", body)
+		}
 	}
 }
 

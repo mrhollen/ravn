@@ -13,6 +13,19 @@ import (
 	"time"
 )
 
+// trackedMethods is the fixed set of standard HTTP verbs the metrics handler
+// exposes as distinct counters. Any request method outside this set is folded
+// into otherMethod, so cardinality (and memory) stays bounded no matter what an
+// unauthenticated client puts on the request line.
+var trackedMethods = []string{
+	http.MethodGet, http.MethodPost, http.MethodPut,
+	http.MethodPatch, http.MethodDelete, http.MethodHead, http.MethodOptions,
+}
+
+// otherMethod is the fixed bucket for any non-standard HTTP method. It is always
+// present in Metrics.methods so recordMethod never has to insert a new key.
+const otherMethod = "OTHER"
+
 // TaskStatsFunc is an optional callback that returns task counts by status and active claim count.
 type TaskStatsFunc func(ctx context.Context) (tasksByStatus map[string]int64, activeClaims int64, err error)
 
@@ -31,18 +44,18 @@ type Metrics struct {
 	taskStatsFunc TaskStatsFunc
 }
 
-// NewMetrics initializes a fresh Metrics instance.
+// NewMetrics initializes a fresh Metrics instance. The methods map is fully
+// populated here and never written to afterwards, so it cannot grow beyond the
+// fixed set of tracked verbs plus the "OTHER" bucket.
 func NewMetrics() *Metrics {
 	m := &Metrics{
 		startTime: time.Now(),
-		methods:   make(map[string]*atomic.Uint64),
+		methods:   make(map[string]*atomic.Uint64, len(trackedMethods)+1),
 	}
-	for _, method := range []string{
-		http.MethodGet, http.MethodPost, http.MethodPut,
-		http.MethodPatch, http.MethodDelete, http.MethodHead, http.MethodOptions,
-	} {
+	for _, method := range trackedMethods {
 		m.methods[method] = new(atomic.Uint64)
 	}
+	m.methods[otherMethod] = new(atomic.Uint64)
 	return m
 }
 
@@ -61,22 +74,19 @@ func (m *Metrics) recordStatus(status int) {
 	}
 }
 
+// recordMethod atomically increments the counter for a request's HTTP method.
+// Standard verbs map to their own pre-allocated counters; any other value maps
+// to the fixed "OTHER" bucket. Because m.methods is never written after
+// construction, this performs only a read-lock lookup and no allocation, so an
+// attacker cannot exhaust memory or cause write-lock contention by flooding the
+// server with arbitrarily named request methods.
 func (m *Metrics) recordMethod(method string) {
 	m.mu.RLock()
 	counter, ok := m.methods[method]
-	m.mu.RUnlock()
-	if ok {
-		counter.Add(1)
-		return
-	}
-
-	m.mu.Lock()
-	counter, ok = m.methods[method]
 	if !ok {
-		counter = new(atomic.Uint64)
-		m.methods[method] = counter
+		counter = m.methods[otherMethod] // always present; never nil
 	}
-	m.mu.Unlock()
+	m.mu.RUnlock()
 	counter.Add(1)
 }
 
@@ -192,6 +202,16 @@ func (m *Metrics) Snapshot(ctx context.Context) MetricsSnapshot {
 	return snap
 }
 
+// escapeLabelValue escapes backslashes, double quotes, and newlines so a value
+// can be embedded in a Prometheus text label without breaking the exposition
+// format or injecting fake metric lines (per the Prometheus text format spec).
+func escapeLabelValue(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)  // \ -> \\  (must run first)
+	s = strings.ReplaceAll(s, `"`, `\"`)  // " -> \"
+	s = strings.ReplaceAll(s, "\n", `\n`) // newline -> literal backslash-n
+	return s
+}
+
 // Handler returns an http.Handler that renders metrics based on Accept header or ?format= query param.
 // When format=prometheus or Accept contains text/plain, it formats as Prometheus text exposition.
 // When format=json or Accept contains application/json, it outputs JSON.
@@ -244,7 +264,7 @@ func (m *Metrics) Handler() http.Handler {
 		}
 		sort.Strings(statusKeys)
 		for _, k := range statusKeys {
-			sb.WriteString(fmt.Sprintf("http_requests_by_status{code=\"%s\"} %d\n", k, snap.HTTPRequestsByStatus[k]))
+			sb.WriteString(fmt.Sprintf("http_requests_by_status{code=\"%s\"} %d\n", escapeLabelValue(k), snap.HTTPRequestsByStatus[k]))
 		}
 		sb.WriteString("\n")
 
@@ -256,7 +276,7 @@ func (m *Metrics) Handler() http.Handler {
 		}
 		sort.Strings(methodKeys)
 		for _, k := range methodKeys {
-			sb.WriteString(fmt.Sprintf("http_requests_by_method{method=\"%s\"} %d\n", k, snap.HTTPRequestsByMethod[k]))
+			sb.WriteString(fmt.Sprintf("http_requests_by_method{method=\"%s\"} %d\n", escapeLabelValue(k), snap.HTTPRequestsByMethod[k]))
 		}
 		sb.WriteString("\n")
 
@@ -277,7 +297,7 @@ func (m *Metrics) Handler() http.Handler {
 			}
 			sort.Strings(taskStatusKeys)
 			for _, k := range taskStatusKeys {
-				sb.WriteString(fmt.Sprintf("tasks_by_status{status=\"%s\"} %d\n", k, snap.TasksByStatus[k]))
+				sb.WriteString(fmt.Sprintf("tasks_by_status{status=\"%s\"} %d\n", escapeLabelValue(k), snap.TasksByStatus[k]))
 			}
 			sb.WriteString("\n")
 		}
