@@ -489,7 +489,14 @@ test.describe('Wide centered task-detail modal', () => {
     stopFailing();
     await retryBtn.click();
 
-    await expect(page.getByRole('heading', { name: 'Modal fixture' })).toBeVisible();
+    // Scope to the drawer's own title id — a PAGE-SCOPED heading query can also
+    // resolve the board card's <h3> (same accessible name) whenever Chromium's
+    // aria-modal pruning of content behind the dialog does not hold at sample
+    // time (observed under CI load: the Retry button is :disabled mid-fetch,
+    // focus drops to <body>, and both headings surface → strict-mode violation).
+    const detailTitle = page.locator('#task-detail-title');
+    await expect(detailTitle).toBeVisible();
+    await expect(detailTitle).toHaveText('Modal fixture');
     // Both transient blocks unmount (x-if) once the detail renders…
     await expect(page.getByTestId('detail-retry-btn')).toHaveCount(0);
     await expect(page.getByText('Loading task…', { exact: true })).toBeHidden();

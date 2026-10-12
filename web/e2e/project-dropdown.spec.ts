@@ -274,6 +274,25 @@ test.describe('Projects dropdown (custom control)', () => {
         };
       });
 
+    /** Wait until the menu's focused item is STABLE (two samples ~120ms apart,
+     *  ~7 frames even at a slow rate). Opening the menu schedules an app-side
+     *  frame-polling focus helper that dies after its first successful focus;
+     *  under CPU load its landing frame can post-date our explicit .focus() or
+     *  key navigation, and while still armed it re-focuses its target — stealing
+     *  focus from the next End/Escape (reproduced locally: focus on
+     *  "+ New project…" yanked back to a project option ~3ms after End). A
+     *  stable reading proves that poll has already fired or given up, so the
+     *  keypresses below cannot lose the race. Coverage is unchanged — every
+     *  focus position below is still asserted exactly. */
+    const settleMenuFocus = (expectedTestid: string): Promise<void> =>
+      expect(async () => {
+        const first = await focusInfo().then((i) => i?.testid);
+        await new Promise((r) => setTimeout(r, 120));
+        const second = await focusInfo().then((i) => i?.testid);
+        expect(first).toBe(expectedTestid);
+        expect(second).toBe(expectedTestid);
+      }).toPass({ timeout: 5000 });
+
     await freshPage(page);
 
     // Pick Beta explicitly so the "selected" initial focus is known regardless
@@ -292,6 +311,7 @@ test.describe('Projects dropdown (custom control)', () => {
     await expect(menu).toBeVisible();
     await expect(trigger).toHaveAttribute('aria-expanded', 'true');
     await expect(betaOpt).toBeFocused();
+    await settleMenuFocus('project-option');
 
     // Escape closes and returns focus to the trigger.
     await page.keyboard.press('Escape');
@@ -306,11 +326,13 @@ test.describe('Projects dropdown (custom control)', () => {
     await page.keyboard.press('ArrowDown');
     await expect(menu).toBeVisible();
     await expect.poll(() => focusInfo().then((i) => i?.testid), { timeout: 3000 }).toBe('project-option');
+    await settleMenuFocus('project-option');
 
     // End jumps to the LAST item: the "+ New project…" action. Enter activates
     // it — the form bar opens with focus already in the name field.
     await page.keyboard.press('End');
     await expect(newItem).toBeFocused();
+    await settleMenuFocus('new-project-item');
     await page.keyboard.press('Enter');
     const nameInput = page.locator('#cb-new-project-name-input');
     await expect(nameInput).toBeVisible();
@@ -329,8 +351,13 @@ test.describe('Projects dropdown (custom control)', () => {
     await expect(menu).toBeVisible();
     await betaOpt.focus();
     await expect(betaOpt).toBeFocused();
+    // The click-open schedules the app's frame-polled menu focus; prove it has
+    // landed (stable focus) before any keypress, or the poll can steal focus
+    // from End/Escape under load.
+    await settleMenuFocus('project-option');
     await page.keyboard.press('End');
     await expect(newItem).toBeFocused();
+    await settleMenuFocus('new-project-item');
     await page.keyboard.press('Escape');
     await expect(menu).toBeHidden();
     await expect(trigger).toBeFocused();
