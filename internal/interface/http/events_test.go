@@ -768,12 +768,12 @@ func TestEvents_SSE_InvalidLastEventIDIsIgnoredLivesOnly(t *testing.T) {
 	url := srv.URL + "/api/v1/projects/" + proj.ID + "/events"
 
 	badCursors := []string{
-		"not-a-ulid",          // wrong chars and length
+		"not-a-ulid",            // wrong chars and length
 		strings.Repeat("O", 26), // O is excluded from Crockford base32
 		strings.Repeat("0", 25), // one char short of a ULID
 	}
 	for _, bad := range badCursors {
-		reader, cancel := sseConnect(t, srv, url, bad) // must still return 200
+		reader, cancel := sseConnect(t, srv, url, bad)              // must still return 200
 		fresh := newTask(t, stk, proj.ID, "inv live after connect") // published AFTER this subscription
 		frames := readSSETaskEvents(t, reader, 1)
 		if got := taskIDOfSSEFrame(t, frames[0]); got != fresh.ID {
