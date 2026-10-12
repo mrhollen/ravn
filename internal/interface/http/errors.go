@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/mrhollen/crowban/internal/domain"
 )
@@ -22,6 +23,10 @@ import (
 //	                            "expires_at":...} — holder + expiry ARE the
 //	                            recovery instruction ("wait until X, or work another
 //	                            task")
+//	*domain.TaskBlockedError  → 409 {"error":"task blocked","blockers":[<id>...]}
+//	                            — a FRESH claim (no active lease) on a task with
+//	                            open blockers; the IDs name what to complete or
+//	                            archive first (or re-claim with override_blockers)
 //	domain.ErrParentConflict  → 409 {"error":"parent conflict",...}
 //	anything else             → 500 {"error":"internal"} (logged)
 //
@@ -71,6 +76,24 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 			"message": fmt.Sprintf(
 				"%q is held by %s (%s) until %s — wait for the lease to expire or work another task",
 				string(id), claim.Holder.Type, claim.Holder.Name, rfc3339(claim.ExpiresAt)),
+		})
+		return
+	}
+
+	var blocked *domain.TaskBlockedError
+	if errors.As(err, &blocked) {
+		ids := make([]string, 0, len(blocked.BlockerIDs))
+		for _, b := range blocked.BlockerIDs {
+			ids = append(ids, string(b))
+		}
+		writeJSONError(w, http.StatusConflict, map[string]any{
+			"error":    "task blocked",
+			"resource": resource,
+			"id":       string(id),
+			"blockers": ids, // machine-readable: the open blocker IDs (edge-creation order)
+			"message": fmt.Sprintf(
+				"%q is blocked by %d unresolved blocker(s) (%s) — complete or archive them first, or claim again with override_blockers=true",
+				string(id), len(ids), strings.Join(ids, ", ")),
 		})
 		return
 	}

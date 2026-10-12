@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"os"
@@ -27,9 +28,12 @@ import (
 // case: a free, expired (takeover), or same-holder (renewal) lease wins and
 // returns 200 with the fresh task (status doing, lease re-stamped); a foreign
 // ACTIVE lease loses with 409 whose holder+expiry ARE the recovery
-// instruction ("wait until X, or work another task"). ttl_sec omitted/0 →
-// server default (900s); negative → 400; values above the cap are clamped to
-// 3600 by the use case. Claiming never touches the durable assignee.
+// instruction ("wait until X, or work another task"). A FRESH claim on a task
+// with open blockers (outgoing blocked-by edges to not-done, non-archived
+// tasks) loses with 409 {"error":"task blocked"} carrying the blocker IDs —
+// override_blockers=true bypasses that gate for emergency unblocking. ttl_sec
+// omitted/0 → server default (900s); negative → 400; values above the cap are
+// clamped to 3600 by the use case. Claiming never touches the durable assignee.
 func (a *App) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := pathID(w, r)
@@ -49,9 +53,13 @@ func (a *App) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 	if req.TTLSec != nil {
 		ttl = *req.TTLSec
 	}
-	fresh, err := a.Tasks.Claim(ctx, actor, id, ttl)
+	if req.OverrideBlockers {
+		slog.Warn("claim with override_blockers — open-blocker gate bypassed",
+			"task", id, "actor_type", string(actor.Type), "actor_name", actor.Name)
+	}
+	fresh, err := a.Tasks.Claim(ctx, actor, id, ttl, req.OverrideBlockers)
 	if err != nil {
-		writeAppError(w, err, "task", id) // ClaimConflictError → 409 holder+expiry
+		writeAppError(w, err, "task", id) // TaskBlockedError → 409 blocker IDs; ClaimConflictError → 409 holder+expiry
 		return
 	}
 	writeJSON(w, http.StatusOK, toSummary(fresh))

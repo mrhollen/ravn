@@ -92,7 +92,7 @@ func TestClaimRacingAgents_ExactlyOneWinnerPerTask(t *testing.T) {
 				go func() {
 					defer wg.Done()
 					actor := domain.Actor{Type: domain.ActorAgent, Name: fmt.Sprintf("racer-%d", i)} // DISTINCT actor names per racer
-					got, cerr := tasks.Claim(ctx, actor, task.ID, 600)
+					got, cerr := tasks.Claim(ctx, actor, task.ID, 600, false)
 					results[i] = cerr
 					if cerr == nil {
 						winners[i] = got.ClaimedBy
@@ -170,7 +170,7 @@ func TestClaimLazyExpiry_NoSweeper_TakeoverAfterClockAdvance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := tasks.Claim(ctx, agentA, task.ID, 30); err != nil { // expires base+30s
+	if _, err := tasks.Claim(ctx, agentA, task.ID, 30, false); err != nil { // expires base+30s
 		t.Fatalf("claim A: %v", err)
 	}
 
@@ -191,7 +191,7 @@ func TestClaimLazyExpiry_NoSweeper_TakeoverAfterClockAdvance(t *testing.T) {
 	}
 
 	// ... but it IS re-claimable: agent B's claim takes over (zombie heal).
-	got, err := tasks.Claim(ctx, agentB, task.ID, 30)
+	got, err := tasks.Claim(ctx, agentB, task.ID, 30, false)
 	if err != nil {
 		t.Fatalf("takeover by B after A's lease expired must win: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestHeartbeatRealSQL_ExtendsLeaseWithoutBumpOrEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	held, err := tasks.Claim(ctx, agentA, task.ID, 120) // v2, expires base+120s
+	held, err := tasks.Claim(ctx, agentA, task.ID, 120, false) // v2, expires base+120s
 	if err != nil {
 		t.Fatalf("claim A: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestReleaseRealSQL_NonHolderConflictAndUnclaimedNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	held, err := tasks.Claim(ctx, agentA, task.ID, 600) // v2 doing
+	held, err := tasks.Claim(ctx, agentA, task.ID, 600, false) // v2 doing
 	if err != nil {
 		t.Fatalf("claim A: %v", err)
 	}

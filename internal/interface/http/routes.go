@@ -20,7 +20,7 @@ const apiPrefix = "/api/v1"
 //	POST  /api/v1/tasks                 create task (+ACs) → 201 with possible_duplicates advisory
 //	GET   /api/v1/tasks/{id}            one-call resume payload (task+ACs+comments+artifacts+relations+events+blocked)
 //	PATCH /api/v1/tasks/{id}            version-guarded partial update → 200 fresh task; 409 with current_version + current task
-//	POST  /api/v1/tasks/{id}/claim      claim lease (CAS) → 200 fresh task doing; 409 claim conflict (holder+expiry)
+//	POST  /api/v1/tasks/{id}/claim      claim lease (CAS) → 200 fresh task doing; 409 claim conflict (holder+expiry); 409 task blocked (open blockers, override_blockers=true to bypass)
 //	POST  /api/v1/tasks/{id}/release    release lease (holder-only) → 200 fresh task todo; 409 not the holder
 //	POST  /api/v1/tasks/{id}/heartbeat  extend lease (keep-alive, no version bump) → 200 fresh task; 409 conflict
 //	POST  /api/v1/tasks/{id}/comments   append typed comment → 201 comment

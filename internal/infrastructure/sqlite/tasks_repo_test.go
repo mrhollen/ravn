@@ -82,14 +82,14 @@ func TestClaim_SubsecondPrecision_NoPrematureStealing(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	// Agent A claims with 30s TTL. Expiry = 12:00:30.500000000Z.
-	if _, err := tasks.Claim(ctx, agentA, task.ID, 30); err != nil {
+	if _, err := tasks.Claim(ctx, agentA, task.ID, 30, false); err != nil {
 		t.Fatalf("claim A: %v", err)
 	}
 
 	// At 12:00:30.000000000Z (whole second, 500ms BEFORE expiration):
 	// Agent A's lease is still active! Agent B must NOT be able to steal it.
 	tc.now = time.Date(2026, 10, 1, 12, 0, 30, 0, time.UTC)
-	_, err = tasks.Claim(ctx, agentB, task.ID, 30)
+	_, err = tasks.Claim(ctx, agentB, task.ID, 30, false)
 	if err == nil {
 		t.Fatalf("Agent B stole active lease 500ms before expiration! (premature steal bug)")
 	}
@@ -100,7 +100,7 @@ func TestClaim_SubsecondPrecision_NoPrematureStealing(t *testing.T) {
 	// At 12:00:30.600000000Z (100ms AFTER expiration):
 	// Agent B's takeover must succeed (zombie heal).
 	tc.now = time.Date(2026, 10, 1, 12, 0, 30, 600000000, time.UTC)
-	got, err := tasks.Claim(ctx, agentB, task.ID, 30)
+	got, err := tasks.Claim(ctx, agentB, task.ID, 30, false)
 	if err != nil {
 		t.Fatalf("Agent B takeover after expiration failed: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestRelease_SubsecondActiveLease_Success(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	// Claim expires at 12:00:30.500000000Z
-	if _, err := tasks.Claim(ctx, agentA, task.ID, 30); err != nil {
+	if _, err := tasks.Claim(ctx, agentA, task.ID, 30, false); err != nil {
 		t.Fatalf("claim A: %v", err)
 	}
 
@@ -155,7 +155,7 @@ func TestClaimAndHeartbeat_DoneAndArchivedTasks_RejectedOnSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := tasks.Claim(ctx, agentA, taskDone.ID, 30); err != nil {
+	if _, err := tasks.Claim(ctx, agentA, taskDone.ID, 30, false); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	doneSt := domain.StatusDone
@@ -164,7 +164,7 @@ func TestClaimAndHeartbeat_DoneAndArchivedTasks_RejectedOnSQLite(t *testing.T) {
 	}
 
 	// Claiming done task must fail with ErrInvalid and not mutate status
-	_, err = tasks.Claim(ctx, agentB, taskDone.ID, 30)
+	_, err = tasks.Claim(ctx, agentB, taskDone.ID, 30, false)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("claim done task err = %v, want ErrInvalid", err)
 	}
@@ -193,7 +193,7 @@ func TestClaimAndHeartbeat_DoneAndArchivedTasks_RejectedOnSQLite(t *testing.T) {
 	}
 
 	// Claiming archived task must fail with ErrInvalid
-	_, err = tasks.Claim(ctx, agentA, taskArchived.ID, 30)
+	_, err = tasks.Claim(ctx, agentA, taskArchived.ID, 30, false)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("claim archived task err = %v, want ErrInvalid", err)
 	}
@@ -225,7 +225,7 @@ func TestRelease_DoneTask_PreservesDoneStatusOnSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := tasks.Claim(ctx, agentA, task.ID, 60); err != nil {
+	if _, err := tasks.Claim(ctx, agentA, task.ID, 60, false); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 

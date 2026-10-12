@@ -47,7 +47,7 @@ func TestTasksClaim_FreshClaimSetsLeaseDoingVersionAndEmitsClaimedEvent(t *testi
 
 	fc.SetNow(fc.now.Add(5 * time.Minute))
 	claimedAt := fc.now
-	got, err := svc.Claim(ctx, claimAgent, task.ID, 600)
+	got, err := svc.Claim(ctx, claimAgent, task.ID, 600, false)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestTasksClaim_IdempotentRenewalBySameActiveHolder(t *testing.T) {
 	task := mustCreateTask(t, svc, "Renewal Task", 1, nil)
 
 	fc.SetNow(fc.now.Add(time.Minute))
-	first, err := svc.Claim(ctx, claimAgent, task.ID, 600) // v2, expires at t+1min+600s
+	first, err := svc.Claim(ctx, claimAgent, task.ID, 600, false) // v2, expires at t+1min+600s
 	if err != nil {
 		t.Fatalf("initial claim: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestTasksClaim_IdempotentRenewalBySameActiveHolder(t *testing.T) {
 	// every task-row mutation emits an event, and the tag lets readers filter
 	// the noise out; heartbeats remain the silent keep-alive channel.
 	fc.SetNow(fc.now.Add(5 * time.Minute)) // t+6min: first lease (t+11min) still active
-	renewed, err := svc.Claim(ctx, claimAgent, task.ID, 900)
+	renewed, err := svc.Claim(ctx, claimAgent, task.ID, 900, false)
 	if err != nil {
 		t.Fatalf("idempotent re-claim by same active holder must succeed, got: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestTasksClaim_IdempotentRenewalBySameActiveHolder(t *testing.T) {
 	// re-claims idempotently while worker-7's agent-typed lease is still active.
 	fc.SetNow(fc.now.Add(time.Minute))
 	sameName := domain.Actor{Type: domain.ActorHuman, Name: "worker-7"}
-	got, err := svc.Claim(ctx, sameName, task.ID, 600)
+	got, err := svc.Claim(ctx, sameName, task.ID, 600, false)
 	if err != nil {
 		t.Fatalf("re-claim by same NAME (different type) must succeed idempotently, got: %v", err)
 	}
@@ -172,14 +172,14 @@ func TestTasksClaim_DifferentLiveHolderGetsConflictNothingMutated(t *testing.T) 
 	task := mustCreateTask(t, svc, "Contested Task", 1, nil)
 
 	fc.SetNow(fc.now.Add(time.Minute))
-	held, err := svc.Claim(ctx, claimAgent, task.ID, 600) // live lease by worker-7
+	held, err := svc.Claim(ctx, claimAgent, task.ID, 600, false) // live lease by worker-7
 	if err != nil {
 		t.Fatalf("initial claim: %v", err)
 	}
 	eventsBefore := len(uow.events.events)
 
 	rival := domain.Actor{Type: domain.ActorAgent, Name: "worker-8"}
-	_, err = svc.Claim(ctx, rival, task.ID, 600)
+	_, err = svc.Claim(ctx, rival, task.ID, 600, false)
 	cc := asClaimConflict(t, err)
 	if cc.Holder.Type != claimAgent.Type || cc.Holder.Name != claimAgent.Name {
 		t.Errorf("conflict holder = %+v, want the live lease holder worker-7", cc.Holder)
@@ -208,7 +208,7 @@ func TestTasksClaim_ExpiredLeaseTakeoverByAnotherActorAndByPreviousHolder(t *tes
 
 	// worker-7 claims a short (300s) lease.
 	fc.SetNow(fc.now.Add(time.Minute))
-	_, err := svc.Claim(ctx, claimAgent, task.ID, 300)
+	_, err := svc.Claim(ctx, claimAgent, task.ID, 300, false)
 	if err != nil {
 		t.Fatalf("initial claim: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestTasksClaim_ExpiredLeaseTakeoverByAnotherActorAndByPreviousHolder(t *tes
 	// Advance PAST the expiry: the lease is a zombie. Another actor takes over.
 	fc.SetNow(fc.now.Add(6 * time.Minute)) // past t+1min+300s
 	rival := domain.Actor{Type: domain.ActorAgent, Name: "worker-8"}
-	takeover, err := svc.Claim(ctx, rival, task.ID, 600)
+	takeover, err := svc.Claim(ctx, rival, task.ID, 600, false)
 	if err != nil {
 		t.Fatalf("takeover of expired lease must win, got: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestTasksClaim_ExpiredLeaseTakeoverByAnotherActorAndByPreviousHolder(t *tes
 	// The previous holder reclaiming their OWN expired zombie lease is ALSO a
 	// takeover (their lease was not active), not a renewal.
 	fc.SetNow(fc.now.Add(20 * time.Minute)) // past worker-8's expiry too
-	back, err := svc.Claim(ctx, claimAgent, task.ID, 600)
+	back, err := svc.Claim(ctx, claimAgent, task.ID, 600, false)
 	if err != nil {
 		t.Fatalf("self-takeover of own expired lease must win, got: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestTasksRelease_HolderClearsLeaseAndEmitsReleasedEvent(t *testing.T) {
 	task := mustCreateTask(t, svc, "Release Task", 1, nil)
 
 	fc.SetNow(fc.now.Add(time.Minute))
-	held, err := svc.Claim(ctx, claimAgent, task.ID, 600) // v2 doing
+	held, err := svc.Claim(ctx, claimAgent, task.ID, 600, false) // v2 doing
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestTasksHeartbeat_ExtendsActiveLeaseWithoutVersionOrEvent(t *testing.T) {
 	task := mustCreateTask(t, svc, "Beat Me", 1, nil)
 
 	fc.SetNow(fc.now.Add(time.Minute))
-	_, err := svc.Claim(ctx, claimAgent, task.ID, 600) // v2, expires t+1min+600s
+	_, err := svc.Claim(ctx, claimAgent, task.ID, 600, false) // v2, expires t+1min+600s
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -398,7 +398,7 @@ func TestTasksClaim_TTLDefaultOverrideAndCap(t *testing.T) {
 	// ttlSec = 0 → DefaultClaimTTL (15m).
 	fc.SetNow(fc.now.Add(time.Minute))
 	task := mustCreateTask(t, svc, "Default TTL", 1, nil)
-	got, err := svc.Claim(ctx, claimAgent, task.ID, 0)
+	got, err := svc.Claim(ctx, claimAgent, task.ID, 0, false)
 	if err != nil {
 		t.Fatalf("claim with ttl 0: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestTasksClaim_TTLDefaultOverrideAndCap(t *testing.T) {
 
 	// Oversized override clamps to maxClaimTTL (3600s) rather than erroring.
 	fc.SetNow(fc.now.Add(time.Minute))
-	got, err = svc.Claim(ctx, claimAgent, mustCreateTask(t, svc, "Capped TTL", 1, nil).ID, 7200)
+	got, err = svc.Claim(ctx, claimAgent, mustCreateTask(t, svc, "Capped TTL", 1, nil).ID, 7200, false)
 	if err != nil {
 		t.Fatalf("claim with ttl 7200: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestTasksClaim_TTLDefaultOverrideAndCap(t *testing.T) {
 	// Negative TTL is invalid input: rejected, nothing written.
 	fc.SetNow(fc.now.Add(time.Minute))
 	victim := mustCreateTask(t, svc, "Negative TTL", 1, nil)
-	if _, err := svc.Claim(ctx, claimAgent, victim.ID, -5); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := svc.Claim(ctx, claimAgent, victim.ID, -5, false); !errors.Is(err, domain.ErrInvalid) {
 		t.Errorf("claim with ttlSec=-5 err = %v, want wrapped domain.ErrInvalid", err)
 	}
 	if stored, _ := svc.Get(ctx, victim.ID); stored.Version != 1 || stored.ClaimedBy != nil {
@@ -433,7 +433,7 @@ func TestTasksClaim_TTLDefaultOverrideAndCap(t *testing.T) {
 	// WithDefaultClaimTTL injects a custom default for ttlSec = 0 calls.
 	fast := svc.WithDefaultClaimTTL(30 * time.Second)
 	fc.SetNow(fc.now.Add(time.Minute))
-	got, err = fast.Claim(ctx, claimAgent, mustCreateTask(t, svc, "Injected TTL", 1, nil).ID, 0)
+	got, err = fast.Claim(ctx, claimAgent, mustCreateTask(t, svc, "Injected TTL", 1, nil).ID, 0, false)
 	if err != nil {
 		t.Fatalf("claim with injected default: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestTasksClaim_CompletedOrArchived_ReturnsErrInvalidAndNoMutation(t *testin
 	// 1. Claiming a completed task returns ErrInvalid and does not mutate status
 	doneTask := mustCreateTask(t, svc, "Done Task", 1, nil)
 	// Transition to doing, then done
-	_, err := svc.Claim(ctx, claimAgent, doneTask.ID, 600)
+	_, err := svc.Claim(ctx, claimAgent, doneTask.ID, 600, false)
 	if err != nil {
 		t.Fatalf("setup claim: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestTasksClaim_CompletedOrArchived_ReturnsErrInvalidAndNoMutation(t *testin
 	beforeEvCount := len(uow.events.events)
 	fc.SetNow(fc.now.Add(time.Minute))
 	otherAgent := domain.Actor{Type: domain.ActorAgent, Name: "worker-other"}
-	_, err = svc.Claim(ctx, otherAgent, doneTask.ID, 600)
+	_, err = svc.Claim(ctx, otherAgent, doneTask.ID, 600, false)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("claim done task err = %v, want domain.ErrInvalid", err)
 	}
@@ -491,7 +491,7 @@ func TestTasksClaim_CompletedOrArchived_ReturnsErrInvalidAndNoMutation(t *testin
 
 	beforeEvCount = len(uow.events.events)
 	fc.SetNow(fc.now.Add(time.Minute))
-	_, err = svc.Claim(ctx, claimAgent, archivedTask.ID, 600)
+	_, err = svc.Claim(ctx, claimAgent, archivedTask.ID, 600, false)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("claim archived task err = %v, want domain.ErrInvalid", err)
 	}
@@ -520,7 +520,7 @@ func TestTasksHeartbeat_CompletedOrArchived_ReturnsErrInvalidAndNoMutation(t *te
 
 	// 1. Heartbeat on completed task returns ErrInvalid
 	task := mustCreateTask(t, svc, "Heartbeat Done Task", 1, nil)
-	_, err := svc.Claim(ctx, claimAgent, task.ID, 600)
+	_, err := svc.Claim(ctx, claimAgent, task.ID, 600, false)
 	if err != nil {
 		t.Fatalf("setup claim: %v", err)
 	}
@@ -556,7 +556,7 @@ func TestTasksRelease_DoneStatusPreserved(t *testing.T) {
 	svc, fc, _ := newTaskTestEnv(t)
 
 	task := mustCreateTask(t, svc, "Done Release Task", 1, nil)
-	_, err := svc.Claim(ctx, claimAgent, task.ID, 600)
+	_, err := svc.Claim(ctx, claimAgent, task.ID, 600, false)
 	if err != nil {
 		t.Fatalf("setup claim: %v", err)
 	}

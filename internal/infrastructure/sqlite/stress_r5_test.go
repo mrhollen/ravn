@@ -248,7 +248,7 @@ func TestChallenger_R5_ClaimLeaseClearing_RawSQLite(t *testing.T) {
 		}
 
 		// Claim the task
-		claimed, err := tasks.Claim(ctx, claimActor, task.ID, 900)
+		claimed, err := tasks.Claim(ctx, claimActor, task.ID, 900, false)
 		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
@@ -316,7 +316,7 @@ func TestChallenger_R5_ClaimLeaseClearing_RawSQLite(t *testing.T) {
 		}
 
 		// Claim the task
-		claimed, err := tasks.Claim(ctx, claimActor, task.ID, 600)
+		claimed, err := tasks.Claim(ctx, claimActor, task.ID, 600, false)
 		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
@@ -374,7 +374,7 @@ func TestChallenger_R5_ReopenAndSubsequentClaim(t *testing.T) {
 	}
 
 	// 1. Agent 1 claims task
-	claimed1, err := tasks.Claim(ctx, agent1, task.ID, 300)
+	claimed1, err := tasks.Claim(ctx, agent1, task.ID, 300, false)
 	if err != nil {
 		t.Fatalf("Agent 1 Claim: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestChallenger_R5_ReopenAndSubsequentClaim(t *testing.T) {
 	}
 
 	// 4. Agent 2 claims the reopened task
-	claimed2, err := tasks.Claim(ctx, agent2, task.ID, 600)
+	claimed2, err := tasks.Claim(ctx, agent2, task.ID, 600, false)
 	if err != nil {
 		t.Fatalf("Agent 2 Claim on reopened task failed: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestChallenger_R5_NonStatusUpdatePreservesActiveLease(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	claimed, err := tasks.Claim(ctx, agent, task.ID, 900)
+	claimed, err := tasks.Claim(ctx, agent, task.ID, 900, false)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestChallenger_R5_ClaimDirectlyOnDoneTask(t *testing.T) {
 	}
 
 	// Move to doing then done
-	if _, err := tasks.Claim(ctx, agent1, task.ID, 300); err != nil {
+	if _, err := tasks.Claim(ctx, agent1, task.ID, 300, false); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 	done := domain.StatusDone
@@ -530,7 +530,7 @@ func TestChallenger_R5_ClaimDirectlyOnDoneTask(t *testing.T) {
 
 	// Now try to Claim directly while in done:
 	// Does the application/store allow or reject claiming a done task?
-	got, claimErr := tasks.Claim(ctx, agent2, task.ID, 600)
+	got, claimErr := tasks.Claim(ctx, agent2, task.ID, 600, false)
 	t.Logf("Empirical observation: Claim on 'done' task result: err=%v, status=%q, completed_at=%v",
 		claimErr, got.Status, got.CompletedAt)
 }

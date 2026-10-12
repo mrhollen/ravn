@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -46,6 +47,27 @@ type ClaimConflictError struct {
 func (e *ClaimConflictError) Error() string {
 	return fmt.Sprintf("task claimed by %s %q until %s",
 		e.Holder.Type, e.Holder.Name, e.ExpiresAt.UTC().Format(time.RFC3339))
+}
+
+// TaskBlockedError is returned when a claim is refused because the task has
+// OPEN blockers — outgoing blocked-by edges whose targets are not done and not
+// archived (the exact predicate List's UnblockedOnly guard encodes). Renewals
+// by the current active lease holder are exempt: the gate only guards fresh
+// starts. BlockerIDs carries the open blocker IDs in edge-creation order; it
+// is the machine-readable "why" that travels with the error. The REST adapter
+// maps it to 409 with error="task blocked" plus the blocker list.
+type TaskBlockedError struct {
+	TaskID     ID
+	BlockerIDs []ID
+}
+
+func (e *TaskBlockedError) Error() string {
+	ids := make([]string, len(e.BlockerIDs))
+	for i, id := range e.BlockerIDs {
+		ids[i] = string(id)
+	}
+	return fmt.Sprintf("task %s is blocked by open blocker(s): %s",
+		e.TaskID, strings.Join(ids, ", "))
 }
 
 // ErrParentConflict is the ≤1-parent rule (ARCHITECTURE §5: "one-parent rule",

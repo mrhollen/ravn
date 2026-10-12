@@ -290,11 +290,13 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 4: If no ACTIVE lease is attached (unclaimed or zombie), claim it for opencode with TTL 3600
+	// Step 4: If no ACTIVE lease is attached (unclaimed or zombie), claim it for opencode with TTL 3600.
+	// No blocker override: a task with open blockers fails the gate and simply
+	// stays unclaimed here (the error is deliberately swallowed, as before).
 	now := time.Now()
 	isClaimed := detail.Task.IsClaimActive(now) // liveness check; an expired lease is takeover-eligible by Claim
 	if !isClaimed {
-		_, _ = a.Tasks.Claim(ctx, opencodeActor, detail.Task.ID, 3600)
+		_, _ = a.Tasks.Claim(ctx, opencodeActor, detail.Task.ID, 3600, false)
 	}
 
 	// Step 5: Return 200 with session_id and session_url

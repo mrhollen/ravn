@@ -314,7 +314,7 @@ func TestChallenger_R1_LeaseExactBoundaryConditions(t *testing.T) {
 			}
 
 			// Claim at claimStart with ttl
-			_, err = tasks.Claim(ctx, agentA, task.ID, tc.claimTTLSec)
+			_, err = tasks.Claim(ctx, agentA, task.ID, tc.claimTTLSec, false)
 			if err != nil {
 				t.Fatalf("Initial claim: %v", err)
 			}
@@ -324,7 +324,7 @@ func TestChallenger_R1_LeaseExactBoundaryConditions(t *testing.T) {
 			clock.now = tc.expiry.Add(-1 * time.Nanosecond)
 
 			// Competitor attempt should fail
-			_, err = tasks.Claim(ctx, agentB, task.ID, 30)
+			_, err = tasks.Claim(ctx, agentB, task.ID, 30, false)
 			if err == nil {
 				t.Fatalf("Competitor claimed lease 1ns BEFORE expiry!")
 			}
@@ -356,7 +356,7 @@ func TestChallenger_R1_LeaseExactBoundaryConditions(t *testing.T) {
 			clock.now = tc.expiry
 
 			// Competitor attempt at exact boundary: MUST FAIL
-			_, err = tasks.Claim(ctx, agentB, task.ID, 30)
+			_, err = tasks.Claim(ctx, agentB, task.ID, 30, false)
 			if err == nil {
 				t.Fatalf("Competitor claimed lease at EXACT expiry moment (premature before < now)!")
 			}
@@ -391,7 +391,7 @@ func TestChallenger_R1_LeaseExactBoundaryConditions(t *testing.T) {
 			}
 
 			// Competitor claim: MUST SUCCEED
-			claimed, err := tasks.Claim(ctx, agentB, task.ID, 30)
+			claimed, err := tasks.Claim(ctx, agentB, task.ID, 30, false)
 			if err != nil {
 				t.Fatalf("Competitor takeover 1ns after expiry failed: %v", err)
 			}

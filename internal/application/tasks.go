@@ -708,7 +708,22 @@ func (s *Tasks) GetDetail(ctx context.Context, id domain.ID, commentLimit, event
 //
 // ttlSec: 0 = DefaultClaimTTL (or the WithDefaultClaimTTL override), >max clamps
 // to max, <0 → domain.ErrInvalid.
-func (s *Tasks) Claim(ctx context.Context, actor domain.Actor, id domain.ID, ttlSec int) (domain.Task, error) {
+//
+// Blocker gate: a FRESH claim or a takeover of an EXPIRED lease is rejected
+// with *domain.TaskBlockedError while the task has open blockers — outgoing
+// blocked-by edges whose targets are not done and not archived (BlockersOf's
+// exact contract, i.e. the same predicate List's UnblockedOnly guard encodes).
+// overrideBlockers bypasses the gate for emergency unblocking; it never
+// affects any other check. RENEWALS by the current active holder are exempt so
+// a working agent's re-claim/heartbeat can never break if a blocked-by edge
+// lands mid-task, and an ACTIVE foreign lease keeps its existing
+// *domain.ClaimConflictError (surfaced by the CAS below). Residual race: gate
+// read and CAS write share ONE transaction, so no concurrent writer can
+// interleave between them — but a blocked-by edge committed by another unit of
+// work AFTER this read could slip past the gate on THIS attempt only (the next
+// claim sees it), and a blocker completing concurrently makes us fail closed —
+// the retry succeeds.
+func (s *Tasks) Claim(ctx context.Context, actor domain.Actor, id domain.ID, ttlSec int, overrideBlockers bool) (domain.Task, error) {
 	a, err := normalizeActor(actor)
 	if err != nil {
 		return domain.Task{}, err
@@ -739,6 +754,23 @@ func (s *Tasks) Claim(ctx context.Context, actor domain.Actor, id domain.ID, ttl
 			return fmt.Errorf("%w: cannot claim completed task %s", domain.ErrInvalid, id)
 		}
 		outcome := claimOutcome(cur, a, now)
+		// Blocker gate (see Claim doc): only FRESH starts are guarded — an
+		// active lease (renewal by the holder or conflict for a rival) skips it
+		// so refresh stays retry-safe and the foreign-lease 409 is unchanged.
+		leaseActive := cur.ClaimedBy != nil && cur.ClaimExpiry != nil && !cur.ClaimExpiry.Before(now)
+		if !leaseActive && !overrideBlockers {
+			blks, berr := r.Tasks.BlockersOf(ctx, id) // already filtered to open blockers
+			if berr != nil {
+				return berr
+			}
+			if len(blks) > 0 {
+				ids := make([]domain.ID, 0, len(blks))
+				for _, b := range blks {
+					ids = append(ids, b.ID)
+				}
+				return &domain.TaskBlockedError{TaskID: id, BlockerIDs: ids} // no CAS attempt, no event, no mutation
+			}
+		}
 		st, cerr := r.Tasks.Claim(ctx, id, a, int(ttl.Seconds()), now)
 		if cerr != nil {
 			return cerr // *domain.ClaimConflictError — propagate verbatim, no event (no mutation)

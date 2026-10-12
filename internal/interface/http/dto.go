@@ -419,10 +419,12 @@ type updateTaskReq struct {
 
 // claimReq is POST /tasks/{id}/claim. Actor required; TTLSec optional —
 // omitted/0 → server default (900s), negative → 400, values above the cap are
-// clamped to 3600 by the use case.
+// clamped to 3600 by the use case. OverrideBlockers optionally bypasses the
+// open-blocker gate (emergency unblock); omitted = false (backward compatible).
 type claimReq struct {
-	Actor  actorInput `json:"actor"`
-	TTLSec *int       `json:"ttl_sec"`
+	Actor            actorInput `json:"actor"`
+	TTLSec           *int       `json:"ttl_sec"`
+	OverrideBlockers bool       `json:"override_blockers"`
 }
 
 // releaseReq is POST /tasks/{id}/release. The optional note rides on the

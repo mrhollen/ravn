@@ -776,7 +776,7 @@ func TestTasksUpdate_ClearsActiveClaimLeaseWhenLeavingDoing(t *testing.T) {
 
 	t.Run("doing -> done clears active claim lease", func(t *testing.T) {
 		task := mustCreateTask(t, svc, "Claimed Task", 0, nil)
-		claimed, err := svc.Claim(ctx, testAgent, task.ID, 900)
+		claimed, err := svc.Claim(ctx, testAgent, task.ID, 900, false)
 		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
@@ -823,7 +823,7 @@ func TestTasksUpdate_ClearsActiveClaimLeaseWhenLeavingDoing(t *testing.T) {
 
 	t.Run("doing -> todo clears active claim lease", func(t *testing.T) {
 		task := mustCreateTask(t, svc, "Claimed Task 2", 0, nil)
-		claimed, err := svc.Claim(ctx, testAgent, task.ID, 900)
+		claimed, err := svc.Claim(ctx, testAgent, task.ID, 900, false)
 		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
@@ -846,7 +846,7 @@ func TestTasksUpdate_ClearsActiveClaimLeaseWhenLeavingDoing(t *testing.T) {
 
 	t.Run("updating other fields in doing preserves active claim lease", func(t *testing.T) {
 		task := mustCreateTask(t, svc, "Claimed Task 3", 0, nil)
-		claimed, err := svc.Claim(ctx, testAgent, task.ID, 900)
+		claimed, err := svc.Claim(ctx, testAgent, task.ID, 900, false)
 		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
