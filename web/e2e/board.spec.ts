@@ -125,6 +125,12 @@ test.describe('Web E2E test suite', () => {
         // not an app bug (the app handles it with its boot-error screen).
         // Scoped to that test so real failures in other tests stay visible.
         if (title.includes('transient network failure') && msg.text().includes('net::ERR_FAILED')) return;
+        // The failed-AC-toggle test deliberately answers the AC PATCH with a
+        // 500 via page.route — Chrome logs that HTTP error as a resource
+        // error. Expected noise, not an app bug (the app handles it with the
+        // checkbox revert + error toast). Scoped to that test so real failures
+        // in other tests stay visible.
+        if (title.includes('failed AC toggle') && msg.text().includes('status of 500')) return;
         uncaughtConsoleErrors.push(`[console.error] ${msg.text()}`);
       }
     });
@@ -783,6 +789,105 @@ test.describe('Web E2E test suite', () => {
     const taskDetail5 = await getRes5.json();
     expect(taskDetail5.acceptance_criteria).toHaveLength(2);
     expect(taskDetail5.acceptance_criteria.map((x: any) => x.seq)).toEqual([1, 2]);
+
+    // Close drawer
+    await drawer.locator('button[aria-label="Close"]').first().click();
+  });
+
+  // -----------------------------------------------------------------------
+  // Ticket 01M3MMZ5VSPXWS9RYP1D24H5AG: the native AC checkbox flips its
+  // .checked on click BEFORE the server answers. When the toggle request
+  // fails, the DOM must revert to the model (checkbox unchecked), an error
+  // toast must appear, and re-arming the route lets a retry succeed.
+
+  test('failed AC toggle reverts checkbox and shows error toast', async ({ page }, testInfo) => {
+    // -------------------------------------------------------------------------
+    // Seed project and task with one UNCHECKED AC
+    // -------------------------------------------------------------------------
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'AC Toggle Failure Project',
+        description: 'Seeded for the failed-AC-toggle e2e test',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    const taskRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Task for failed toggle',
+        priority: 2,
+        acceptance_criteria: ['Fails then succeeds'],
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(taskRes.ok).toBe(true);
+    const task = (await taskRes.json()).task;
+
+    // Load UI and open the task detail drawer
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, project.id);
+
+    const taskCard = page.locator('article', { hasText: 'Task for failed toggle' });
+    await expect(taskCard).toBeVisible();
+    await taskCard.click();
+
+    const drawer = page.locator('aside');
+    await expect(drawer.getByRole('heading', { name: 'Task for failed toggle' })).toBeVisible();
+
+    const acItem = drawer.locator('li', { hasText: 'Fails then succeeds' });
+    const box = acItem.locator('input[type="checkbox"]');
+    await expect(box).not.toBeChecked();
+
+    // -------------------------------------------------------------------------
+    // AC1 + AC2: the toggle PATCH is intercepted and answered with 500.
+    // The checkbox must NOT remain checked after the failure, an error toast
+    // (role=alert in the aria-live toast stack) must appear, and the server
+    // row must still be unchecked.
+    // -------------------------------------------------------------------------
+    let failing = true;
+    const acToggleUrl = new RegExp(`/api/v1/tasks/${task.id}/acceptance-criteria/1$`);
+    await page.route(acToggleUrl, (route) => {
+      if (!failing || route.request().method() !== 'PATCH') return route.continue();
+      return route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'internal', message: 'simulated AC toggle failure' }),
+      });
+    });
+
+    await box.click();
+
+    const errorToast = page.getByTestId('toast-stack').locator('[role="alert"]');
+    await expect(errorToast).toContainText('simulated AC toggle failure');
+    await expect(box).not.toBeChecked();
+
+    // QA evidence for the ticket: reverted (unchecked) box + error toast in one shot.
+    await page.screenshot({ path: path.join(testInfo.outputDir, 'ac-toggle-failure-reverted.png') });
+
+    const getRes1 = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`);
+    expect(getRes1.ok).toBe(true);
+    const detail1 = await getRes1.json();
+    expect(detail1.acceptance_criteria[0].done).toBe(false);
+    expect(detail1.acceptance_criteria[0].completed_by).toBeUndefined();
+
+    // -------------------------------------------------------------------------
+    // Re-arm the route: the same toggle now succeeds end to end.
+    // -------------------------------------------------------------------------
+    failing = false;
+    await box.click();
+    await expect(box).toBeChecked();
+
+    const getRes2 = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`);
+    const detail2 = await getRes2.json();
+    expect(detail2.acceptance_criteria[0].done).toBe(true);
+    expect(detail2.acceptance_criteria[0].completed_by).toBeDefined();
 
     // Close drawer
     await drawer.locator('button[aria-label="Close"]').first().click();

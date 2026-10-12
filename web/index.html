@@ -1209,7 +1209,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         <!-- view mode: the whole row (checkbox + text) is one tappable label -->
                         <div x-show="editingAcSeq !== ac.seq" class="flex items-start gap-2.5">
                           <label class="tap-target flex min-w-0 flex-1 cursor-pointer items-start gap-2.5">
-                            <input type="checkbox" :checked="ac.done" @change="toggleAc(ac)" :disabled="acBusySeq !== 0"
+                             <input type="checkbox" :checked="ac.done" @change="toggleAc(ac, $event)" :disabled="acBusySeq !== 0"
                                    class="mt-0.5 h-4 w-4 rounded border-zinc-300 accent-emerald-600 shrink-0"
                                    :aria-label="'Mark done: ' + ac.text" />
                             <span class="min-w-0 flex-1">

@@ -2346,8 +2346,13 @@ export function crowbanApp() {
     savingAcSeq: 0,
     deletingAcSeq: 0,
 
-    /** Toggle one criterion; the 200 response carries the updated AC row. */
-    async toggleAc(ac: AcRow): Promise<void> {
+    /** Toggle one criterion; the 200 response carries the updated AC row, which
+     *  is merged back into detail (authoritative). `ev` is the change event —
+     *  on a FAILED toggle it lets us revert the native checkbox: the click flips
+     *  its .checked before we know the server said no, and ac.done is never
+     *  mutated on failure, so Alpine's :checked binding has no diff to re-sync
+     *  and would otherwise leave the box visually checked (split state). */
+    async toggleAc(ac: AcRow, ev?: Event): Promise<void> {
       const t = this.detail;
       if (!t || this.acBusySeq !== 0) return;
       this.acBusySeq = ac.seq;
@@ -2363,6 +2368,11 @@ export function crowbanApp() {
           };
         }
       } catch (e) {
+        // ac.done is still its pre-click value — put the DOM back in line with it.
+        // Duck-typed on purpose: unit tests drive this path with a plain fake
+        // event object (no DOM globals exist under node:test).
+        const el = ev?.target as unknown as { checked?: boolean } | null;
+        if (el && typeof el.checked === "boolean") el.checked = ac.done;
         this.toast(errMsg(e), "error");
       } finally {
         this.acBusySeq = 0;

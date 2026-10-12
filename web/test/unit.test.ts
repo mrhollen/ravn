@@ -13,7 +13,7 @@ import {
   safeStorage,
 } from "../src/util.ts";
 import { escapeHtml, isAllowedHref, renderMarkdown } from "../src/md.ts";
-import { api } from "../src/api.ts";
+import { ApiError, api } from "../src/api.ts";
 import { crowbanApp, isMobileDetailViewport, MOBILE_DETAIL_MAX_WIDTH, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
 import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
@@ -1594,5 +1594,104 @@ test("Boot: first visit (no stored id) on a successful load selects and persists
     (api as any).listProjects = origListProjects;
     (api as any).getBoard = origGetBoard;
     safeStorage.removeItem("crowban.project");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Ticket 01M3MMZ5VSPXWS9RYP1D24H5AG: the native AC checkbox flips its .checked
+// on click BEFORE the server answers. On a failed toggle ac.done is never
+// mutated, so Alpine's :checked binding has no diff to re-sync — the handler
+// must revert the DOM element explicitly and surface the error toast.
+
+function acToggleDetailFixture(): any {
+  return {
+    id: "task-ac-toggle",
+    acceptance_criteria: [
+      { seq: 1, text: "First criterion", done: false },
+      { seq: 2, text: "Second criterion", done: true },
+    ],
+  };
+}
+
+test("toggleAc: failed server toggle leaves the model untouched and reverts the DOM checkbox", async () => {
+  const origToggleAc = api.toggleAc;
+  try {
+    (api as any).toggleAc = async () => {
+      throw new ApiError(500, { error: "internal", message: "simulated server failure" });
+    };
+
+    const app = crowbanApp() as any;
+    app.detail = acToggleDetailFixture();
+    const ac = app.detail.acceptance_criteria[0]; // done: false
+    // Simulate the browser: the user's click has already flipped .checked on.
+    const fakeInput: any = { checked: true };
+
+    await app.toggleAc(ac, { target: fakeInput } as any);
+
+    assert.equal(app.detail.acceptance_criteria[0].done, false, "AC1: model stays false after a failed toggle");
+    assert.equal(fakeInput.checked, false, "AC1: the DOM checkbox reverts to the model value");
+    const errors = app.toasts.filter((t: any) => t.kind === "error");
+    assert.equal(errors.length, 1, "AC2: exactly one error toast");
+    assert.match(String(errors[0].msg), /simulated server failure/);
+    assert.equal(app.acBusySeq, 0, "busy guard released on failure");
+  } finally {
+    (api as any).toggleAc = origToggleAc;
+  }
+});
+
+test("toggleAc: a failing UNCHECK also reverts the DOM checkbox to the model", async () => {
+  const origToggleAc = api.toggleAc;
+  try {
+    (api as any).toggleAc = async () => {
+      throw new ApiError(409, { error: "version_conflict", current_version: 2, message: "stale" });
+    };
+
+    const app = crowbanApp() as any;
+    app.detail = acToggleDetailFixture();
+    const ac = app.detail.acceptance_criteria[1]; // done: true
+    // The click visually UNchecked the box.
+    const fakeInput: any = { checked: false };
+
+    await app.toggleAc(ac, { target: fakeInput } as any);
+
+    assert.equal(app.detail.acceptance_criteria[1].done, true, "model stays true after a failed uncheck");
+    assert.equal(fakeInput.checked, true, "DOM checkbox reverts to the (still-done) model value");
+    assert.ok(app.toasts.some((t: any) => t.kind === "error"), "error toast raised");
+  } finally {
+    (api as any).toggleAc = origToggleAc;
+  }
+});
+
+test("toggleAc: successful toggle merges the server's row back into detail state", async () => {
+  const origToggleAc = api.toggleAc;
+  try {
+    let requestedDone: unknown;
+    (api as any).toggleAc = async (_id: string, _seq: number, _actor: any, done: boolean) => {
+      requestedDone = done;
+      // The server row is authoritative — completed_by/at come back populated.
+      return {
+        seq: 1,
+        text: "First criterion",
+        done: true,
+        completed_by: { name: "qa-bot", type: "agent" },
+        completed_at: "2026-10-12T00:00:00Z",
+      };
+    };
+
+    const app = crowbanApp() as any;
+    app.detail = acToggleDetailFixture();
+
+    await app.toggleAc(app.detail.acceptance_criteria[0]);
+
+    assert.equal(requestedDone, true, "requests the negated current value");
+    const row1 = app.detail.acceptance_criteria[0];
+    assert.equal(row1.done, true, "server's done is applied to state");
+    assert.deepEqual(row1.completed_by, { name: "qa-bot", type: "agent" });
+    assert.equal(row1.completed_at, "2026-10-12T00:00:00Z");
+    // Only the toggled seq is patched — sibling rows are left untouched.
+    assert.deepEqual(app.detail.acceptance_criteria[1], { seq: 2, text: "Second criterion", done: true });
+    assert.ok(!app.toasts.some((t: any) => t.kind === "error"), "no error toast on success");
+  } finally {
+    (api as any).toggleAc = origToggleAc;
   }
 });
