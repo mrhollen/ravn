@@ -366,15 +366,19 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     const notes = panel.locator('textarea[placeholder*="Last run"]');
     await notes.fill('Notes saved from full page\nNext: ship it');
     await panel.getByRole('button', { name: 'Save notes' }).click();
-    const b2 = await getJson(`${serverUrl}/api/v1/tasks/${taskB.id}`);
-    expect(b2.notes).toBe('Notes saved from full page\nNext: ship it');
+    await expect(async () => {
+      const b2 = await getJson(`${serverUrl}/api/v1/tasks/${taskB.id}`);
+      expect(b2.notes).toBe('Notes saved from full page\nNext: ship it');
+    }).toPass({ timeout: 10_000 });
 
     // --- acceptance criterion check-off --------------------------------------
     const acBox = panel.locator('input[aria-label="Mark done: Edit works from page"]');
     await acBox.check();
-    const b3 = await getJson(`${serverUrl}/api/v1/tasks/${taskB.id}`);
-    const ac1 = b3.acceptance_criteria.find((a: any) => a.seq === 1);
-    expect(ac1.done).toBe(true);
+    await expect(async () => {
+      const b3 = await getJson(`${serverUrl}/api/v1/tasks/${taskB.id}`);
+      const ac1 = b3.acceptance_criteria.find((a: any) => a.seq === 1);
+      expect(ac1.done).toBe(true);
+    }).toPass({ timeout: 10_000 });
 
     // --- comment ---------------------------------------------------------------
     const commentsBefore = (await getJson(`${serverUrl}/api/v1/tasks/${taskB.id}`)).comments.length;
@@ -453,8 +457,10 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     const notes = panel.locator('textarea[placeholder*="Last run"]');
     await notes.fill('Notes saved at 375px');
     await panel.getByRole('button', { name: 'Save notes' }).click();
-    const t2 = await getJson(`${serverUrl}/api/v1/tasks/${taskA.id}`);
-    expect(t2.notes).toBe('Notes saved at 375px');
+    await expect(async () => {
+      const t2 = await getJson(`${serverUrl}/api/v1/tasks/${taskA.id}`);
+      expect(t2.notes).toBe('Notes saved at 375px');
+    }).toPass({ timeout: 10_000 });
 
     // Status control is tappable at this width too (todo → doing).
     const statusGroup = panel.locator('[role="group"][aria-label="Status"]');

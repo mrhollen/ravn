@@ -37,3 +37,5 @@ go.work.sum
 # Agents working directory
 .agents/
 
+# Local run directory
+.run-local/
