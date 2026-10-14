@@ -10,17 +10,10 @@
 #      upstream server (503 until ready, then 200), so it self-heals as
 #      soon as the server comes up. The healthcheck blocks below are kept
 #      for observability (`docker ps` state + `make smoke`) only.
-#   2. v1.x compose rejects `build.target` (needs BuildKit) and
-#      healthcheck `start_period` (not in the v3.3 schema), so:
-#        - each service builds a dedicated Dockerfile (Dockerfile.server /
-#          Dockerfile.mcp) via the universally supported `dockerfile:` key —
-#          no BuildKit required;
-#        - start_period is omitted from the compose healthcheck blocks. The
-#          images themselves carry an equivalent HEALTHCHECK with
-#          --start-period baked in, so startup grace is preserved; on first
-#          boot allow ~45s (3 retries x 15s) for server SQL migrations.
-#      Keep Dockerfile.server / Dockerfile.mcp in sync with the shared
-#      multi-stage Dockerfile.
+#   2. Uses the prebuilt Forgejo package image (${CROWBAN_IMAGE:-forgejo.lan:80/mrhollen/crowban:latest})
+#      directly without building from source.
+#   3. start_period is omitted from the compose healthcheck blocks (not in v3.3 schema).
+#      The image itself carries an equivalent HEALTHCHECK with --start-period baked in.
 #
 # Everything else — service names, environment blocks, the crowban-data
 # named volume and its /data mount — is equivalent to docker-compose.yml.
@@ -28,16 +21,13 @@
 # listen on 8080/9080 internally, so the MCP upstream URL stays stable.
 #
 # Run:
-#   docker-compose -f docker-compose-v3.3.yml up --build
+#   docker-compose -f docker-compose-v3.3.yml up -d
 
 version: "3.3"
 
 services:
   crowban-server:
     image: ${CROWBAN_IMAGE:-forgejo.lan:80/mrhollen/crowban:latest}
-    build:
-      context: .
-      dockerfile: Dockerfile.server
     ports:
       - "${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_SERVER_PORT:-3311}:8080"
     environment:
@@ -59,9 +49,6 @@ services:
   crowban-mcp:
     image: ${CROWBAN_IMAGE:-forgejo.lan:80/mrhollen/crowban:latest}
     entrypoint: ["crowban-mcp"]
-    build:
-      context: .
-      dockerfile: Dockerfile.server
     ports:
       - "${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_MCP_PORT:-9311}:9080"
     environment:
