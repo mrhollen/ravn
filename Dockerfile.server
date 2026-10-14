@@ -29,6 +29,7 @@ RUN apk add --no-cache ca-certificates \
  && mkdir -p /data /artifacts \
  && chown app:app /data /artifacts
 COPY --from=go-build  /out/crowban-server /usr/local/bin/
+COPY --from=go-build  /out/crowban-mcp    /usr/local/bin/
 COPY --from=web-build /web/dist           /app/public
 USER app
 ENV CROWBAN_ADDR=:8080 \

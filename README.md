@@ -43,13 +43,14 @@ Requires Docker (with compose). Copy the env template only if you want to change
 
 ```bash
 cp .env.example .env       # optional — every variable has a default
-make up                    # builds both images, starts crowban-server (:3311) + crowban-mcp (:9311) detached
+make up                    # starts crowban-server (:3311) + crowban-mcp (:9311) using Forgejo package
+make build-up              # builds images from scratch locally and starts detached
 make smoke                 # hits both /healthz + GET /api/v1/projects, prints PASS/FAIL
 make logs                  # stream both containers' logs
 make down                  # stop and remove containers (keeps the SQLite volume)
 ```
 
-Older `docker-compose` (v1.x, Compose schema v3.3) can't parse the modern file — run `docker-compose -f docker-compose-v3.3.yml up --build` instead.
+Older `docker-compose` (v1.x, Compose schema v3.3) can't parse the modern file — run `docker-compose -f docker-compose-v3.3.yml up` instead.
 
 - **UI**: http://localhost:3311
 - **API**: http://localhost:3311/api/v1 — full contract in [docs/API.md](docs/API.md)

@@ -5,7 +5,7 @@
 GO      ?= go
 BIN_DIR := bin
 
-.PHONY: help fmt vet build test ui e2e up down logs smoke
+.PHONY: help fmt vet build test ui e2e up build-up down logs smoke
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-8s %s\n", $$1, $$2}'
@@ -35,7 +35,10 @@ ui: ## build the web UI into web/dist (served by crowban-server via CROWBAN_STAT
 e2e: ## run browser E2E test suite (Playwright)
 	cd web && npm run test:e2e
 
-up: ## build both images and start crowban-server + crowban-mcp detached
+up: ## start crowban-server + crowban-mcp detached (uses forgejo package by default)
+	docker compose up -d
+
+build-up: ## build images from scratch and start crowban-server + crowban-mcp detached
 	docker compose up --build -d
 
 down: ## stop and remove containers (keeps the crowban-data volume)

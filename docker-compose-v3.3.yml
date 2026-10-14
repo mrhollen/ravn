@@ -34,6 +34,7 @@ version: "3.3"
 
 services:
   crowban-server:
+    image: ${CROWBAN_IMAGE:-forgejo.lan:80/mrhollen/crowban:latest}
     build:
       context: .
       dockerfile: Dockerfile.server
@@ -56,9 +57,11 @@ services:
       retries: 3
 
   crowban-mcp:
+    image: ${CROWBAN_IMAGE:-forgejo.lan:80/mrhollen/crowban:latest}
+    entrypoint: ["crowban-mcp"]
     build:
       context: .
-      dockerfile: Dockerfile.mcp
+      dockerfile: Dockerfile.server
     ports:
       - "${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_MCP_PORT:-9311}:9080"
     environment:
