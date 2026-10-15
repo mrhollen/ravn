@@ -78,25 +78,26 @@ func NewRelations(uow UnitOfWork, clock Clock, idgen IDGenerator) *Relations {
 // "other_id":<target>} (After for adds, Before for removes; the other side is
 // empty). Relations are child rows: NO task version bump and NO updated_at
 // change (version-bump policy).
-func (s *Relations) Relate(ctx context.Context, actor domain.Actor, aID, bID domain.ID, kind domain.RelationKind, action RelateAction) (domain.Relation, error) {
+func (s *Relations) Relate(ctx context.Context, actor domain.Actor, aID, bID domain.ID, kind domain.RelationKind, action RelateAction) (domain.Relation, bool, error) {
 	if !action.valid() {
-		return domain.Relation{}, fmt.Errorf("%w: unknown relation action %q", domain.ErrInvalid, action)
+		return domain.Relation{}, false, fmt.Errorf("%w: unknown relation action %q", domain.ErrInvalid, action)
 	}
 	if !kind.Valid() {
-		return domain.Relation{}, fmt.Errorf("%w: unknown relation kind %q", domain.ErrInvalid, kind)
+		return domain.Relation{}, false, fmt.Errorf("%w: unknown relation kind %q", domain.ErrInvalid, kind)
 	}
 	if aID == bID { // includes both-zero; self-edges are meaningless and rejected by the schema too
-		return domain.Relation{}, fmt.Errorf("%w: a task cannot relate to itself (%s)", domain.ErrInvalid, aID)
+		return domain.Relation{}, false, fmt.Errorf("%w: a task cannot relate to itself (%s)", domain.ErrInvalid, aID)
 	}
 	a, err := normalizeActor(actor)
 	if err != nil {
-		return domain.Relation{}, err
+		return domain.Relation{}, false, err
 	}
 
 	src, dst, storedKind := normalizeRelation(aID, bID, kind)
 
 	now := s.clock.Now()
 	var out domain.Relation
+	var created bool
 	var r Repos
 	err = s.uow.Run(ctx, &r, func() error {
 		at, terr := r.Tasks.Get(ctx, aID) // existence + project for BOTH ends
@@ -117,15 +118,15 @@ func (s *Relations) Relate(ctx context.Context, actor domain.Actor, aID, bID dom
 
 		switch action {
 		case RelateAdd:
-			return s.addEdge(ctx, &r, a, src, dst, storedKind, now, *srcTask, &out)
+			return s.addEdge(ctx, &r, a, src, dst, storedKind, now, *srcTask, &out, &created)
 		default: // RelateRemove
 			return s.removeEdge(ctx, &r, a, src, dst, storedKind, now, *srcTask, &out)
 		}
 	})
 	if err != nil {
-		return domain.Relation{}, err
+		return domain.Relation{}, false, err
 	}
-	return out, nil
+	return out, created, nil
 }
 
 // addEdge implements RelateAdd inside the caller's unit of work. It first
@@ -136,7 +137,7 @@ func (s *Relations) Relate(ctx context.Context, actor domain.Actor, aID, bID dom
 // or hierarchies cannot be formed. The repository additionally backstops the
 // parent rule with the partial unique index (its ErrParentConflict is propagated
 // verbatim if a concurrent writer wins the check-then-write race).
-func (s *Relations) addEdge(ctx context.Context, r *Repos, actor domain.Actor, src, dst domain.ID, kind domain.RelationKind, now time.Time, srcTask domain.Task, out *domain.Relation) error {
+func (s *Relations) addEdge(ctx context.Context, r *Repos, actor domain.Actor, src, dst domain.ID, kind domain.RelationKind, now time.Time, srcTask domain.Task, out *domain.Relation, created *bool) error {
 	edges, err := r.Relations.ListByTask(ctx, src)
 	if err != nil {
 		return err
@@ -145,6 +146,7 @@ func (s *Relations) addEdge(ctx context.Context, r *Repos, actor domain.Actor, s
 		switch {
 		case e.TaskID == src && e.OtherTaskID == dst && e.Kind == kind:
 			*out = e // identical edge already stored: idempotent no-op, nothing written, no event
+			*created = false
 			return nil
 		case e.TaskID == src && e.Kind == domain.RelationChild && kind == domain.RelationChild && e.OtherTaskID != dst:
 			return fmt.Errorf("%w: task %s already has a parent (%s)", domain.ErrParentConflict, src, e.OtherTaskID)
@@ -177,6 +179,7 @@ func (s *Relations) addEdge(ctx context.Context, r *Repos, actor domain.Actor, s
 		return err
 	}
 	*out = stored
+	*created = true
 
 	ev := domain.Event{
 		ID:        s.idgen.NewID(),

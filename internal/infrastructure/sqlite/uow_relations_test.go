@@ -85,7 +85,7 @@ func TestRelations_RealSQL_SecondParentBlockedAtDBLevel(t *testing.T) {
 	}
 
 	// (1) A child-of B — the first parent, allowed.
-	stored, err := relations.Relate(ctx, testActor, a.ID, b.ID, domain.RelationChild, application.RelateAdd)
+	stored, _, err := relations.Relate(ctx, testActor, a.ID, b.ID, domain.RelationChild, application.RelateAdd)
 	if err != nil {
 		t.Fatalf("relate A child-of B: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestRelations_RealSQL_SecondParentBlockedAtDBLevel(t *testing.T) {
 	}
 
 	// (2) A child-of C — a SECOND, different parent, rejected by the ≤1-parent rule.
-	_, err = relations.Relate(ctx, testActor, a.ID, c.ID, domain.RelationChild, application.RelateAdd)
+	_, _, err = relations.Relate(ctx, testActor, a.ID, c.ID, domain.RelationChild, application.RelateAdd)
 	if !errors.Is(err, domain.ErrParentConflict) {
 		t.Fatalf("second parent error = %v, want domain.ErrParentConflict", err)
 	}
@@ -150,7 +150,7 @@ func TestRelations_RealSQL_UpsertIdempotentOneRow(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		if _, err := relations.Relate(ctx, testActor, a.ID, b.ID, domain.RelationChild, application.RelateAdd); err != nil {
+		if _, _, err := relations.Relate(ctx, testActor, a.ID, b.ID, domain.RelationChild, application.RelateAdd); err != nil {
 			t.Fatalf("add #%d: %v", i+1, err)
 		}
 	}
@@ -209,7 +209,7 @@ func TestRelations_RealSQL_AddRemoveRoundTripNoVersionBump(t *testing.T) {
 
 	// Add via the PARENT alias ("A is parent of B") so the inverse-child
 	// normalization is exercised on real SQL too.
-	stored, err := relations.Relate(ctx, testActor, a.ID, b.ID, domain.RelationParent, application.RelateAdd)
+	stored, _, err := relations.Relate(ctx, testActor, a.ID, b.ID, domain.RelationParent, application.RelateAdd)
 	if err != nil {
 		t.Fatalf("relate (parent alias): %v", err)
 	}
@@ -266,7 +266,7 @@ func TestRelations_RealSQL_AddRemoveRoundTripNoVersionBump(t *testing.T) {
 
 	// Remove via the same alias: deletes the inverse child row, appends a
 	// second event, and still bumps nothing.
-	if _, err := relations.Relate(ctx, testActor, a.ID, b.ID, domain.RelationParent, application.RelateRemove); err != nil {
+	if _, _, err := relations.Relate(ctx, testActor, a.ID, b.ID, domain.RelationParent, application.RelateRemove); err != nil {
 		t.Fatalf("remove (parent alias): %v", err)
 	}
 	var rows int

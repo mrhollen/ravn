@@ -27,7 +27,7 @@ type stack struct {
 	App     *App
 }
 
-func newStack(t *testing.T) stack {
+func newStack(t testing.TB) stack {
 	t.Helper()
 	ctx := context.Background()
 	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "crowban-http-test.db"))
@@ -60,7 +60,7 @@ func actor(name string) map[string]any {
 	return map[string]any{"type": "human", "name": name}
 }
 
-func doReq(t *testing.T, h http.Handler, method, path string, body any) (int, []byte) {
+func doReq(t testing.TB, h http.Handler, method, path string, body any) (int, []byte) {
 	t.Helper()
 	var reader io.Reader
 	if body != nil {
@@ -91,7 +91,7 @@ func doRaw(t *testing.T, h http.Handler, method, path, raw string) (int, []byte)
 	return res.Code, res.Body.Bytes()
 }
 
-func mustDecode[T any](t *testing.T, body []byte) T {
+func mustDecode[T any](t testing.TB, body []byte) T {
 	t.Helper()
 	var v T
 	if err := json.Unmarshal(body, &v); err != nil {
@@ -114,7 +114,7 @@ type errResp struct {
 
 // --- seed helpers --------------------------------------------------------------------
 
-func createProject(t *testing.T, stk stack, name string) projectDTO {
+func createProject(t testing.TB, stk stack, name string) projectDTO {
 	t.Helper()
 	code, body := doReq(t, stk.Handler, "POST", "/api/v1/projects", map[string]any{
 		"actor": actor("ada"), "name": name, "description": "seeded in test",
@@ -127,7 +127,7 @@ func createProject(t *testing.T, stk stack, name string) projectDTO {
 
 // makeTask creates a task; extra overrides any create-task request field
 // (e.g. "priority": 5, "due_at": "...", "assignee": {...}).
-func makeTask(t *testing.T, stk stack, projectID, title string, extra map[string]any) taskSummaryDTO {
+func makeTask(t testing.TB, stk stack, projectID, title string, extra map[string]any) taskSummaryDTO {
 	t.Helper()
 	body := map[string]any{"actor": actor("eve"), "title": title, "project_id": projectID}
 	for k, v := range extra {
@@ -140,7 +140,7 @@ func makeTask(t *testing.T, stk stack, projectID, title string, extra map[string
 	return mustDecode[createTaskResponse](t, b).Task
 }
 
-func newTask(t *testing.T, stk stack, projectID, title string) taskSummaryDTO {
+func newTask(t testing.TB, stk stack, projectID, title string) taskSummaryDTO {
 	t.Helper()
 	return makeTask(t, stk, projectID, title, nil)
 }
@@ -453,7 +453,7 @@ func TestTaskListFiltersPaginationAndOrder(t *testing.T) {
 	// total honors the same predicate.
 	blocker := makeTask(t, stk, p.ID, "blocker", map[string]any{"priority": 4})
 	work := makeTask(t, stk, p.ID, "work item", map[string]any{"priority": 4})
-	if _, err := stk.App.Relations.Relate(context.Background(),
+	if _, _, err := stk.App.Relations.Relate(context.Background(),
 		domain.Actor{Type: domain.ActorAgent, Name: "eve"}, domain.ID(work.ID), domain.ID(blocker.ID),
 		domain.RelationBlockedBy, application.RelateAdd); err != nil {
 		t.Fatalf("seed blocked-by edge: %v", err)
@@ -1500,5 +1500,71 @@ func TestDeleteEndpoints_ActorHeadersAndQueryParams(t *testing.T) {
 	code, _ = doReq(t, stk.Handler, "DELETE", "/api/v1/tasks/"+task.ID+"/relations/"+t2.ID+"/blocked-by", nil)
 	if code != http.StatusBadRequest {
 		t.Fatalf("DELETE relation without actor = %d, want 400", code)
+	}
+}
+
+func TestAddRelation_WithHeavyChildCollections(t *testing.T) {
+	t.Parallel()
+	stk := newStack(t)
+	p := createProject(t, stk, "Heavy Project")
+	task := newTask(t, stk, p.ID, "Heavy Task")
+	other := newTask(t, stk, p.ID, "Other Task")
+
+	// Add multiple comments, ACs, artifacts to make task detail heavy
+	for i := 1; i <= 5; i++ {
+		doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/comments", map[string]any{
+			"actor": actor("eve"), "content": "Comment content",
+		})
+		doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/acceptance-criteria", map[string]any{
+			"actor": actor("eve"), "text": "Acceptance criterion",
+		})
+		doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/artifacts", map[string]any{
+			"actor": actor("eve"), "kind": "log", "ref": "log.txt", "summary": "test log",
+		})
+	}
+
+	// 1. First add: brand new relation returns 201 Created
+	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": other.ID, "kind": "related",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("first relation add = %d, want 201 (body %s)", code, string(body))
+	}
+	rel := mustDecode[relationDTO](t, body)
+	if rel.TaskID != task.ID || rel.OtherTaskID != other.ID || rel.Kind != "related" {
+		t.Fatalf("unexpected relation returned: %+v", rel)
+	}
+
+	// 2. Second add of identical relation: idempotent returns 200 OK
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": other.ID, "kind": "related",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("second relation add = %d, want 200 (body %s)", code, string(body))
+	}
+	rel2 := mustDecode[relationDTO](t, body)
+	if rel2.TaskID != rel.TaskID || rel2.OtherTaskID != rel.OtherTaskID || rel2.CreatedAt != rel.CreatedAt {
+		t.Fatalf("expected same stored relation %+v, got %+v", rel, rel2)
+	}
+
+	// 3. Parent alias add: returns 201 Created, stored as child
+	third := newTask(t, stk, p.ID, "Parent Task")
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+third.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": task.ID, "kind": "parent",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("parent relation add = %d, want 201 (body %s)", code, string(body))
+	}
+	rel3 := mustDecode[relationDTO](t, body)
+	if rel3.TaskID != task.ID || rel3.OtherTaskID != third.ID || rel3.Kind != "child" {
+		t.Fatalf("expected stored inverse child relation, got: %+v", rel3)
+	}
+
+	// 4. Re-add parent alias: returns 200 OK
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+third.ID+"/relations", map[string]any{
+		"actor": actor("eve"), "other_id": task.ID, "kind": "parent",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("parent re-add = %d, want 200 (body %s)", code, string(body))
 	}
 }

@@ -55,7 +55,7 @@ func TestUnblockedOnlyFilterAndBlockedFlag(t *testing.T) {
 
 	x := mustCreateTaskIn(t, tasks, p, "Blocked feature")
 	y := mustCreateTaskIn(t, tasks, p, "Foundation work")
-	if _, err := rels.Relate(ctx, testActor, x.ID, y.ID, domain.RelationBlockedBy, application.RelateAdd); err != nil {
+	if _, _, err := rels.Relate(ctx, testActor, x.ID, y.ID, domain.RelationBlockedBy, application.RelateAdd); err != nil {
 		t.Fatalf("Relate blocked-by: %v", err)
 	}
 

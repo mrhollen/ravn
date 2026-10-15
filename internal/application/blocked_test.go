@@ -26,7 +26,7 @@ func newBlockedTestEnv(t *testing.T) (*Tasks, *Relations, *fakeClock, *fakeUoW) 
 // Relations use case (same-project check and event included).
 func mustBlock(t *testing.T, rels *Relations, blocked, blocker domain.Task) {
 	t.Helper()
-	_, err := rels.Relate(context.Background(), testAgent, blocked.ID, blocker.ID, domain.RelationBlockedBy, RelateAdd)
+	_, _, err := rels.Relate(context.Background(), testAgent, blocked.ID, blocker.ID, domain.RelationBlockedBy, RelateAdd)
 	if err != nil {
 		t.Fatalf("relate %q blocked-by %q: %v", blocked.Title, blocker.Title, err)
 	}

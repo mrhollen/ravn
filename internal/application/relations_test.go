@@ -86,9 +86,12 @@ func TestRelate_AddChildStoresEdgeAndReflectsInGetDetail(t *testing.T) {
 	pid, ids := seedRelationWorld(t, uow, "world", "A", "B")
 	a, b := ids[0], ids[1]
 
-	rel, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd)
+	rel, created, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd)
 	if err != nil {
 		t.Fatalf("Relate add child: %v", err)
+	}
+	if !created {
+		t.Errorf("Relate add child created = false, want true")
 	}
 	want := edgeTriple{a, b, domain.RelationChild}
 	if got := tripleOf(rel); got != want {
@@ -170,9 +173,12 @@ func TestRelate_ParentAliasStoresInverseChildEdge(t *testing.T) {
 	_, ids := seedRelationWorld(t, uow, "world", "A", "B")
 	a, b := ids[0], ids[1]
 
-	viaParent, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateAdd) // "a is parent of b"
+	viaParent, created, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateAdd) // "a is parent of b"
 	if err != nil {
 		t.Fatalf("Relate add parent: %v", err)
+	}
+	if !created {
+		t.Errorf("Relate add parent created = false, want true")
 	}
 	want := edgeTriple{b, a, domain.RelationChild} // stored: "b's parent is a"
 	if got := tripleOf(viaParent); got != want {
@@ -181,12 +187,15 @@ func TestRelate_ParentAliasStoresInverseChildEdge(t *testing.T) {
 
 	// Removing it and re-expressing the SAME fact as b-child-of-a must land on
 	// the identical stored triple.
-	if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateRemove); err != nil {
+	if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateRemove); err != nil {
 		t.Fatalf("Relate remove parent: %v", err)
 	}
-	viaChild, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationChild, RelateAdd) // "b is child of a"
+	viaChild, created, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationChild, RelateAdd) // "b is child of a"
 	if err != nil {
 		t.Fatalf("Relate add child: %v", err)
+	}
+	if !created {
+		t.Errorf("Relate add child viaChild created = false, want true")
 	}
 	if got := tripleOf(viaChild); got != want {
 		t.Errorf("child-direction stored edge = %+v, want same inverse edge %+v as the parent alias", got, want)
@@ -209,13 +218,19 @@ func TestRelate_AddSameEdgeTwiceIsIdempotent(t *testing.T) {
 	_, ids := seedRelationWorld(t, uow, "world", "A", "B")
 	a, b := ids[0], ids[1]
 
-	first, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd)
+	first, created, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd)
 	if err != nil {
 		t.Fatalf("first add: %v", err)
 	}
-	second, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd)
+	if !created {
+		t.Errorf("first add created = false, want true")
+	}
+	second, created, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd)
 	if err != nil {
 		t.Fatalf("second add of identical edge must be a no-op success, got: %v", err)
+	}
+	if created {
+		t.Errorf("second add created = true, want false (idempotent no-op)")
 	}
 	if len(uow.relations.edges) != 1 {
 		t.Fatalf("stored edges after double-add = %d (%+v), want exactly 1", len(uow.relations.edges), uow.relations.edges)
@@ -239,11 +254,11 @@ func TestRelate_TwoDifferentParents_SecondFailsSameParentNoOp(t *testing.T) {
 	_, ids := seedRelationWorld(t, uow, "world", "X", "B", "C")
 	x, b, c := ids[0], ids[1], ids[2]
 
-	if _, err := rels.Relate(ctx, relateTestActor, x, b, domain.RelationChild, RelateAdd); err != nil {
+	if _, _, err := rels.Relate(ctx, relateTestActor, x, b, domain.RelationChild, RelateAdd); err != nil {
 		t.Fatalf("first parent (b): %v", err)
 	}
 	err := func() error {
-		_, e := rels.Relate(ctx, relateTestActor, x, c, domain.RelationChild, RelateAdd)
+		_, _, e := rels.Relate(ctx, relateTestActor, x, c, domain.RelationChild, RelateAdd)
 		return e
 	}()
 	if !errors.Is(err, domain.ErrParentConflict) {
@@ -262,9 +277,12 @@ func TestRelate_TwoDifferentParents_SecondFailsSameParentNoOp(t *testing.T) {
 	}
 
 	// The SAME parent again: idempotent no-op success, state and log unchanged.
-	again, err := rels.Relate(ctx, relateTestActor, x, b, domain.RelationChild, RelateAdd)
+	again, created, err := rels.Relate(ctx, relateTestActor, x, b, domain.RelationChild, RelateAdd)
 	if err != nil {
 		t.Fatalf("re-adding the same parent must not error, got: %v", err)
+	}
+	if created {
+		t.Errorf("same-parent re-add created = true, want false (idempotent no-op)")
 	}
 	if len(uow.relations.edges) != 1 || len(events.events) != 1 {
 		t.Errorf("after same-parent re-add: edges=%d events=%d, want 1/1", len(uow.relations.edges), len(events.events))
@@ -283,12 +301,15 @@ func TestRelate_RemoveDeletesEdge(t *testing.T) {
 	_, ids := seedRelationWorld(t, uow, "world", "A", "B")
 	a, b := ids[0], ids[1]
 
-	if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd); err != nil {
+	if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	got, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateRemove)
+	got, created, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateRemove)
 	if err != nil {
 		t.Fatalf("remove: %v", err)
+	}
+	if created {
+		t.Errorf("remove created = true, want false")
 	}
 	want := edgeTriple{a, b, domain.RelationChild}
 	if t3 := tripleOf(got); t3 != want {
@@ -314,7 +335,7 @@ func TestRelate_RemoveDeletesEdge(t *testing.T) {
 	}
 
 	// Removing the SAME edge again: ErrNotFound, no third event.
-	_, err = rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateRemove)
+	_, _, err = rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateRemove)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("remove of absent edge = %v, want domain.ErrNotFound", err)
 	}
@@ -324,13 +345,13 @@ func TestRelate_RemoveDeletesEdge(t *testing.T) {
 
 	// Parent-alias remove hits the INVERSE stored row: "a is parent of b" was
 	// stored (b→a, child); removing it via the alias must clear that row.
-	if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateAdd); err != nil {
+	if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateAdd); err != nil {
 		t.Fatalf("add via parent alias: %v", err)
 	}
 	if len(uow.relations.edges) != 1 || tripleOf(uow.relations.edges[0]) != (edgeTriple{b, a, domain.RelationChild}) {
 		t.Fatalf("precondition: stored edge = %+v, want inverse child (b→a)", uow.relations.edges)
 	}
-	if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateRemove); err != nil {
+	if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateRemove); err != nil {
 		t.Fatalf("remove via parent alias: %v", err)
 	}
 	if len(uow.relations.edges) != 0 {
@@ -351,10 +372,10 @@ func TestRelate_NoVersionBump(t *testing.T) {
 	for _, id := range []domain.ID{a, b} {
 		before[id] = uow.tasks.byID[id]
 	}
-	if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd); err != nil {
+	if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateRemove); err != nil {
+	if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateRemove); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	for _, id := range []domain.ID{a, b} {
@@ -390,7 +411,7 @@ func TestRelate_ValidationErrors(t *testing.T) {
 		{
 			name: "unknown action",
 			call: func() error {
-				_, e := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAction("upsert"))
+				_, _, e := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAction("upsert"))
 				return e
 			},
 			want: domain.ErrInvalid, excerpt: `unknown relation action "upsert"`,
@@ -398,7 +419,7 @@ func TestRelate_ValidationErrors(t *testing.T) {
 		{
 			name: "unknown kind",
 			call: func() error {
-				_, e := rels.Relate(ctx, relateTestActor, a, b, domain.RelationKind("parent-of"), RelateAdd)
+				_, _, e := rels.Relate(ctx, relateTestActor, a, b, domain.RelationKind("parent-of"), RelateAdd)
 				return e
 			},
 			want: domain.ErrInvalid, excerpt: `unknown relation kind "parent-of"`,
@@ -406,7 +427,7 @@ func TestRelate_ValidationErrors(t *testing.T) {
 		{
 			name: "self-relation",
 			call: func() error {
-				_, e := rels.Relate(ctx, relateTestActor, a, a, domain.RelationChild, RelateAdd)
+				_, _, e := rels.Relate(ctx, relateTestActor, a, a, domain.RelationChild, RelateAdd)
 				return e
 			},
 			want:    domain.ErrInvalid,
@@ -415,7 +436,7 @@ func TestRelate_ValidationErrors(t *testing.T) {
 		{
 			name: "missing subject",
 			call: func() error {
-				_, e := rels.Relate(ctx, relateTestActor, "ghost-a", b, domain.RelationChild, RelateAdd)
+				_, _, e := rels.Relate(ctx, relateTestActor, "ghost-a", b, domain.RelationChild, RelateAdd)
 				return e
 			},
 			want:    domain.ErrNotFound,
@@ -424,7 +445,7 @@ func TestRelate_ValidationErrors(t *testing.T) {
 		{
 			name: "missing object",
 			call: func() error {
-				_, e := rels.Relate(ctx, relateTestActor, a, "ghost-b", domain.RelationChild, RelateAdd)
+				_, _, e := rels.Relate(ctx, relateTestActor, a, "ghost-b", domain.RelationChild, RelateAdd)
 				return e
 			},
 			want:    domain.ErrNotFound,
@@ -433,7 +454,7 @@ func TestRelate_ValidationErrors(t *testing.T) {
 		{
 			name: "cross-project pair",
 			call: func() error {
-				_, e := rels.Relate(ctx, relateTestActor, a, other.ID, domain.RelationChild, RelateAdd)
+				_, _, e := rels.Relate(ctx, relateTestActor, a, other.ID, domain.RelationChild, RelateAdd)
 				return e
 			},
 			want:    domain.ErrInvalid,
@@ -481,11 +502,11 @@ func TestRelate_CycleDetection_BlockedByDirectAndTransitive(t *testing.T) {
 		_, ids := seedRelationWorld(t, uow, "world", "A", "B")
 		a, b := ids[0], ids[1]
 
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("first relation (A blocked-by B): %v", err)
 		}
 
-		_, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationBlockedBy, RelateAdd)
+		_, _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationBlockedBy, RelateAdd)
 		if !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("direct cycle error = %v, want domain.ErrInvalid", err)
 		}
@@ -508,15 +529,15 @@ func TestRelate_CycleDetection_BlockedByDirectAndTransitive(t *testing.T) {
 		a, b, c := ids[0], ids[1], ids[2]
 
 		// A is blocked by B, B is blocked by C
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("A blocked-by B: %v", err)
 		}
-		if _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("B blocked-by C: %v", err)
 		}
 
 		// C is blocked by A completes the cycle: A -> B -> C -> A
-		_, err := rels.Relate(ctx, relateTestActor, c, a, domain.RelationBlockedBy, RelateAdd)
+		_, _, err := rels.Relate(ctx, relateTestActor, c, a, domain.RelationBlockedBy, RelateAdd)
 		if !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("transitive cycle error = %v, want domain.ErrInvalid", err)
 		}
@@ -538,17 +559,17 @@ func TestRelate_CycleDetection_BlockedByDirectAndTransitive(t *testing.T) {
 		_, ids := seedRelationWorld(t, uow, "world", "A", "B", "C", "D")
 		a, b, c, d := ids[0], ids[1], ids[2], ids[3]
 
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("A blocked-by B: %v", err)
 		}
-		if _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("B blocked-by C: %v", err)
 		}
-		if _, err := rels.Relate(ctx, relateTestActor, c, d, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, c, d, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("C blocked-by D: %v", err)
 		}
 
-		_, err := rels.Relate(ctx, relateTestActor, d, a, domain.RelationBlockedBy, RelateAdd)
+		_, _, err := rels.Relate(ctx, relateTestActor, d, a, domain.RelationBlockedBy, RelateAdd)
 		if !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("4-node cycle error = %v, want domain.ErrInvalid", err)
 		}
@@ -570,12 +591,12 @@ func TestRelate_CycleDetection_ParentChildDirectAndTransitive(t *testing.T) {
 		a, b := ids[0], ids[1]
 
 		// A is child of B
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd); err != nil {
 			t.Fatalf("A child-of B: %v", err)
 		}
 
 		// Attempt B is child of A (making B parent of A and child of A)
-		_, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationChild, RelateAdd)
+		_, _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationChild, RelateAdd)
 		if !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("direct child cycle error = %v, want domain.ErrInvalid", err)
 		}
@@ -598,12 +619,12 @@ func TestRelate_CycleDetection_ParentChildDirectAndTransitive(t *testing.T) {
 		a, b := ids[0], ids[1]
 
 		// B is parent of A (stored: A is child of B)
-		if _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationParent, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationParent, RelateAdd); err != nil {
 			t.Fatalf("B parent-of A: %v", err)
 		}
 
 		// Attempt A is parent of B (stored: B is child of A)
-		_, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateAdd)
+		_, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateAdd)
 		if !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("direct parent cycle error = %v, want domain.ErrInvalid", err)
 		}
@@ -626,15 +647,15 @@ func TestRelate_CycleDetection_ParentChildDirectAndTransitive(t *testing.T) {
 		a, b, c := ids[0], ids[1], ids[2]
 
 		// A is child of B, B is child of C (C -> B -> A)
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationChild, RelateAdd); err != nil {
 			t.Fatalf("A child-of B: %v", err)
 		}
-		if _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationChild, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationChild, RelateAdd); err != nil {
 			t.Fatalf("B child-of C: %v", err)
 		}
 
 		// Attempt C is child of A (cycle: C child of A, A child of B, B child of C)
-		_, err := rels.Relate(ctx, relateTestActor, c, a, domain.RelationChild, RelateAdd)
+		_, _, err := rels.Relate(ctx, relateTestActor, c, a, domain.RelationChild, RelateAdd)
 		if !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("transitive child cycle error = %v, want domain.ErrInvalid", err)
 		}
@@ -657,15 +678,15 @@ func TestRelate_CycleDetection_ParentChildDirectAndTransitive(t *testing.T) {
 		a, b, c := ids[0], ids[1], ids[2]
 
 		// C is parent of B, B is parent of A
-		if _, err := rels.Relate(ctx, relateTestActor, c, b, domain.RelationParent, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, c, b, domain.RelationParent, RelateAdd); err != nil {
 			t.Fatalf("C parent-of B: %v", err)
 		}
-		if _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationParent, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationParent, RelateAdd); err != nil {
 			t.Fatalf("B parent-of A: %v", err)
 		}
 
 		// Attempt A is parent of C
-		_, err := rels.Relate(ctx, relateTestActor, a, c, domain.RelationParent, RelateAdd)
+		_, _, err := rels.Relate(ctx, relateTestActor, a, c, domain.RelationParent, RelateAdd)
 		if !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("transitive parent alias cycle error = %v, want domain.ErrInvalid", err)
 		}
@@ -681,16 +702,16 @@ func TestRelate_CycleDetection_ParentChildDirectAndTransitive(t *testing.T) {
 		a, b, c := ids[0], ids[1], ids[2]
 
 		// B parent of A (parent alias) -> A child of B
-		if _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationParent, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationParent, RelateAdd); err != nil {
 			t.Fatalf("B parent-of A: %v", err)
 		}
 		// B child of C (child kind) -> B child of C
-		if _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationChild, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, b, c, domain.RelationChild, RelateAdd); err != nil {
 			t.Fatalf("B child-of C: %v", err)
 		}
 
 		// Attempt C child of A
-		_, err := rels.Relate(ctx, relateTestActor, c, a, domain.RelationChild, RelateAdd)
+		_, _, err := rels.Relate(ctx, relateTestActor, c, a, domain.RelationChild, RelateAdd)
 		if !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("mixed transitive cycle error = %v, want domain.ErrInvalid", err)
 		}
@@ -712,18 +733,18 @@ func TestRelate_CycleDetection_NonCyclicRelationsSucceed(t *testing.T) {
 		a, b, c, d := ids[0], ids[1], ids[2], ids[3]
 
 		// A blocked-by B and C
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("A blocked-by B: %v", err)
 		}
-		if _, err := rels.Relate(ctx, relateTestActor, a, c, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, c, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("A blocked-by C: %v", err)
 		}
 
 		// B and C both blocked-by D (DAG diamond)
-		if _, err := rels.Relate(ctx, relateTestActor, b, d, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, b, d, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("B blocked-by D: %v", err)
 		}
-		if _, err := rels.Relate(ctx, relateTestActor, c, d, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, c, d, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("C blocked-by D: %v", err)
 		}
 
@@ -738,10 +759,10 @@ func TestRelate_CycleDetection_NonCyclicRelationsSucceed(t *testing.T) {
 		_, ids := seedRelationWorld(t, uow, "world", "Parent", "Child1", "Child2")
 		p, c1, c2 := ids[0], ids[1], ids[2]
 
-		if _, err := rels.Relate(ctx, relateTestActor, c1, p, domain.RelationChild, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, c1, p, domain.RelationChild, RelateAdd); err != nil {
 			t.Fatalf("c1 child-of p: %v", err)
 		}
-		if _, err := rels.Relate(ctx, relateTestActor, c2, p, domain.RelationChild, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, c2, p, domain.RelationChild, RelateAdd); err != nil {
 			t.Fatalf("c2 child-of p: %v", err)
 		}
 
@@ -756,10 +777,10 @@ func TestRelate_CycleDetection_NonCyclicRelationsSucceed(t *testing.T) {
 		_, ids := seedRelationWorld(t, uow, "world", "A", "B")
 		a, b := ids[0], ids[1]
 
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("first add: %v", err)
 		}
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("idempotent second add should succeed, got: %v", err)
 		}
 
@@ -775,17 +796,17 @@ func TestRelate_CycleDetection_NonCyclicRelationsSucceed(t *testing.T) {
 		a, b := ids[0], ids[1]
 
 		// A blocked-by B
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("A blocked-by B: %v", err)
 		}
 
 		// Remove A blocked-by B
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateRemove); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationBlockedBy, RelateRemove); err != nil {
 			t.Fatalf("remove A blocked-by B: %v", err)
 		}
 
 		// Now B blocked-by A must succeed (no cycle exists anymore)
-		if _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationBlockedBy, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationBlockedBy, RelateAdd); err != nil {
 			t.Fatalf("B blocked-by A after removal should succeed, got: %v", err)
 		}
 
@@ -801,10 +822,10 @@ func TestRelate_CycleDetection_NonCyclicRelationsSucceed(t *testing.T) {
 		a, b := ids[0], ids[1]
 
 		// Mutual related
-		if _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationRelated, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationRelated, RelateAdd); err != nil {
 			t.Fatalf("A related B: %v", err)
 		}
-		if _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationRelated, RelateAdd); err != nil {
+		if _, _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationRelated, RelateAdd); err != nil {
 			t.Fatalf("B related A: %v", err)
 		}
 

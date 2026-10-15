@@ -760,18 +760,6 @@ func (a *App) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 
 // --- relations -----------------------------------------------------------------------
 
-// storedEdgeFor mirrors application.normalizeRelation: 'parent' ("{id} is a
-// parent of {other}") stores as the INVERSE child edge (other → id, child);
-// every other valid kind stores verbatim, directed id → other. It exists so
-// the add handler can pre-classify 201-new vs 200-upsert from the task's
-// current edge set; if the use case's mapping ever changes, this flips with it.
-func storedEdgeFor(id, other domain.ID, kind domain.RelationKind) (src, dst domain.ID, stored domain.RelationKind) {
-	if kind == domain.RelationParent {
-		return other, id, domain.RelationChild
-	}
-	return id, other, kind
-}
-
 // handleAddRelation → POST /api/v1/tasks/{id}/relations. Body: actor, other_id,
 // kind (any tool-boundary value: child|parent|blocked-by|duplicate-of|related).
 // A new edge → 201 with the stored row; re-adding an EXISTING identical edge is
@@ -805,30 +793,13 @@ func (a *App) handleAddRelation(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := domain.RelationKind(req.Kind)
 
-	// Pre-check for the 201-new vs 200-upsert status (the use case does not
-	// distinguish; §5's contract requires both). The check is best-effort — a
-	// concurrent writer winning it changes at most the status code, never the row.
-	detail, err := a.Tasks.GetDetail(ctx, id, 0, 0)
-	if err != nil {
-		writeAppError(w, err, "task", id)
-		return
-	}
-	src, dst, stored := storedEdgeFor(id, otherID, kind)
-	existing := false
-	for _, e := range detail.Relations {
-		if e.Kind == stored && e.TaskID == src && e.OtherTaskID == dst {
-			existing = true
-			break
-		}
-	}
-
-	rel, err := a.Relations.Relate(ctx, actor, id, otherID, kind, application.RelateAdd)
+	rel, created, err := a.Relations.Relate(ctx, actor, id, otherID, kind, application.RelateAdd)
 	if err != nil {
 		writeAppError(w, err, "task", id) // self/kind/cross-project → 400; unknown → 404; second parent → 409
 		return
 	}
 	code := http.StatusCreated
-	if existing {
+	if !created {
 		code = http.StatusOK // idempotent re-add of the same edge
 	}
 	writeJSON(w, code, toRelation(rel))
@@ -896,7 +867,7 @@ func (a *App) handleRemoveRelation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := a.Relations.Relate(ctx, actor, id, otherID, kind, application.RelateRemove); err != nil {
+	if _, _, err := a.Relations.Relate(ctx, actor, id, otherID, kind, application.RelateRemove); err != nil {
 		writeAppError(w, err, "task", id) // missing edge → 404; self/kind/unknown task → 400
 		return
 	}
