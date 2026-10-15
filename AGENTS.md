@@ -31,10 +31,14 @@ After a green run:
    - tool `attach_artifact`
    - `id`: task ID
    - `kind`: `screenshot` (or `other` for videos/PDFs/audio, `command-output`, `log`)
-   - `data_base64`: base64-encoded file bytes (e.g. `base64 -w 0 <path>`). This reliably uploads binary data to the server storage volume across remote or containerized MCP environments.
+   - `data_base64`: base64-encoded file bytes (e.g. `base64 -w 0 <path>`). **MANDATORY for screenshots and media files.** This reliably uploads binary data to the server storage volume so the web UI renders an inline clickable image preview.
    - `filename`: filename with extension (e.g. `test-finished-1.png`, `demo.mp4`, `report.pdf`) to preserve MIME type for inline preview/playback.
+   - `ref`: optional filename (e.g. `test-finished-1.png`) or URL. For compatibility with older MCP server schemas that require `ref`, pass the filename here as well.
    - `summary`: one line — what the evidence shows and which AC it evidences.
-   *(Note: if the agent and MCP server share the same filesystem, passing the path in `ref` is also supported).*
+
+> [!CAUTION]
+> **NEVER pass local filesystem paths (e.g. `/home/...`) in `ref`.**
+> The CrowBan server runs in a remote container environment (`10.0.0.150`). It cannot read files from your local machine. Passing a local filesystem path will cause the UI to render raw text rather than an inline image/video preview. You MUST read the file and pass `data_base64`.
 
 Applies to QA agents (`frontend-qa`, `backend-qa`) and devs verifying their own work: leave visual evidence the UI looks right, not just that tests passed. If per-agent prompt files are added to this repo later, move this requirement there.
 

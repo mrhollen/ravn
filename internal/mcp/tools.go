@@ -752,11 +752,11 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 		mcpgo.WithString("kind", mcpgo.Required(), mcpgo.Enum("log", "screenshot", "command-output", "trace", "url", "other"),
 			mcpgo.Description("Artifact kind.")),
 		mcpgo.WithString("ref",
-			mcpgo.Description("Web URL (http/https) or server filesystem path. Optional if data_base64 is provided.")),
+			mcpgo.Description("Web URL (http/https) or server filesystem path. Optional if data_base64 is provided. DO NOT pass local client filesystem paths here; use 'data_base64' to upload images and files so they render inline in the web UI.")),
 		mcpgo.WithString("data_base64",
-			mcpgo.Description("Base64-encoded file bytes (or data URI) to upload binary data like images (PNG, JPEG), video (MP4, WebM), audio (MP3, WAV), PDF, or logs.")),
+			mcpgo.Description("Base64-encoded file bytes (or data URI) to upload binary data like images (PNG, JPEG), video (MP4, WebM), audio (MP3, WAV), PDF, or logs. REQUIRED for screenshots and workspace test evidence files.")),
 		mcpgo.WithString("filename",
-			mcpgo.Description("Optional filename with extension (e.g. \"screenshot.png\", \"demo.mp4\", \"report.pdf\") to preserve file type for browser preview/playback when uploading with data_base64.")),
+			mcpgo.Description("Filename with extension (e.g. \"screenshot.png\", \"demo.mp4\", \"report.pdf\") to preserve file type for browser preview/playback when uploading with data_base64.")),
 		mcpgo.WithString("summary",
 			mcpgo.Description("Optional one-line description of what the artifact shows.")),
 		actorProp(),
@@ -857,7 +857,7 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 				Summary: summary,
 			})
 		} else {
-			return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid input","message":"attach_artifact: local file %q not found on the MCP server filesystem. To attach files from an agent environment, supply base64-encoded file bytes in data_base64 (along with filename)"}`, ref)), nil
+			return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid input","message":"attach_artifact: local file %q not found on the MCP server filesystem. The CrowBan MCP server runs in a remote container environment and cannot access files on your machine. For screenshots and workspace evidence files, you MUST encode the file to base64 and pass 'data_base64' (along with 'filename') so the server can store and display it as an inline image/video."}`, ref)), nil
 		}
 
 		if err != nil {
