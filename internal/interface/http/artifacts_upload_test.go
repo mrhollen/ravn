@@ -364,3 +364,56 @@ func TestArtifactAttach_JSONBackCompat(t *testing.T) {
 		t.Errorf("ref = %q, want verbatim URL", art.Ref)
 	}
 }
+
+func TestArtifactUpload_VideoAndAudioInlineServing(t *testing.T) {
+	t.Parallel()
+	rig := setupTestRig(t)
+
+	videoBytes := []byte("fake-mp4-video-stream-bytes")
+	uploadURL := fmt.Sprintf("%s/api/v1/tasks/%s/artifacts", rig.server.URL, rig.taskID)
+	req := createMultipartRequest(t, uploadURL, "file", "screencast.mp4", videoBytes, map[string]string{
+		"actor_name": "qa-agent",
+		"actor_type": "agent",
+		"kind":       "other",
+		"summary":    "E2E run video",
+	})
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST upload: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("upload status = %d, want 201", res.StatusCode)
+	}
+
+	var art struct {
+		ID      string `json:"id"`
+		Ref     string `json:"ref"`
+		Summary string `json:"summary"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&art); err != nil {
+		t.Fatalf("decode upload response: %v", err)
+	}
+
+	if !strings.Contains(art.Summary, "screencast.mp4") {
+		t.Errorf("art.Summary = %q, expected to preserve filename extension", art.Summary)
+	}
+
+	serveRes, err := http.Get(rig.server.URL + art.Ref)
+	if err != nil {
+		t.Fatalf("GET /artifacts/{id}: %v", err)
+	}
+	defer serveRes.Body.Close()
+
+	if serveRes.StatusCode != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200", serveRes.StatusCode)
+	}
+	if ct := serveRes.Header.Get("Content-Type"); !strings.HasPrefix(ct, "video/mp4") {
+		t.Errorf("Content-Type = %q, want video/mp4", ct)
+	}
+	if disp := serveRes.Header.Get("Content-Disposition"); disp != "inline" {
+		t.Errorf("Content-Disposition = %q, want inline for video", disp)
+	}
+}

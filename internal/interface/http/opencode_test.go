@@ -224,7 +224,7 @@ func TestOpenCodeStart_Success(t *testing.T) {
 	if !strings.Contains(receivedPromptText, "Feature works on Linux") || !strings.Contains(receivedPromptText, "Unit tests pass 100%") {
 		t.Errorf("prompt missing acceptance criteria: %s", receivedPromptText)
 	}
-	if !strings.Contains(receivedPromptText, "Instructions: You are assigned to autonomously work on and complete this task in CrowBan. Use the CrowBan MCP tools (or REST API) as you progress: claim the task, update notes with your plan and progress, complete acceptance criteria using complete_ac as you verify them, and mark the task done when all criteria are met. When tests or verification commands produce output, upload it as evidence with attach_artifact (kind command-output/log/screenshot, ref = file path or URL) so a human can verify your work — encouraged, not required.") {
+	if !strings.Contains(receivedPromptText, "Instructions: You are assigned to autonomously work on and complete this task in CrowBan. Use the CrowBan MCP tools (or REST API) as you progress: claim the task, update notes with your plan and progress, complete acceptance criteria using complete_ac as you verify them, and mark the task done when all criteria are met. When tests or verification commands produce output, upload it as evidence with attach_artifact (kind command-output/log/screenshot, ref = URL or data_base64 = base64 file content) so a human can verify your work — encouraged, not required.") {
 		t.Errorf("prompt missing required instructions: %s", receivedPromptText)
 	}
 

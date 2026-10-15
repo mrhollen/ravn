@@ -740,46 +740,102 @@ func registerEditAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor)
 func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("attach_artifact",
 		mcpgo.WithDescription(
-			"Attach a typed piece of evidence to a task: kind log | screenshot | command-output | trace | url | other; ref is a URL or filesystem path (required); summary is an optional one-line description. If data_base64 is provided (or ref is an accessible local file on the server), the file bytes are uploaded to the storage volume and ref becomes /artifacts/{id}. Returns the created artifact row (201). Append-only and NOT idempotent — after an error, check artifacts via get_task before re-attaching or you may duplicate. RECOMMENDED for verification: when your work includes running tests or verification commands, attach that evidence (kind \"command-output\", \"log\" or \"screenshot\") so a human can verify it — encouraged, never required."+actorHint),
+			"Attach a typed piece of evidence to a task: kind log | screenshot | command-output | trace | url | other. Provide either data_base64 (to upload binary data like images, video, audio, PDF, logs) or ref (a web URL or accessible server file path). When using data_base64, optional filename specifies the file extension for MIME detection. If data_base64 is provided (or ref is an accessible local file on the server), the file bytes are uploaded to the storage volume and ref becomes /artifacts/{id}. Returns the created artifact row (201). Append-only and NOT idempotent — after an error, check artifacts via get_task before re-attaching or you may duplicate. RECOMMENDED for verification: when your work includes running tests or verification commands, attach that evidence (kind \"command-output\", \"log\" or \"screenshot\") so a human can verify it — encouraged, never required."+actorHint),
 		mcpgo.WithString("id", mcpgo.Required(),
 			mcpgo.Description("Task ULID to attach the artifact to.")),
 		mcpgo.WithString("kind", mcpgo.Required(), mcpgo.Enum("log", "screenshot", "command-output", "trace", "url", "other"),
 			mcpgo.Description("Artifact kind.")),
-		mcpgo.WithString("ref", mcpgo.Required(),
-			mcpgo.Description("URL or filesystem path of the evidence (required, non-empty).")),
+		mcpgo.WithString("ref",
+			mcpgo.Description("Web URL (http/https) or server filesystem path. Optional if data_base64 is provided.")),
+		mcpgo.WithString("data_base64",
+			mcpgo.Description("Base64-encoded file bytes (or data URI) to upload binary data like images (PNG, JPEG), video (MP4, WebM), audio (MP3, WAV), PDF, or logs.")),
+		mcpgo.WithString("filename",
+			mcpgo.Description("Optional filename with extension (e.g. \"screenshot.png\", \"demo.mp4\", \"report.pdf\") to preserve file type for browser preview/playback when uploading with data_base64.")),
 		mcpgo.WithString("summary",
 			mcpgo.Description("Optional one-line description of what the artifact shows.")),
-		mcpgo.WithString("data_base64",
-			mcpgo.Description("Optional base64-encoded file bytes to upload to the server volume (e.g. for remote agents).")),
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		id := strings.TrimSpace(req.GetString("id", ""))
 		ref := strings.TrimSpace(req.GetString("ref", ""))
+		dataBase64 := strings.TrimSpace(req.GetString("data_base64", ""))
+		filename := strings.TrimSpace(req.GetString("filename", ""))
+		kind := strings.TrimSpace(req.GetString("kind", ""))
+		summary := strings.TrimSpace(req.GetString("summary", ""))
+		actor := resolveActor(req.GetArguments(), defaultActor)
+
 		if id == "" {
 			return invalidInput("attach_artifact", "id"), nil
 		}
-		if ref == "" {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"attach_artifact: \"ref\" must be a non-empty URL or path"}`), nil
+
+		// Support data URI passed via ref if data_base64 was omitted
+		if dataBase64 == "" && strings.HasPrefix(ref, "data:") {
+			dataBase64 = ref
+			ref = ""
 		}
-		kind := strings.TrimSpace(req.GetString("kind", ""))
-		summary := strings.TrimSpace(req.GetString("summary", ""))
-		dataBase64 := strings.TrimSpace(req.GetString("data_base64", ""))
-		actor := resolveActor(req.GetArguments(), defaultActor)
+
+		if dataBase64 == "" && ref == "" {
+			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"attach_artifact: either \"data_base64\" or \"ref\" must be provided"}`), nil
+		}
 
 		var row *apiclient.Artifact
 		var err error
 
 		if dataBase64 != "" {
+			var inferredExt string
+			if strings.HasPrefix(dataBase64, "data:") {
+				if semiIdx := strings.Index(dataBase64, ";base64,"); semiIdx != -1 {
+					mimeType := strings.ToLower(strings.TrimSpace(dataBase64[5:semiIdx]))
+					dataBase64 = dataBase64[semiIdx+8:]
+					switch mimeType {
+					case "image/png":
+						inferredExt = ".png"
+					case "image/jpeg", "image/jpg":
+						inferredExt = ".jpg"
+					case "image/gif":
+						inferredExt = ".gif"
+					case "image/webp":
+						inferredExt = ".webp"
+					case "video/mp4":
+						inferredExt = ".mp4"
+					case "video/webm":
+						inferredExt = ".webm"
+					case "audio/mpeg", "audio/mp3":
+						inferredExt = ".mp3"
+					case "audio/wav":
+						inferredExt = ".wav"
+					case "application/pdf":
+						inferredExt = ".pdf"
+					}
+				}
+			}
+
+			dataBase64 = strings.TrimSpace(dataBase64)
 			raw, decErr := base64.StdEncoding.DecodeString(dataBase64)
 			if decErr != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid input","message":"attach_artifact: invalid base64 in data_base64: %s"}`, decErr.Error())), nil
+				// Fallback to URL-safe base64 if StdEncoding fails
+				var urlErr error
+				raw, urlErr = base64.URLEncoding.DecodeString(dataBase64)
+				if urlErr != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid input","message":"attach_artifact: invalid base64 in data_base64: %s"}`, decErr.Error())), nil
+				}
 			}
-			filename := filepath.Base(ref)
-			if filename == "" || filename == "." || filename == "/" {
-				filename = "artifact.bin"
+
+			fname := filename
+			if fname == "" && ref != "" {
+				fname = filepath.Base(ref)
 			}
-			row, err = c.UploadArtifact(ctx, id, filename, bytes.NewReader(raw), kind, summary, actor)
+			if fname == "" || fname == "." || fname == "/" {
+				if inferredExt != "" {
+					fname = "artifact" + inferredExt
+				} else {
+					fname = "artifact.bin"
+				}
+			} else if filepath.Ext(fname) == "" && inferredExt != "" {
+				fname += inferredExt
+			}
+
+			row, err = c.UploadArtifact(ctx, id, fname, bytes.NewReader(raw), kind, summary, actor)
 		} else if fi, statErr := os.Stat(ref); statErr == nil && !fi.IsDir() {
 			f, openErr := os.Open(ref)
 			if openErr != nil {
@@ -787,13 +843,15 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 			}
 			defer f.Close()
 			row, err = c.UploadArtifact(ctx, id, filepath.Base(ref), f, kind, summary, actor)
-		} else {
+		} else if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") || strings.HasPrefix(ref, "mailto:") {
 			row, err = c.AttachArtifact(ctx, id, apiclient.ArtifactRequest{
 				Actor:   actor,
 				Kind:    kind,
 				Ref:     ref,
 				Summary: summary,
 			})
+		} else {
+			return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid input","message":"attach_artifact: local file %q not found on the MCP server filesystem. To attach files from an agent environment, supply base64-encoded file bytes in data_base64 (along with filename)"}`, ref)), nil
 		}
 
 		if err != nil {

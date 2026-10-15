@@ -1359,6 +1359,25 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                                  class="max-w-full max-h-48 rounded object-contain cursor-pointer hover:opacity-90 transition-opacity border border-zinc-200 dark:border-zinc-700" />
                           </div>
                         </template>
+                        <!-- Stored video: inline <video> -->
+                        <template x-if="isStoredVideo(a)">
+                          <div class="mt-2">
+                            <video controls preload="metadata"
+                                   class="max-w-full max-h-56 rounded border border-zinc-200 dark:border-zinc-700 bg-black">
+                              <source :src="a.ref" />
+                              Your browser does not support the video tag.
+                            </video>
+                          </div>
+                        </template>
+                        <!-- Stored audio: inline <audio> -->
+                        <template x-if="isStoredAudio(a)">
+                          <div class="mt-2">
+                            <audio controls preload="metadata" class="w-full">
+                              <source :src="a.ref" />
+                              Your browser does not support the audio tag.
+                            </audio>
+                          </div>
+                        </template>
                         <p x-show="a.summary" x-cloak class="mt-1 text-xs text-zinc-600 dark:text-zinc-400" x-text="a.summary"></p>
                       </li>
                     </template>

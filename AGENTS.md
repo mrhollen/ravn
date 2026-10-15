@@ -27,11 +27,14 @@ The Playwright config (`web/playwright.config.ts`) sets `use.screenshot: 'on'`, 
 After a green run:
 
 1. Review the generated screenshots in `web/test-results/`. Open only the ones relevant to what you verified — folder names map to spec + test case, so find them by name instead of opening every PNG.
-2. Attach task-relevant screenshot(s) as evidence on the CrowBan task:
+2. Attach task-relevant evidence (screenshot, video, PDF, audio, command output, or log) on the CrowBan task:
    - tool `attach_artifact`
-   - `kind`: `screenshot`
-   - `ref`: absolute path to the `.png` (e.g. `/home/hollen/Code/crowban/web/test-results/theme-theme-dark-mode-head-86d82-rk-System-theme-toggle-AC1--chromium/test-finished-1.png`)
-   - `summary`: one line — what the shot shows and which AC it evidences.
+   - `id`: task ID
+   - `kind`: `screenshot` (or `other` for videos/PDFs/audio, `command-output`, `log`)
+   - `data_base64`: base64-encoded file bytes (e.g. `base64 -w 0 <path>`). This reliably uploads binary data to the server storage volume across remote or containerized MCP environments.
+   - `filename`: filename with extension (e.g. `test-finished-1.png`, `demo.mp4`, `report.pdf`) to preserve MIME type for inline preview/playback.
+   - `summary`: one line — what the evidence shows and which AC it evidences.
+   *(Note: if the agent and MCP server share the same filesystem, passing the path in `ref` is also supported).*
 
 Applies to QA agents (`frontend-qa`, `backend-qa`) and devs verifying their own work: leave visual evidence the UI looks right, not just that tests passed. If per-agent prompt files are added to this repo later, move this requirement there.
 

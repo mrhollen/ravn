@@ -2647,12 +2647,24 @@ export function crowbanApp() {
     isStoredImage(a: { kind: string; ref: string; summary?: string }): boolean {
       if (!this.isStoredArtifact(a.ref)) return false;
       if (a.kind === "screenshot") return true;
-      const imageExt = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+      const imageExt = /\.(png|jpe?g|gif|webp|svg|bmp|avif)\b/i;
       return imageExt.test(a.ref) || imageExt.test(a.summary || "");
     },
 
+    isStoredVideo(a: { kind: string; ref: string; summary?: string }): boolean {
+      if (!this.isStoredArtifact(a.ref)) return false;
+      const videoExt = /\.(mp4|webm|ogg|mov)\b/i;
+      return videoExt.test(a.ref) || videoExt.test(a.summary || "");
+    },
+
+    isStoredAudio(a: { kind: string; ref: string; summary?: string }): boolean {
+      if (!this.isStoredArtifact(a.ref)) return false;
+      const audioExt = /\.(mp3|wav|ogg|aac|flac|m4a)\b/i;
+      return audioExt.test(a.ref) || audioExt.test(a.summary || "");
+    },
+
     isStoredNonImage(a: { kind: string; ref: string; summary?: string }): boolean {
-      return this.isStoredArtifact(a.ref) && !this.isStoredImage(a);
+      return this.isStoredArtifact(a.ref) && !this.isStoredImage(a) && !this.isStoredVideo(a) && !this.isStoredAudio(a);
     },
 
     // ---------------------------------------------------------------- claims

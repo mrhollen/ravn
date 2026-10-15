@@ -393,4 +393,43 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
     const previewImg = previewDialog.locator('img');
     await expect(previewImg).toBeVisible();
   });
+
+  test('uploading video artifact displays inline video player and serves inline', async ({ page }) => {
+    const { projectId, taskId } = await seedProjectAndTask(serverUrl);
+
+    const videoFilePath = path.join(tempDir, 'sample-test-run.mp4');
+    fs.writeFileSync(videoFilePath, Buffer.from('fake-mp4-test-bytes'));
+
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, projectId);
+
+    const taskCard = page.locator('article', { hasText: 'Task with Artifacts' });
+    await taskCard.click();
+
+    const drawer = page.locator('aside');
+    const attachBtn = drawer.getByRole('button', { name: '+ Attach artifact' });
+    await attachBtn.click();
+
+    const fileInput = drawer.locator('#artifactFileInput');
+    await fileInput.setInputFiles(videoFilePath);
+
+    const summaryInput = drawer.getByPlaceholder('One-line summary (optional)');
+    await summaryInput.fill('Playwright test run');
+
+    const submitBtn = drawer.getByRole('button', { name: 'Attach', exact: true });
+    await submitBtn.click();
+
+    const inlineVideo = drawer.locator('video');
+    await expect(inlineVideo).toBeVisible({ timeout: 5000 });
+
+    const videoSource = inlineVideo.locator('source');
+    const src = await videoSource.getAttribute('src');
+    expect(src).toMatch(/^\/artifacts\/[0-9A-HJKMNP-TV-Z]{26}$/);
+
+    // Verify GET returns Content-Disposition: inline
+    const serveRes = await fetch(`${serverUrl}${src}`);
+    expect(serveRes.status).toBe(200);
+    expect(serveRes.headers.get('content-type')).toContain('video/mp4');
+    expect(serveRes.headers.get('content-disposition')).toBe('inline');
+  });
 });

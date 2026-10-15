@@ -405,6 +405,30 @@ func isSafeImageContentType(ct string) bool {
 	}
 }
 
+func isSafeInlineContentType(ct string) bool {
+	switch ct {
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/x-icon", "image/avif":
+		return true
+	case "video/mp4", "video/webm", "video/ogg":
+		return true
+	case "audio/mpeg", "audio/wav", "audio/ogg", "audio/aac", "audio/flac":
+		return true
+	case "application/pdf":
+		return true
+	default:
+		return false
+	}
+}
+
+func isMediaExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".mp4", ".webm", ".ogg", ".mov", ".mp3", ".wav", ".aac", ".flac", ".m4a", ".pdf":
+		return true
+	default:
+		return false
+	}
+}
+
 func isImageExt(ext string) bool {
 	switch strings.ToLower(ext) {
 	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif", ".svg":
@@ -601,6 +625,15 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 	}
 
 	summary := strings.TrimSpace(r.FormValue("summary"))
+	if isMediaExt(ext) {
+		if summary == "" && header.Filename != "" && header.Filename != "artifact.bin" {
+			summary = header.Filename
+		} else if summary != "" && header.Filename != "" && !strings.Contains(summary, ext) {
+			summary = fmt.Sprintf("%s (%s)", summary, header.Filename)
+		}
+	} else if summary == "" && header.Filename != "" && header.Filename != "artifact.bin" {
+		summary = header.Filename
+	}
 
 	if err := os.MkdirAll(a.ArtifactsDir, 0755); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
@@ -712,9 +745,9 @@ func (a *App) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 	// 1. nosniff to prevent mime-sniffing exploits
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
-	// 2. Safe raster images: inline
-	//    Non-images (HTML, JS, text, etc.): attachment (force download, preventing execution on origin)
-	if isSafeImageContentType(contentType) {
+	// 2. Safe media (images, video, audio, PDF): inline
+	//    Non-media (HTML, JS, text, etc.): attachment (force download, preventing execution on origin)
+	if isSafeInlineContentType(contentType) {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Content-Disposition", "inline")
 	} else {

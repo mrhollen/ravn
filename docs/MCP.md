@@ -104,7 +104,7 @@ All tools return **compact JSON text** on success. All failures come back as an
 | `add_ac` | Append a new acceptance criterion at `max(seq)+1`. No version bump. | `id` (required), `text` (required markdown, non-empty), `actor?` | The created AC row |
 | `remove_ac` | Remove an acceptance criterion by its 1-based seq. Surviving criteria keep their seqs (no renumbering). No version bump. | `id` (required), `seq` (number ≥ 1, required), `actor?` | `{"removed":true, "task_id", "seq"}` |
 | `edit_ac` | Reword or edit the text of an existing acceptance criterion by its 1-based seq. No version bump. | `id` (required), `seq` (number ≥ 1, required), `text` (required markdown, non-empty), `actor?` | The updated AC row |
-| `attach_artifact` | Attach typed evidence. **Recommended for testing work:** when you run tests or verification commands, attach the output (`command-output`/`log`/`screenshot`) so a human can verify your work — encouraged, never required. Not idempotent — check artifacts via `get_task` before re-attaching after an error. | `id`, `kind` (required; log\|screenshot\|command-output\|trace\|url\|other), `ref` (required URL/path), `summary?`, `actor?` | The created artifact row |
+| `attach_artifact` | Attach typed evidence. **Recommended for testing work:** when you run tests or verification commands, attach the output (`command-output`/`log`/`screenshot`) so a human can verify your work — encouraged, never required. Supports uploading binary files (images, video, audio, PDF, logs) via `data_base64` + `filename`. Not idempotent — check artifacts via `get_task` before re-attaching after an error. | `id`, `kind` (required; log\|screenshot\|command-output\|trace\|url\|other), `data_base64?` (base64 file bytes or data URI), `filename?` (e.g. "test.png"), `ref?` (URL or server file path), `summary?`, `actor?` | The created artifact row |
 | `relate_tasks` | Add or remove a relation edge between two tasks in the same project. | `id`, `other_id`, `kind` (all required; child\|parent\|blocked-by\|duplicate-of\|related), `action?` ("add" default \| "remove"), `actor?` | add: stored relation row (a `parent` input is stored/returned as the inverse `child` edge); remove: `{"removed":true, task_id, other_task_id, kind}` |
 
 Notes on relations: a task has **at most one parent** — re-adding the same
@@ -180,12 +180,27 @@ is what a fresh session reads first):
 **Attach test evidence — `attach_artifact`** (encouraged for testing work, never
 required — this is what a human reviews to verify your work):
 
+Upload binary files (screenshot, video, audio, PDF) using base64:
+
+```json
+{
+  "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
+  "actor": { "name": "runner-2", "type": "agent" },
+  "kind": "screenshot",
+  "filename": "test-finished.png",
+  "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB...",
+  "summary": "E2E theme toggle AC1 verified"
+}
+```
+
+Or attach a web URL:
+
 ```json
 {
   "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
   "actor": { "name": "runner-2", "type": "agent" },
   "kind": "command-output",
-  "ref": "/tmp/crowban/test-run.log",
+  "ref": "https://ci.example.lan/builds/123/test.log",
   "summary": "go test ./... — all pass after the fix"
 }
 ```

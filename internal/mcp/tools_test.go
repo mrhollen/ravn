@@ -1196,6 +1196,69 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 			t.Errorf("attach_artifact result = %s", firstText(t, res))
 		}
 	})
+
+	t.Run("attach_artifact_base64_filename_only", func(t *testing.T) {
+		payload := base64.StdEncoding.EncodeToString([]byte("fake-video-bytes"))
+		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
+			"id":          "T1",
+			"actor":       map[string]any{"name": "runner-2", "type": "agent"},
+			"kind":        "other",
+			"filename":    "recording.mp4",
+			"summary":     "test recording",
+			"data_base64": payload,
+		})
+		if res.IsError {
+			t.Fatalf("attach_artifact returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		if row["id"] != "AUPLOAD" || row["kind"] != "other" || row["ref"] != "/artifacts/AUPLOAD" {
+			t.Errorf("attach_artifact result = %s", firstText(t, res))
+		}
+	})
+
+	t.Run("attach_artifact_data_uri", func(t *testing.T) {
+		payload := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("fake-png-bytes"))
+		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
+			"id":          "T1",
+			"kind":        "screenshot",
+			"data_base64": payload,
+			"summary":     "data uri screenshot",
+		})
+		if res.IsError {
+			t.Fatalf("attach_artifact data uri returned isError: %s", firstText(t, res))
+		}
+		row := asMap(t, firstText(t, res))
+		if row["id"] != "AUPLOAD" {
+			t.Errorf("attach_artifact result = %s", firstText(t, res))
+		}
+	})
+
+	t.Run("attach_artifact_missing_inputs", func(t *testing.T) {
+		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
+			"id":   "T1",
+			"kind": "screenshot",
+		})
+		if !res.IsError {
+			t.Fatalf("expected error when neither data_base64 nor ref provided")
+		}
+		if !strings.Contains(firstText(t, res), "data_base64") || !strings.Contains(firstText(t, res), "must be provided") {
+			t.Errorf("unexpected error text: %s", firstText(t, res))
+		}
+	})
+
+	t.Run("attach_artifact_unreachable_local_path", func(t *testing.T) {
+		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
+			"id":   "T1",
+			"kind": "screenshot",
+			"ref":  "/path/does/not/exist/screenshot.png",
+		})
+		if !res.IsError {
+			t.Fatalf("expected error for non-existent local file path")
+		}
+		if !strings.Contains(firstText(t, res), "not found on the MCP server filesystem") {
+			t.Errorf("unexpected error text: %s", firstText(t, res))
+		}
+	})
 }
 
 func TestRelateTasksAddRemoveRoundTrip(t *testing.T) {
