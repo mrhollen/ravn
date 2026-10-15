@@ -268,3 +268,78 @@ func TestProjectsRepo_OpenCodeSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("got updated settings (%q, %q, %q), want (http://localhost:6666, /home/test/newdir, llama.cpp/Qwen Small)", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel)
 	}
 }
+
+func TestProjectsRepo_ArchivedRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openTestDB(t)
+	uow := NewUnitOfWork(db)
+
+	p1 := domain.Project{
+		ID:        "proj-arch-1",
+		Name:      "Active Project",
+		CreatedAt: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC),
+	}
+	p2 := domain.Project{
+		ID:        "proj-arch-2",
+		Name:      "Archived Project",
+		Archived:  true,
+		CreatedAt: time.Date(2026, 9, 27, 10, 1, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 9, 27, 10, 1, 0, 0, time.UTC),
+	}
+
+	var r application.Repos
+	err := uow.Run(ctx, &r, func() error {
+		if err := r.Projects.Create(ctx, p1); err != nil {
+			return err
+		}
+		return r.Projects.Create(ctx, p2)
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var openList, archList []domain.Project
+	err = uow.Run(ctx, &r, func() error {
+		var err error
+		openList, err = r.Projects.List(ctx)
+		if err != nil {
+			return err
+		}
+		archList, err = r.Projects.List(ctx, application.ProjectFilter{Archived: true})
+		return err
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	if len(openList) != 1 || openList[0].ID != p1.ID || openList[0].Archived {
+		t.Fatalf("openList = %+v, want only p1 (unarchived)", openList)
+	}
+	if len(archList) != 1 || archList[0].ID != p2.ID || !archList[0].Archived {
+		t.Fatalf("archList = %+v, want only p2 (archived)", archList)
+	}
+
+	// Update p1 to archived
+	p1.Archived = true
+	err = uow.Run(ctx, &r, func() error {
+		return r.Projects.Update(ctx, p1)
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	var p1Got domain.Project
+	err = uow.Run(ctx, &r, func() error {
+		var err error
+		p1Got, err = r.Projects.Get(ctx, p1.ID)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !p1Got.Archived {
+		t.Fatal("expected p1 to be archived")
+	}
+}

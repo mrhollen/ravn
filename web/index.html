@@ -746,7 +746,44 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               </label>
             </div>
 
-            <div class="flex items-center justify-end gap-2 pt-2">
+            <!-- Archive Project section -->
+            <div class="border-t border-zinc-200 dark:border-zinc-800 pt-3 flex flex-col gap-2">
+              <div x-show="!showArchiveConfirm" class="flex items-center justify-between">
+                <div>
+                  <h3 class="text-xs font-semibold text-red-600 dark:text-red-400">Archive project</h3>
+                  <p class="text-[11px] text-zinc-600 dark:text-zinc-400">Hide this project from the selector dropdown</p>
+                </div>
+                <button type="button" @click="openArchiveConfirm()" data-testid="archive-project-btn"
+                        class="rounded-md border border-red-300 bg-white px-2.5 py-1.5 text-xs font-medium text-red-700 shadow-sm hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500 dark:border-red-800 dark:bg-zinc-900 dark:text-red-400 dark:hover:bg-red-950/50">
+                  Archive Project
+                </button>
+              </div>
+
+              <!-- Archive confirmation input box and instructions -->
+              <div x-show="showArchiveConfirm" x-cloak data-testid="archive-confirm-box"
+                   class="rounded-lg border border-red-200 bg-red-50/50 p-3 dark:border-red-900/50 dark:bg-red-950/20 flex flex-col gap-2">
+                <p class="text-xs text-red-800 dark:text-red-300 font-medium leading-relaxed">
+                  To archive this project, please type <span class="font-bold underline select-all" x-text="(projects.find(p => p.id === selectedProjectId)?.name || projectSettingsForm.name)"></span> to confirm:
+                </p>
+                <input type="text" x-model="archiveConfirmInput" data-testid="archive-confirm-input"
+                       aria-label="Confirm project name"
+                       placeholder="Type name to confirm"
+                       @keydown.enter.prevent="if (isArchiveInputValid()) archiveProject()"
+                       class="field text-xs w-full bg-white dark:bg-zinc-900" />
+                <div class="flex items-center justify-end gap-2 pt-1">
+                  <button type="button" @click="cancelArchiveConfirm()" data-testid="cancel-archive-btn" class="btn-ghost text-xs">
+                    Cancel
+                  </button>
+                  <button type="button" :disabled="!isArchiveInputValid() || projectSettingsBusy"
+                          @click="archiveProject()" data-testid="confirm-archive-btn"
+                          class="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed dark:hover:bg-red-500">
+                    <span x-text="projectSettingsBusy ? 'Archiving…' : 'Archive'"></span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div x-show="!showArchiveConfirm" class="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
               <button type="button" @click="closeProjectSettings()" class="btn-ghost text-xs">
                 Cancel
               </button>

@@ -11,7 +11,8 @@ import (
 // counts (ARCHITECTURE §5: "rows + per-status task counts"), computed by the
 // Projects use case from ONE grouped query — no N+1.
 func (a *App) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.Projects.ListWithCounts(r.Context())
+	archived := parseBoolFlag(r.URL.Query(), "archived")
+	rows, err := a.Projects.ListWithCounts(r.Context(), application.ProjectFilter{Archived: archived})
 	if err != nil {
 		writeAppError(w, err, "project", "")
 		return
@@ -81,6 +82,7 @@ func (a *App) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		OpenCodeServerURL: req.OpenCodeServerURL,
 		OpenCodeDirectory: req.OpenCodeDirectory,
 		OpenCodeModel:     req.OpenCodeModel,
+		Archived:          req.Archived,
 	})
 	if err != nil {
 		writeAppError(w, err, "project", id)

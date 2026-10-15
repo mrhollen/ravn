@@ -59,13 +59,20 @@ type IDGenerator interface {
 type ProjectRepository interface {
 	Create(ctx context.Context, p domain.Project) error
 	Get(ctx context.Context, id domain.ID) (domain.Project, error)
-	// List returns all projects ordered by created_at ASC (id ASC as
+	// List returns all projects matching filter ordered by created_at ASC (id ASC as
 	// deterministic tie-break). Per-status task counts are computed by use
 	// cases from TaskRepository, not here.
-	List(ctx context.Context) ([]domain.Project, error)
+	List(ctx context.Context, filter ...ProjectFilter) ([]domain.Project, error)
 	// Update renames and/or rewrites the description; it is not
 	// version-guarded (the project row has no version column).
 	Update(ctx context.Context, p domain.Project) error
+}
+
+// ProjectFilter narrows ProjectRepository.List.
+// Archived selects which archive state is listed: false (zero value) =
+// open projects only, the REST default; true = archived projects only.
+type ProjectFilter struct {
+	Archived bool
 }
 
 // TaskFilter narrows TaskRepository.List. Zero values mean "unconstrained"

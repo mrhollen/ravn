@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mrhollen/crowban/internal/domain"
@@ -19,6 +20,7 @@ type ProjectUpdate struct {
 	OpenCodeServerURL *string // optional OpenCode server URL; empty string allowed to clear
 	OpenCodeDirectory *string // optional OpenCode worktree directory; empty string allowed to clear
 	OpenCodeModel     *string // optional OpenCode model "providerID/modelID"; empty string allowed to clear
+	Archived          *bool   // optional archive state
 }
 
 // Projects implements the project use cases: create, get, list, update. It
@@ -93,13 +95,13 @@ func (s *Projects) Get(ctx context.Context, id domain.ID) (domain.Project, error
 	return stored, nil
 }
 
-// List returns every project in created_at ASC order (repository-defined).
-func (s *Projects) List(ctx context.Context) ([]domain.Project, error) {
+// List returns every project matching filter in created_at ASC order (repository-defined).
+func (s *Projects) List(ctx context.Context, f ...ProjectFilter) ([]domain.Project, error) {
 	var out []domain.Project
 	var repos Repos
 	err := s.uow.Run(ctx, &repos, func() error {
 		var err error
-		out, err = repos.Projects.List(ctx)
+		out, err = repos.Projects.List(ctx, f...)
 		return err
 	})
 	if err != nil {
@@ -117,18 +119,18 @@ type ProjectRow struct {
 	OpenTasks map[domain.Status]int64
 }
 
-// ListWithCounts returns every project (created_at ASC) with its per-status
+// ListWithCounts returns every project (created_at ASC) matching filter with its per-status
 // open task counts. The snapshot is gathered in ONE unit of work so it is
 // internally consistent: projects come from ProjectRepository and the dense
 // (project, status) aggregates from TaskRepository.OpenTaskCounts — a single
 // grouped query over the task table, no N+1 fan-out per project.
-func (s *Projects) ListWithCounts(ctx context.Context) ([]ProjectRow, error) {
+func (s *Projects) ListWithCounts(ctx context.Context, f ...ProjectFilter) ([]ProjectRow, error) {
 	var projects []domain.Project
 	var rows []TaskCountRow
 	var r Repos
 	err := s.uow.Run(ctx, &r, func() error {
 		var err error
-		if projects, err = r.Projects.List(ctx); err != nil {
+		if projects, err = r.Projects.List(ctx, f...); err != nil {
 			return err
 		}
 		rows, err = r.Tasks.OpenTaskCounts(ctx)
@@ -201,7 +203,11 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 	if u.OpenCodeModel != nil {
 		newModel, hasModel = strings.TrimSpace(*u.OpenCodeModel), true
 	}
-	if !hasName && !hasDesc && !hasServerURL && !hasDir && !hasModel {
+	newArchived, hasArchived := false, false
+	if u.Archived != nil {
+		newArchived, hasArchived = *u.Archived, true
+	}
+	if !hasName && !hasDesc && !hasServerURL && !hasDir && !hasModel && !hasArchived {
 		return domain.Project{}, fmt.Errorf("%w: no project fields to update", domain.ErrInvalid)
 	}
 
@@ -240,6 +246,11 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 			before["opencode_model"] = p.OpenCodeModel
 			after["opencode_model"] = newModel
 			p.OpenCodeModel = newModel
+		}
+		if hasArchived {
+			before["archived"] = strconv.FormatBool(p.Archived)
+			after["archived"] = strconv.FormatBool(newArchived)
+			p.Archived = newArchived
 		}
 		p.UpdatedAt = now
 		ev := domain.Event{

@@ -280,6 +280,83 @@ func TestProjectsLifecycleAndCounts(t *testing.T) {
 	}
 }
 
+func TestProjectArchive_HTTP(t *testing.T) {
+	t.Parallel()
+	stk := newStack(t)
+	p1 := createProject(t, stk, "Keep Open")
+	p2 := createProject(t, stk, "To Archive")
+
+	// Archive p2 via PUT /api/v1/projects/{id}
+	code, body := doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p2.ID, map[string]any{
+		"actor":    actor("ada"),
+		"archived": true,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("PUT /projects/%s archive = %d, want 200 (body %s)", p2.ID, code, string(body))
+	}
+	updated := mustDecode[projectDTO](t, body)
+	if !updated.Archived {
+		t.Fatalf("expected updated project to have archived=true, got %+v", updated)
+	}
+
+	// GET /projects (default): only open projects
+	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /projects = %d, want 200", code)
+	}
+	var openList struct {
+		Projects []projectRowDTO `json:"projects"`
+		Total    int             `json:"total"`
+	}
+	if err := json.Unmarshal(body, &openList); err != nil {
+		t.Fatalf("decode open list: %v", err)
+	}
+	if openList.Total != 1 || len(openList.Projects) != 1 || openList.Projects[0].ID != p1.ID {
+		t.Fatalf("expected only p1 in open list, got %+v", openList)
+	}
+
+	// GET /projects?archived=true: only archived projects
+	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects?archived=true", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /projects?archived=true = %d, want 200", code)
+	}
+	var archList struct {
+		Projects []projectRowDTO `json:"projects"`
+		Total    int             `json:"total"`
+	}
+	if err := json.Unmarshal(body, &archList); err != nil {
+		t.Fatalf("decode arch list: %v", err)
+	}
+	if archList.Total != 1 || len(archList.Projects) != 1 || archList.Projects[0].ID != p2.ID {
+		t.Fatalf("expected only p2 in arch list, got %+v", archList)
+	}
+
+	// Unarchive p2
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p2.ID, map[string]any{
+		"actor":    actor("ada"),
+		"archived": false,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("PUT /projects/%s unarchive = %d, want 200", p2.ID, code)
+	}
+	unarchived := mustDecode[projectDTO](t, body)
+	if unarchived.Archived {
+		t.Fatalf("expected unarchived project to have archived=false, got %+v", unarchived)
+	}
+
+	// GET /projects should now list both
+	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /projects = %d, want 200", code)
+	}
+	if err := json.Unmarshal(body, &openList); err != nil {
+		t.Fatalf("decode open list: %v", err)
+	}
+	if openList.Total != 2 {
+		t.Fatalf("expected 2 projects after unarchive, got %d", openList.Total)
+	}
+}
+
 func TestTaskCreateAcceptanceCriteriaAndDuplicates(t *testing.T) {
 	t.Parallel()
 	stk := newStack(t)

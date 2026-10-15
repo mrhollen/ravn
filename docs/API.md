@@ -293,6 +293,9 @@ body is a flat snapshot object with one key per series.
 Lists projects, newest-first, with per-status **open** task counts (all three
 statuses always present, zero when empty). Not paged in the MVP.
 
+Query param:
+- `archived`: `true` lists archived projects; default `false` = open only.
+
 ```json
 {
   "projects": [
@@ -303,6 +306,7 @@ statuses always present, zero when empty). Not paged in the MVP.
       "opencode_server_url": "http://localhost:4444",
       "opencode_directory": "/home/hollen/Code/crowban",
       "opencode_model": "llama.cpp/Qwen Medium Long Context",
+      "archived": false,
       "created_at": "2026-09-20T09:00:00Z",
       "updated_at": "2026-09-20T09:00:00Z",
       "task_counts": { "todo": 3, "doing": 1, "done": 5 }
@@ -325,7 +329,7 @@ Request: `{ "actor": {"name":"ada"}, "name": "Website Redesign", "description": 
 
 Get returns the project row; `404 not found` (`resource: "project"`) when
 unknown. Put takes `{ "actor": …, "name"?: …, "description"?: …,
-"opencode_server_url"?: …, "opencode_directory"?: …, "opencode_model"?: … }`
+"opencode_server_url"?: …, "opencode_directory"?: …, "opencode_model"?: …, "archived"?: … }`
 with pointer semantics — omitted = unchanged, at least one field required (else
 `400`) — and returns `200` with the updated row. The `opencode_*` fields
 configure where/how `POST /tasks/{id}/opencode/start` dispatches sessions for

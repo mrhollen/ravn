@@ -277,3 +277,77 @@ func TestProjectsUpdate_OpenCodeSettings(t *testing.T) {
 		t.Fatalf("event after payload missing opencode fields: %s", ev.After)
 	}
 }
+
+func TestProjectsUpdate_Archive(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, fp, fe := newProjectTestEnv(t)
+
+	p, err := svc.Create(ctx, testAgent, "To Archive", "some desc")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	fc.SetNow(fc.now.Add(time.Minute))
+	arch := true
+	updated, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{
+		Archived: &arch,
+	})
+	if err != nil {
+		t.Fatalf("Update archive: %v", err)
+	}
+	if !updated.Archived {
+		t.Fatal("expected updated.Archived to be true")
+	}
+	if !fp.byID[p.ID].Archived {
+		t.Fatal("expected stored.Archived to be true")
+	}
+
+	// Verify update event
+	if len(fe.events) != 2 {
+		t.Fatalf("events count = %d, want 2 (create + update)", len(fe.events))
+	}
+	ev := fe.events[1]
+	if ev.Kind != domain.EventUpdated {
+		t.Fatalf("event kind = %v, want %v", ev.Kind, domain.EventUpdated)
+	}
+	if !strings.Contains(ev.After, `"archived":"true"`) {
+		t.Fatalf("event after payload missing archived field: %s", ev.After)
+	}
+}
+
+func TestProjectsList_ArchivedFilter(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, _ := newProjectTestEnv(t)
+
+	p1, err := svc.Create(ctx, testAgent, "Active Project", "")
+	if err != nil {
+		t.Fatalf("Create active: %v", err)
+	}
+	p2, err := svc.Create(ctx, testAgent, "Archived Project", "")
+	if err != nil {
+		t.Fatalf("Create to-be-archived: %v", err)
+	}
+
+	arch := true
+	if _, err := svc.Update(ctx, testAgent, p2.ID, ProjectUpdate{Archived: &arch}); err != nil {
+		t.Fatalf("Update archive: %v", err)
+	}
+
+	// Default list: open projects only
+	openProjects, err := svc.List(ctx)
+	if err != nil {
+		t.Fatalf("List default: %v", err)
+	}
+	if len(openProjects) != 1 || openProjects[0].ID != p1.ID {
+		t.Fatalf("List default = %+v, want only p1", openProjects)
+	}
+
+	// Filter archived: true
+	archivedProjects, err := svc.List(ctx, ProjectFilter{Archived: true})
+	if err != nil {
+		t.Fatalf("List archived: %v", err)
+	}
+	if len(archivedProjects) != 1 || archivedProjects[0].ID != p2.ID {
+		t.Fatalf("List archived = %+v, want only p2", archivedProjects)
+	}
+}

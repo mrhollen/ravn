@@ -55,11 +55,18 @@ func (f *fakeProjects) Get(_ context.Context, id domain.ID) (domain.Project, err
 	return p, nil
 }
 
-// List returns all projects ordered by created_at ASC (id ASC tie-break),
+// List returns all projects matching filter ordered by created_at ASC (id ASC tie-break),
 // mirroring the port contract.
-func (f *fakeProjects) List(_ context.Context) ([]domain.Project, error) {
+func (f *fakeProjects) List(_ context.Context, filter ...ProjectFilter) ([]domain.Project, error) {
+	archived := false
+	if len(filter) > 0 {
+		archived = filter[0].Archived
+	}
 	out := make([]domain.Project, 0, len(f.byID))
 	for _, p := range f.byID {
+		if p.Archived != archived {
+			continue
+		}
 		out = append(out, p)
 	}
 	sort.Slice(out, func(i, j int) bool {

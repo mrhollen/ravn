@@ -1383,6 +1383,80 @@ test("ProjectSettingsGear: openProjectSettings() no-ops without a selection; ope
   assert.equal(app.showProjectSettings, false);
 });
 
+test("ArchiveProject: index.html wires archive button, confirmation box, input, and cancel/archive buttons", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+
+  // AC1 — Archive project button exists
+  assert.match(html, /data-testid="archive-project-btn"[^>]*>\s*Archive Project\s*<\/button>/);
+
+  // AC2 — input box opens instructing the user to type the project name
+  assert.match(html, /data-testid="archive-confirm-box"/);
+  assert.match(html, /data-testid="archive-confirm-input"/);
+  assert.match(html, /To archive this project, please type/);
+
+  // AC4 — archive button exists with validation guard
+  assert.match(html, /data-testid="confirm-archive-btn"/);
+  assert.match(html, /:disabled="!isArchiveInputValid\(\) \|\| projectSettingsBusy"/);
+
+  // AC5 — cancel button exists to dismiss the confirmation
+  assert.match(html, /data-testid="cancel-archive-btn"/);
+});
+
+test("ArchiveProject: isArchiveInputValid validates project name with whitespace trimming", () => {
+  const app = crowbanApp() as any;
+  app.selectedProjectId = "p1";
+  app.projects = [{ id: "p1", name: "Alpha Project" }];
+  app.projectSettingsForm = { name: "Alpha Project" };
+
+  // Empty input -> invalid
+  app.archiveConfirmInput = "";
+  assert.equal(app.isArchiveInputValid(), false);
+
+  // Partial or mismatch -> invalid
+  app.archiveConfirmInput = "Alpha";
+  assert.equal(app.isArchiveInputValid(), false);
+  app.archiveConfirmInput = "alpha project";
+  assert.equal(app.isArchiveInputValid(), false);
+
+  // Exact match -> valid
+  app.archiveConfirmInput = "Alpha Project";
+  assert.equal(app.isArchiveInputValid(), true);
+
+  // Whitespace trimmed match -> valid
+  app.archiveConfirmInput = "   Alpha Project   ";
+  assert.equal(app.isArchiveInputValid(), true);
+  app.archiveConfirmInput = "\tAlpha Project\n";
+  assert.equal(app.isArchiveInputValid(), true);
+});
+
+test("ArchiveProject: open/cancel confirmation and Escape handling", () => {
+  const app = crowbanApp() as any;
+  app.selectedProjectId = "p1";
+  app.projects = [{ id: "p1", name: "Alpha Project" }];
+  app.showProjectSettings = true;
+
+  // Open confirmation
+  app.openArchiveConfirm();
+  assert.equal(app.showArchiveConfirm, true);
+  assert.equal(app.archiveConfirmInput, "");
+
+  // Cancel confirmation
+  app.archiveConfirmInput = "partially typed";
+  app.cancelArchiveConfirm();
+  assert.equal(app.showArchiveConfirm, false);
+  assert.equal(app.archiveConfirmInput, "");
+  assert.equal(app.showProjectSettings, true); // settings modal still open
+
+  // Escape cancels confirmation first before closing settings
+  app.openArchiveConfirm();
+  assert.equal(app.showArchiveConfirm, true);
+  app.dismissTop(); // first Escape
+  assert.equal(app.showArchiveConfirm, false, "first Escape dismisses archive confirmation");
+  assert.equal(app.showProjectSettings, true, "settings modal remains open");
+  app.dismissTop(); // second Escape
+  assert.equal(app.showProjectSettings, false, "second Escape closes settings modal");
+});
+
 // ---------------------------------------------------------------------------
 // Toast notifications: dismiss button, slide+fade transitions, kind icons.
 

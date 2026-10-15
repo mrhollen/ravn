@@ -732,11 +732,15 @@ export function crowbanApp() {
       opencode_model: "",
     },
     projectSettingsBusy: false,
+    showArchiveConfirm: false,
+    archiveConfirmInput: "",
     /** Focus session for the project settings modal (trap + restore). */
     projectSettingsFocus: null as DialogFocus | null,
 
     async openProjectSettings(): Promise<void> {
       if (!this.selectedProjectId) return;
+      this.showArchiveConfirm = false;
+      this.archiveConfirmInput = "";
       const p = this.projects.find((x) => x.id === this.selectedProjectId);
       if (p) {
         this.projectSettingsForm = {
@@ -767,8 +771,69 @@ export function crowbanApp() {
     /** Single close path for the settings modal (× / Cancel / backdrop / save / Esc). */
     closeProjectSettings(): void {
       this.showProjectSettings = false;
+      this.showArchiveConfirm = false;
+      this.archiveConfirmInput = "";
       this.closeDialog(this.projectSettingsFocus);
       this.projectSettingsFocus = null;
+    },
+
+    openArchiveConfirm(): void {
+      this.showArchiveConfirm = true;
+      this.archiveConfirmInput = "";
+      if (typeof window !== "undefined" && typeof document !== "undefined") {
+        this._focusWhenVisible(document.querySelector<HTMLElement>('[data-testid="archive-confirm-input"]'));
+      }
+    },
+
+    cancelArchiveConfirm(): void {
+      this.showArchiveConfirm = false;
+      this.archiveConfirmInput = "";
+      if (typeof window !== "undefined" && typeof document !== "undefined") {
+        this._focusWhenVisible(document.querySelector<HTMLElement>('[data-testid="archive-project-btn"]'));
+      }
+    },
+
+    isArchiveInputValid(): boolean {
+      const p = this.projects.find((x) => x.id === this.selectedProjectId);
+      const target = (p ? p.name : this.projectSettingsForm.name).trim();
+      return Boolean(target && this.archiveConfirmInput.trim() === target);
+    },
+
+    async archiveProject(): Promise<void> {
+      if (!this.selectedProjectId || !this.isArchiveInputValid() || this.projectSettingsBusy) return;
+      this.projectSettingsBusy = true;
+      const targetId = this.selectedProjectId;
+      try {
+        await api.updateProject(targetId, {
+          actor: this.actor(),
+          archived: true,
+        });
+        this.closeProjectSettings();
+        await this.loadProjects();
+        const stillSelected = this.projects.find((x) => x.id === this.selectedProjectId);
+        if (!stillSelected) {
+          this.selectedProjectId = this.projects[0]?.id ?? "";
+          if (this.selectedProjectId) {
+            try {
+              safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
+            } catch { /* ignore */ }
+            this.connectSse();
+            await this.loadBoard();
+          } else {
+            try {
+              safeStorage.removeItem(LS_PROJECT);
+            } catch { /* ignore */ }
+            this.disconnectSse(true);
+            this.board = null;
+            this.showNewProject = true;
+          }
+        }
+        this.toast("Project archived");
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.projectSettingsBusy = false;
+      }
     },
 
     async saveProjectSettings(): Promise<void> {
@@ -2878,7 +2943,10 @@ export function crowbanApp() {
       if (this.previewModal && this.previewModal.open) this.closeImagePreview();
       else if (this.unsavedNotesAction) this.cancelUnsavedNotes(); // Escape = "keep editing"
       else if (this.showAuthModal) this.closeAuthModal();
-      else if (this.showProjectSettings) this.closeProjectSettings();
+      else if (this.showProjectSettings) {
+        if (this.showArchiveConfirm) this.cancelArchiveConfirm();
+        else this.closeProjectSettings();
+      }
       else if (this.editingAcSeq !== 0) this.cancelEditingAc();
       else if (this.editingTask) this.cancelEditing();
       else if (this.detailOpen) this.requestCloseDetail();
