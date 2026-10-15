@@ -74,6 +74,9 @@ func doReq(t testing.TB, h http.Handler, method, path string, body any) (int, []
 	if err != nil {
 		t.Fatalf("build request %s %s: %v", method, path, err)
 	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	res := httptest.NewRecorder()
 	h.ServeHTTP(res, req)
 	return res.Code, res.Body.Bytes()
@@ -86,6 +89,7 @@ func doRaw(t *testing.T, h http.Handler, method, path, raw string) (int, []byte)
 	if err != nil {
 		t.Fatalf("build request %s %s: %v", method, path, err)
 	}
+	req.Header.Set("Content-Type", "application/json")
 	res := httptest.NewRecorder()
 	h.ServeHTTP(res, req)
 	return res.Code, res.Body.Bytes()

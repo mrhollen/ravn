@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,9 +15,50 @@ import (
 	"github.com/mrhollen/crowban/internal/domain"
 )
 
-// decodeJSON decodes the request body into v. Malformed JSON or a missing
-// body is a 400 ({"error":"invalid input"}) and the handler returns false.
+// decodeJSON decodes the request body into v. Non-empty bodies must have
+// Content-Type: application/json (or media type application/json with parameters),
+// returning 415 ({"error":"unsupported media type"}) if mismatched.
+// Malformed JSON or a missing body is a 400 ({"error":"invalid input"})
+// and the handler returns false.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	hasBody := false
+	if r.Body != nil && r.Body != http.NoBody {
+		if r.ContentLength > 0 {
+			hasBody = true
+		} else {
+			var buf [1]byte
+			n, _ := r.Body.Read(buf[:])
+			if n > 0 {
+				hasBody = true
+				r.Body = struct {
+					io.Reader
+					io.Closer
+				}{
+					Reader: io.MultiReader(bytes.NewReader(buf[:n]), r.Body),
+					Closer: r.Body,
+				}
+			}
+		}
+	}
+
+	if !hasBody {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": "malformed JSON body: unexpected EOF",
+		})
+		return false
+	}
+
+	ct := r.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil || mediaType != "application/json" {
+		writeJSONError(w, http.StatusUnsupportedMediaType, map[string]any{
+			"error":   "unsupported media type",
+			"message": "Content-Type must be application/json",
+		})
+		return false
+	}
+
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v); err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
 			"error":   "invalid input",

@@ -40,6 +40,7 @@ func patchRace(stk stack, taskID string, version int, title string) (raceOutcome
 	if err != nil {
 		return raceOutcome{}, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 	res := httptest.NewRecorder()
 	stk.Handler.ServeHTTP(res, req)
 	return raceOutcome{status: res.Code, body: res.Body.Bytes()}, nil

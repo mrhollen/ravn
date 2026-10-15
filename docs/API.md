@@ -137,6 +137,14 @@ One task may have at most one parent. Adding a *second, different* parent:
 Re-adding the *same* parent is not an error — it is the idempotent no-op
 described under relations.
 
+### 415 unsupported media type
+
+Returned when a request body is supplied with a missing or mismatched `Content-Type` header (must be `application/json`):
+
+```json
+{ "error": "unsupported media type", "message": "Content-Type must be application/json" }
+```
+
 ### 500 internal
 
 ```json

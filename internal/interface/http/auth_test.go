@@ -128,6 +128,7 @@ func TestAuthMiddleware_RejectsMissingOrInvalidToken(t *testing.T) {
 				jsonBytesReader(t, map[string]any{
 					"actor": actor("ada"), "name": "Should Not Exist",
 				}))
+			postReq.Header.Set("Content-Type", "application/json")
 			if tc.authHeader != "" {
 				postReq.Header.Set("Authorization", tc.authHeader)
 			}
@@ -179,6 +180,7 @@ func TestAuthMiddleware_AcceptsValidBearerToken(t *testing.T) {
 				jsonBytesReader(t, map[string]any{
 					"actor": actor("ada"), "name": "Valid Auth Project " + string(rune('A'+i)),
 				}))
+			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", h)
 			res := httptest.NewRecorder()
 			stk.Handler.ServeHTTP(res, req)
