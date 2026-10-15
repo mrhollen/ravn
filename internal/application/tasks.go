@@ -844,16 +844,17 @@ func (s *Tasks) Claim(ctx context.Context, actor domain.Actor, id domain.ID, ttl
 
 // Release clears actor's lease and moves the task back to todo in ONE unit of
 // work: the holder-only CAS write (TaskRepository.Release) plus one `released`
-// event. Only the CURRENT active holder may release; a foreign holder — or an
-// expired self-lease — gets *domain.ClaimConflictError{Holder, ExpiresAt} with
-// nothing mutated (chosen over domain.ErrInvalid on purpose: this is a
-// coordination collision whose body carries the live holder + expiry as the
-// recovery instruction, not malformed input). Releasing a task with NO lease at
-// all is an idempotent no-op returning the fresh row (retry-safe), emitting no
-// event and bumping nothing. The note (if any) lands in the event summary, not
-// in the task row. The durable Assignee is untouched — like claim, release
-// deals only with the ephemeral lease.
-func (s *Tasks) Release(ctx context.Context, actor domain.Actor, id domain.ID, note string) (domain.Task, error) {
+// event. The holder of an active or expired lease may release; a foreign holder
+// gets *domain.ClaimConflictError{Holder, ExpiresAt} with nothing mutated (chosen
+// over domain.ErrInvalid on purpose: this is a coordination collision whose body
+// carries the live holder + expiry as the recovery instruction, not malformed input).
+// When force is true, administrative force-release clears any lease without takeover.
+// Releasing a task with NO lease at all is an idempotent no-op returning the fresh
+// row (retry-safe), emitting no event and bumping nothing. The note (if any) lands
+// in the event summary, not in the task row. The durable Assignee is untouched —
+// like claim, release deals only with the ephemeral lease.
+func (s *Tasks) Release(ctx context.Context, actor domain.Actor, id domain.ID, note string, force ...bool) (domain.Task, error) {
+	isForce := len(force) > 0 && force[0]
 	a, err := normalizeActor(actor)
 	if err != nil {
 		return domain.Task{}, err
@@ -868,7 +869,7 @@ func (s *Tasks) Release(ctx context.Context, actor domain.Actor, id domain.ID, n
 		if gerr != nil {
 			return gerr
 		}
-		st, rerr := r.Tasks.Release(ctx, id, a, now)
+		st, rerr := r.Tasks.Release(ctx, id, a, now, isForce)
 		if rerr != nil {
 			return rerr // *domain.ClaimConflictError — propagate verbatim, no event (no mutation)
 		}
@@ -882,6 +883,9 @@ func (s *Tasks) Release(ctx context.Context, actor domain.Actor, id domain.ID, n
 		}
 		if note != "" {
 			after["note"] = note
+		}
+		if isForce {
+			after["force"] = true
 		}
 		ev := domain.Event{
 			ID:        s.idgen.NewID(),

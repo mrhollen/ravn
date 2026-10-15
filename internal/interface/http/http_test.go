@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mrhollen/crowban/internal/application"
 	"github.com/mrhollen/crowban/internal/domain"
@@ -47,6 +48,38 @@ func newStack(t testing.TB) stack {
 		Artifacts:  application.NewArtifacts(uow, now, mint),
 		Acceptance: application.NewAcceptance(uow, now, mint),
 		Relations:  application.NewRelations(uow, now, mint),
+	})
+
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, app)
+	return stack{Handler: mux, App: app}
+}
+
+type fakeClock struct {
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time { return c.now }
+
+func newStackWithClock(t testing.TB, c *fakeClock) stack {
+	t.Helper()
+	ctx := context.Background()
+	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "crowban-http-test.db"))
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { closeDB() })
+
+	uow := sqlite.NewUnitOfWork(db)
+	mint := idgen.New()
+
+	app := NewApp(Deps{
+		Projects:   application.NewProjects(uow, c, mint),
+		Tasks:      application.NewTasks(uow, c, mint),
+		Comments:   application.NewComments(uow, c, mint),
+		Artifacts:  application.NewArtifacts(uow, c, mint),
+		Acceptance: application.NewAcceptance(uow, c, mint),
+		Relations:  application.NewRelations(uow, c, mint),
 	})
 
 	mux := http.NewServeMux()
@@ -802,6 +835,101 @@ func TestClaimLifecycle(t *testing.T) {
 	})
 	if code != http.StatusNotFound {
 		t.Fatalf("claim on unknown task = %d, want 404", code)
+	}
+}
+
+func TestRelease_ExpiredLeaseAndForce_HTTP(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	fc := &fakeClock{now: base}
+	stk := newStackWithClock(t, fc)
+	p := createProject(t, stk, "Release Expired and Force")
+	task := newTask(t, stk, p.ID, "lease test task")
+
+	// 1. Agent A claims task with TTL 30s
+	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
+		"actor": actor("agent-a"), "ttl_sec": 30,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("claim A = %d, want 200 (body %s)", code, string(body))
+	}
+
+	// 2. Advance time past the 30s TTL -> lease expires
+	fc.now = base.Add(45 * time.Second)
+
+	// 3. Agent B attempts to release expired lease without force -> 409 Conflict
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/release", map[string]any{
+		"actor": actor("agent-b"), "note": "rival release",
+	})
+	if code != http.StatusConflict {
+		t.Fatalf("B release of expired lease = %d, want 409 (body %s)", code, string(body))
+	}
+	errDTO := mustDecode[errResp](t, body)
+	if errDTO.Error != "claim conflict" || errDTO.Holder == nil || errDTO.Holder.Name != "agent-a" {
+		t.Fatalf("expected conflict holding agent-a, got %+v", errDTO)
+	}
+
+	// 4. Agent A releases own expired lease without force -> 200 OK
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/release", map[string]any{
+		"actor": actor("agent-a"), "note": "finished late",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("A release of own expired lease = %d, want 200 (body %s)", code, string(body))
+	}
+	sum := mustDecode[taskSummaryDTO](t, body)
+	if sum.Status != "todo" || sum.ClaimedBy != nil {
+		t.Fatalf("task after expired release: %+v, want todo unclaimed", sum)
+	}
+
+	// 5. Agent A claims task again
+	fc.now = base.Add(60 * time.Second)
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
+		"actor": actor("agent-a"), "ttl_sec": 30,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("re-claim A = %d, want 200", code)
+	}
+
+	// 6. Admin force-releases via query parameter ?force=true -> 200 OK
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/release?force=true", map[string]any{
+		"actor": actor("admin-user"), "note": "admin break via query param",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("admin force release with ?force=true = %d, want 200 (body %s)", code, string(body))
+	}
+	sum = mustDecode[taskSummaryDTO](t, body)
+	if sum.Status != "todo" || sum.ClaimedBy != nil {
+		t.Fatalf("task after admin force release: %+v, want todo unclaimed", sum)
+	}
+
+	// 7. Agent A claims task again, and lease expires
+	fc.now = base.Add(100 * time.Second)
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
+		"actor": actor("agent-a"), "ttl_sec": 30,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("claim A = %d, want 200", code)
+	}
+	fc.now = base.Add(200 * time.Second) // expired zombie lease
+
+	// 8. Admin force-releases via body {"force": true} -> 200 OK
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/release", map[string]any{
+		"actor": actor("admin-user"), "note": "admin break via body", "force": true,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("admin force release with body force=true = %d, want 200 (body %s)", code, string(body))
+	}
+	sum = mustDecode[taskSummaryDTO](t, body)
+	if sum.Status != "todo" || sum.ClaimedBy != nil {
+		t.Fatalf("task after admin force release: %+v, want todo unclaimed", sum)
+	}
+
+	// 9. Admin force-releases on already unclaimed task -> idempotent 200 OK
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/release?force=true", map[string]any{
+		"actor": actor("admin-user"),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("admin force release on unclaimed task = %d, want 200", code)
 	}
 }
 
