@@ -40,3 +40,15 @@ func CollectTaskMetrics(ctx context.Context, db *sql.DB, now time.Time) (map[str
 
 	return byStatus, activeClaims, nil
 }
+
+// CollectTaskMetricsPool delegates to CollectTaskMetrics using the pool's reader connection.
+func CollectTaskMetricsPool(ctx context.Context, pool *DBPool, now time.Time) (map[string]int64, int64, error) {
+	if pool == nil {
+		return nil, 0, fmt.Errorf("database pool is nil")
+	}
+	db := pool.Reader
+	if db == nil {
+		db = pool.Writer
+	}
+	return CollectTaskMetrics(ctx, db, now)
+}

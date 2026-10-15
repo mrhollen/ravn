@@ -3,10 +3,13 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func openTestDB(t *testing.T) *sql.DB {
@@ -215,5 +218,99 @@ func TestHealthReportsErrorForClosedDB(t *testing.T) {
 	got := Health(ctx, db)
 	if !strings.HasPrefix(got, "error:") {
 		t.Errorf("Health on closed db = %q, want it to start with error:", got)
+	}
+}
+
+func TestOpenPool_HealthAndMetricsConcurrentlyDuringActiveWriteTx(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	pool, closePool, err := OpenPool(ctx, filepath.Join(t.TempDir(), "dual-pool-test.db"))
+	if err != nil {
+		t.Fatalf("OpenPool: %v", err)
+	}
+	t.Cleanup(func() { closePool() })
+
+	// Insert an initial project so tasks can be created
+	_, err = pool.Writer.ExecContext(ctx, `INSERT INTO project (id, name, created_at, updated_at) VALUES ('01M00000000000000000000001', 'Test Project', '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z')`)
+	if err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+
+	// 1. Begin a write transaction on Writer pool and hold it open
+	tx, err := pool.Writer.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin write tx: %v", err)
+	}
+	defer tx.Rollback()
+
+	// Perform a write inside the transaction without committing
+	_, err = tx.ExecContext(ctx, `INSERT INTO task (id, project_id, status, title, created_at, updated_at) VALUES ('01M00000000000000000000002', '01M00000000000000000000001', 'doing', 'In Flight Task', '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z')`)
+	if err != nil {
+		t.Fatalf("insert task in tx: %v", err)
+	}
+
+	// 2. Demonstrate that the Writer pool connection is fully saturated by tx:
+	// A new query against Writer with a short timeout must fail because SetMaxOpenConns(1)
+	// has 0 available connections.
+	timeoutCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	var dummy int
+	err = pool.Writer.QueryRowContext(timeoutCtx, "SELECT 1").Scan(&dummy)
+	if err == nil {
+		t.Fatalf("expected query on busy writer pool to timeout, but it succeeded")
+	}
+
+	// 3. Concurrently, Reader pool queries (health check and metrics) MUST succeed immediately!
+	const concurrency = 10
+	var wg sync.WaitGroup
+	errCh := make(chan error, concurrency*2)
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			hCtx, hCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			defer hCancel()
+			if status := HealthPool(hCtx, pool); status != "ok" {
+				errCh <- fmt.Errorf("HealthPool = %q, want 'ok'", status)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			mCtx, mCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			defer mCancel()
+			stats, claims, err := CollectTaskMetricsPool(mCtx, pool, time.Now())
+			if err != nil {
+				errCh <- fmt.Errorf("CollectTaskMetricsPool: %w", err)
+				return
+			}
+			// Snapshot isolation: reader should not see the uncommitted 'doing' task yet
+			if stats["doing"] != 0 {
+				errCh <- fmt.Errorf("expected 0 doing tasks (snapshot isolation), got %d", stats["doing"])
+			}
+			if claims != 0 {
+				errCh <- fmt.Errorf("expected 0 active claims, got %d", claims)
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("concurrent reader error while writer tx was active: %v", err)
+	}
+
+	// 4. Commit the write transaction and verify reader now sees it
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	stats, _, err := CollectTaskMetricsPool(ctx, pool, time.Now())
+	if err != nil {
+		t.Fatalf("CollectTaskMetricsPool after commit: %v", err)
+	}
+	if stats["doing"] != 1 {
+		t.Errorf("expected 1 doing task after commit, got %d", stats["doing"])
 	}
 }
