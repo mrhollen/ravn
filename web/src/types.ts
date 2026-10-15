@@ -259,6 +259,8 @@ export interface UpdateTaskReq {
   assignee?: ActorInput; // durable ownership…
   clear_assignee?: boolean; // …or clear it
   archived?: boolean;
+  override_blockers?: boolean;
+  override_acs?: boolean;
 }
 
 export interface NotesReq {

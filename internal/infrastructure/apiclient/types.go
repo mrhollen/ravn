@@ -235,15 +235,17 @@ type UpdateTaskRequest struct {
 	Actor   Actor `json:"actor"`
 	Version int   `json:"version"` // required
 
-	Title         *string `json:"title,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	Status        *string `json:"status,omitempty"`    // validated against the transition map
-	Priority      *int    `json:"priority,omitempty"`  // 0-5
-	DueAt         *string `json:"due_at,omitempty"`    // RFC3339 to set…
-	ClearDue      bool    `json:"clear_due,omitempty"` // …or clear the deadline
-	Assignee      *Actor  `json:"assignee,omitempty"`  // durable ownership; or
-	ClearAssignee bool    `json:"clear_assignee,omitempty"`
-	Archived      *bool   `json:"archived,omitempty"`
+	Title            *string `json:"title,omitempty"`
+	Description      *string `json:"description,omitempty"`
+	Status           *string `json:"status,omitempty"`    // validated against the transition map
+	Priority         *int    `json:"priority,omitempty"`  // 0-5
+	DueAt            *string `json:"due_at,omitempty"`    // RFC3339 to set…
+	ClearDue         bool    `json:"clear_due,omitempty"` // …or clear the deadline
+	Assignee         *Actor  `json:"assignee,omitempty"`  // durable ownership; or
+	ClearAssignee    bool    `json:"clear_assignee,omitempty"`
+	Archived         *bool   `json:"archived,omitempty"`
+	OverrideBlockers bool    `json:"override_blockers,omitempty"`
+	OverrideACs      bool    `json:"override_acs,omitempty"`
 }
 
 // ClaimTaskRequest is POST /tasks/{id}/claim. TTLSec is optional: 0 means

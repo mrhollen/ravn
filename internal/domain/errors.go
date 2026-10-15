@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -49,13 +50,13 @@ func (e *ClaimConflictError) Error() string {
 		e.Holder.Type, e.Holder.Name, e.ExpiresAt.UTC().Format(time.RFC3339))
 }
 
-// TaskBlockedError is returned when a claim is refused because the task has
-// OPEN blockers — outgoing blocked-by edges whose targets are not done and not
-// archived (the exact predicate List's UnblockedOnly guard encodes). Renewals
-// by the current active lease holder are exempt: the gate only guards fresh
-// starts. BlockerIDs carries the open blocker IDs in edge-creation order; it
-// is the machine-readable "why" that travels with the error. The REST adapter
-// maps it to 409 with error="task blocked" plus the blocker list.
+// TaskBlockedError is returned when a claim or a transition to StatusDone is
+// refused because the task has OPEN blockers — outgoing blocked-by edges whose
+// targets are not done and not archived (the exact predicate List's UnblockedOnly
+// guard encodes). Renewals by the current active lease holder are exempt: the
+// claim gate only guards fresh starts. BlockerIDs carries the open blocker IDs in
+// edge-creation order; it is the machine-readable "why" that travels with the
+// error. The REST adapter maps it to 409 with error="task blocked" plus the blocker list.
 type TaskBlockedError struct {
 	TaskID     ID
 	BlockerIDs []ID
@@ -68,6 +69,23 @@ func (e *TaskBlockedError) Error() string {
 	}
 	return fmt.Sprintf("task %s is blocked by open blocker(s): %s",
 		e.TaskID, strings.Join(ids, ", "))
+}
+
+// TaskUnsatisfiedACsError is returned when a transition to StatusDone is refused
+// because the task has unsatisfied acceptance criteria (and override_acs is false).
+// UnmetSeqs carries the 1-based sequence numbers of the incomplete criteria.
+type TaskUnsatisfiedACsError struct {
+	TaskID    ID
+	UnmetSeqs []int
+}
+
+func (e *TaskUnsatisfiedACsError) Error() string {
+	seqStrs := make([]string, len(e.UnmetSeqs))
+	for i, s := range e.UnmetSeqs {
+		seqStrs[i] = strconv.Itoa(s)
+	}
+	return fmt.Sprintf("task %s has %d unsatisfied acceptance criteria (seq %s)",
+		e.TaskID, len(e.UnmetSeqs), strings.Join(seqStrs, ", "))
 }
 
 // ErrParentConflict is the ≤1-parent rule (ARCHITECTURE §5: "one-parent rule",

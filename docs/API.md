@@ -470,12 +470,19 @@ All other fields optional (omitted = unchanged):
   "due_at": "2026-10-02T00:00:00Z",   // RFC3339 to set…
   "clear_due": true,           // …or clear the deadline
   "assignee": { "type": "human", "name": "ada" },  // durable ownership; or "clear_assignee": true
-  "archived": false
+  "archived": false,
+  "override_blockers": false,  // true bypasses unresolved blocker gate when moving to done
+  "override_acs": false        // true bypasses unsatisfied acceptance criteria gate when moving to done
 }
 ```
 
 `200` with the fresh summary row (version incremented). Status changes emit
 events; this is the only field that touches `completed_at`.
+
+Transitioning to `status: "done"` validates that:
+1. The task has no open blockers (`blocked-by` targets that are not done and not archived). If open blockers exist and `override_blockers` is false, returns `409` (`{"error": "task blocked", "blockers": [...]}`).
+2. All acceptance criteria on the task are satisfied (`done: true`). If unsatisfied criteria exist and `override_acs` is false, returns `409` (`{"error": "unsatisfied_acceptance_criteria", "unmet_acs": [...]}`).
+
 
 ### POST /tasks/{id}/claim → `claim_task`
 

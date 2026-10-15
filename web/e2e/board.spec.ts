@@ -1564,5 +1564,122 @@ test.describe('Web E2E test suite', () => {
     await expect(bootError).not.toBeVisible();
     await expect(page.getByTestId('board-error')).not.toBeVisible();
   });
+
+  test('validates open blockers and acceptance criteria before transitioning to done', async ({ page }) => {
+    // Step 1: Create project with a blocker and a dependent task that has ACs
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Done Gate Verification',
+        description: 'Verifies blocked and AC completion invariant',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    const blockerRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Prerequisite Blocker',
+        priority: 3,
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(blockerRes.ok).toBe(true);
+    const blocker = (await blockerRes.json()).task;
+
+    const taskRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Guarded Work Task',
+        priority: 2,
+        acceptance_criteria: ['Must be tested in browser', 'Docs updated'],
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(taskRes.ok).toBe(true);
+    const task = (await taskRes.json()).task;
+
+    // Relate: task is blocked-by blocker
+    const relRes = await fetch(`${serverUrl}/api/v1/tasks/${task.id}/relations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        other_id: blocker.id,
+        kind: 'blocked-by',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(relRes.ok).toBe(true);
+
+    // Step 2: Open project on board
+    await page.addInitScript((id: string) => { localStorage.setItem('crowban.project', id); }, project.id);
+    await page.goto(serverUrl);
+    await expectProjectSelected(page, 'Done Gate Verification');
+
+    const card = page.locator('article', { hasText: 'Guarded Work Task' });
+    await expect(card).toBeVisible();
+
+    // Step 3: Open drawer and move to Doing
+    await card.click();
+    const drawer = page.locator('#cb-detail-drawer');
+    await expect(drawer).toBeVisible();
+
+    const statusGroup = page.getByRole('group', { name: 'Status' });
+    const doingBtn = statusGroup.getByRole('button', { name: 'Doing' });
+    await doingBtn.click();
+    await expect(doingBtn).toHaveAttribute('aria-pressed', 'true');
+
+    // Step 4: Attempt to move to Done while blocked -> rejected with blocker error toast
+    const doneBtn = statusGroup.getByRole('button', { name: 'Done' });
+    await doneBtn.click();
+
+    // Toast error appears explaining unresolved blockers
+    const toast = page.getByTestId('toast-stack');
+    await expect(toast).toContainText('blocked by 1 unresolved blocker(s)');
+    // Status must remain Doing
+    await expect(doingBtn).toHaveAttribute('aria-pressed', 'true');
+    await expect(doneBtn).toHaveAttribute('aria-pressed', 'false');
+
+    // Step 5: Resolve blocker via API (move blocker to doing then done)
+    const moveB1 = await fetch(`${serverUrl}/api/v1/tasks/${blocker.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: blocker.version, status: 'doing', actor: { name: 'e2e', type: 'agent' } }),
+    });
+    expect(moveB1.ok).toBe(true);
+    const bDoing = await moveB1.json();
+    const moveB2 = await fetch(`${serverUrl}/api/v1/tasks/${blocker.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: bDoing.version, status: 'done', actor: { name: 'e2e', type: 'agent' } }),
+    });
+    expect(moveB2.ok).toBe(true);
+
+    // Step 6: Attempt to move to Done while ACs are incomplete -> rejected with unsatisfied ACs error toast
+    await doneBtn.click();
+    await expect(toast).toContainText('unsatisfied acceptance criteria');
+    await expect(doingBtn).toHaveAttribute('aria-pressed', 'true');
+    await expect(doneBtn).toHaveAttribute('aria-pressed', 'false');
+
+    // Step 7: Complete all acceptance criteria via UI checkboxes
+    const ac1Box = drawer.locator('li', { hasText: 'Must be tested in browser' }).locator('input[type="checkbox"]');
+    const ac2Box = drawer.locator('li', { hasText: 'Docs updated' }).locator('input[type="checkbox"]');
+    await ac1Box.click();
+    await expect(ac1Box).toBeChecked();
+    await ac2Box.click();
+    await expect(ac2Box).toBeChecked();
+
+    // Step 8: Move to Done now that blockers are resolved and ACs are checked -> succeeds!
+    await doneBtn.click();
+    await expect(doneBtn).toHaveAttribute('aria-pressed', 'true');
+    await expect(doingBtn).toHaveAttribute('aria-pressed', 'false');
+  });
 });
 

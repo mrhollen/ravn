@@ -404,15 +404,17 @@ type updateTaskReq struct {
 	Actor   actorInput `json:"actor"`
 	Version int        `json:"version"` // required; 0 = missing → 400 (tasks start at v1)
 
-	Title         *string     `json:"title"`
-	Description   *string     `json:"description"`
-	Status        *string     `json:"status"`
-	Priority      *int        `json:"priority"`
-	DueAt         *string     `json:"due_at"`
-	ClearDue      bool        `json:"clear_due"`
-	Assignee      *actorInput `json:"assignee"`
-	ClearAssignee bool        `json:"clear_assignee"`
-	Archived      *bool       `json:"archived"`
+	Title            *string     `json:"title"`
+	Description      *string     `json:"description"`
+	Status           *string     `json:"status"`
+	Priority         *int        `json:"priority"`
+	DueAt            *string     `json:"due_at"`
+	ClearDue         bool        `json:"clear_due"`
+	Assignee         *actorInput `json:"assignee"`
+	ClearAssignee    bool        `json:"clear_assignee"`
+	Archived         *bool       `json:"archived"`
+	OverrideBlockers bool        `json:"override_blockers"`
+	OverrideACs      bool        `json:"override_acs"`
 }
 
 // --- slice 3b request bodies ------------------------------------------------------

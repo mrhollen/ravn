@@ -112,6 +112,11 @@ type TaskUpdateInput struct {
 
 	Archived *bool // archive (true) or unarchive (false)
 
+	// OverrideBlockers bypasses the open-blocker gate when transitioning to StatusDone.
+	OverrideBlockers bool
+	// OverrideACs bypasses the unsatisfied acceptance criteria gate when transitioning to StatusDone.
+	OverrideACs bool
+
 	// ExpectedVersion is the stored version the caller last read. >0 enables
 	// the optimistic-concurrency guard: INSIDE the write transaction, if the
 	// row's current version differs, a *domain.ConflictError carrying the fresh
@@ -315,6 +320,40 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 		if statusChanged {
 			if !domain.CanTransition(cur.Status, *in.Status) {
 				return fmt.Errorf("%w: cannot transition status from %q to %q", domain.ErrInvalid, cur.Status, *in.Status)
+			}
+
+			if *in.Status == domain.StatusDone {
+				// Blocker gate: cannot complete a task with open blockers unless overridden
+				if !in.OverrideBlockers && r.Tasks != nil {
+					blks, berr := r.Tasks.BlockersOf(ctx, id)
+					if berr != nil {
+						return berr
+					}
+					if len(blks) > 0 {
+						ids := make([]domain.ID, 0, len(blks))
+						for _, b := range blks {
+							ids = append(ids, b.ID)
+						}
+						return &domain.TaskBlockedError{TaskID: id, BlockerIDs: ids}
+					}
+				}
+
+				// Acceptance criteria gate: cannot complete a task with incomplete criteria unless overridden
+				if !in.OverrideACs && r.ACs != nil {
+					acs, aerr := r.ACs.ListByTask(ctx, id)
+					if aerr != nil {
+						return aerr
+					}
+					var unmet []int
+					for _, ac := range acs {
+						if !ac.Done {
+							unmet = append(unmet, ac.Seq)
+						}
+					}
+					if len(unmet) > 0 {
+						return &domain.TaskUnsatisfiedACsError{TaskID: id, UnmetSeqs: unmet}
+					}
+				}
 			}
 
 			if (cur.Status == domain.StatusDoing && *in.Status != domain.StatusDoing) || *in.Status == domain.StatusDone {

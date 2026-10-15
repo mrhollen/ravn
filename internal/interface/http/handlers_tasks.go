@@ -178,9 +178,11 @@ func (a *App) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	in := application.TaskUpdateInput{
 		// The caller's last-read version — validated authoritatively INSIDE the
 		// use case's write transaction (the pre-check above is a fast-fail only).
-		ExpectedVersion: req.Version,
-		ClearDue:        req.ClearDue,
-		ClearAssignee:   req.ClearAssignee,
+		ExpectedVersion:  req.Version,
+		ClearDue:         req.ClearDue,
+		ClearAssignee:    req.ClearAssignee,
+		OverrideBlockers: req.OverrideBlockers,
+		OverrideACs:      req.OverrideACs,
 	}
 	if req.Title != nil {
 		in.Title = req.Title
