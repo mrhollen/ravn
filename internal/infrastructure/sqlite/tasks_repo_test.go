@@ -246,3 +246,134 @@ func TestRelease_DoneTask_PreservesDoneStatusOnSQLite(t *testing.T) {
 		t.Errorf("holder after release = %+v, want nil", released.ClaimedBy)
 	}
 }
+
+func TestRelease_ExpiredLease_OriginalHolderSucceeds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openTestDB(t)
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	tc := &testClock{now: base}
+	tasks, projects := newClaimUseCase(t, db, tc)
+	p := mustCreateProject(t, ctx, projects)
+	agentA := domain.Actor{Type: domain.ActorAgent, Name: "agent-a"}
+
+	task, err := tasks.Create(ctx, agentA, application.TaskInput{Title: "Expired release", ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := tasks.Claim(ctx, agentA, task.ID, 30, false); err != nil {
+		t.Fatalf("claim A: %v", err)
+	}
+
+	// Advance time past the 30s TTL
+	tc.now = base.Add(45 * time.Second)
+
+	// Original holder releases expired lease — must succeed
+	released, err := tasks.Release(ctx, agentA, task.ID, "done after lease expired")
+	if err != nil {
+		t.Fatalf("Release by original holder of expired lease failed: %v", err)
+	}
+	if released.Status != domain.StatusTodo {
+		t.Errorf("status = %q, want todo", released.Status)
+	}
+	if released.ClaimedBy != nil {
+		t.Errorf("holder after release = %+v, want nil", released.ClaimedBy)
+	}
+	if released.Version != 3 {
+		t.Errorf("version after release = %d, want 3", released.Version)
+	}
+}
+
+func TestRelease_ExpiredLease_RivalFailsWithConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openTestDB(t)
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	tc := &testClock{now: base}
+	tasks, projects := newClaimUseCase(t, db, tc)
+	p := mustCreateProject(t, ctx, projects)
+	agentA := domain.Actor{Type: domain.ActorAgent, Name: "agent-a"}
+	agentB := domain.Actor{Type: domain.ActorAgent, Name: "agent-b"}
+
+	task, err := tasks.Create(ctx, agentA, application.TaskInput{Title: "Expired rival release", ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := tasks.Claim(ctx, agentA, task.ID, 30, false); err != nil {
+		t.Fatalf("claim A: %v", err)
+	}
+
+	// Advance time past the 30s TTL
+	tc.now = base.Add(45 * time.Second)
+
+	// Rival tries to release expired lease — must fail with ClaimConflictError
+	_, err = tasks.Release(ctx, agentB, task.ID, "rival release")
+	if err == nil {
+		t.Fatalf("expected ClaimConflictError when rival releases expired lease, got nil")
+	}
+	if !isClaimConflict(err) {
+		t.Fatalf("expected isClaimConflict(err) == true, got %v", err)
+	}
+
+	var cc *domain.ClaimConflictError
+	if errors.As(err, &cc) {
+		if cc.Holder.Name != agentA.Name {
+			t.Errorf("conflict holder = %q, want %q", cc.Holder.Name, agentA.Name)
+		}
+	} else {
+		t.Fatalf("err is not *domain.ClaimConflictError")
+	}
+
+	// Stored row is untouched
+	stored, err := tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Status != domain.StatusDoing || stored.ClaimedBy == nil || stored.ClaimedBy.Name != agentA.Name {
+		t.Errorf("stored task mutated by failed release: %+v", stored)
+	}
+}
+
+func TestRelease_Force_ClearsLeaseForAnyActor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openTestDB(t)
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	tc := &testClock{now: base}
+	tasks, projects := newClaimUseCase(t, db, tc)
+	p := mustCreateProject(t, ctx, projects)
+	agentA := domain.Actor{Type: domain.ActorAgent, Name: "agent-a"}
+	admin := domain.Actor{Type: domain.ActorHuman, Name: "admin-operator"}
+
+	task, err := tasks.Create(ctx, agentA, application.TaskInput{Title: "Force release test", ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := tasks.Claim(ctx, agentA, task.ID, 30, false); err != nil {
+		t.Fatalf("claim A: %v", err)
+	}
+
+	// Advance time past expiry
+	tc.now = base.Add(45 * time.Second)
+
+	// Admin force releases zombie lease
+	released, err := tasks.Release(ctx, admin, task.ID, "clearing zombie", true)
+	if err != nil {
+		t.Fatalf("force release failed: %v", err)
+	}
+	if released.Status != domain.StatusTodo || released.ClaimedBy != nil {
+		t.Errorf("released task status %q, holder %+v, want todo and nil", released.Status, released.ClaimedBy)
+	}
+	if released.Version != 3 {
+		t.Errorf("version = %d, want 3", released.Version)
+	}
+
+	// Repeated force release on now-unclaimed task is an idempotent no-op
+	noop, err := tasks.Release(ctx, admin, task.ID, "repeat force", true)
+	if err != nil {
+		t.Fatalf("idempotent force release failed: %v", err)
+	}
+	if noop.Version != 3 || noop.ClaimedBy != nil {
+		t.Errorf("idempotent force release mutated row: %+v", noop)
+	}
+}

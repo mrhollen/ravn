@@ -336,6 +336,113 @@ func TestTasksRelease_UnclaimedTaskIsIdempotentNoOp(t *testing.T) {
 	}
 }
 
+func TestTasksRelease_ExpiredLease_OriginalHolderSucceedsAndRivalFails(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := mustCreateTask(t, svc, "Expired Lease Release", 1, nil)
+
+	held, err := svc.Claim(ctx, claimAgent, task.ID, 600, false) // v2 doing
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	// Advance time past the 600s TTL
+	fc.SetNow(fc.now.Add(700 * time.Second))
+
+	// Rival tries to release expired lease -> ClaimConflictError
+	eventsBefore := len(uow.events.events)
+	rival := domain.Actor{Type: domain.ActorAgent, Name: "rival-agent"}
+	_, err = svc.Release(ctx, rival, task.ID, "rival trying to release expired")
+	if err == nil {
+		t.Fatalf("expected ClaimConflictError for rival release of expired lease, got nil")
+	}
+	cc := asClaimConflict(t, err)
+	if cc.Holder.Name != claimAgent.Name || !cc.ExpiresAt.Equal(*held.ClaimExpiry) {
+		t.Errorf("rival conflict = %+v, want holder %s expiry %s", cc, claimAgent.Name, held.ClaimExpiry)
+	}
+	if len(uow.events.events) != eventsBefore {
+		t.Errorf("failed rival release appended event")
+	}
+
+	// Original holder releases expired lease -> succeeds
+	released, err := svc.Release(ctx, claimAgent, task.ID, "finishing late")
+	if err != nil {
+		t.Fatalf("release by holder of expired lease: %v", err)
+	}
+	if released.Status != domain.StatusTodo {
+		t.Errorf("status = %q, want todo", released.Status)
+	}
+	if released.Version != 3 {
+		t.Errorf("version = %d, want 3", released.Version)
+	}
+	if released.ClaimedBy != nil || released.ClaimExpiry != nil {
+		t.Errorf("lease not cleared: %+v", released)
+	}
+
+	evs := leaseEvents(uow)
+	if len(evs) != 2 { // claimed + released
+		t.Fatalf("lease events = %d, want 2", len(evs))
+	}
+	rv := evs[1]
+	if rv.Kind != domain.EventReleased || rv.Actor != claimAgent {
+		t.Fatalf("event = (kind %q actor %+v), want released by claimAgent", rv.Kind, rv.Actor)
+	}
+}
+
+func TestTasksRelease_ForceRelease_ByOperator(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := mustCreateTask(t, svc, "Force Release Test", 1, nil)
+
+	_, err := svc.Claim(ctx, claimAgent, task.ID, 600, false) // v2 doing
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	// Advance time past the 600s TTL (zombie lease)
+	fc.SetNow(fc.now.Add(700 * time.Second))
+
+	operator := domain.Actor{Type: domain.ActorHuman, Name: "operator-admin"}
+	released, err := svc.Release(ctx, operator, task.ID, "breaking zombie lease", true)
+	if err != nil {
+		t.Fatalf("force release: %v", err)
+	}
+	if released.Status != domain.StatusTodo {
+		t.Errorf("status = %q, want todo", released.Status)
+	}
+	if released.Version != 3 {
+		t.Errorf("version = %d, want 3", released.Version)
+	}
+	if released.ClaimedBy != nil {
+		t.Errorf("lease not cleared: %+v", released)
+	}
+
+	evs := leaseEvents(uow)
+	if len(evs) != 2 { // claimed + released
+		t.Fatalf("lease events = %d, want 2", len(evs))
+	}
+	rv := evs[1]
+	if rv.Kind != domain.EventReleased || rv.Actor != operator {
+		t.Fatalf("event = (kind %q actor %+v), want released by operator", rv.Kind, rv.Actor)
+	}
+	if !strings.Contains(rv.After, `"force":true`) {
+		t.Errorf("After %q missing \"force\":true", rv.After)
+	}
+
+	// Repeated force release on unclaimed task is idempotent no-op
+	eventsBefore := len(uow.events.events)
+	noop, err := svc.Release(ctx, operator, task.ID, "repeat", true)
+	if err != nil {
+		t.Fatalf("noop force release: %v", err)
+	}
+	if noop.Version != 3 || noop.ClaimedBy != nil {
+		t.Errorf("noop force release mutated row: %+v", noop)
+	}
+	if len(uow.events.events) != eventsBefore {
+		t.Errorf("noop force release appended an event")
+	}
+}
+
 func TestTasksHeartbeat_ExtendsActiveLeaseWithoutVersionOrEvent(t *testing.T) {
 	ctx := context.Background()
 	svc, fc, uow := newTaskTestEnv(t)

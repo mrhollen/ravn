@@ -297,11 +297,13 @@ func (f *fakeTasks) Claim(_ context.Context, id domain.ID, actor domain.Actor, t
 }
 
 // Release mirrors the adapter's holder-only CAS in memory: it clears the lease
-// and moves status→todo (bumping version) ONLY when actor holds an ACTIVE
-// lease; a foreign or expired holder gets *domain.ClaimConflictError{Holder,
-// ExpiresAt}. A task with no lease at all is an idempotent no-op returning the
+// Release mirrors sqlite's guarded release: it clears lease fields
+// and moves status→todo (bumping version) for the lease holder (active or
+// expired). A foreign holder gets *domain.ClaimConflictError{Holder, ExpiresAt}.
+// When force is true, any lease is cleared regardless of holder.
+// A task with no lease at all is an idempotent no-op returning the
 // current row (mirrors the SQL's 0-rows → empty-holder branch).
-func (f *fakeTasks) Release(_ context.Context, id domain.ID, actor domain.Actor, now time.Time) (domain.Task, error) {
+func (f *fakeTasks) Release(_ context.Context, id domain.ID, actor domain.Actor, now time.Time, force bool) (domain.Task, error) {
 	cur, ok := f.byID[id]
 	if !ok {
 		return domain.Task{}, domain.ErrNotFound
@@ -309,8 +311,7 @@ func (f *fakeTasks) Release(_ context.Context, id domain.ID, actor domain.Actor,
 	if cur.ClaimedBy == nil || cur.ClaimExpiry == nil {
 		return cur, nil // nothing to release: idempotent no-op, row untouched
 	}
-	active := !cur.ClaimExpiry.Before(now)
-	if !active || !sameLeaseHolder(&cur, actor) {
+	if !force && !sameLeaseHolder(&cur, actor) {
 		return domain.Task{}, &domain.ClaimConflictError{Holder: *cur.ClaimedBy, ExpiresAt: *cur.ClaimExpiry}
 	}
 	start := now

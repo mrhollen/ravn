@@ -258,10 +258,12 @@ type ClaimTaskRequest struct {
 }
 
 // ReleaseTaskRequest is POST /tasks/{id}/release. Note is optional and rides on
-// the released event (it is NOT posted as a comment).
+// the released event (it is NOT posted as a comment). Force enables administrative
+// force-release.
 type ReleaseTaskRequest struct {
 	Actor Actor  `json:"actor"`
 	Note  string `json:"note,omitempty"`
+	Force bool   `json:"force,omitempty"`
 }
 
 // HeartbeatRequest is POST /tasks/{id}/heartbeat — actor only; the stored TTL

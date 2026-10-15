@@ -189,11 +189,12 @@ type TaskRepository interface {
 	Claim(ctx context.Context, taskID domain.ID, actor domain.Actor, ttlSec int, now time.Time) (domain.Task, error)
 
 	// Release clears the lease and moves the task back to todo, bumping
-	// Version. Holder-only with an ACTIVE lease; a foreign or expired holder
+	// Version. Holder-only against an active or expired lease; a foreign holder
 	// gets *domain.ClaimConflictError{Holder, ExpiresAt} with nothing mutated.
-	// A task with no lease at all is an idempotent no-op returning the fresh
-	// row (retry-safe). The durable Assignee is never touched.
-	Release(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time) (domain.Task, error)
+	// When force is true, an administrative release clears any lease regardless
+	// of holder. A task with no lease at all is an idempotent no-op returning
+	// the fresh row (retry-safe). The durable Assignee is never touched.
+	Release(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time, force bool) (domain.Task, error)
 
 	// Heartbeat extends claim_expires_at by the stored claim TTL as of now.
 	// Holder-only with an ACTIVE lease; a foreign or expired holder — or no

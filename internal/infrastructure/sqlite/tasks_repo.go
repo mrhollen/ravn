@@ -251,22 +251,37 @@ func (r *taskRepo) Claim(ctx context.Context, taskID domain.ID, actor domain.Act
 	return t, nil // the RETURNING row IS the stored result of the CAS
 }
 
-// Release clears the lease and moves status back to todo (or preserves done), bumping version. The
-// WHERE enforces holder-only release against an ACTIVE lease (name key +
-// claim_expires_at >= now); a foreign holder or an EXPIRED self-lease loses with
-// *domain.ClaimConflictError{Holder, ExpiresAt} and nothing is mutated. A task
-// with no lease at all is an idempotent no-op returning the fresh row (retry-
+// Release clears the lease and moves status back to todo (or preserves done), bumping version.
+// The WHERE enforces holder-only release against an active or expired lease (name key);
+// a foreign holder loses with *domain.ClaimConflictError{Holder, ExpiresAt} and nothing is mutated.
+// When force is true, an administrative release clears any lease without requiring the holder key.
+// A task with no lease at all is an idempotent no-op returning the fresh row (retry-
 // safe: re-releasing after a success must not error). The durable assignee
 // columns are never touched.
-func (r *taskRepo) Release(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time) (domain.Task, error) {
-	res, err := r.q.ExecContext(ctx, `
-		UPDATE task SET
-			claimed_by_type = NULL, claimed_by_name = NULL,
-			claimed_at = NULL, claim_expires_at = NULL, claim_ttl_sec = NULL,
-			status = CASE WHEN status = 'done' THEN 'done' ELSE 'todo' END,
-			version = version + 1, updated_at = ?
-		WHERE id = ? AND claimed_by_name = ? AND claim_expires_at >= ?`,
-		formatTS(now), string(taskID), actor.Name, formatTS(now))
+func (r *taskRepo) Release(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time, force bool) (domain.Task, error) {
+	var (
+		res sql.Result
+		err error
+	)
+	if force {
+		res, err = r.q.ExecContext(ctx, `
+			UPDATE task SET
+				claimed_by_type = NULL, claimed_by_name = NULL,
+				claimed_at = NULL, claim_expires_at = NULL, claim_ttl_sec = NULL,
+				status = CASE WHEN status = 'done' THEN 'done' ELSE 'todo' END,
+				version = version + 1, updated_at = ?
+			WHERE id = ? AND claimed_by_name IS NOT NULL`,
+			formatTS(now), string(taskID))
+	} else {
+		res, err = r.q.ExecContext(ctx, `
+			UPDATE task SET
+				claimed_by_type = NULL, claimed_by_name = NULL,
+				claimed_at = NULL, claim_expires_at = NULL, claim_ttl_sec = NULL,
+				status = CASE WHEN status = 'done' THEN 'done' ELSE 'todo' END,
+				version = version + 1, updated_at = ?
+			WHERE id = ? AND claimed_by_name = ?`,
+			formatTS(now), string(taskID), actor.Name)
+	}
 	if err != nil {
 		return domain.Task{}, fmt.Errorf("release task %s: %w", taskID, err)
 	}

@@ -433,10 +433,12 @@ type claimReq struct {
 }
 
 // releaseReq is POST /tasks/{id}/release. The optional note rides on the
-// released event payload (it does NOT become a comment).
+// released event payload (it does NOT become a comment). Force optionally enables
+// administrative force-release to break zombie or foreign leases.
 type releaseReq struct {
 	Actor actorInput `json:"actor"`
 	Note  string     `json:"note"`
+	Force bool       `json:"force"`
 }
 
 // heartbeatReq is POST /tasks/{id}/heartbeat — keep-alive; the actor alone.

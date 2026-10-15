@@ -66,10 +66,11 @@ func (a *App) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleReleaseTask → POST /api/v1/tasks/{id}/release. Holder-only against an
-// ACTIVE lease — a foreign or expired holder gets 409 with the real holder's
+// active or expired lease — a foreign holder gets 409 with the real holder's
 // identity and expiry; releasing a task with no lease at all is an idempotent
-// no-op (retry-safe). Success clears the lease, moves status→todo, bumps the
-// version and appends a released event carrying the optional note.
+// no-op (retry-safe). An administrative force-release (?force=true or force: true in body)
+// clears any lease without takeover. Success clears the lease, moves status→todo,
+// bumps the version and appends a released event carrying the optional note.
 func (a *App) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := pathID(w, r)
@@ -77,15 +78,44 @@ func (a *App) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req releaseReq
-	if !decodeJSON(w, r, &req) {
-		return
+	if r.Body != nil {
+		rawBody, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, map[string]any{
+				"error":   "invalid input",
+				"message": "unreadable request body: " + err.Error(),
+			})
+			return
+		}
+		if len(strings.TrimSpace(string(rawBody))) > 0 {
+			if err := json.Unmarshal(rawBody, &req); err != nil {
+				writeJSONError(w, http.StatusBadRequest, map[string]any{
+					"error":   "invalid input",
+					"message": "malformed JSON body: " + err.Error(),
+				})
+				return
+			}
+		}
 	}
-	actor, err := req.Actor.toDomain()
-	if err != nil {
-		writeAppError(w, err, "task", id)
-		return
+	actorIn, hasActor := extractActor(r, req.Actor)
+	var actor domain.Actor
+	if hasActor {
+		var err error
+		actor, err = actorIn.toDomain()
+		if err != nil {
+			writeAppError(w, err, "task", id)
+			return
+		}
+	} else {
+		var err error
+		actor, err = req.Actor.toDomain()
+		if err != nil {
+			writeAppError(w, err, "task", id)
+			return
+		}
 	}
-	fresh, err := a.Tasks.Release(ctx, actor, id, req.Note)
+	force := req.Force || parseBoolFlag(r.URL.Query(), "force")
+	fresh, err := a.Tasks.Release(ctx, actor, id, req.Note, force)
 	if err != nil {
 		writeAppError(w, err, "task", id) // ClaimConflictError → 409 holder+expiry
 		return
