@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,18 @@ func newTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { closeDB() })
 	return db
+}
+
+// newTestDBPool opens a temp-file SQLite database with dual writer/reader pools.
+func newTestDBPool(t *testing.T) *sqlite.DBPool {
+	t.Helper()
+	ctx := context.Background()
+	pool, closePool, err := sqlite.OpenPool(ctx, filepath.Join(t.TempDir(), "crowban-test.db"))
+	if err != nil {
+		t.Fatalf("open test db pool: %v", err)
+	}
+	t.Cleanup(func() { closePool() })
+	return pool
 }
 
 // startTestServer serves the exact router production uses with NO built UI —
@@ -911,5 +924,167 @@ func TestHTTPServer_SecurityHeadersAndCORS(t *testing.T) {
 	}
 	if got := res.Header.Get("X-Frame-Options"); got != "DENY" {
 		t.Errorf("OPTIONS X-Frame-Options = %q, want DENY", got)
+	}
+}
+
+func TestHealthzAndMetricsResilientToActiveWriteTransaction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	pool := newTestDBPool(t)
+
+	// Create a router with the dual pool
+	router := newRouterWithPool(pool, filepath.Join(t.TempDir(), "no-dist"), "", t.TempDir())
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	// 1. Initial health check and metrics succeed
+	code, body := get(t, srv.URL+"/healthz")
+	if code != http.StatusOK || body != `{"status":"ok","db":"ok"}` {
+		t.Fatalf("initial GET /healthz = %d %q, want 200 ok", code, body)
+	}
+
+	code, body = get(t, srv.URL+"/metrics")
+	if code != http.StatusOK || !strings.Contains(body, "http_requests_total") {
+		t.Fatalf("initial GET /metrics = %d %q, want 200 with http_requests_total", code, body)
+	}
+
+	// 2. Insert a project and commit it so the DB has data
+	_, err := pool.Writer.ExecContext(ctx, `INSERT INTO project (id, name, created_at, updated_at) VALUES ('01M00000000000000000000001', 'Active Tx Project', '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z')`)
+	if err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+
+	// 3. Begin an explicit write transaction on pool.Writer and hold it open
+	tx, err := pool.Writer.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin write tx: %v", err)
+	}
+	defer tx.Rollback()
+
+	// Mutate task table inside the transaction
+	_, err = tx.ExecContext(ctx, `INSERT INTO task (id, project_id, status, title, created_at, updated_at) VALUES ('01M00000000000000000000002', '01M00000000000000000000001', 'todo', 'Concurrent Health Test Task', '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z')`)
+	if err != nil {
+		t.Fatalf("insert task in write tx: %v", err)
+	}
+
+	// 4. Verify pool.Writer is indeed blocked for any new query:
+	shortCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	var dummy int
+	err = pool.Writer.QueryRowContext(shortCtx, "SELECT 1").Scan(&dummy)
+	if err == nil {
+		t.Fatalf("expected writer query to time out while tx is active")
+	}
+
+	// 5. While tx is STILL HOLDING the writer connection, perform concurrent /healthz and /metrics requests!
+	const requestCount = 10
+	var wg sync.WaitGroup
+	errCh := make(chan error, requestCount*3)
+
+	for i := 0; i < requestCount; i++ {
+		wg.Add(3)
+
+		// Concurrent /healthz
+		go func() {
+			defer wg.Done()
+			reqCtx, reqCancel := context.WithTimeout(ctx, 1*time.Second)
+			defer reqCancel()
+
+			req, _ := http.NewRequestWithContext(reqCtx, "GET", srv.URL+"/healthz", nil)
+			res, err := srv.Client().Do(req)
+			if err != nil {
+				errCh <- fmt.Errorf("GET /healthz failed: %w", err)
+				return
+			}
+			defer res.Body.Close()
+			b, _ := io.ReadAll(res.Body)
+			if res.StatusCode != http.StatusOK {
+				errCh <- fmt.Errorf("GET /healthz status = %d (body: %s), want 200", res.StatusCode, string(b))
+				return
+			}
+			if string(b) != `{"status":"ok","db":"ok"}` {
+				errCh <- fmt.Errorf("GET /healthz body = %q, want ok JSON", string(b))
+			}
+		}()
+
+		// Concurrent /metrics (Prometheus)
+		go func() {
+			defer wg.Done()
+			reqCtx, reqCancel := context.WithTimeout(ctx, 1*time.Second)
+			defer reqCancel()
+
+			req, _ := http.NewRequestWithContext(reqCtx, "GET", srv.URL+"/metrics", nil)
+			res, err := srv.Client().Do(req)
+			if err != nil {
+				errCh <- fmt.Errorf("GET /metrics failed: %w", err)
+				return
+			}
+			defer res.Body.Close()
+			b, _ := io.ReadAll(res.Body)
+			if res.StatusCode != http.StatusOK {
+				errCh <- fmt.Errorf("GET /metrics status = %d, want 200", res.StatusCode)
+				return
+			}
+			if !strings.Contains(string(b), "http_requests_total") {
+				errCh <- fmt.Errorf("GET /metrics missing http_requests_total")
+			}
+		}()
+
+		// Concurrent /metrics?format=json
+		go func() {
+			defer wg.Done()
+			reqCtx, reqCancel := context.WithTimeout(ctx, 1*time.Second)
+			defer reqCancel()
+
+			req, _ := http.NewRequestWithContext(reqCtx, "GET", srv.URL+"/metrics?format=json", nil)
+			res, err := srv.Client().Do(req)
+			if err != nil {
+				errCh <- fmt.Errorf("GET /metrics?format=json failed: %w", err)
+				return
+			}
+			defer res.Body.Close()
+			b, _ := io.ReadAll(res.Body)
+			if res.StatusCode != http.StatusOK {
+				errCh <- fmt.Errorf("GET /metrics?format=json status = %d, want 200", res.StatusCode)
+				return
+			}
+			var snap struct {
+				TasksByStatus map[string]int64 `json:"tasks_by_status"`
+			}
+			if err := json.Unmarshal(b, &snap); err != nil {
+				errCh <- fmt.Errorf("unmarshal json metrics: %w", err)
+				return
+			}
+			// Snapshot isolation: reader does not see the uncommitted task
+			if snap.TasksByStatus["todo"] != 0 {
+				errCh <- fmt.Errorf("expected 0 todo tasks before commit, got %d", snap.TasksByStatus["todo"])
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("error during concurrent requests with active write tx: %v", err)
+	}
+
+	// 6. Commit the transaction and verify /metrics?format=json now sees 1 todo task
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	code, body = get(t, srv.URL+"/metrics?format=json")
+	if code != http.StatusOK {
+		t.Fatalf("GET /metrics?format=json after commit = %d", code)
+	}
+	var snapAfter struct {
+		TasksByStatus map[string]int64 `json:"tasks_by_status"`
+	}
+	if err := json.Unmarshal([]byte(body), &snapAfter); err != nil {
+		t.Fatalf("unmarshal json metrics after commit: %v", err)
+	}
+	if snapAfter.TasksByStatus["todo"] != 1 {
+		t.Errorf("expected 1 todo task after commit, got %d", snapAfter.TasksByStatus["todo"])
 	}
 }

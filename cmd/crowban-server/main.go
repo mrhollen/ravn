@@ -73,19 +73,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, closeDB, err := sqlite.Open(ctx, *data)
+	pool, closePool, err := sqlite.OpenPool(ctx, *data)
 	if err != nil {
 		logger.Error("database open failed", "err", err)
 		os.Exit(1)
 	}
 	defer func() {
-		if err := closeDB(); err != nil {
+		if err := closePool(); err != nil {
 			logger.Error("closing database", "err", err)
 		}
 	}()
 
 	broker := pubsub.NewBroker()
-	srv := newHTTPServer(*addr, newRouterWithBrokerAndCORS(db, *static, *token, *artifacts, broker, *corsOrigins))
+	srv := newHTTPServer(*addr, newRouterWithPoolAndCORS(pool, *static, *token, *artifacts, broker, *corsOrigins))
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -144,21 +144,62 @@ func newRouterWithBroker(db *sql.DB, staticDir, token, artifactsDir string, brok
 }
 
 func newRouterWithBrokerAndCORS(db *sql.DB, staticDir, token, artifactsDir string, broker application.EventBroker, corsOrigins string) http.Handler {
+	var pool *sqlite.DBPool
+	if db != nil {
+		pool = &sqlite.DBPool{Writer: db, Reader: db}
+	}
+	return newRouterWithPoolAndCORS(pool, staticDir, token, artifactsDir, broker, corsOrigins)
+}
+
+func newRouterWithPool(pool *sqlite.DBPool, staticDir, token, artifactsDir string) http.Handler {
+	return newRouterWithPoolAndBroker(pool, staticDir, token, artifactsDir, pubsub.NewBroker())
+}
+
+func newRouterWithPoolAndBroker(pool *sqlite.DBPool, staticDir, token, artifactsDir string, broker application.EventBroker) http.Handler {
+	corsOrigins := os.Getenv("CROWBAN_CORS_ORIGINS")
+	if corsOrigins == "" {
+		corsOrigins = "*"
+	}
+	return newRouterWithPoolAndCORS(pool, staticDir, token, artifactsDir, broker, corsOrigins)
+}
+
+func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDir string, broker application.EventBroker, corsOrigins string) http.Handler {
 	mux := http.NewServeMux()
 
 	if broker == nil {
 		broker = pubsub.NewBroker()
 	}
-	uow := sqlite.NewUnitOfWork(db, sqlite.WithPublisher(broker))
+
+	var (
+		writerDB *sql.DB
+		readerDB *sql.DB
+	)
+	if pool != nil {
+		writerDB = pool.Writer
+		readerDB = pool.Reader
+		if readerDB == nil {
+			readerDB = writerDB
+		}
+	}
+
+	var uow application.UnitOfWork
+	if writerDB != nil {
+		uow = sqlite.NewUnitOfWork(writerDB, sqlite.WithPublisher(broker))
+	}
 	now := clock.New()
 	mint := idgen.New()
 
 	metrics := httpapi.NewMetrics()
 	var events application.EventStore // SSE Last-Event-ID replay (nil = live-only)
-	if db != nil {
-		events = sqlite.NewEventStore(db)
+	if readerDB != nil {
+		events = sqlite.NewEventStore(readerDB)
 		metrics.SetTaskStatsFunc(func(ctx context.Context) (map[string]int64, int64, error) {
-			return sqlite.CollectTaskMetrics(ctx, db, time.Now())
+			return sqlite.CollectTaskMetrics(ctx, readerDB, time.Now())
+		})
+	} else if writerDB != nil {
+		events = sqlite.NewEventStore(writerDB)
+		metrics.SetTaskStatsFunc(func(ctx context.Context) (map[string]int64, int64, error) {
+			return sqlite.CollectTaskMetrics(ctx, writerDB, time.Now())
 		})
 	}
 
@@ -179,7 +220,7 @@ func newRouterWithBrokerAndCORS(db *sql.DB, staticDir, token, artifactsDir strin
 	mux.Handle("GET /api/v1/metrics", metrics.Handler())
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		dbStatus := sqlite.Health(r.Context(), db)
+		dbStatus := sqlite.HealthPool(r.Context(), pool)
 		res := healthResponse{Status: "ok", DB: dbStatus}
 		code := http.StatusOK
 		if strings.HasPrefix(dbStatus, "error:") {
