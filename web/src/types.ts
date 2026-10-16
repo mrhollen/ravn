@@ -330,7 +330,7 @@ export interface ListTasksResponse {
 /** Base shape of every /api/v1/* error body. `message` is the agent-readable
  *  recovery instruction — surface it verbatim in the UI. */
 export interface ApiErrorBody {
-  error: string; // "invalid input" | "not found" | "version_conflict" | "claim conflict" | "parent conflict" | "internal"
+  error: string; // "invalid input" | "not found" | "version_conflict" | "claim conflict" | "not claimed" | "parent conflict" | "internal"
   message?: string;
   resource?: string; // "task" | "project"
   id?: string;
@@ -344,11 +344,21 @@ export interface VersionConflictBody extends ApiErrorBody {
   current: TaskSummary; // fresh task summary row
 }
 
-/** 409 claim conflict — holder + expiry ARE the recovery instruction. */
+/** 409 claim conflict — holder + expiry ARE the recovery instruction.
+ *  `holder` ALWAYS names a live foreign lease; a task with no lease at all
+ *  gets 409 `not claimed` instead (see NotClaimedBody). */
 export interface ClaimConflictBody extends ApiErrorBody {
   error: "claim conflict";
-  holder: ActorRef; // { type: "" } when there is no lease at all
+  holder: ActorRef;
   expires_at?: string;
+}
+
+/** 409 not claimed — the task has no claim lease at all (nobody to wait for);
+ *  recovery is claim first. */
+export interface NotClaimedBody extends ApiErrorBody {
+  error: "not claimed";
+  resource: "task";
+  id: string;
 }
 
 /** 409 parent conflict — a task may have at most one parent. */

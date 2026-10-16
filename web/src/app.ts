@@ -2799,7 +2799,13 @@ export function crowbanApp() {
         await this.refreshDetail(true);
         this.toast("Heartbeat recorded — lease extended");
       } catch (e) {
-        this.toast(errMsg(e), "error");
+        if (ApiError.isNotClaimed(e)) {
+          // No lease exists at all (not a conflict with a live holder) — say
+          // the actionable part plainly instead of echoing the raw body.
+          this.toast("No claim lease on this task — claim it first.", "error");
+        } else {
+          this.toast(errMsg(e), "error");
+        }
       } finally {
         this.claimBusy = false;
       }

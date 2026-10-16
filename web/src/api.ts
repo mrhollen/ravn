@@ -140,6 +140,12 @@ export class ApiError extends Error {
     return e instanceof ApiError && e.status === 409 && e.body.error === "claim conflict";
   }
 
+  /** 409 heartbeat on a task with no lease at all — recovery is claim first,
+   *  never a conflict with a live holder (see NotClaimedBody in types.ts). */
+  static isNotClaimed(e: unknown): boolean {
+    return e instanceof ApiError && e.status === 409 && e.body.error === "not claimed";
+  }
+
   static isParentConflict(e: unknown): boolean {
     return e instanceof ApiError && e.status === 409 && e.body.error === "parent conflict";
   }
