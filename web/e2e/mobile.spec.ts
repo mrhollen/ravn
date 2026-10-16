@@ -364,7 +364,7 @@ test.describe('Mobile experience (375px, touch)', () => {
     await context.close();
   });
 
-  test('board columns: stacked at 375px, 2-up at md, 3-up at lg', async ({ browser }) => {
+  test('board columns: stacked at 375px, 3-up on every tablet and desktop width', async ({ browser }) => {
     const { context, page } = await openMobileBoard(browser);
 
     const todo = column(page, 'To Do');
@@ -385,14 +385,38 @@ test.describe('Mobile experience (375px, touch)', () => {
     expect(m3!.y).toBeGreaterThan(m2!.y);
     expect(m1!.width).toBeGreaterThan(280);
 
-    // md (768px and up): two columns per row — To Do + Doing side by side, Done wraps.
-    await page.setViewportSize({ width: 800, height: 900 });
-    const t1 = await todo.boundingBox();
-    const d1 = await doing.boundingBox();
-    const f1 = await done.boundingBox();
-    expect(t1!.x).toBeLessThan(d1!.x);
-    expect(Math.abs(t1!.y - d1!.y)).toBeLessThanOrEqual(4);
-    expect(f1!.y).toBeGreaterThan(t1!.y + 20);
+    // md lower bound (768px, tablet portrait edge): ALL three columns sit
+    // side-by-side on ONE row — no orphaned 'Done' alone on a second row with an
+    // empty half-screen (task AC1/AC2). The board is a fixed 3-status kanban, so
+    // every width >= md renders 3-up.
+    await page.setViewportSize({ width: 768, height: 1024 });
+    const p1 = await todo.boundingBox();
+    const p2 = await doing.boundingBox();
+    const p3 = await done.boundingBox();
+    expect(p1).not.toBeNull();
+    expect(p2).not.toBeNull();
+    expect(p3).not.toBeNull();
+    expect(p1!.x, 'To Do is leftmost').toBeLessThan(p2!.x);
+    expect(p2!.x, 'Doing is middle').toBeLessThan(p3!.x);
+    expect(Math.abs(p1!.y - p2!.y), 'same visual row as To Do').toBeLessThanOrEqual(4);
+    expect(Math.abs(p2!.y - p3!.y), 'same visual row as Doing').toBeLessThanOrEqual(4);
+    // No column is alone on a lower row: Done's top must match the others.
+    expect(p3!.y).toBeGreaterThan(p1!.y - 4);
+    expect(p3!.y).toBeLessThan(p1!.y + 4);
+    // No horizontal overflow inside the viewport at exactly 768px.
+    expect(p3!.x + p3!.width, 'Done stays inside the 768px viewport').toBeLessThanOrEqual(768);
+
+    // md upper bound (1023px, tablet landscape edge — one pixel below lg):
+    // still three columns on one row.
+    await page.setViewportSize({ width: 1023, height: 768 });
+    const l1 = await todo.boundingBox();
+    const l2 = await doing.boundingBox();
+    const l3 = await done.boundingBox();
+    expect(l1!.x).toBeLessThan(l2!.x);
+    expect(l2!.x).toBeLessThan(l3!.x);
+    expect(Math.abs(l1!.y - l2!.y), 'same visual row at 1023px').toBeLessThanOrEqual(4);
+    expect(Math.abs(l2!.y - l3!.y), 'no orphan below 1023px').toBeLessThanOrEqual(4);
+    expect(l3!.x + l3!.width, 'Done stays inside the 1023px viewport').toBeLessThanOrEqual(1023);
 
     // lg (1024px and up): three columns on one row.
     await page.setViewportSize({ width: 1100, height: 900 });

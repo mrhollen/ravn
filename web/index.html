@@ -539,8 +539,11 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               </button>
             </div>
 
-            <!-- columns: 1-up on phones, 2-up from md (tablet) up, 3-up from lg -->
-            <div class="grid grid-cols-1 items-start gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <!-- columns: 1-up on phones, 3-up from md (tablet) up — the board is a
+                 fixed 3-status kanban, so md must never drop to 2-up (it orphaned
+                 'Done' on a second row with half the screen dead). Card content
+                 wraps at 768px (break-words titles, flex-wrap meta row). -->
+            <div class="grid grid-cols-1 items-start gap-4 md:grid-cols-3">
               <template x-for="col in columns()" :key="col.status">
                 <section
                   @dragover="onDragOver($event, col.status)"
