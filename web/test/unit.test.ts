@@ -2042,3 +2042,174 @@ test("toggleAc: successful toggle merges the server's row back into detail state
     (api as any).toggleAc = origToggleAc;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Blocked-state cache project scoping (task 01M3MMZASQB2RBB2Q4RS3GM0JK)
+// The card-badge blocked state lives in TWO client caches (derived board diff
+// + detail-fetched knowledge). Both are scoped to the project they were
+// derived/learned under, so switching projects can never render a "blocked"
+// indicator based on a DIFFERENT project's tasks.
+// ---------------------------------------------------------------------------
+
+test("BlockedCache: selectProject() clears both caches, re-scoped to the new project (AC1)", () => {
+  const app = crowbanApp() as any;
+  // Network-side collaborators are irrelevant here — stub them out.
+  app.connectSse = () => {};
+  app.loadBoard = async () => {};
+
+  app.selectedProjectId = "A";
+  app.blockedIds = new Set(["a1", "a2"]);
+  app.knownBlocked = { a3: true };
+  app.blockedCacheProjectId = "A";
+
+  app.selectedProjectId = "B"; // what pickProject() does before calling selectProject()
+  app.selectProject();
+
+  assert.equal(app.blockedIds.size, 0, "derived set is cleared on switch");
+  assert.deepEqual(app.knownBlocked, {}, "learned map is cleared on switch");
+  assert.equal(app.blockedCacheProjectId, "B", "cache re-scoped to the selected project");
+  assert.equal(app.isBlocked("a1"), false);
+});
+
+test("BlockedCache: isBlocked fails closed when the cache belongs to another project (AC3)", () => {
+  const app = crowbanApp() as any;
+  // The cache was derived while project "P" was selected…
+  app.blockedIds = new Set(["x1"]);
+  app.knownBlocked = { x2: true };
+  app.blockedCacheProjectId = "P";
+
+  // …but the selection has since moved on (an entry point that does not
+  // reset — deep link, popstate adoption, archive fallback).
+  app.selectedProjectId = "Q";
+  assert.equal(app.isBlocked("x1"), false, "stale derived ids never surface");
+  assert.equal(app.isBlocked("x2"), false, "stale learned entries never surface");
+
+  // Back in scope → the same entries serve normally (feature intact).
+  app.selectedProjectId = "P";
+  assert.equal(app.isBlocked("x1"), true);
+  assert.equal(app.isBlocked("x2"), true);
+});
+
+test("BlockedCache: a >100-task board never retains a previous project's set (AC2)", async () => {
+  const origListTasks = api.listTasks;
+  try {
+    // Both listTasks calls report the project is too big to diff cheaply.
+    (api as any).listTasks = async () => ({ tasks: [], total: 150, limit: 100, offset: 0 });
+
+    const app = crowbanApp() as any;
+    app.selectedProjectId = "B";
+    // Leftover from project A's load:
+    app.blockedIds = new Set(["a1"]);
+    app.knownBlocked = { a2: true };
+    app.blockedCacheProjectId = "A";
+
+    // Non-empty buckets so the board is treated as a real (large) project:
+    // listTasks' totals (150) drive the too-big path.
+    const bigBoard = {
+      project_id: "B",
+      counts: {},
+      tasks: { todo: [{ id: "b7" }, { id: "b8" }], doing: [], done: [] },
+    };
+    await app.refreshBlockedSet(bigBoard);
+
+    assert.equal(app.blockedIds.size, 0, "the >100 path clears instead of inheriting");
+    assert.deepEqual(app.knownBlocked, {});
+    assert.equal(app.blockedCacheProjectId, "B", "cache now belongs to the big project");
+    assert.equal(app.isBlocked("a1"), false, "project A's ids can't surface in B");
+
+    // Repeated loads of the SAME large board don't thrash: entries learned
+    // under it survive its own big-board reload.
+    (app.blockedIds as Set<string>).add("b9"); // e.g. learned from a detail fetch
+    await app.refreshBlockedSet(bigBoard);
+    assert.equal(app.blockedCacheProjectId, "B");
+    assert.ok((app.blockedIds as Set<string>).has("b9"), "same-project entries survive its own reload");
+  } finally {
+    (api as any).listTasks = origListTasks;
+  }
+});
+
+test("BlockedCache: a successful diff re-scopes the cache to the payload's project", async () => {
+  const origListTasks = api.listTasks;
+  try {
+    (api as any).listTasks = async (params: any) => ({
+      tasks: params?.unblocked ? [{ id: "b1" }] : [{ id: "b1" }, { id: "b2" }],
+      total: params?.unblocked ? 1 : 2,
+      limit: 100,
+      offset: 0,
+    });
+
+    const app = crowbanApp() as any;
+    app.selectedProjectId = "B";
+    app.blockedCacheProjectId = ""; // fresh boot
+    await app.refreshBlockedSet({
+      project_id: "B",
+      counts: {},
+      tasks: { todo: [{ id: "b1" }, { id: "b2" }], doing: [], done: [] },
+    });
+
+    assert.equal(app.blockedCacheProjectId, "B");
+    assert.ok((app.blockedIds as Set<string>).has("b2"), "diff marks b2 blocked (in all, not in unblocked)");
+    assert.ok(!(app.blockedIds as Set<string>).has("b1"));
+  } finally {
+    (api as any).listTasks = origListTasks;
+  }
+});
+
+test("BlockedCache: a failed refresh keeps the current project's last good set (catch-branch decision)", async () => {
+  const origListTasks = api.listTasks;
+  try {
+    (api as any).listTasks = async () => {
+      throw new Error("network down");
+    };
+
+    const app = crowbanApp() as any;
+    app.selectedProjectId = "B";
+    // Last good set for B, derived by an earlier successful load:
+    app.blockedIds = new Set(["b1"]);
+    app.knownBlocked = {};
+    app.blockedCacheProjectId = "B";
+
+    const boardB = { project_id: "B", counts: {}, tasks: { todo: [{ id: "b0" }], doing: [], done: [] } };
+    await app.refreshBlockedSet(boardB); // listTasks rejects → catch branch
+
+    assert.ok((app.blockedIds as Set<string>).has("b1"), "transient failure keeps the last good set");
+    assert.equal(app.blockedCacheProjectId, "B");
+  } finally {
+    (api as any).listTasks = origListTasks;
+  }
+});
+
+test("BlockedCache: a detail payload for ANOTHER project never writes into the current cache", () => {
+  const app = crowbanApp() as any;
+  // The drawer is still open on A's task after a dropdown switch to B
+  // (selectProject does not close it) — its refresh lands post-switch.
+  app.detailOpen = true;
+  app.detailId = "a9";
+  app.selectedProjectId = "B";
+  app.blockedIds = new Set(["b1"]);
+  app.knownBlocked = {};
+  app.blockedCacheProjectId = "B";
+
+  const detailA: any = { id: "a9", project_id: "A", notes: "", comments: [], assignee: undefined, blocked: true };
+  app.applyDetail(detailA);
+
+  assert.equal(app.knownBlocked["a9"], undefined, "foreign task's blocked state is not learned");
+  assert.deepEqual(app.blockedIds, new Set(["b1"]), "current project's set untouched");
+  assert.equal(app.blockedCacheProjectId, "B", "scope stays with the selected project");
+});
+
+test("BlockedCache: a detail payload for the CURRENT project still learns blocked state (feature intact)", () => {
+  const app = crowbanApp() as any;
+  app.detailOpen = true;
+  app.detailId = "b9";
+  app.selectedProjectId = "B";
+  app.blockedIds = new Set();
+  app.knownBlocked = {};
+  app.blockedCacheProjectId = "B";
+
+  const detailB: any = { id: "b9", project_id: "B", notes: "", comments: [], assignee: undefined, blocked: true };
+  app.applyDetail(detailB);
+
+  assert.equal(app.knownBlocked["b9"], true, "current-project task's blocked state is learned");
+  assert.equal(app.isBlocked("b9"), true);
+});

@@ -913,12 +913,32 @@ export function crowbanApp() {
 
     /** IDs of tasks known to be blocked right now — summary rows don't carry
      *  the flag, so it is derived (see refreshBlockedSet) plus learned from
-     *  detail fetches (knownBlocked). */
+     *  detail fetches (knownBlocked). BOTH structures are scoped to
+     *  `blockedCacheProjectId`, the project they were derived/learned under:
+     *  readers (isBlocked → card badges + the "Unblocked only" filter) see an
+     *  empty cache whenever the scope differs from the selected project, so a
+     *  switch can never render a "blocked" indicator based on ANOTHER
+     *  project's tasks — including entry points that change selectedProjectId
+     *  without going through selectProject() (deep-link / popstate adoption,
+     *  archive fallback, boot). */
     blockedIds: new Set<string>(),
     knownBlocked: {} as Record<string, boolean>,
+    /** Project the blocked-state cache belongs to; "" = nothing derived yet. */
+    blockedCacheProjectId: "" as string,
 
     isBlocked(id: string): boolean {
+      // Fail closed: a cache owned by another project counts as empty.
+      if (this.blockedCacheProjectId !== this.selectedProjectId) return false;
       return this.blockedIds.has(id) || !!this.knownBlocked[id];
+    },
+
+    /** Drop every derived/learned blocked entry and re-scope the cache to
+     *  `projectId` ("" = fully empty). Called on project switch and whenever
+     *  a board payload arrives for a project the cache does not belong to. */
+    resetBlockedCache(projectId: string): void {
+      this.blockedIds = new Set();
+      this.knownBlocked = {};
+      this.blockedCacheProjectId = projectId;
     },
 
     // ------------------------------------------------------ client-side sorting
@@ -1085,6 +1105,11 @@ export function crowbanApp() {
         safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
       } catch { /* ignore */ }
       this.board = null;
+      // The blocked-state cache belongs to the project being LEFT: reset it,
+      // scoped to the new selection, so the fresh board starts from no stale
+      // badges (isBlocked()'s scope check also covers the entry points that
+      // change selectedProjectId without going through here).
+      this.resetBlockedCache(this.selectedProjectId);
       // Invalidate anything pending for the PREVIOUS project: drop a queued
       // debounced SSE reload and retire in-flight board loads. (The fresh
       // loadBoard() below also bumps the sequence, and late payloads fail the
@@ -1128,13 +1153,22 @@ export function crowbanApp() {
 
     /** Derive which open tasks are blocked without N extra calls: one
      *  list_tasks plus the same call with unblocked=true, then diff by id.
-     *  Skipped when the project has more than `limit` open tasks (MVP).
-     *  `isStillCurrent` lets the caller veto writing a stale diff after awaits. */
+     *  Writes are ownership-gated via `isStillCurrent`, so a superseded load
+     *  (project switched or a newer board load in flight) never lands its
+     *  diff — and everything written is re-scoped to the payload's project
+     *  (blockedCacheProjectId), so another project's set can never survive a
+     *  switch. Projects with more than `limit` open tasks can't be diffed
+     *  cheaply: for those the cache is re-scoped to that project and left
+     *  EMPTY for it instead of inheriting whatever was derived before;
+     *  per-task detail loads (applyDetail → knownBlocked) still fill in
+     *  individual badges. */
     async refreshBlockedSet(b: Board, isStillCurrent?: () => boolean): Promise<void> {
       const stillCurrent = (): boolean => (isStillCurrent ? isStillCurrent() : true);
       const total = STATUSES.reduce((n, s) => n + (b.tasks[s]?.length ?? 0), 0);
       if (total === 0) {
-        if (stillCurrent()) this.blockedIds = new Set();
+        // An empty board owns an EMPTY cache — anything derived under a
+        // different project is stale by definition.
+        if (stillCurrent()) this.resetBlockedCache(b.project_id);
         return;
       }
       const limit = 100;
@@ -1144,13 +1178,28 @@ export function crowbanApp() {
           api.listTasks({ project_id: b.project_id, unblocked: true, limit }),
         ]);
         if (!stillCurrent()) return; // superseded — keep whatever we had
-        if (all.total > limit || un.total > limit) return; // too big to diff cheaply
+        if (all.total > limit || un.total > limit) {
+          // Too big to diff cheaply. A DIFFERENT project's set must never be
+          // retained here — that is exactly the cross-project leak this cache
+          // guards against: re-scope to this project and start empty. If the
+          // cache already belongs to THIS project (repeated loads of the same
+          // large board), its entries stay valid and are kept.
+          if (this.blockedCacheProjectId !== b.project_id) {
+            this.resetBlockedCache(b.project_id);
+          }
+          return;
+        }
         const unIds = new Set(un.tasks.map((t) => t.id));
         this.blockedIds = new Set(
           all.tasks.filter((t) => !unIds.has(t.id)).map((t) => t.id),
         );
+        this.blockedCacheProjectId = b.project_id;
       } catch {
-        /* keep whatever we had — advisory feature only */
+        // Transient network failure: keep whatever we had (deliberate — an
+        // advisory feature should not lose good data on a blip). Safe, because
+        // the cache is project-scoped and isBlocked() only serves entries
+        // owned by the CURRENTLY selected project: this can never surface a
+        // different project's blocked state.
       }
     },
 
@@ -1862,10 +1911,16 @@ export function crowbanApp() {
       this.assigneeInputType = (t.assignee?.type as "human" | "agent") || "human";
       // Learn the blocked state for card badges (the board diff is authoritative
       // on poll; details fill in between polls and cover >100-task projects).
-      const kb = { ...this.knownBlocked };
-      if (t.blocked) kb[t.id] = true;
-      else delete kb[t.id];
-      this.knownBlocked = kb;
+      // Only while the task's project IS the selected one: a detail refresh
+      // that outlives a project switch must neither add entries to nor delete
+      // from the cache of the project now on screen — board loads own the
+      // scope (see blockedCacheProjectId / selectProject).
+      if (t.project_id === this.selectedProjectId) {
+        const kb = { ...this.knownBlocked };
+        if (t.blocked) kb[t.id] = true;
+        else delete kb[t.id];
+        this.knownBlocked = kb;
+      }
       // Never clobber an in-progress edit of THIS task; a scratchpad that
       // belongs to a DIFFERENT task is discarded so drafts cannot leak across
       // tasks (AC 2).
