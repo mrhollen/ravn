@@ -279,8 +279,11 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     const notes = panel.locator('textarea[placeholder*="Last run"]');
     await expect(notes).toHaveValue(new RegExp('Fixture notes for A'));
 
-    // Acceptance criteria with check-offs + counter.
-    await expect(panel.locator('h3', { hasText: 'Acceptance criteria' })).toContainText('(0/2)');
+    // Acceptance criteria with check-offs + progress ring (one segment per AC).
+    const acHeading = panel.locator('h3', { hasText: 'Acceptance criteria' });
+    const acRing = acHeading.getByRole('img');
+    await expect(acRing).toHaveAttribute('aria-label', '0 of 2 acceptance criteria complete');
+    await expect(acRing.locator('circle')).toHaveCount(2);
     const acBoxes = panel.locator('input[type="checkbox"][aria-label^="Mark done"]');
     await expect(acBoxes).toHaveCount(2);
 
@@ -453,6 +456,11 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
       const t = await getJson(`${serverUrl}/api/v1/tasks/${taskA.id}`);
       expect(t.acceptance_criteria[0].done).toBe(true);
     }).toPass({ timeout: 10_000 });
+
+    // The progress ring tracks the check-off.
+    await expect(
+      panel.locator('h3', { hasText: 'Acceptance criteria' }).getByRole('img'),
+    ).toHaveAttribute('aria-label', '1 of 2 acceptance criteria complete');
 
     const notes = panel.locator('textarea[placeholder*="Last run"]');
     await notes.fill('Notes saved at 375px');

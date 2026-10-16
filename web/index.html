@@ -1268,8 +1268,17 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
                 <!-- acceptance criteria -->
                 <section>
-                  <h3 class="section-title">Acceptance criteria <span class="font-normal normal-case tracking-normal"
-                     x-text="'(' + acDoneCount() + '/' + (detail ? detail.acceptance_criteria.length : 0) + ')'"></span></h3>
+                  <h3 class="section-title flex items-center gap-1.5">Acceptance criteria
+                     <!-- Progress ring: one segment per AC (stroke-dasharray on a
+                          100-unit circle), done segments filled, open ones hollow. -->
+                     <svg x-show="(detail ? detail.acceptance_criteria.length : 0) > 0" x-cloak
+                          viewBox="0 0 36 36" class="-rotate-90 h-4 w-4 shrink-0" role="img"
+                          :aria-label="acProgressLabel()">
+                       <!-- Segments are injected (not x-for'd): Alpine's x-for
+                            cannot anchor nodes inside inline SVG, and Vite's
+                            build-html rejects <template> in foreign content. -->
+                       <g x-html="acRingInner()"></g>
+                     </svg></h3>
                   <ul class="flex flex-col gap-1.5">
                     <template x-for="ac in detail.acceptance_criteria" :key="ac.seq">
                        <li class="rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm transition dark:border-zinc-700 dark:bg-zinc-800">

@@ -2705,6 +2705,38 @@ export function crowbanApp() {
       return this.detail ? this.detail.acceptance_criteria.filter((a) => a.done).length : 0;
     },
 
+    /** One SVG <circle> per criterion for the AC progress ring. Each sits on a
+     *  100-unit circle (r = 15.915 in a 36x36 viewBox), so dash/offset map
+     *  straight onto stroke-dasharray/stroke-dashoffset. Done slots fill, open
+     *  ones stay hollow; the inter-slot gap shrinks as N grows so many criteria
+     *  still read as distinct segments. Returned as a string (not x-for) because
+     *  Alpine's x-for cannot anchor nodes inside inline SVG. Only numeric values
+     *  and two fixed class tokens are interpolated — no user text — so this is
+     *  safe to pass to :innerHTML on the <g>. */
+    acRingInner(): string {
+      const acs = this.detail ? this.detail.acceptance_criteria : [];
+      const n = acs.length;
+      if (n === 0) return "";
+      const slot = 100 / n;
+      const gap = n > 1 ? Math.min(2, slot * 0.35) : 0;
+      const dash = Math.max(slot - gap, 0.5);
+      return acs
+        .map((ac, i) => {
+          const cls = ac.done ? "stroke-emerald-500" : "stroke-zinc-300 dark:stroke-zinc-600";
+          return (
+            `<circle cx="18" cy="18" r="15.915" fill="none" stroke-width="6" ` +
+            `class="${cls}" stroke-dasharray="${dash.toFixed(3)} ${(100 - dash).toFixed(3)}" ` +
+            `stroke-dashoffset="${(-i * slot).toFixed(3)}"></circle>`
+          );
+        })
+        .join("");
+    },
+
+    acProgressLabel(): string {
+      const total = this.detail ? this.detail.acceptance_criteria.length : 0;
+      return `${this.acDoneCount()} of ${total} acceptance criteria complete`;
+    },
+
     completedLabel(ac: AcRow): string {
       const who = ac.completed_by ? actorLabel(ac.completed_by) : "unknown";
       const when = ac.completed_at ? relTime(ac.completed_at) : "";
