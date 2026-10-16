@@ -47,9 +47,13 @@ const (
 	EventACRemoved EventKind = "ac-removed" // an acceptance criterion row was deleted
 )
 
-// AllEventKinds lists every canonical event kind, in stable order, for tests
-// and future enum exposure over REST/MCP.
-var AllEventKinds = []EventKind{
+// canonicalEventKinds is the unexported source of truth for the canonical set,
+// in stable order. It is a fixed-length array (cannot be appended to,
+// re-sliced, reassigned, or nil'd) that is written once at package init and
+// never mutated again; EventKinds() hands out fresh copies and Valid() switches
+// over the constants, so no exported mutable state remains for another
+// package or goroutine to corrupt.
+var canonicalEventKinds = [...]EventKind{
 	EventCreated,
 	EventUpdated,
 	EventStatusChanged,
@@ -67,14 +71,29 @@ var AllEventKinds = []EventKind{
 	EventACRemoved,
 }
 
+// EventKinds lists every canonical event kind, in stable order, for tests and
+// future enum exposure over REST/MCP. It returns a fresh copy on every call:
+// callers may mutate the returned slice (or even set it to nil) without
+// affecting this package's canonical set or any other caller.
+func EventKinds() []EventKind {
+	out := make([]EventKind, len(canonicalEventKinds))
+	copy(out, canonicalEventKinds[:])
+	return out
+}
+
 // Valid reports whether k is one of the canonical event kinds. Use cases must
 // only emit valid kinds; adapters store whatever they are given as-is (the
 // column is unconstrained), so validation belongs at the emission site.
+// Implemented as a switch over the constants: O(1)-ish, and it touches no
+// shared state, so concurrent calls cannot race or observe corruption.
 func (k EventKind) Valid() bool {
-	for _, v := range AllEventKinds {
-		if k == v {
-			return true
-		}
+	switch k {
+	case EventCreated, EventUpdated, EventStatusChanged, EventClaimed,
+		EventReleased, EventHeartbeat, EventAssigned, EventNoted,
+		EventCommented, EventACToggled, EventArtifactAdded,
+		EventRelationChanged, EventACAdded, EventACUpdated, EventACRemoved:
+		return true
+	default:
+		return false
 	}
-	return false
 }
