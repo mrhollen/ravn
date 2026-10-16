@@ -1150,8 +1150,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   <!-- inline assignee picker -->
                   <form @submit.prevent="saveAssignee()" class="flex flex-wrap items-center gap-2 pt-1 border-t border-amber-200/60 text-xs dark:border-amber-800/60">
                     <input type="text" x-model="assigneeInputName" placeholder="Assignee name (e.g. alice, agent-1)"
-                           class="field flex-1 min-w-[140px] text-xs py-1" />
-                    <select x-model="assigneeInputType" class="field text-xs py-1 w-24">
+                           aria-label="Assignee name" class="field flex-1 min-w-[140px] text-xs py-1" />
+                    <select x-model="assigneeInputType" aria-label="Assignee type" class="field text-xs py-1 w-24">
                       <option value="human">human</option>
                       <option value="agent">agent</option>
                     </select>
@@ -1226,7 +1226,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <!-- notes -->
                 <section>
                   <h3 class="section-title">Notes <span class="font-normal normal-case tracking-normal">(resume scratchpad — replace-on-save)</span></h3>
-                  <textarea x-model="notesDraft" @input="notesDirty = true" rows="5"
+                  <textarea x-model="notesDraft" @input="notesDirty = true" rows="5" aria-label="Task notes"
                             placeholder="Last run: …&#10;Next: …"
                             class="field w-full font-mono text-xs leading-relaxed"></textarea>
                   <div class="mt-1.5 flex items-center justify-end gap-2">
@@ -1277,7 +1277,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
                         <!-- inline edit mode -->
                         <form x-show="editingAcSeq === ac.seq" x-cloak @submit.prevent="saveAcEdit(ac.seq)" class="flex flex-col gap-2">
-                          <textarea x-model="editingAcText" rows="2" class="field w-full text-xs"
+                          <textarea x-model="editingAcText" rows="2" aria-label="Edit acceptance criterion"
+                                    class="field w-full text-xs"
                                     placeholder="Acceptance criterion text…" required></textarea>
                           <div class="flex items-center justify-end gap-2">
                             <button type="button" @click="cancelEditingAc()" :disabled="savingAcSeq !== 0"
@@ -1298,7 +1299,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   <!-- add acceptance criterion form -->
                   <form @submit.prevent="addAc()" class="mt-2.5 flex items-center gap-2">
                     <input type="text" x-model="newAcText" placeholder="Add acceptance criterion…"
-                           class="field flex-1 text-xs py-1.5" />
+                           aria-label="New acceptance criterion" class="field flex-1 text-xs py-1.5" />
                     <button type="submit" :disabled="addingAc || !newAcText.trim()" class="btn-primary text-xs py-1.5 px-3 shrink-0">
                       <span x-text="addingAc ? 'Adding…' : '+ Add criterion'"></span>
                     </button>
@@ -1342,14 +1343,14 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
                   <form @submit.prevent="postComment()" class="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800">
                     <div class="flex items-center gap-2">
-                      <select x-model="commentForm.kind" class="field w-auto text-xs">
+                      <select x-model="commentForm.kind" aria-label="Comment type" class="field w-auto text-xs">
                         <template x-for="k in ['progress', 'question', 'decision', 'handoff', 'note']" :key="k">
                           <option :value="k" x-text="k"></option>
                         </template>
                       </select>
                       <span class="text-[11px] text-zinc-600 dark:text-zinc-400">as <span x-text="actorName.trim() || 'human'"></span></span>
                     </div>
-                    <textarea x-model="commentForm.body" rows="3" class="field mt-2 w-full"
+                    <textarea x-model="commentForm.body" rows="3" aria-label="Comment body" class="field mt-2 w-full"
                               placeholder="Markdown… posted as a typed comment"></textarea>
                     <div class="mt-1.5 flex justify-end">
                       <button type="submit" :disabled="postingComment || !commentForm.body.trim()" class="btn-primary"
@@ -1427,23 +1428,23 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   <form x-show="artifactForm.open" x-cloak @submit.prevent="attachArtifact()"
                         class="mt-2 flex flex-col gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800">
                     <div class="flex flex-wrap gap-2">
-                      <select x-model="artifactForm.kind" class="field w-auto text-xs">
+                      <select x-model="artifactForm.kind" aria-label="Artifact kind" class="field w-auto text-xs">
                         <template x-for="k in ['screenshot', 'url', 'log', 'command-output', 'trace', 'other']" :key="k">
                           <option :value="k" x-text="k"></option>
                         </template>
                       </select>
                     </div>
                     <div>
-                      <label class="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">Choose file to upload</label>
+                      <label for="artifactFileInput" class="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">Choose file to upload</label>
                       <input type="file" id="artifactFileInput" @change="onArtifactFileSelected($event)"
                              class="field text-xs w-full file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-zinc-200 dark:file:bg-zinc-700 file:text-zinc-700 dark:file:text-zinc-200 hover:file:cursor-pointer" />
                     </div>
                     <div x-show="!artifactForm.file">
-                      <label class="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">Or enter URL / file path</label>
-                      <input x-model="artifactForm.ref" class="field font-mono text-xs w-full"
+                      <label for="cb-artifact-ref-input" class="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">Or enter URL / file path</label>
+                      <input id="cb-artifact-ref-input" x-model="artifactForm.ref" class="field font-mono text-xs w-full"
                              placeholder="https://… or /path/to/file" />
                     </div>
-                    <input x-model="artifactForm.summary" class="field text-xs" placeholder="One-line summary (optional)" />
+                    <input x-model="artifactForm.summary" aria-label="Artifact summary" class="field text-xs" placeholder="One-line summary (optional)" />
                     <div class="flex justify-end gap-2">
                       <button type="button" @click="resetArtifactForm()" class="btn-ghost text-xs">Cancel</button>
                       <button type="submit" :disabled="attachingArtifact || (!artifactForm.file && !artifactForm.ref.trim())" class="btn-primary"
@@ -1484,8 +1485,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     <div class="font-medium text-zinc-700 dark:text-zinc-300">Add relation</div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div>
-                        <label class="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">Kind</label>
-                        <select x-model="relationForm.kind" name="kind" class="field text-xs py-1">
+                        <label for="relation-kind-select" class="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">Kind</label>
+                        <select id="relation-kind-select" x-model="relationForm.kind" name="kind" class="field text-xs py-1">
                           <option value="parent">Parent</option>
                           <option value="child">Child</option>
                           <option value="blocked-by">Blocked by</option>
@@ -1495,14 +1496,14 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         </select>
                       </div>
                       <div>
-                        <label class="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">Target task</label>
-                        <select x-model="relationForm.targetId" class="field text-xs py-1 mb-1">
+                        <label for="relation-target-select" class="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">Target task</label>
+                        <select id="relation-target-select" x-model="relationForm.targetId" class="field text-xs py-1 mb-1">
                           <option value="">Select a task…</option>
                           <template x-for="t in availableRelationTasks()" :key="t.id">
                             <option :value="t.id" x-text="t.title + ' (' + shortId(t.id) + ')'"></option>
                           </template>
                         </select>
-                        <input type="text" x-model="relationForm.targetId" name="other_id"
+                        <input type="text" x-model="relationForm.targetId" name="other_id" aria-label="Target task ID"
                                placeholder="Or enter target task ID (ULID)…"
                                class="field font-mono text-[11px] py-1" />
                       </div>
