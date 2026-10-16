@@ -30,11 +30,23 @@ trusts it):
 
 | Field | Rules |
 |---|---|
-| `name`  | **Required.** Non-empty after trimming. This name is the lease/ownership key for claims. Any non-empty string works. |
+| `name`  | **Required.** Non-empty after trimming; at most 100 runes; no control characters (newlines, tabs, …); must be well-formed UTF-8. This name is the lease/ownership key for claims — see "Lease-holder identity" below. |
 | `type`  | Optional. `"human"` \| `"agent"`. **Defaults to `"human"`** when omitted (a bare name from a browser/curl is usually human; agents should send `"agent"` explicitly). Anything else → `400`. |
 
-An empty/missing name or an unknown type fails with `400 invalid input`
-before anything is written.
+An invalid actor — empty/oversized/control-char name, unknown type — fails
+with `400 invalid input` on every mutation endpoint before anything is written.
+
+### Lease-holder identity
+
+Claim-lease holder equality (claim renewal, heartbeat, release) keys on the
+actor **NAME alone** — the unified NAME identity model: a human-typed and an
+agent-typed actor that share a name are the SAME lease holder, so either may
+re-claim / heartbeat / release the other's lease. `claimed_by_type` is stored
+and returned for display/audit only; it never participates in holder
+comparison. This matches the self-declared-identity MVP (names carry no trust
+signal, and the holder's full `(type, name)` pair is always visible in task
+rows and claim-conflict bodies), so making the comparison type-sensitive would
+buy no protection while breaking clients that omit `type` on some calls.
 
 ## Error contract
 

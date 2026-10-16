@@ -40,10 +40,15 @@ func NewProjects(uow UnitOfWork, clock Clock, idgen IDGenerator) *Projects {
 }
 
 // Create stores a new project and appends its `created` event in the same
-// unit of work. The caller's actor is recorded on the event; name must be
-// non-empty (else domain.ErrInvalid); duplicate names surface as a wrapped
-// domain.ErrInvalid from the repository.
+// unit of work. The acting actor is validated and normalized BEFORE anything
+// else (domain.Actor.Validate via normalizeActor): an invalid principal never
+// reaches the event log. name must be non-empty (else domain.ErrInvalid);
+// duplicate names surface as a wrapped domain.ErrInvalid from the repository.
 func (s *Projects) Create(ctx context.Context, actor domain.Actor, name, description string) (domain.Project, error) {
+	actor, err := normalizeActor(actor)
+	if err != nil {
+		return domain.Project{}, err
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return domain.Project{}, fmt.Errorf("%w: project name must not be empty", domain.ErrInvalid)
@@ -67,7 +72,7 @@ func (s *Projects) Create(ctx context.Context, actor domain.Actor, name, descrip
 	}
 
 	var r Repos
-	err := s.uow.Run(ctx, &r, func() error {
+	err = s.uow.Run(ctx, &r, func() error {
 		if err := r.Projects.Create(ctx, p); err != nil {
 			return err
 		}
@@ -166,9 +171,15 @@ func (s *Projects) ListWithCounts(ctx context.Context, f ...ProjectFilter) ([]Pr
 
 // Update applies a partial field change to an existing project and appends an
 // `updated` event in the same unit of work. Before/After JSON carry only the
-// changed fields. Unknown id → domain.ErrNotFound; no fields set or empty new
-// name → domain.ErrInvalid.
+// changed fields. The acting actor is validated and normalized BEFORE anything
+// else (domain.Actor.Validate via normalizeActor): an invalid principal never
+// reaches the event log or triggers a write. Unknown id → domain.ErrNotFound;
+// no fields set, empty new name, or invalid actor → domain.ErrInvalid.
 func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID, u ProjectUpdate) (domain.Project, error) {
+	actor, err := normalizeActor(actor)
+	if err != nil {
+		return domain.Project{}, err
+	}
 	newName, hasName := "", false
 	if u.Name != nil {
 		newName = strings.TrimSpace(*u.Name)
@@ -217,7 +228,7 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 
 	var before, after = map[string]string{}, map[string]string{}
 	var repos Repos
-	err := s.uow.Run(ctx, &repos, func() error {
+	err = s.uow.Run(ctx, &repos, func() error {
 		p, err := repos.Projects.Get(ctx, id)
 		if err != nil {
 			return err

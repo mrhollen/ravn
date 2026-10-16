@@ -128,16 +128,25 @@ type TaskUpdateInput struct {
 	ExpectedVersion int
 }
 
-// Create validates the input, mints the task ID, stamps timestamps, and stores
-// the task row (status=todo, version=1), its initial acceptance criteria, and
-// ONE `created` event — all inside a single unit of work. Empty title or a
-// missing/unknown project → domain.ErrInvalid; nothing is written on failure.
+// Create validates the input (including the acting actor — see
+// normalizeActor), mints the task ID, stamps timestamps, and stores the task
+// row (status=todo, version=1), its initial acceptance criteria, and ONE
+// `created` event — all inside a single unit of work. Empty title, an invalid
+// actor, or a missing/unknown project → domain.ErrInvalid; nothing is written
+// on failure.
 // Duplicate-title candidates are surfaced as a non-blocking
 // `possible_duplicates` advisory on create (see FindDuplicateCandidates).
 // Parent / blocked-by / related edges are managed via the separate relations
 // use case (POST|DELETE /tasks/{id}/relations, `relate_tasks`) and are
 // intentionally not part of the create payload (docs/API.md).
 func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (domain.Task, error) {
+	// The acting actor is validated and normalized BEFORE anything else: an
+	// invalid principal (unknown type, empty/oversized/control-char name) must
+	// not reach the event log or any stored row.
+	actor, err := normalizeActor(actor)
+	if err != nil {
+		return domain.Task{}, err
+	}
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		return domain.Task{}, fmt.Errorf("%w: task title must not be empty", domain.ErrInvalid)
@@ -189,7 +198,7 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 	}
 
 	var r Repos
-	err := s.uow.Run(ctx, &r, func() error {
+	err = s.uow.Run(ctx, &r, func() error {
 		if _, gerr := r.Projects.Get(ctx, in.ProjectID); errors.Is(gerr, domain.ErrNotFound) {
 			return fmt.Errorf("%w: project %s does not exist", domain.ErrInvalid, in.ProjectID)
 		} else if gerr != nil {
@@ -235,6 +244,12 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 // event — EXCEPT when guarded: a stale base conflicts even if the payload
 // would otherwise be a no-op.
 func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in TaskUpdateInput) (domain.Task, error) {
+	// The acting actor is validated and normalized BEFORE anything else: an
+	// invalid principal must not reach the event log or any stored row.
+	actor, err := normalizeActor(actor)
+	if err != nil {
+		return domain.Task{}, err
+	}
 	if in.Title != nil && strings.TrimSpace(*in.Title) == "" {
 		return domain.Task{}, fmt.Errorf("%w: task title must not be empty", domain.ErrInvalid)
 	}
@@ -262,7 +277,7 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 	now := s.clock.Now()
 	var fresh domain.Task
 	var r Repos
-	err := s.uow.Run(ctx, &r, func() error {
+	err = s.uow.Run(ctx, &r, func() error {
 		cur, err := r.Tasks.Get(ctx, id)
 		if err != nil {
 			return err
@@ -952,15 +967,39 @@ func (s *Tasks) Heartbeat(ctx context.Context, actor domain.Actor, id domain.ID)
 	return stored, nil
 }
 
-// sameLeaseHolder reports whether actor holds cur's current lease. The NAME is
-// the lease-holder key (MVP single-tenant, self-declared names — ADR 2026-09-26);
-// the stored claimed_by_type is display-only and may legitimately differ across
-// re-claims by the same named actor. This must stay in lockstep with the SQL
-// CAS's `claimed_by_name = ?` conditions — it is what keeps the fake adapter,
-// the real adapter, and the event classification agreeing on "who is home".
+// sameLeaseHolder reports whether actor holds cur's current lease.
+//
+// Lease-holder identity model — UNIFIED NAME IDENTITY (explicit, per
+// ADR 2026-09-26): the NAME is the ENTIRE lease principal. claimed_by_type is
+// display/audit metadata only and deliberately does NOT participate in holder
+// comparison: a human-typed and an agent-typed actor that share a name are the
+// SAME lease holder, so either may idempotently re-claim, heartbeat, or release
+// the other's lease.
+//
+// This is a deliberate choice for crowban's single-tenant MVP, not an
+// oversight:
+//   - Principals SELF-DECLARE identity through unauthenticated API calls
+//     (docs/API.md "Actor convention" — "the server trusts it"), so the type
+//     carries no trust signal. Adding type to the CAS key would not close the
+//     impersonation vector: the holder's full (type, name) pair is already
+//     exposed to ANY caller in task rows and in *domain.ClaimConflictError
+//     bodies, so an actor that can read the board can always know both halves.
+//   - The documented HTTP contract defaults an omitted type to "human"
+//     (actorInput.toDomain), and MCP tooling documents claims keyed on NAME.
+//     A type-sensitive comparison would turn a client that omits type on one
+//     call and sends it on the next into a 409 conflict — breaking observable
+//     behavior that docs/API.md, ARCHITECTURE.md, and E2E specs encode.
+//
+// This helper is the single source of truth for lease-holder equality in Go
+// code (claim outcome classification + the in-memory test adapter). It must
+// stay in lockstep with the SQL CAS's `claimed_by_name = ?` conditions in
+// internal/infrastructure/sqlite/tasks_repo.go (Claim / Release / Heartbeat) —
+// that is what keeps the fake adapter, the real adapter, and the event
+// classification agreeing on "who is home". If crowban ever gains
+// authenticated identities, this helper AND both adapters must change together.
 func sameLeaseHolder(cur *domain.Task, actor domain.Actor) bool {
 	by := cur.Claim.By()
-	return by != nil && by.Name == actor.Name
+	return by != nil && by.Name == actor.Name // NAME key — see doc comment above
 }
 
 // claimOutcome tags a successful claim for the `claimed` event summary (ADR
@@ -983,15 +1022,18 @@ func claimOutcome(cur domain.Task, actor domain.Actor, now time.Time) string {
 
 // --- helpers shared by the task use cases ---------------------------------------
 
-// normalizeActor trims the actor name and validates the type; it returns a
-// copy so callers' inputs are never mutated.
+// normalizeActor trims the actor name and then validates the whole principal
+// through domain.Actor.Validate (known type, non-empty trimmed name, at most
+// domain.MaxActorNameLen runes, no control characters); it returns a copy so
+// callers' inputs are never mutated. Every write-path use case funnels its
+// acting actor — and any assignee it accepts — through here, so an invalid
+// actor is rejected with domain.ErrInvalid BEFORE anything is stored or an
+// event is recorded. Validation lives at the WRITE edge on purpose: read paths
+// never re-validate, so legacy rows stored before the cap keep working.
 func normalizeActor(a domain.Actor) (domain.Actor, error) {
 	a.Name = strings.TrimSpace(a.Name)
-	if !a.Type.Valid() {
-		return domain.Actor{}, fmt.Errorf("%w: unknown actor type %q", domain.ErrInvalid, a.Type)
-	}
-	if a.Name == "" {
-		return domain.Actor{}, fmt.Errorf("%w: actor name must not be empty", domain.ErrInvalid)
+	if err := a.Validate(); err != nil {
+		return domain.Actor{}, err // Validate already wraps domain.ErrInvalid
 	}
 	return a, nil
 }

@@ -207,8 +207,12 @@ func (r *taskRepo) Update(ctx context.Context, t domain.Task) (domain.Task, erro
 // claimed_at/claim_expires_at are re-stamped to now/now+ttl even on renewal
 // (the event log carries the full history). Status is forced to doing and the
 // version bumped; the durable assignee columns are deliberately untouched
-// (claim ≠ assignment). The actor NAME is the lease-holder key (MVP single
-// tenant, self-declared names); claimed_by_type is stored for display only.
+// (claim ≠ assignment). Lease-holder identity is the NAME alone — the unified
+// NAME identity model defined by sameLeaseHolder in internal/application/
+// tasks.go (single-tenant MVP, self-declared names): claimed_by_type is stored
+// for display/audit only and deliberately does NOT participate in this CAS, so
+// a human-typed and an agent-typed actor sharing a name are the same holder.
+// Change here and there together if that model ever changes.
 func (r *taskRepo) Claim(ctx context.Context, taskID domain.ID, actor domain.Actor, ttlSec int, now time.Time) (domain.Task, error) {
 	expiry := now.Add(time.Duration(ttlSec) * time.Second)
 	row := r.q.QueryRowContext(ctx, `
@@ -253,8 +257,9 @@ func (r *taskRepo) Claim(ctx context.Context, taskID domain.ID, actor domain.Act
 }
 
 // Release clears the lease and moves status back to todo (or preserves done), bumping version.
-// The WHERE enforces holder-only release against an active or expired lease (name key);
-// a foreign holder loses with *domain.ClaimConflictError{Holder, ExpiresAt} and nothing is mutated.
+// The WHERE enforces holder-only release against an active or expired lease (unified NAME
+// identity — claimed_by_name is the whole principal; see sameLeaseHolder in the application
+// layer); a foreign-name holder loses with *domain.ClaimConflictError{Holder, ExpiresAt} and nothing is mutated.
 // When force is true, an administrative release clears any lease without requiring the holder key.
 // A task with no lease at all is an idempotent no-op returning the fresh row (retry-
 // safe: re-releasing after a success must not error). The durable assignee
@@ -311,7 +316,9 @@ func (r *taskRepo) Release(ctx context.Context, taskID domain.ID, actor domain.A
 // Heartbeat extends actor's ACTIVE lease to now + the STORED TTL (claim_ttl_sec).
 // Two statements: the read supplies the stored TTL and proves holder identity,
 // the guarded UPDATE re-checks `claimed_by_name = ? AND claim_expires_at >= ?`
-// so the extension can never apply to a lost or lapsed lease. Under the
+// so the extension can never apply to a lost or lapsed lease. Holder identity
+// here is the NAME alone (unified NAME identity — see sameLeaseHolder in the
+// application layer; claimed_by_type is display-only and not compared). Under the
 // single-connection pool the pair is serialized against every other writer (and
 // both run inside one tx when called through UnitOfWork), so no lease can move
 // between the read and the write. Deliberately does NOT bump version and does
