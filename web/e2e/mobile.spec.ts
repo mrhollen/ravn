@@ -323,8 +323,14 @@ test.describe('Mobile experience (375px, touch)', () => {
   test('all visible interactive controls meet the 44x44px tap-target minimum at 375px', async ({ browser }) => {
     const { context, page } = await openMobileBoard(browser);
 
+    // `.tap-target-exempt` (style.css mobile media query) marks intentionally
+    // compact controls — segmented theme toggle, per-card 3-dot move trigger,
+    // inline AC/relation action buttons — that are EXCLUDED from the mobile
+    // 44px min-size rule by design so they keep their tight sizing at narrow
+    // widths. They are skipped here; every other visible control is still
+    // asserted to meet the minimum below.
     const targets = page.locator(
-      'button:visible, select:visible, input:visible:not([type="checkbox"]):not([type="radio"]), textarea:visible',
+      'button:visible:not(.tap-target-exempt), select:visible:not(.tap-target-exempt), input:visible:not([type="checkbox"]):not([type="radio"]):not(.tap-target-exempt), textarea:visible:not(.tap-target-exempt)',
     );
     const count = await targets.count();
     expect(count).toBeGreaterThan(0);
@@ -344,6 +350,16 @@ test.describe('Mobile experience (375px, touch)', () => {
         ).toBeGreaterThanOrEqual(44);
       }
     }
+
+    // The exemption must actually apply: the per-card 3-dot move trigger stays
+    // a compact icon button (≈24px) instead of ballooning to a forced 44x44
+    // block that would push the priority badge and wrap card titles.
+    const menuToggle = page.locator('[data-testid="card-menu-toggle"]').first();
+    await expect(menuToggle).toBeVisible();
+    const mbox = await menuToggle.boundingBox();
+    expect(mbox, 'card menu toggle missing').not.toBeNull();
+    expect(mbox!.height, 'exempted card menu trigger must stay compact (<44px)').toBeLessThan(44);
+    expect(mbox!.width, 'exempted card menu trigger must stay compact (<44px)').toBeLessThan(44);
 
     await context.close();
   });

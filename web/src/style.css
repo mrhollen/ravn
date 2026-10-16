@@ -90,16 +90,19 @@ html.dark {
 /* --- mobile tap targets ------------------------------------------------------
    44x44px minimum touch-target guideline (WCAG 2.5.8 / Apple HIG) applied on
    small screens only, so the desktop UI keeps its denser layout. Checkboxes are
-   excluded — their wrapping <label> is the tappable area (see .tap-target). */
+   excluded — their wrapping <label> is the tappable area (see .tap-target).
+   `.tap-target-exempt` carves out intentionally compact controls (segmented
+   theme toggle, per-card 3-dot move trigger, inline AC/relation action buttons)
+   that a forced 44px size would distort at small widths. */
 @media (max-width: 767px) {
-  button,
-  select,
-  input:not([type="checkbox"]):not([type="radio"]),
-  textarea {
+  button:not(.tap-target-exempt),
+  select:not(.tap-target-exempt),
+  input:not([type="checkbox"]):not([type="radio"]):not(.tap-target-exempt),
+  textarea:not(.tap-target-exempt) {
     min-height: 44px;
   }
 
-  button {
+  button:not(.tap-target-exempt) {
     min-width: 44px;
   }
 

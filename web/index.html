@@ -310,7 +310,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                    class="flex w-full items-center overflow-hidden rounded-md border border-zinc-300 shadow-sm dark:border-zinc-700">
                 <button type="button" data-testid="theme-light" @click="setTheme('light')"
                         :aria-pressed="theme === 'light'" title="Always use the light theme"
-                        class="flex-1 justify-center px-2.5 py-1 text-xs font-medium transition-colors"
+                        class="tap-target-exempt flex-1 justify-center px-2.5 py-1 text-xs font-medium transition-colors"
                         :class="theme === 'light'
                           ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
                           : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
@@ -319,7 +319,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <span class="h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
                 <button type="button" data-testid="theme-dark" @click="setTheme('dark')"
                         :aria-pressed="theme === 'dark'" title="Always use the dark theme"
-                        class="flex-1 justify-center px-2.5 py-1 text-xs font-medium transition-colors"
+                        class="tap-target-exempt flex-1 justify-center px-2.5 py-1 text-xs font-medium transition-colors"
                         :class="theme === 'dark'
                           ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
                           : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
@@ -328,7 +328,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <span class="h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
                 <button type="button" data-testid="theme-system" @click="setTheme('system')"
                         :aria-pressed="theme === 'system'" title="Follow the operating system color scheme"
-                        class="flex-1 justify-center px-2.5 py-1 text-xs font-medium transition-colors"
+                        class="tap-target-exempt flex-1 justify-center px-2.5 py-1 text-xs font-medium transition-colors"
                         :class="theme === 'system'
                           ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
                           : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
@@ -610,7 +610,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                                     data-testid="card-menu-toggle" aria-label="Move task to another status"
                                     :aria-expanded="cardMenuTaskId === task.id ? 'true' : 'false'"
                                     title="Move task" :class="cardMenuTaskId === task.id ? 'text-zinc-900 dark:text-zinc-100' : ''"
-                                    class="-my-1 -mr-1 shrink-0 rounded-md p-1 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200">
+                                    class="tap-target-exempt -my-1 -mr-1 shrink-0 rounded-md p-1 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200">
                               <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                                 <path d="M12 8a2 2 0 100-4 2 2 0 000 4zm0 6a2 2 0 100-4 2 2 0 000 4zm0 6a2 2 0 100-4 2 2 0 000 4z"/>
                               </svg>
@@ -1262,13 +1262,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                           <div class="flex items-center gap-1 shrink-0">
                              <button type="button" @click="startEditingAc(ac)"
                                      :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0"
-                                      class="rounded px-1.5 py-0.5 text-xs text-zinc-600 hover:bg-zinc-100 hover:text-zinc-700 font-medium dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+                                      class="tap-target-exempt rounded px-1.5 py-0.5 text-xs text-zinc-600 hover:bg-zinc-100 hover:text-zinc-700 font-medium dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
                                      title="Edit criterion" aria-label="Edit criterion">
                                Edit
                              </button>
                              <button type="button" @click="deleteAc(ac.seq)"
                                      :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0"
-                                      class="rounded px-1.5 py-0.5 text-xs text-zinc-600 hover:bg-zinc-100 hover:text-red-600 font-medium dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-red-400"
+                                      class="tap-target-exempt rounded px-1.5 py-0.5 text-xs text-zinc-600 hover:bg-zinc-100 hover:text-red-600 font-medium dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-red-400"
                                      title="Delete criterion" :aria-label="'Delete criterion ' + ac.seq">
                                ✕
                              </button>
@@ -1467,7 +1467,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                                     :title="r.title" x-text="r.title"></button>
                           </div>
                           <button type="button" @click="removeRelation(r.raw)"
-                                  class="text-zinc-600 hover:text-red-600 text-xs px-1.5 py-0.5 rounded hover:bg-zinc-100 shrink-0 font-medium dark:text-zinc-400 dark:hover:text-red-400 dark:hover:bg-zinc-700"
+                                  class="tap-target-exempt text-zinc-600 hover:text-red-600 text-xs px-1.5 py-0.5 rounded hover:bg-zinc-100 shrink-0 font-medium dark:text-zinc-400 dark:hover:text-red-400 dark:hover:bg-zinc-700"
                                   title="Remove relation" aria-label="Remove relation">
                             ✕
                           </button>
