@@ -228,16 +228,20 @@ test("R10: web/index.html uses <article> containers with scoped keyboard listene
   const htmlPath = path.resolve(__dirname, "../index.html");
   const html = fs.readFileSync(htmlPath, "utf-8");
 
-  // Verify the task card uses <article>
+  // Verify the task card uses <article>. The a11y rationale comment added in
+  // 93c141e may sit between <template> and <article>, so allow any gap there.
   assert.match(
     html,
-    /<template x-for="task in col\.tasks" :key="task\.id">\s*<article[\s\S]*?<\/article>\s*<\/template>/,
+    /<template x-for="task in col\.tasks" :key="task\.id">[\s\S]*?<article[\s\S]*?<\/article>\s*<\/template>/,
     "Kanban cards must be wrapped in <article> ... </article> containers",
   );
 
-  // Verify role="button" is NOT present on the article card
-  const cardMatch = html.match(/<article[\s\S]*?class="relative w-full rounded-lg border p-3/);
+  // Locate the card's full opening tag via its stable class prefix so every
+  // per-card assertion below is scoped to the kanban card element itself.
+  const cardMatch = html.match(/<article[\s\S]*?class="relative w-full rounded-lg border p-3[^"]*"[^>]*>/);
   assert.ok(cardMatch, "Should find the card article element");
+
+  // Verify role="button" is NOT present on the article card
   assert.ok(
     !cardMatch[0].includes('role="button"'),
     "Card article must not have role='button'",
@@ -255,9 +259,28 @@ test("R10: web/index.html uses <article> containers with scoped keyboard listene
     "@keydown.space.self.prevent must be scoped with .self",
   );
 
-  // Verify tabindex="0" and aria-label are present on the card
-  assert.match(html, /tabindex="0"/);
-  assert.match(html, /:aria-label="'Task: ' \+ task\.title \+ ', status ' \+ statusLabel\(col\.status\)"/);
+  // Verify the card is focusable (tabindex="0")
+  assert.match(cardMatch[0], /tabindex="0"/, "Card article must be focusable via tabindex=0");
+
+  // Accessible name (93c141e): labelledby points at the card title's id. A
+  // hard-coded aria-label on this focusable container would override the whole
+  // subtree for AT and hide the metadata badges, so it must not come back.
+  assert.match(
+    cardMatch[0],
+    /:aria-labelledby="'card-title-' \+ task\.id"/,
+    "Card article must be named via :aria-labelledby pointing at its title",
+  );
+  assert.ok(
+    !/aria-label[=\s]/.test(cardMatch[0]),
+    "Card article must not carry a hard-coded aria-label (would hide metadata from screen readers)",
+  );
+
+  // The labelledby target exists: the card's title <h3> carries that id.
+  assert.match(
+    html,
+    /<h3 :id="'card-title-' \+ task\.id"/,
+    "Card title must expose the id the card's aria-labelledby points at",
+  );
 });
 
 // --------------------------------------------------------------------------- Notes scratchpad reset (task 01M3MMSVAF8RV8J7VGDSCV6M07)
