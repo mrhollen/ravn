@@ -341,14 +341,14 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
 
     // --- fields (title + priority) via the edit form -----------------------
     await panel.getByRole('button', { name: 'Edit', exact: true }).first().click();
-    // The edit form is the ancestor <form> of its "Edit task details" heading.
-    const editForm = panel.locator(
-      'xpath=//h3[normalize-space()="Edit task details"]/ancestor::form',
-    );
+    // Edit mode pins the "Edit task details" bar (with Save/Cancel/×) outside
+    // the scroll region; the fields live in #task-edit-form inside it, and the
+    // pinned Save is form-associated via its `form` attribute.
+    const editForm = panel.locator('#task-edit-form');
     await expect(editForm).toBeVisible();
     await editForm.locator('input').first().fill('B renamed from full page');
     await editForm.locator('select').first().selectOption('4'); // priority P4
-    await editForm.getByRole('button', { name: 'Save', exact: true }).click();
+    await panel.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(panel.locator('h2').first()).toHaveText('B renamed from full page');
     const b1 = await getJson(`${serverUrl}/api/v1/tasks/${taskB.id}`);
     expect(b1.title).toBe('B renamed from full page');

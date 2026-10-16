@@ -1681,5 +1681,133 @@ test.describe('Web E2E test suite', () => {
     await expect(doneBtn).toHaveAttribute('aria-pressed', 'true');
     await expect(doingBtn).toHaveAttribute('aria-pressed', 'false');
   });
+
+  // -----------------------------------------------------------------------
+  // Ticket 01M3MMTSSZ4F40EH4F30JA8TN7: on long tasks the drawer header must not
+  // scroll out of view. The view-mode header and the edit-mode bar are shrink-0
+  // flex siblings of the scroll body, so after scrolling deep into the content
+  // Close / Edit / OpenCode (view) and Cancel / Save / × (edit) stay pinned at
+  // the top — asserted here in BOTH modes with a long seeded task.
+
+  test('pinned drawer header: title/close/edit stay visible while scrolling long task detail', async ({ page }, testInfo) => {
+    // -------------------------------------------------------------------------
+    // Seed a project with one LONG task (30 paragraphs + 8 ACs) so the drawer
+    // body far exceeds its viewport and genuinely overflows.
+    // -------------------------------------------------------------------------
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Pinned Header Project',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    const longDescription = [
+      '## Long task used to verify the pinned drawer header',
+      '',
+      ...Array.from(
+        { length: 30 },
+        (_, i) =>
+          `Paragraph ${i + 1}: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.`,
+      ),
+    ].join('\n');
+
+    const taskRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Long Task for Pinned Header',
+        description: longDescription,
+        priority: 2,
+        acceptance_criteria: Array.from({ length: 8 }, (_, i) => `Pinned header criterion ${i + 1}`),
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(taskRes.ok).toBe(true);
+
+    // -------------------------------------------------------------------------
+    // Open the task drawer (modal skin at the default 1280x720 viewport)
+    // -------------------------------------------------------------------------
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, project.id);
+
+    const taskCard = page.locator('article', { hasText: 'Long Task for Pinned Header' });
+    await expect(taskCard).toBeVisible();
+    await taskCard.click();
+
+    const drawer = page.locator('aside');
+    await expect(drawer.getByRole('heading', { name: 'Long Task for Pinned Header' })).toBeVisible();
+
+    // The ONLY scrollable region of the drawer is the body below the pinned header.
+    const scroller = page.locator('#cb-detail-drawer aside .overflow-y-auto');
+    await expect(scroller).toBeVisible();
+
+    const viewCloseBtn = page.getByTestId('detail-close-btn');
+    const editBtn = drawer.locator('button[title="Edit task details"]');
+    const opencodeBtn = page.getByTestId('start-opencode-btn');
+    for (const loc of [viewCloseBtn, editBtn, opencodeBtn]) {
+      await expect(loc).toBeVisible();
+    }
+
+    // -------------------------------------------------------------------------
+    // View mode: scroll the body well past its initial position — title, Close,
+    // Edit and Start-Task-in-OpenCode must remain pinned in the viewport.
+    // -------------------------------------------------------------------------
+    const scrolled = await scroller.evaluate((el) => {
+      el.scrollBy(0, 600);
+      return el.scrollTop;
+    });
+    expect(scrolled).toBeGreaterThan(0, 'seeded long content must overflow the drawer body');
+
+    await expect(viewCloseBtn).toBeVisible();
+    const closeBox = await viewCloseBtn.boundingBox();
+    expect(closeBox).not.toBeNull();
+    expect(closeBox!.y).toBeGreaterThanOrEqual(0);
+    await expect(editBtn).toBeVisible();
+    await expect(opencodeBtn).toBeVisible();
+
+    // QA evidence: long drawer scrolled down, header still pinned at the top.
+    await page.screenshot({ path: path.join(testInfo.outputDir, 'pinned-header-view-scrolled.png') });
+
+    // -------------------------------------------------------------------------
+    // Edit mode: switch to the edit bar and scroll to the very bottom — its
+    // Cancel / Save / × row must stay pinned too (exactly one header pins per
+    // mode; the view header is hidden while editing).
+    // -------------------------------------------------------------------------
+    await editBtn.click();
+    const editBarHeading = drawer.getByRole('heading', { name: 'Edit task details' });
+    await expect(editBarHeading).toBeVisible();
+    await expect(viewCloseBtn).not.toBeVisible();
+
+    const scrolledToBottom = await scroller.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+      return el.scrollTop;
+    });
+    expect(scrolledToBottom).toBeGreaterThan(scrolled, 'edit-mode content must still overflow');
+
+    await expect(editBarHeading).toBeVisible();
+    const editCloseBtn = page.getByTestId('detail-close-edit-btn');
+    await expect(editCloseBtn).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Save', exact: true })).toBeVisible();
+    const barBox = await editBarHeading.boundingBox();
+    expect(barBox).not.toBeNull();
+    expect(barBox!.y).toBeGreaterThanOrEqual(0);
+
+    // QA evidence: scrolled to the bottom in edit mode, edit bar still pinned.
+    await page.screenshot({ path: path.join(testInfo.outputDir, 'pinned-header-edit-scrolled.png') });
+
+    // Cancel from the pinned bar returns to view mode with the header intact.
+    await drawer.getByRole('button', { name: 'Cancel' }).click();
+    await expect(drawer.getByRole('heading', { name: 'Long Task for Pinned Header' })).toBeVisible();
+
+    // Close via the (still scrolled) pinned view header — the exact workflow
+    // the ticket was about.
+    await viewCloseBtn.click();
+    await expect(drawer).toBeHidden();
+  });
 });
 

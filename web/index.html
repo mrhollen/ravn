@@ -968,12 +968,18 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              </div>
            </template>
 
-           <template x-if="detail">
-            <!-- Modal skin: min-h-0 flex child so long content scrolls inside the
-                 max-height-capped panel; full page keeps filling its region. -->
-            <div :class="fullPageOpen ? 'h-full overflow-y-auto' : 'min-h-0 flex-1 overflow-y-auto'">
+            <template x-if="detail">
+              <!-- NOTE: Alpine v3 x-if only renders the template's FIRST element
+                   child, so this column wrapper is the single root: pinned
+                   headers + scroll body are its flex children. -->
+              <div class="flex min-h-0 flex-1 flex-col">
+              <!-- Pinned drawer headers: shrink-0 flex siblings of the scroll body
+                   below (NOT inside it), so exactly one — the view header or the
+                   edit bar — stays visible at any scroll depth. Ticket
+                   01M3MMTSSZ4F40EH4F30JA8TN7: on long tasks the old single
+                   h-full overflow-y-auto container scrolled these headers away. -->
               <!-- header (view mode) -->
-              <div x-show="!editingTask" class="border-b border-zinc-100 dark:border-zinc-800 px-5 py-4">
+             <div x-show="!editingTask" class="shrink-0 border-b border-zinc-100 bg-white px-5 py-4 dark:border-zinc-800 dark:bg-zinc-900">
                 <!-- Never wraps: the button cluster stays pinned to the right of
                      the title's FIRST line at any title length — the h2 is
                      flex-basis-0 (flex-1), so its text width never drives shrink
@@ -1046,23 +1052,35 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </div>
               </div>
 
-              <!-- edit form (edit mode) -->
-              <form x-show="editingTask" x-cloak @submit.prevent="saveTaskEdit()" class="border-b border-zinc-200 bg-zinc-50/70 p-5 dark:border-zinc-700 dark:bg-zinc-800/60">
-                  <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-zinc-200 dark:border-zinc-700">
-                    <h3 class="text-sm font-semibold text-zinc-800 dark:text-zinc-200">Edit task details</h3>
-                    <div class="flex flex-wrap items-center gap-2">
-                      <!-- Full-page mode: same back-to-board affordance as the view header. -->
-                      <button type="button" x-show="fullPageOpen" x-cloak @click="requestCloseDetail()"
-                              data-testid="fullpage-back-btn-edit" aria-label="Back to board" title="Back to board"
-                              class="btn-ghost px-2.5 py-1 text-xs">← Board</button>
-                      <button type="button" @click="cancelEditing()" :disabled="savingEdit" class="btn-ghost px-2.5 py-1 text-xs">Cancel</button>
-                    <button type="submit" :disabled="savingEdit || !editDraft.title.trim()" class="btn-primary px-3 py-1 text-xs"
-                            x-text="savingEdit ? 'Saving…' : 'Save'"></button>
-                    <button type="button" @click="requestCloseDetail()" aria-label="Close"
-                            class="ml-1 text-xl leading-none text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">&times;</button>
-                  </div>
-                </div>
-                <div class="flex flex-col gap-3 pt-3">
+             <!-- edit bar (edit mode): pinned Cancel / Save / Close at any scroll
+                  depth, solid backdrop so nothing shows through behind it. Save is
+                  form-associated via the `form` attribute — the fields' <form> in
+                  the scroller below still owns submission + validation. -->
+             <div x-show="editingTask" x-cloak class="shrink-0 border-b border-zinc-200 bg-zinc-50 px-5 pt-5 dark:border-zinc-700 dark:bg-zinc-800">
+               <div class="flex flex-wrap items-center justify-between gap-2 pb-3">
+                 <h3 class="text-sm font-semibold text-zinc-800 dark:text-zinc-200">Edit task details</h3>
+                 <div class="flex flex-wrap items-center gap-2">
+                   <!-- Full-page mode: same back-to-board affordance as the view header. -->
+                   <button type="button" x-show="fullPageOpen" x-cloak @click="requestCloseDetail()"
+                           data-testid="fullpage-back-btn-edit" aria-label="Back to board" title="Back to board"
+                           class="btn-ghost px-2.5 py-1 text-xs">← Board</button>
+                   <button type="button" @click="cancelEditing()" :disabled="savingEdit" class="btn-ghost px-2.5 py-1 text-xs">Cancel</button>
+                 <button type="submit" form="task-edit-form" :disabled="savingEdit || !editDraft.title.trim()" class="btn-primary px-3 py-1 text-xs"
+                         x-text="savingEdit ? 'Saving…' : 'Save'"></button>
+                 <button type="button" @click="requestCloseDetail()" aria-label="Close" data-testid="detail-close-edit-btn"
+                         class="ml-1 text-xl leading-none text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">&times;</button>
+               </div>
+             </div>
+           </div>
+
+             <!-- Scroll body: the ONLY scrolling region of the drawer. Modal skin:
+                  min-h-0 flex child so long content scrolls inside the
+                  max-height-capped panel; full page fills its region the same way. -->
+             <div class="min-h-0 flex-1 overflow-y-auto">
+               <!-- edit form (edit mode): only the fields live in the scroller —
+                    the pinned bar above stays out of it -->
+               <form id="task-edit-form" x-show="editingTask" x-cloak @submit.prevent="saveTaskEdit()" class="border-b border-zinc-200 bg-zinc-50 px-5 pb-5 dark:border-zinc-700 dark:bg-zinc-800">
+                 <div class="flex flex-col gap-3 pt-3">
                   <label class="flex flex-col text-xs font-medium text-zinc-600 dark:text-zinc-400">
                     Title *
                     <input x-model="editDraft.title" class="field mt-1 text-sm font-medium" placeholder="Task title" required />
@@ -1534,6 +1552,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </section>
               </div>
             </div>
+              </div>
           </template>
         </aside>
       </div>
