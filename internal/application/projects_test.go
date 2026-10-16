@@ -235,6 +235,115 @@ func TestProjectsUpdate_EmptyNameOrNoFieldsReturnsErrInvalid(t *testing.T) {
 	}
 }
 
+func TestProjectsCreate_NameTooLongReturnsErrInvalid(t *testing.T) {
+	ctx := context.Background()
+	svc, _, fp, fe := newProjectTestEnv(t)
+
+	overCap := strings.Repeat("x", domain.MaxProjectNameLen+1)
+	if _, err := svc.Create(ctx, testAgent, overCap, ""); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("Create(%d-rune name) err = %v, want wrapped domain.ErrInvalid", len(overCap), err)
+	}
+
+	atCap := strings.Repeat("y", domain.MaxProjectNameLen)
+	p, err := svc.Create(ctx, testAgent, atCap, "")
+	if err != nil {
+		t.Fatalf("Create(name exactly at cap) = %v, want success", err)
+	}
+	if len(fp.byID) != 1 || fp.byID[p.ID].Name != atCap {
+		t.Fatalf("at-cap name not stored intact: %+v", fp.byID)
+	}
+	if len(fe.events) != 1 {
+		t.Fatalf("rejected create must write nothing; events = %d (projects=%d)", len(fe.events), len(fp.byID))
+	}
+}
+
+func TestProjectsUpdate_NameTooLongReturnsErrInvalid(t *testing.T) {
+	ctx := context.Background()
+	svc, _, fp, fe := newProjectTestEnv(t)
+
+	p, err := svc.Create(ctx, testAgent, "Keep", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	overCap := strings.Repeat("z", domain.MaxProjectNameLen+1)
+	if _, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{Name: &overCap}); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("Update(over-long name) err = %v, want wrapped domain.ErrInvalid", err)
+	}
+	if fp.byID[p.ID].Name != "Keep" {
+		t.Fatalf("rejected rename must not touch stored row: got %q", fp.byID[p.ID].Name)
+	}
+	if len(fe.events) != 1 {
+		t.Fatalf("failed update must not emit events: got %d", len(fe.events))
+	}
+}
+
+// TestProjectsUpdate_RejectsInvalidOpenCodeModel pins the update write path to
+// parseOpenCodeModel semantics: no slash, leading/trailing slash all rejected;
+// nested model IDs (extra slashes) accepted. Nothing is written on rejection.
+func TestProjectsUpdate_RejectsInvalidOpenCodeModel(t *testing.T) {
+	ctx := context.Background()
+	svc, _, fp, fe := newProjectTestEnv(t)
+
+	p, err := svc.Create(ctx, testAgent, "Model Project", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	for _, bad := range []string{"gpt-4o", "/model", "provider/", "/", "//double"} {
+		bad := bad
+		if _, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{OpenCodeModel: &bad}); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("Update(model %q) err = %v, want wrapped domain.ErrInvalid", bad, err)
+		}
+		if fp.byID[p.ID].OpenCodeModel != "" {
+			t.Errorf("rejected model %q must not touch stored row: got %q", bad, fp.byID[p.ID].OpenCodeModel)
+		}
+	}
+	if len(fe.events) != 1 {
+		t.Fatalf("failed updates must not emit events: got %d", len(fe.events))
+	}
+
+	nested := "openrouter/meta-llama/llama-3.1-70b-instruct"
+	updated, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{OpenCodeModel: &nested})
+	if err != nil {
+		t.Fatalf("Update(nested model id) = %v, want success", err)
+	}
+	if updated.OpenCodeModel != nested || fp.byID[p.ID].OpenCodeModel != nested {
+		t.Fatalf("nested model not stored: got (%q, %q)", updated.OpenCodeModel, fp.byID[p.ID].OpenCodeModel)
+	}
+}
+
+// TestProjectsUpdate_RejectsInvalidServerURL covers the update write path for
+// malformed URLs, non-http(s) schemes, and missing hosts (shape errors that
+// fail before any private-IP/env logic).
+func TestProjectsUpdate_RejectsInvalidServerURL(t *testing.T) {
+	ctx := context.Background()
+	svc, _, fp, fe := newProjectTestEnv(t)
+
+	p, err := svc.Create(ctx, testAgent, "URL Project", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	for _, bad := range []string{
+		"javascript:alert(1)", // non-http scheme
+		"ftp://opencode.example.com",
+		"http://",          // missing host
+		"not a url at all", // schemeless
+		"http://[::1",      // unparseable (unterminated IPv6 bracket)
+	} {
+		bad := bad
+		if _, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{OpenCodeServerURL: &bad}); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("Update(url %q) err = %v, want wrapped domain.ErrInvalid", bad, err)
+		}
+		if fp.byID[p.ID].OpenCodeServerURL != "" {
+			t.Errorf("rejected url %q must not touch stored row: got %q", bad, fp.byID[p.ID].OpenCodeServerURL)
+		}
+	}
+	if len(fe.events) != 1 {
+		t.Fatalf("failed updates must not emit events: got %d", len(fe.events))
+	}
+}
+
 func TestProjectsUpdate_OpenCodeSettings(t *testing.T) {
 	t.Setenv("OPENCODE_ALLOW_PRIVATE_IPS", "true")
 	ctx := context.Background()

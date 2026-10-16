@@ -384,21 +384,44 @@ func TestParseOpenCodeModel(t *testing.T) {
 }
 
 func TestOpenCodeStart_InvalidModelRef(t *testing.T) {
+	// OPENCODE_ALLOW_PRIVATE_IPS lets the dispatch handler's URL check pass the
+	// localhost default so the test reaches the model parse guard. The env-var
+	// model fallback (OPENCODE_MODEL) feeds parseOpenCodeModel exactly like a
+	// stored project value would — no HTTP contact happens: parsing fails first.
+	t.Setenv("OPENCODE_ALLOW_PRIVATE_IPS", "true")
+	t.Setenv("OPENCODE_MODEL", "not-a-model-ref")
 	stk := newStack(t)
-	t.Setenv("OPENCODE_MODEL", "")
 
 	p := createProject(t, stk, "Invalid Model Project")
-	_, _ = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
-		"actor":               actor("admin"),
-		"opencode_server_url": "http://unreachable.invalid:4444", // never contacted: parse fails first
-		"opencode_model":      "not-a-model-ref",
-	})
 
+	// 1. The update write path rejects the value at save time (the whole PUT is
+	// atomic, so nothing is stored).
+	code, body := doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":          actor("admin"),
+		"opencode_model": "not-a-model-ref",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("PUT with malformed opencode_model = %d, want 400 (body %s)", code, string(body))
+	}
+	if !strings.Contains(string(body), "providerID/modelID") {
+		t.Errorf("PUT error body missing model-ref rule: %s", string(body))
+	}
+	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects/"+p.ID, nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /projects/%s = %d, want 200 (body %s)", p.ID, code, string(body))
+	}
+	stored := mustDecode[projectDTO](t, body)
+	if stored.OpenCodeModel != "" {
+		t.Errorf("rejected model must not be stored: got %q", stored.OpenCodeModel)
+	}
+
+	// 2. Dispatch still guards the env-var fallback for values that bypass the
+	// update path (legacy rows / OPENCODE_MODEL).
 	taskID := makeTask(t, stk, p.ID, "Task with bad model ref", nil).ID
 
-	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskID+"/opencode/start", nil)
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskID+"/opencode/start", nil)
 	if code != http.StatusBadRequest {
-		t.Fatalf("POST with malformed opencode_model = %d, want 400 (body %s)", code, string(body))
+		t.Fatalf("POST with malformed opencode model fallback = %d, want 400 (body %s)", code, string(body))
 	}
 	if !strings.Contains(string(body), "invalid opencode model") {
 		t.Errorf("error body missing 'invalid opencode model': %s", string(body))
