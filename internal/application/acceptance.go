@@ -39,13 +39,20 @@ func NewAcceptance(uow UnitOfWork, clock Clock, idgen IDGenerator) *Acceptance {
 // all three completion fields again. It appends ONE `ac-toggled` event whose
 // before→after payloads carry seq and the old/new done value. The parent
 // task's version is NOT bumped (child-row rule). Unknown task or unknown seq
-// → domain.ErrNotFound; nothing is written in that case.
+// → domain.ErrNotFound, and an incoming note over domain.MaxACNoteLen runes →
+// domain.ErrInvalid; nothing is written in either case.
 func (s *Acceptance) ToggleAC(ctx context.Context, actor domain.Actor, taskID domain.ID, seq int, done bool, note string) (domain.AcceptanceCriterion, error) {
 	a, err := normalizeActor(actor)
 	if err != nil {
 		return domain.AcceptanceCriterion{}, err
 	}
 	note = strings.TrimSpace(note)
+	// Bound check on the INCOMING note only (write path): a stored legacy note
+	// over the cap stays readable and mutable — an uncheck or re-check without
+	// a note must not re-litigate it. Empty passes (check-off without a note).
+	if err := domain.ValidateACNote(note); err != nil {
+		return domain.AcceptanceCriterion{}, err
+	}
 
 	now := s.clock.Now()
 	var fresh domain.AcceptanceCriterion
@@ -110,8 +117,10 @@ func nextSeqAfter(acs []domain.AcceptanceCriterion) int {
 
 // AddAC appends a new criterion to an existing task at seq max(seq)+1 (dense
 // when nothing was deleted; gaps otherwise) and returns the fresh row. Text is
-// trimmed; whitespace-only → domain.ErrInvalid (a checklist row with no words
-// verifies nothing). Unknown task → domain.ErrNotFound. Appends ONE `ac-added`
+// trimmed; whitespace-only or over domain.MaxACTextLen runes →
+// domain.ErrInvalid (a checklist row with no words verifies nothing, and a
+// long blob belongs in the task description). Unknown task →
+// domain.ErrNotFound. Appends ONE `ac-added`
 // event (After carries seq + text); the parent task's version is NOT bumped
 // (child-row rule); nothing is written on failure.
 func (s *Acceptance) AddAC(ctx context.Context, actor domain.Actor, taskID domain.ID, text string) (domain.AcceptanceCriterion, error) {
@@ -122,6 +131,9 @@ func (s *Acceptance) AddAC(ctx context.Context, actor domain.Actor, taskID domai
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return domain.AcceptanceCriterion{}, fmt.Errorf("%w: acceptance criterion text must not be empty", domain.ErrInvalid)
+	}
+	if err := domain.ValidateACText(text); err != nil {
+		return domain.AcceptanceCriterion{}, err
 	}
 
 	now := s.clock.Now()
@@ -158,7 +170,9 @@ func (s *Acceptance) AddAC(ctx context.Context, actor domain.Actor, taskID domai
 }
 
 // EditACText rewords the criterion at 1-based seq. Text is trimmed;
-// whitespace-only → domain.ErrInvalid. An edit to IDENTICAL text is a no-op:
+// whitespace-only or over domain.MaxACTextLen runes → domain.ErrInvalid (only
+// the INCOMING value is checked, so legacy rows stay mutable). An edit to
+// IDENTICAL text is a no-op:
 // the stored row is returned unchanged and NO event is appended (the log
 // records state changes, not retries — same convention as UpdateNotes and
 // relation re-adds). A real change appends ONE `ac-updated` event whose
@@ -172,6 +186,9 @@ func (s *Acceptance) EditACText(ctx context.Context, actor domain.Actor, taskID 
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return domain.AcceptanceCriterion{}, fmt.Errorf("%w: acceptance criterion text must not be empty", domain.ErrInvalid)
+	}
+	if err := domain.ValidateACText(text); err != nil { // incoming value only: legacy rows stay mutable
+		return domain.AcceptanceCriterion{}, err
 	}
 
 	now := s.clock.Now()

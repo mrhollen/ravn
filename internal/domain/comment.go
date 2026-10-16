@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // CommentKind classifies a task comment so agents can filter the thread tail
 // by intent. Values match the `comment.kind` CHECK constraint exactly.
@@ -33,4 +36,22 @@ type Comment struct {
 	Body      string // markdown
 	Actor     Actor
 	CreatedAt time.Time
+}
+
+// MaxCommentBodyLen caps a comment body's size in BYTES. Bodies are markdown
+// thread entries streamed over SSE and scanned out of SQLite for every task
+// detail read: byte-bounded like descriptions so a multi-MB paste cannot bloat
+// the thread tail or an event frame. Comments are append-only, so this is
+// checked exactly once — at add (write path only).
+const MaxCommentBodyLen = 64 * 1024
+
+// ValidateCommentBody reports whether body is within MaxCommentBodyLen bytes
+// (empty allowed — emptiness itself is rejected by the caller). WRITE paths
+// only (Comments.Add); see Task.ValidateTaskTitle for the legacy-row
+// convention. Wraps ErrInvalid.
+func ValidateCommentBody(body string) error {
+	if n := len(body); n > MaxCommentBodyLen {
+		return fmt.Errorf("%w: comment body is %d bytes, max is %d", ErrInvalid, n, MaxCommentBodyLen)
+	}
+	return nil
 }

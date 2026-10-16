@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 // Task is the unit of work. It deliberately has no parent/child fields: the
@@ -36,6 +37,55 @@ type Task struct {
 	UpdatedAt    time.Time
 	CompletedAt  *time.Time // set when status becomes done
 	LastActivity time.Time  // most recent mutation of the task or its child rows; derived by adapters (no dedicated column in the MVP schema)
+}
+
+// MaxTaskTitleLen caps a task title's length in RUNES after trimming. Titles
+// are human-typed labels rendered on board cards (which truncate); anything
+// longer is almost certainly a paste and must not bloat event JSON, SQLite
+// scans, or SSE frames. Mirrors MaxProjectNameLen / MaxActorNameLen (runes).
+const MaxTaskTitleLen = 500
+
+// MaxTaskDescriptionLen caps Task.Description size in BYTES. Descriptions are
+// markdown blobs rather than labels, so they get a generous byte bound: 64 KiB
+// is many times any hand-written description while still keeping rows, event
+// JSON, and SSE frames bounded.
+const MaxTaskDescriptionLen = 64 * 1024
+
+// MaxTaskNotesLen caps Task.Notes size in BYTES — same rationale as
+// MaxTaskDescriptionLen (markdown resume context, byte-bounded).
+const MaxTaskNotesLen = 64 * 1024
+
+// ValidateTaskTitle reports whether title is within MaxTaskTitleLen runes.
+// Called at WRITE paths only (task create/update), so legacy rows stored
+// before the cap remain readable and mutable — Task.Validate deliberately does
+// NOT re-litigate them (Update merges onto the stored row before validating).
+// Wraps ErrInvalid.
+func ValidateTaskTitle(title string) error {
+	if runes := utf8.RuneCountInString(title); runes > MaxTaskTitleLen {
+		return fmt.Errorf("%w: task title is %d runes, max is %d", ErrInvalid, runes, MaxTaskTitleLen)
+	}
+	return nil
+}
+
+// ValidateTaskDescription reports whether description is within
+// MaxTaskDescriptionLen bytes (empty allowed). WRITE paths only (task
+// create/update); see ValidateTaskTitle for the legacy-row rationale. Wraps
+// ErrInvalid.
+func ValidateTaskDescription(description string) error {
+	if n := len(description); n > MaxTaskDescriptionLen {
+		return fmt.Errorf("%w: task description is %d bytes, max is %d", ErrInvalid, n, MaxTaskDescriptionLen)
+	}
+	return nil
+}
+
+// ValidateTaskNotes reports whether notes is within MaxTaskNotesLen bytes
+// (empty allowed). WRITE paths only (the update-notes use case); see
+// ValidateTaskTitle for the legacy-row rationale. Wraps ErrInvalid.
+func ValidateTaskNotes(notes string) error {
+	if n := len(notes); n > MaxTaskNotesLen {
+		return fmt.Errorf("%w: task notes are %d bytes, max is %d", ErrInvalid, n, MaxTaskNotesLen)
+	}
+	return nil
 }
 
 // Done reports whether the task is in the terminal done status.

@@ -37,12 +37,13 @@ func NewComments(uow UnitOfWork, clock Clock, idgen IDGenerator) *Comments {
 const eventBodyMax = 200
 
 // Add validates kind (must be one of progress|question|decision|handoff|note)
-// and body (non-empty after trimming), confirms the parent task exists
-// (domain.ErrNotFound otherwise — the FK enforces this in storage too), and
-// appends the comment plus ONE `commented` event whose After JSON carries the
-// kind and a truncated body. The parent task's version is NOT bumped
-// (child-row rule). Unknown task → domain.ErrNotFound; bad kind or empty
-// body → domain.ErrInvalid; nothing is written on validation failure.
+// and body (non-empty after trimming, at most domain.MaxCommentBodyLen bytes),
+// confirms the parent task exists (domain.ErrNotFound otherwise — the FK
+// enforces this in storage too), and appends the comment plus ONE `commented`
+// event whose After JSON carries the kind and a truncated body. The parent
+// task's version is NOT bumped (child-row rule). Unknown task →
+// domain.ErrNotFound; bad kind, empty body, or over-long body →
+// domain.ErrInvalid; nothing is written on validation failure.
 func (s *Comments) Add(ctx context.Context, actor domain.Actor, taskID domain.ID, kind domain.CommentKind, body string) (domain.Comment, error) {
 	a, err := normalizeActor(actor)
 	if err != nil {
@@ -54,13 +55,16 @@ func (s *Comments) Add(ctx context.Context, actor domain.Actor, taskID domain.ID
 	if strings.TrimSpace(body) == "" {
 		return domain.Comment{}, fmt.Errorf("%w: comment body must not be empty", domain.ErrInvalid)
 	}
+	if err := domain.ValidateCommentBody(body); err != nil {
+		return domain.Comment{}, err
+	}
 
 	now := s.clock.Now()
 	c := domain.Comment{
 		ID:        s.idgen.NewID(),
 		TaskID:    taskID,
 		Kind:      kind,
-		Body:      body, // markdown stored as given; only emptiness is validated
+		Body:      body, // markdown stored as given; emptiness + byte bound validated
 		Actor:     a,
 		CreatedAt: now,
 	}

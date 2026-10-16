@@ -132,8 +132,10 @@ type TaskUpdateInput struct {
 // normalizeActor), mints the task ID, stamps timestamps, and stores the task
 // row (status=todo, version=1), its initial acceptance criteria, and ONE
 // `created` event — all inside a single unit of work. Empty title, an invalid
-// actor, or a missing/unknown project → domain.ErrInvalid; nothing is written
-// on failure.
+// actor, a missing/unknown project, or a value over its bound (title >
+// domain.MaxTaskTitleLen runes, description > domain.MaxTaskDescriptionLen
+// bytes, AC text > domain.MaxACTextLen runes) → domain.ErrInvalid; nothing is
+// written on failure.
 // Duplicate-title candidates are surfaced as a non-blocking
 // `possible_duplicates` advisory on create (see FindDuplicateCandidates).
 // Parent / blocked-by / related edges are managed via the separate relations
@@ -150,6 +152,19 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		return domain.Task{}, fmt.Errorf("%w: task title must not be empty", domain.ErrInvalid)
+	}
+	// Bound checks on the incoming values only (write paths): stored legacy
+	// rows over the caps stay readable and mutable.
+	if err := domain.ValidateTaskTitle(title); err != nil {
+		return domain.Task{}, err
+	}
+	if err := domain.ValidateTaskDescription(in.Description); err != nil {
+		return domain.Task{}, err
+	}
+	for _, text := range in.ACs { // bulk ACs on create get the same bound as AddAC
+		if err := domain.ValidateACText(strings.TrimSpace(text)); err != nil {
+			return domain.Task{}, err
+		}
 	}
 	if in.ProjectID.IsZero() {
 		return domain.Task{}, fmt.Errorf("%w: project id is required", domain.ErrInvalid)
@@ -250,8 +265,22 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 	if err != nil {
 		return domain.Task{}, err
 	}
-	if in.Title != nil && strings.TrimSpace(*in.Title) == "" {
-		return domain.Task{}, fmt.Errorf("%w: task title must not be empty", domain.ErrInvalid)
+	// Bound checks on the INCOMING values only (write paths): a stored legacy
+	// row over the caps stays readable and mutable — an update that leaves its
+	// fields untouched must not re-litigate them.
+	if in.Title != nil {
+		t := strings.TrimSpace(*in.Title)
+		if t == "" {
+			return domain.Task{}, fmt.Errorf("%w: task title must not be empty", domain.ErrInvalid)
+		}
+		if err := domain.ValidateTaskTitle(t); err != nil {
+			return domain.Task{}, err
+		}
+	}
+	if in.Description != nil {
+		if err := domain.ValidateTaskDescription(*in.Description); err != nil {
+			return domain.Task{}, err
+		}
 	}
 	if in.Status != nil && !(*in.Status).IsCanonical() {
 		return domain.Task{}, fmt.Errorf("%w: unknown status %q", domain.ErrInvalid, *in.Status)
@@ -612,6 +641,11 @@ func (s *Tasks) FindDuplicateCandidates(ctx context.Context, projectID domain.ID
 func (s *Tasks) UpdateNotes(ctx context.Context, actor domain.Actor, id domain.ID, notes string, expectedVersion int) (domain.Task, error) {
 	a, err := normalizeActor(actor)
 	if err != nil {
+		return domain.Task{}, err
+	}
+	// Bound check on the incoming blob only (write path): a stored legacy blob
+	// over the cap stays readable and re-savable via an identical no-op write.
+	if err := domain.ValidateTaskNotes(notes); err != nil {
 		return domain.Task{}, err
 	}
 
@@ -1043,13 +1077,18 @@ func normalizeActor(a domain.Actor) (domain.Actor, error) {
 }
 
 // mintCriteria turns the raw AC texts into stored criteria: trimmed, dense
-// 1-based seq, fresh IDs. Whitespace-only entries are dropped.
+// 1-based seq, fresh IDs. Whitespace-only entries are dropped; over-long texts
+// are rejected with a wrapped domain.ErrInvalid (the same bound AddAC enforces
+// — Tasks.Create pre-checks the batch, this is the funnel guarantee).
 func (s *Tasks) mintCriteria(taskID domain.ID, texts []string) ([]domain.AcceptanceCriterion, error) {
 	out := make([]domain.AcceptanceCriterion, 0, len(texts))
 	for _, text := range texts {
 		text = strings.TrimSpace(text)
 		if text == "" {
 			continue
+		}
+		if err := domain.ValidateACText(text); err != nil { // funnel guarantee (Create pre-checks too)
+			return nil, err
 		}
 		out = append(out, domain.AcceptanceCriterion{
 			ID:     s.idgen.NewID(),

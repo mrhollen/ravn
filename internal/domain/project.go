@@ -32,6 +32,12 @@ type Project struct {
 // before the cap remain readable and mutable — see Project.Validate.
 const MaxProjectNameLen = 100
 
+// MaxProjectDescriptionLen caps a project description's size in BYTES.
+// Descriptions are markdown onboarding documents: byte-bounded like task
+// descriptions — generous for hand-written docs, bounded against pasted
+// blobs. Empty is allowed (no description).
+const MaxProjectDescriptionLen = 64 * 1024
+
 // MaxOpenCodeDirectoryLen caps an OpenCode worktree directory's length in
 // runes. Directories are deploy-specific paths; this is a light bound against
 // pasted garbage, not a shape check — Validate deliberately does NOT require
@@ -43,6 +49,7 @@ const MaxOpenCodeDirectoryLen = 512
 // Validate reports whether p satisfies the Project field invariants:
 //
 //   - Name is non-empty (after trimming) and at most MaxProjectNameLen runes;
+//   - Description is at most MaxProjectDescriptionLen bytes (empty allowed);
 //   - OpenCodeServerURL, when non-empty, is a well-formed HTTP/HTTPS URL:
 //     net/url parses it, its scheme is http or https (case-insensitive), and
 //     its host is non-empty. Empty = no OpenCode server configured — allowed;
@@ -63,6 +70,9 @@ const MaxOpenCodeDirectoryLen = 512
 // unrelated update.
 func (p Project) Validate() error {
 	if err := ValidateProjectName(p.Name); err != nil {
+		return err
+	}
+	if err := ValidateProjectDescription(p.Description); err != nil {
 		return err
 	}
 	if p.OpenCodeServerURL != "" {
@@ -91,6 +101,18 @@ func ValidateProjectName(name string) error {
 	}
 	if runes := utf8.RuneCountInString(name); runes > MaxProjectNameLen {
 		return fmt.Errorf("%w: project name is %d runes, max is %d", ErrInvalid, runes, MaxProjectNameLen)
+	}
+	return nil
+}
+
+// ValidateProjectDescription reports whether description is within
+// MaxProjectDescriptionLen bytes (empty allowed). Called at WRITE paths only
+// (Projects.Create via Validate; Projects.Update validates the incoming value
+// before writing), so legacy rows stored before the cap remain readable and
+// mutable. Wraps ErrInvalid.
+func ValidateProjectDescription(description string) error {
+	if n := len(description); n > MaxProjectDescriptionLen {
+		return fmt.Errorf("%w: project description is %d bytes, max is %d", ErrInvalid, n, MaxProjectDescriptionLen)
 	}
 	return nil
 }

@@ -63,6 +63,33 @@ func TestProjectValidate_Name(t *testing.T) {
 	}
 }
 
+func TestProjectValidate_Description(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		ok   bool
+	}{
+		{"valid short markdown", "## Onboarding\nServer-side work goes here.", true},
+		{"empty allowed", "", true},
+		{"exactly at cap", strings.Repeat("a", MaxProjectDescriptionLen), true},
+		{"multi-byte string measured in bytes: half the cap in runes = at cap", strings.Repeat("é", MaxProjectDescriptionLen/2), true},
+		{"one byte over cap", strings.Repeat("a", MaxProjectDescriptionLen+1), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validProject()
+			p.Description = tc.in
+			err := p.Validate()
+			if tc.ok && err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+			if !tc.ok && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Validate() = %v, want wrapped domain.ErrInvalid", err)
+			}
+		})
+	}
+}
+
 func TestProjectValidate_ServerURL(t *testing.T) {
 	cases := []struct {
 		name string
@@ -175,6 +202,30 @@ func TestValidateProjectName(t *testing.T) {
 			}
 			if !tc.ok && !errors.Is(err, ErrInvalid) {
 				t.Fatalf("ValidateProjectName(%q) = %v, want wrapped domain.ErrInvalid", tc.in, err)
+			}
+		})
+	}
+}
+
+func TestValidateProjectDescription(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		ok   bool
+	}{
+		{"valid", "onboarding doc", true},
+		{"empty allowed (clears the description)", "", true},
+		{"exactly at cap", strings.Repeat("a", MaxProjectDescriptionLen), true},
+		{"one over cap", strings.Repeat("a", MaxProjectDescriptionLen+1), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateProjectDescription(tc.in)
+			if tc.ok && err != nil {
+				t.Fatalf("ValidateProjectDescription() = %v, want nil", err)
+			}
+			if !tc.ok && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("ValidateProjectDescription() = %v, want wrapped domain.ErrInvalid", err)
 			}
 		})
 	}

@@ -43,9 +43,10 @@ func NewProjects(uow UnitOfWork, clock Clock, idgen IDGenerator) *Projects {
 // unit of work. The acting actor is validated and normalized BEFORE anything
 // else (domain.Actor.Validate via normalizeActor): an invalid principal never
 // reaches the event log. name must be non-empty and at most
-// domain.MaxProjectNameLen runes (else domain.ErrInvalid); the whole entity is
-// gated by domain.Project.Validate before any write. Duplicate names surface
-// as a wrapped domain.ErrInvalid from the repository.
+// domain.MaxProjectNameLen runes, and description at most
+// domain.MaxProjectDescriptionLen bytes (else domain.ErrInvalid); the whole
+// entity is gated by domain.Project.Validate before any write. Duplicate names
+// surface as a wrapped domain.ErrInvalid from the repository.
 func (s *Projects) Create(ctx context.Context, actor domain.Actor, name, description string) (domain.Project, error) {
 	actor, err := normalizeActor(actor)
 	if err != nil {
@@ -177,9 +178,11 @@ func (s *Projects) ListWithCounts(ctx context.Context, f ...ProjectFilter) ([]Pr
 // else (domain.Actor.Validate via normalizeActor): an invalid principal never
 // reaches the event log or triggers a write. Every incoming field value is
 // shape-validated BEFORE any write (name via domain.ValidateProjectName;
-// OpenCodeServerURL/OpenCodeDirectory via their security-aware application
-// validators; OpenCodeModel via domain.ValidateOpenCodeModel, which mirrors
-// parseOpenCodeModel exactly) — only the CHANGED values are checked, so legacy
+// description via domain.ValidateProjectDescription — byte bound only, since
+// the markdown content itself is free-form; OpenCodeServerURL/OpenCodeDirectory
+// via their security-aware application validators; OpenCodeModel via
+// domain.ValidateOpenCodeModel, which mirrors parseOpenCodeModel exactly) —
+// only the CHANGED values are checked, so legacy
 // rows with pre-invariant stored values stay mutable without a rewrite.
 // Unknown id → domain.ErrNotFound; no fields set, empty or over-long new name,
 // invalid OpenCode value, or invalid actor → domain.ErrInvalid.
@@ -198,7 +201,11 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 	}
 	newDesc, hasDesc := "", false
 	if u.Description != nil {
-		newDesc, hasDesc = *u.Description, true
+		newDesc = *u.Description
+		if err := domain.ValidateProjectDescription(newDesc); err != nil { // incoming value only: legacy rows stay mutable
+			return domain.Project{}, err
+		}
+		hasDesc = true
 	}
 	newServerURL, hasServerURL := "", false
 	if u.OpenCodeServerURL != nil {
