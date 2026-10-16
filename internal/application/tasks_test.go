@@ -780,7 +780,7 @@ func TestTasksUpdate_ClearsActiveClaimLeaseWhenLeavingDoing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
-		if !claimed.Claimed() || claimed.ClaimedBy == nil {
+		if !claimed.Claimed() || claimed.Claim.By() == nil {
 			t.Fatalf("task not claimed: %+v", claimed)
 		}
 
@@ -792,20 +792,9 @@ func TestTasksUpdate_ClearsActiveClaimLeaseWhenLeavingDoing(t *testing.T) {
 		if updated.Status != domain.StatusDone {
 			t.Errorf("status = %q, want done", updated.Status)
 		}
-		if updated.Claimed() {
-			t.Errorf("updated.Claimed() = true, want false")
-		}
-		if updated.ClaimedBy != nil {
-			t.Errorf("ClaimedBy = %+v, want nil", updated.ClaimedBy)
-		}
-		if updated.ClaimedAt != nil {
-			t.Errorf("ClaimedAt = %v, want nil", updated.ClaimedAt)
-		}
-		if updated.ClaimExpiry != nil {
-			t.Errorf("ClaimExpiry = %v, want nil", updated.ClaimExpiry)
-		}
-		if updated.ClaimTTLSeconds != 0 {
-			t.Errorf("ClaimTTLSeconds = %d, want 0", updated.ClaimTTLSeconds)
+		if updated.Claimed() || updated.Claim.Present() {
+			t.Errorf("lease not cleared on moving doing -> done: present=%v holder=%+v expiry=%v ttl=%d",
+				updated.Claim.Present(), updated.Claim.By(), updated.Claim.Expiry(), updated.Claim.TTLSeconds())
 		}
 		if updated.CompletedAt == nil {
 			t.Errorf("CompletedAt is nil on done task")
@@ -816,8 +805,8 @@ func TestTasksUpdate_ClearsActiveClaimLeaseWhenLeavingDoing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		if fresh.ClaimedBy != nil || fresh.ClaimExpiry != nil {
-			t.Errorf("persisted task has active lease: ClaimedBy=%+v ClaimExpiry=%v", fresh.ClaimedBy, fresh.ClaimExpiry)
+		if fresh.Claim.Present() {
+			t.Errorf("persisted task has active lease: holder=%+v expiry=%v", fresh.Claim.By(), fresh.Claim.Expiry())
 		}
 	})
 
@@ -839,8 +828,9 @@ func TestTasksUpdate_ClearsActiveClaimLeaseWhenLeavingDoing(t *testing.T) {
 		if updated.Status != domain.StatusTodo {
 			t.Errorf("status = %q, want todo", updated.Status)
 		}
-		if updated.Claimed() || updated.ClaimedBy != nil || updated.ClaimExpiry != nil || updated.ClaimTTLSeconds != 0 {
-			t.Errorf("lease not cleared on moving doing -> todo: %+v", updated)
+		if updated.Claimed() || updated.Claim.Present() {
+			t.Errorf("lease not cleared on moving doing -> todo: present=%v holder=%+v expiry=%v ttl=%d",
+				updated.Claim.Present(), updated.Claim.By(), updated.Claim.Expiry(), updated.Claim.TTLSeconds())
 		}
 	})
 
@@ -859,11 +849,10 @@ func TestTasksUpdate_ClearsActiveClaimLeaseWhenLeavingDoing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Update title: %v", err)
 		}
-		if !updated.Claimed() || updated.ClaimedBy == nil {
-			t.Errorf("lease was cleared when updating title in doing: %+v", updated)
-		}
-		if updated.ClaimedBy.Name != testAgent.Name {
-			t.Errorf("ClaimedBy = %q, want %q", updated.ClaimedBy.Name, testAgent.Name)
+		byUpdated := updated.Claim.By()
+		if !updated.Claimed() || byUpdated == nil || byUpdated.Name != testAgent.Name {
+			t.Errorf("lease was cleared or stolen when updating title in doing: present=%v holder=%+v",
+				updated.Claim.Present(), byUpdated)
 		}
 	})
 }

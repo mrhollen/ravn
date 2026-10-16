@@ -356,10 +356,7 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 			}
 
 			if (cur.Status == domain.StatusDoing && *in.Status != domain.StatusDoing) || *in.Status == domain.StatusDone {
-				next.ClaimedBy = nil
-				next.ClaimedAt = nil
-				next.ClaimExpiry = nil
-				next.ClaimTTLSeconds = 0
+				next.Claim = next.Claim.Released() // clearing the lease is all-or-nothing
 			}
 
 			wasDone := cur.Status == domain.StatusDone
@@ -389,6 +386,9 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 
 		next.Version = cur.Version // expected stored version for the optimistic guard
 		next.UpdatedAt = now
+		if verr := next.Validate(); verr != nil { // fail closed: an inconsistent row never reaches an adapter
+			return verr
+		}
 		stored, err := r.Tasks.Update(ctx, next)
 		if err != nil { // includes *domain.ConflictError — propagate without events
 			return err
@@ -795,7 +795,7 @@ func (s *Tasks) Claim(ctx context.Context, actor domain.Actor, id domain.ID, ttl
 		// Blocker gate (see Claim doc): only FRESH starts are guarded — an
 		// active lease (renewal by the holder or conflict for a rival) skips it
 		// so refresh stays retry-safe and the foreign-lease 409 is unchanged.
-		leaseActive := cur.ClaimedBy != nil && cur.ClaimExpiry != nil && !cur.ClaimExpiry.Before(now)
+		leaseActive := cur.Claim.Present() && !cur.Claim.Expiry().Before(now) // Present ⇒ expiry is set (all-or-nothing)
 		if !leaseActive && !overrideBlockers {
 			blks, berr := r.Tasks.BlockersOf(ctx, id) // already filtered to open blockers
 			if berr != nil {
@@ -821,12 +821,12 @@ func (s *Tasks) Claim(ctx context.Context, actor domain.Actor, id domain.ID, ttl
 			Kind:      domain.EventClaimed, // the claimed event implies doing — no separate status-changed
 			Before: compactJSON(map[string]any{
 				"status": string(cur.Status),
-				"holder": actorJSON(cur.ClaimedBy),
+				"holder": actorJSON(cur.Claim.By()),
 			}),
 			After: compactJSON(map[string]any{
 				"status":           string(st.Status),
 				"holder":           map[string]string{"type": string(a.Type), "name": a.Name},
-				"claim_expires_at": dueAtJSON(st.ClaimExpiry),
+				"claim_expires_at": dueAtJSON(claimExpiryPtr(st)), // a won CAS always carries the fresh lease
 				"ttl_sec":          int(ttl.Seconds()),
 				"claim":            outcome, // fresh | takeover | renewal
 			}),
@@ -872,13 +872,13 @@ func (s *Tasks) Release(ctx context.Context, actor domain.Actor, id domain.ID, n
 		if rerr != nil {
 			return rerr // *domain.ClaimConflictError — propagate verbatim, no event (no mutation)
 		}
-		if cur.ClaimedBy == nil || cur.ClaimExpiry == nil {
+		if !cur.Claim.Present() {
 			stored = st // no-op release of an unclaimed task: nothing to record
 			return nil
 		}
 		after := map[string]any{
 			"status": string(st.Status),
-			"holder": actorJSON(st.ClaimedBy), // null — the lease is cleared
+			"holder": actorJSON(st.Claim.By()), // null — the lease is cleared
 		}
 		if note != "" {
 			after["note"] = note
@@ -894,8 +894,8 @@ func (s *Tasks) Release(ctx context.Context, actor domain.Actor, id domain.ID, n
 			Kind:      domain.EventReleased,
 			Before: compactJSON(map[string]any{
 				"status":           string(cur.Status),
-				"holder":           actorJSON(cur.ClaimedBy),
-				"claim_expires_at": dueAtJSON(cur.ClaimExpiry),
+				"holder":           actorJSON(cur.Claim.By()),
+				"claim_expires_at": dueAtJSON(claimExpiryPtr(cur)),
 			}),
 			After: compactJSON(after),
 			At:    now,
@@ -959,7 +959,8 @@ func (s *Tasks) Heartbeat(ctx context.Context, actor domain.Actor, id domain.ID)
 // CAS's `claimed_by_name = ?` conditions — it is what keeps the fake adapter,
 // the real adapter, and the event classification agreeing on "who is home".
 func sameLeaseHolder(cur *domain.Task, actor domain.Actor) bool {
-	return cur.ClaimedBy != nil && cur.ClaimedBy.Name == actor.Name
+	by := cur.Claim.By()
+	return by != nil && by.Name == actor.Name
 }
 
 // claimOutcome tags a successful claim for the `claimed` event summary (ADR
@@ -970,10 +971,11 @@ func sameLeaseHolder(cur *domain.Task, actor domain.Actor) bool {
 // the start of the same transaction as the CAS, so under serialized writes it
 // can never disagree with the winner the CAS actually elects.
 func claimOutcome(cur domain.Task, actor domain.Actor, now time.Time) string {
-	if cur.ClaimedBy == nil || cur.ClaimExpiry == nil {
+	if !cur.Claim.Present() {
 		return "fresh"
 	}
-	if !cur.ClaimExpiry.Before(now) && sameLeaseHolder(&cur, actor) { // active self-lease (name key)
+	exp := cur.Claim.Expiry()                             // Present ⇒ set (all-or-nothing)
+	if !exp.Before(now) && sameLeaseHolder(&cur, actor) { // active self-lease (name key)
 		return "renewal"
 	}
 	return "takeover"
@@ -1050,4 +1052,14 @@ func actorJSON(a *domain.Actor) any {
 		return nil
 	}
 	return map[string]string{"type": string(a.Type), "name": a.Name}
+}
+
+// claimExpiryPtr renders an attached lease's expiry for event payloads: a
+// pointer to the stored instant, or nil when the task carries no lease at all.
+func claimExpiryPtr(t domain.Task) *time.Time {
+	if !t.Claim.Present() {
+		return nil
+	}
+	e := t.Claim.Expiry() // Present ⇒ set (all-or-nothing)
+	return &e
 }

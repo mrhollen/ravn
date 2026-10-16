@@ -104,8 +104,9 @@ func TestClaim_SubsecondPrecision_NoPrematureStealing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Agent B takeover after expiration failed: %v", err)
 	}
-	if got.ClaimedBy == nil || got.ClaimedBy.Name != agentB.Name {
-		t.Errorf("holder after takeover = %+v, want agent-b", got.ClaimedBy)
+	byGot := got.Claim.By()
+	if byGot == nil || byGot.Name != agentB.Name {
+		t.Errorf("holder after takeover = %+v, want agent-b", byGot)
 	}
 }
 
@@ -135,8 +136,9 @@ func TestRelease_SubsecondActiveLease_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Release of active lease at whole second failed: %v", err)
 	}
-	if released.Status != domain.StatusTodo || released.ClaimedBy != nil {
-		t.Errorf("task after release = status %q holder %+v, want todo and nil holder", released.Status, released.ClaimedBy)
+	if released.Status != domain.StatusTodo || released.Claim.Present() {
+		t.Errorf("task after release = status %q holder %+v expiry %v, want todo and nil lease",
+			released.Status, released.Claim.By(), released.Claim.Expiry())
 	}
 }
 
@@ -172,8 +174,8 @@ func TestClaimAndHeartbeat_DoneAndArchivedTasks_RejectedOnSQLite(t *testing.T) {
 	if storedDone.Status != domain.StatusDone {
 		t.Errorf("stored done status = %q, want done", storedDone.Status)
 	}
-	if storedDone.ClaimedBy != nil {
-		t.Errorf("stored ClaimedBy = %+v, want nil", storedDone.ClaimedBy)
+	if storedDone.Claim.Present() {
+		t.Errorf("stored lease present (holder %+v expiry %v), want none", storedDone.Claim.By(), storedDone.Claim.Expiry())
 	}
 
 	// Heartbeating done task must fail with ErrInvalid
@@ -242,8 +244,8 @@ func TestRelease_DoneTask_PreservesDoneStatusOnSQLite(t *testing.T) {
 	if released.Status != domain.StatusDone {
 		t.Errorf("status after release = %q, want done (not reverted to todo)", released.Status)
 	}
-	if released.ClaimedBy != nil {
-		t.Errorf("holder after release = %+v, want nil", released.ClaimedBy)
+	if released.Claim.Present() {
+		t.Errorf("lease present after release (holder %+v expiry %v), want none", released.Claim.By(), released.Claim.Expiry())
 	}
 }
 
@@ -276,8 +278,8 @@ func TestRelease_ExpiredLease_OriginalHolderSucceeds(t *testing.T) {
 	if released.Status != domain.StatusTodo {
 		t.Errorf("status = %q, want todo", released.Status)
 	}
-	if released.ClaimedBy != nil {
-		t.Errorf("holder after release = %+v, want nil", released.ClaimedBy)
+	if released.Claim.Present() {
+		t.Errorf("lease present after release (holder %+v expiry %v), want none", released.Claim.By(), released.Claim.Expiry())
 	}
 	if released.Version != 3 {
 		t.Errorf("version after release = %d, want 3", released.Version)
@@ -329,8 +331,9 @@ func TestRelease_ExpiredLease_RivalFailsWithConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if stored.Status != domain.StatusDoing || stored.ClaimedBy == nil || stored.ClaimedBy.Name != agentA.Name {
-		t.Errorf("stored task mutated by failed release: %+v", stored)
+	byStored := stored.Claim.By()
+	if stored.Status != domain.StatusDoing || byStored == nil || byStored.Name != agentA.Name {
+		t.Errorf("stored task mutated by failed release: status=%q holder=%+v", stored.Status, byStored)
 	}
 }
 
@@ -361,8 +364,9 @@ func TestRelease_Force_ClearsLeaseForAnyActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("force release failed: %v", err)
 	}
-	if released.Status != domain.StatusTodo || released.ClaimedBy != nil {
-		t.Errorf("released task status %q, holder %+v, want todo and nil", released.Status, released.ClaimedBy)
+	if released.Status != domain.StatusTodo || released.Claim.Present() {
+		t.Errorf("released task status %q, holder %+v expiry %v, want todo and none",
+			released.Status, released.Claim.By(), released.Claim.Expiry())
 	}
 	if released.Version != 3 {
 		t.Errorf("version = %d, want 3", released.Version)
@@ -373,7 +377,8 @@ func TestRelease_Force_ClearsLeaseForAnyActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("idempotent force release failed: %v", err)
 	}
-	if noop.Version != 3 || noop.ClaimedBy != nil {
-		t.Errorf("idempotent force release mutated row: %+v", noop)
+	if noop.Version != 3 || noop.Claim.Present() {
+		t.Errorf("idempotent force release mutated row: v=%d holder=%+v expiry=%v",
+			noop.Version, noop.Claim.By(), noop.Claim.Expiry())
 	}
 }

@@ -59,11 +59,10 @@ func toSummary(t domain.Task) taskSummaryDTO {
 		s.DueAt = &v
 	}
 	s.Assignee = toActor(t.Assignee)
-	if t.ClaimedBy != nil {
-		s.ClaimedBy = toActor(t.ClaimedBy)
-	}
-	if t.ClaimExpiry != nil {
-		v := rfc3339(*t.ClaimExpiry)
+	if c := t.Claim; c.Present() { // all-or-nothing: present ⇒ every piece is set
+		holder := c.By()
+		v := rfc3339(c.Expiry())
+		s.ClaimedBy = toActor(holder)
 		s.ClaimExpiresAt = &v
 	}
 	return s
@@ -200,12 +199,10 @@ func toDetail(d application.TaskDetail) taskDetailDTO {
 		Archived:       d.Task.Archived,
 		Blocked:        d.Blocked,
 	}
-	if d.Task.ClaimedAt != nil {
-		v := rfc3339(*d.Task.ClaimedAt)
+	if c := d.Task.Claim; c.Present() { // all-or-nothing: the flat detail keys appear together
+		v := rfc3339(c.At())
 		out.ClaimedAt = &v
-	}
-	if d.Task.ClaimTTLSeconds > 0 {
-		out.ClaimTTLSeconds = d.Task.ClaimTTLSeconds
+		out.ClaimTTLSeconds = c.TTLSeconds()
 	}
 	if d.Task.CompletedAt != nil {
 		v := rfc3339(*d.Task.CompletedAt)

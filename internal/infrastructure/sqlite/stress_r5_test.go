@@ -252,8 +252,8 @@ func TestChallenger_R5_ClaimLeaseClearing_RawSQLite(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
-		if !claimed.Claimed() || claimed.ClaimedBy == nil {
-			t.Fatalf("claimed domain state invalid: %+v", claimed)
+		if !claimed.Claimed() || claimed.Claim.By() == nil {
+			t.Fatalf("claimed domain state invalid: present=%v holder=%+v", claimed.Claim.Present(), claimed.Claim.By())
 		}
 
 		// Verify raw SQLite has non-null lease
@@ -283,8 +283,9 @@ func TestChallenger_R5_ClaimLeaseClearing_RawSQLite(t *testing.T) {
 		if updated.Status != domain.StatusDone {
 			t.Fatalf("updated status = %q, want done", updated.Status)
 		}
-		if updated.Claimed() || updated.ClaimedBy != nil || updated.ClaimExpiry != nil || updated.ClaimTTLSeconds != 0 {
-			t.Errorf("domain task still has lease after moving to done: %+v", updated)
+		if updated.Claimed() || updated.Claim.Present() {
+			t.Errorf("domain task still has lease after moving to done: present=%v holder=%+v expiry=%v ttl=%d",
+				updated.Claim.Present(), updated.Claim.By(), updated.Claim.Expiry(), updated.Claim.TTLSeconds())
 		}
 
 		// Inspect raw SQLite columns - ALL 5 MUST BE SQL NULL
@@ -378,8 +379,9 @@ func TestChallenger_R5_ReopenAndSubsequentClaim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Agent 1 Claim: %v", err)
 	}
-	if claimed1.ClaimedBy.Name != agent1.Name {
-		t.Fatalf("holder = %q, want %q", claimed1.ClaimedBy.Name, agent1.Name)
+	byClaimed1 := claimed1.Claim.By()
+	if byClaimed1 == nil || byClaimed1.Name != agent1.Name {
+		t.Fatalf("holder = %+v, want %q", byClaimed1, agent1.Name)
 	}
 
 	// 2. Move to done
@@ -428,11 +430,12 @@ func TestChallenger_R5_ReopenAndSubsequentClaim(t *testing.T) {
 	if claimed2.Status != domain.StatusDoing {
 		t.Errorf("claimed2 status = %q, want doing", claimed2.Status)
 	}
-	if claimed2.ClaimedBy == nil || claimed2.ClaimedBy.Name != agent2.Name {
-		t.Errorf("claimed2 holder = %+v, want %q", claimed2.ClaimedBy, agent2.Name)
+	byClaimed2 := claimed2.Claim.By()
+	if byClaimed2 == nil || byClaimed2.Name != agent2.Name {
+		t.Errorf("claimed2 holder = %+v, want %q", byClaimed2, agent2.Name)
 	}
-	if claimed2.ClaimTTLSeconds != 600 {
-		t.Errorf("claimed2 TTL = %d, want 600", claimed2.ClaimTTLSeconds)
+	if claimed2.Claim.TTLSeconds() != 600 {
+		t.Errorf("claimed2 TTL = %d, want 600", claimed2.Claim.TTLSeconds())
 	}
 
 	// Verify raw SQLite has Agent 2's lease
@@ -466,7 +469,7 @@ func TestChallenger_R5_NonStatusUpdatePreservesActiveLease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	claimExpiryBefore := *claimed.ClaimExpiry
+	claimExpiryBefore := claimed.Claim.Expiry()
 
 	newTitle := "Updated Title"
 	newDesc := "Updated Description"
@@ -483,11 +486,12 @@ func TestChallenger_R5_NonStatusUpdatePreservesActiveLease(t *testing.T) {
 	if updated.Status != domain.StatusDoing {
 		t.Errorf("status = %q, want doing", updated.Status)
 	}
-	if !updated.Claimed() || updated.ClaimedBy == nil || updated.ClaimedBy.Name != agent.Name {
-		t.Errorf("lease was lost after metadata update: %+v", updated)
+	byUpdated := updated.Claim.By()
+	if !updated.Claimed() || byUpdated == nil || byUpdated.Name != agent.Name {
+		t.Errorf("lease was lost after metadata update: present=%v holder=%+v", updated.Claim.Present(), byUpdated)
 	}
-	if updated.ClaimExpiry == nil || !updated.ClaimExpiry.Equal(claimExpiryBefore) {
-		t.Errorf("claim expiry changed: before=%v after=%v", claimExpiryBefore, updated.ClaimExpiry)
+	if !updated.Claim.Present() || !updated.Claim.Expiry().Equal(claimExpiryBefore) {
+		t.Errorf("claim expiry changed: before=%v after=%v", claimExpiryBefore, updated.Claim.Expiry())
 	}
 
 	// Verify in SQLite

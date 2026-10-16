@@ -74,7 +74,10 @@ func (s *Acceptance) ToggleAC(ctx context.Context, actor domain.Actor, taskID do
 		if serr != nil {
 			return serr // ErrNotFound if the row vanished between read and write (same tx — defensive)
 		}
-		fresh = toggled // assign to the captured variable (`:=` here would shadow it)
+		fresh = toggled                            // assign to the captured variable (`:=` here would shadow it)
+		if verr := fresh.Validate(); verr != nil { // fail closed: a desynchronized completion row never reaches an adapter
+			return verr
+		}
 		ev := domain.Event{
 			ID:        s.idgen.NewID(),
 			ProjectID: &t.ProjectID,

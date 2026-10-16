@@ -99,22 +99,40 @@ func TestTaskHelpers(t *testing.T) {
 	if unclaimed.Done() || unclaimed.Claimed() {
 		t.Error("plain task must be neither done nor claimed")
 	}
+	if err := unclaimed.Validate(); err != nil {
+		t.Errorf("plain unclaimed task: Validate() = %v, want nil", err)
+	}
 
 	actor := Actor{Type: ActorAgent, Name: "builder"}
+	now := time.Date(2026, 10, 12, 7, 30, 0, 0, time.UTC)
 	done := Task{
 		Status:      StatusDone,
-		ClaimedBy:   &actor,
-		ClaimExpiry: timePtr(time.Now()),
+		CompletedAt: timePtr(now),
+		Claim:       NewClaim(actor, now.Add(-time.Minute), 120),
 	}
 	if !done.Done() || !done.Claimed() {
 		t.Error("claimed done task must report Done and Claimed")
 	}
-
-	// A holder without an expiry is not a real lease.
-	half := Task{ClaimedBy: &actor}
-	if half.Claimed() {
-		t.Error("holder without expiry must not count as claimed")
+	if err := done.Validate(); err != nil {
+		t.Errorf("consistent done + live-lease task: Validate() = %v, want nil", err)
 	}
+
+	// A partial lease CANNOT be attached through any sanctioned constructor —
+	// this is what makes the encapsulation meaningful. Same-package test code
+	// can still fabricate one with a composite literal (unexported fields), and
+	// Validate() must reject it as the backstop: holder without an expiry is
+	// not a real lease.
+	half := Task{Claim: Claim{by: &actor}}
+	if ve := half.Validate(); ve == nil {
+		t.Error("task with a holder-without-expiry lease must fail Validate()")
+	} else if ie, ok := errAsInvariant(ve); !ok || ie.Entity != "claim lease" {
+		t.Errorf("partial lease: want *InvariantError(entity \"claim lease\"), got %T %v", ve, ve)
+	}
+}
+
+func errAsInvariant(err error) (*InvariantError, bool) {
+	ie, ok := err.(*InvariantError)
+	return ie, ok
 }
 
 func TestTaskIsClaimActive(t *testing.T) {
@@ -126,21 +144,26 @@ func TestTaskIsClaimActive(t *testing.T) {
 		t.Error("unclaimed task must report neither active nor leased")
 	}
 
-	// A holder without an expiry is a half-lease: not active, not even present.
-	half := Task{ClaimedBy: &actor}
-	if half.IsClaimActive(now) || half.HasLease() {
-		t.Error("holder without expiry must count as neither active nor leased")
+	// A partial lease cannot be attached through the sanctioned constructors —
+	// ClaimFromStored degrades ANY incomplete input to the zero value, so a
+	// holder-without-expiry is not even representable on read.
+	if got := ClaimFromStored(&actor, timePtr(now.Add(-time.Minute)), nil, intPtr(300)); got.Present() {
+		t.Error("ClaimFromStored with a missing expiry must degrade to unclaimed")
+	}
+	if got := ClaimFromStored(nil, timePtr(now), timePtr(now.Add(time.Second)), intPtr(1)); got.Present() {
+		t.Error("ClaimFromStored with a missing holder must degrade to unclaimed")
 	}
 
 	// Active lease: holder + future expiry ⇒ active and claimed/present.
-	active := Task{ClaimedBy: &actor, ClaimedAt: timePtr(now.Add(-time.Minute)), ClaimExpiry: timePtr(now.Add(time.Minute))}
+	active := Task{Claim: NewClaim(actor, now.Add(-time.Minute), 120)}
 	if !active.IsClaimActive(now) || !active.HasLease() || !active.Claimed() {
 		t.Error("live lease must report active, leased and claimed")
 	}
 
 	// Boundary: at exactly the expiry instant the lease is already over —
-	// presence yes, liveness no (strict now.Before).
-	boundary := Task{ClaimedBy: &actor, ClaimExpiry: timePtr(now)}
+	// presence yes, liveness no (strict now.Before). ClaimFromStored is used so
+	// the stored expiry lands EXACTLY on `now` (a heartbeat-style re-stamp).
+	boundary := Task{Claim: ClaimFromStored(&actor, timePtr(now.Add(-time.Minute)), timePtr(now), intPtr(60))}
 	if boundary.IsClaimActive(now) {
 		t.Error("lease at exactly its expiry must not be active")
 	}
@@ -149,7 +172,7 @@ func TestTaskIsClaimActive(t *testing.T) {
 	}
 
 	// Expired (zombie) lease: present but not active.
-	stale := Task{ClaimedBy: &actor, ClaimExpiry: timePtr(now.Add(-time.Nanosecond))}
+	stale := Task{Claim: ClaimFromStored(&actor, timePtr(now.Add(-time.Minute)), timePtr(now.Add(-time.Nanosecond)), intPtr(60))}
 	if stale.IsClaimActive(now) {
 		t.Error("expired lease must not be active")
 	}
@@ -163,6 +186,8 @@ func TestTaskIsClaimActive(t *testing.T) {
 		t.Error("IsClaimActive must be relative to the supplied now")
 	}
 }
+
+func intPtr(i int) *int { return &i }
 
 func TestRelationKindValidVsStored(t *testing.T) {
 	// Every stored kind is also acceptable at the tool boundary…

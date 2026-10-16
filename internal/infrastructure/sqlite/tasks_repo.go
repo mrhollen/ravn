@@ -37,14 +37,14 @@ const taskColumns = `id, project_id, status, title, description, priority, due_a
 // state. Constraint failures (unknown project/status, out-of-range priority)
 // surface as wrapped domain.ErrInvalid — the input was invalid, not the store.
 func (r *taskRepo) Create(ctx context.Context, t domain.Task) error {
+	la := claimLeaseArgs(t.Claim) // the five lease columns, rendered all-or-nothing
 	res, err := r.q.ExecContext(ctx,
 		`INSERT INTO task (`+taskColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) `+
 			`ON CONFLICT(id) DO NOTHING`,
 		string(t.ID), string(t.ProjectID), string(t.Status), t.Title, t.Description, int(t.Priority),
 		tsOrNil(t.DueAt), t.Notes,
 		actorTypeOrNil(t.Assignee), actorNameOrNil(t.Assignee),
-		actorTypeOrNil(t.ClaimedBy), actorNameOrNil(t.ClaimedBy), tsOrNil(t.ClaimedAt),
-		tsOrNil(t.ClaimExpiry), claimTTLOrNil(&t),
+		la[0], la[1], la[2], la[3], la[4],
 		t.Version, boolToInt(t.Archived),
 		formatTS(t.CreatedAt), formatTS(t.UpdatedAt), tsOrNil(t.CompletedAt))
 	if err != nil {
@@ -156,6 +156,7 @@ func (r *taskRepo) BlockersOf(ctx context.Context, taskID domain.ID) ([]domain.T
 // either an unknown ID (domain.ErrNotFound) or a stale writer
 // (*domain.ConflictError carrying the freshly read current row).
 func (r *taskRepo) Update(ctx context.Context, t domain.Task) (domain.Task, error) {
+	la := claimLeaseArgs(t.Claim) // the five lease columns, rendered all-or-nothing
 	res, err := r.q.ExecContext(ctx,
 		`UPDATE task SET project_id = ?, status = ?, title = ?, description = ?, priority = ?, due_at = ?,
 		 notes = ?, assignee_type = ?, assignee_name = ?, claimed_by_type = ?, claimed_by_name = ?,
@@ -165,8 +166,7 @@ func (r *taskRepo) Update(ctx context.Context, t domain.Task) (domain.Task, erro
 		string(t.ProjectID), string(t.Status), t.Title, t.Description, int(t.Priority), tsOrNil(t.DueAt),
 		t.Notes,
 		actorTypeOrNil(t.Assignee), actorNameOrNil(t.Assignee),
-		actorTypeOrNil(t.ClaimedBy), actorNameOrNil(t.ClaimedBy), tsOrNil(t.ClaimedAt),
-		tsOrNil(t.ClaimExpiry), claimTTLOrNil(&t),
+		la[0], la[1], la[2], la[3], la[4],
 		t.Version+1, boolToInt(t.Archived), formatTS(t.UpdatedAt), tsOrNil(t.CompletedAt),
 		string(t.ID), t.Version)
 	if err != nil {
@@ -239,11 +239,12 @@ func (r *taskRepo) Claim(ctx context.Context, taskID domain.ID, actor domain.Act
 		if current.Status == domain.StatusDone {
 			return domain.Task{}, fmt.Errorf("%w: cannot claim completed task %s", domain.ErrInvalid, taskID)
 		}
-		if current.ClaimedBy == nil || current.ClaimExpiry == nil {
+		if !current.Claim.Present() { // ClaimFromStored on read already guarantees all-or-nothing
 			// Unreachable: a 0-row claim requires a non-expired different holder.
 			return domain.Task{}, fmt.Errorf("claim task %s: CAS matched no row but the stored lease is empty (internal invariant)", taskID)
 		}
-		return domain.Task{}, &domain.ClaimConflictError{Holder: *current.ClaimedBy, ExpiresAt: *current.ClaimExpiry}
+		holder, exp := current.Claim.By(), current.Claim.Expiry()
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *holder, ExpiresAt: exp}
 	}
 	if err != nil {
 		return domain.Task{}, fmt.Errorf("claim task %s: %w", taskID, err)
@@ -294,10 +295,11 @@ func (r *taskRepo) Release(ctx context.Context, taskID domain.ID, actor domain.A
 		if gerr != nil {
 			return domain.Task{}, gerr // ErrNotFound if the row vanished entirely
 		}
-		if current.ClaimedBy == nil || current.ClaimExpiry == nil {
+		if !current.Claim.Present() { // ClaimFromStored on read already guarantees all-or-nothing
 			return current, nil // nothing to release: idempotent no-op, row untouched
 		}
-		return domain.Task{}, &domain.ClaimConflictError{Holder: *current.ClaimedBy, ExpiresAt: *current.ClaimExpiry}
+		holder, exp := current.Claim.By(), current.Claim.Expiry()
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *holder, ExpiresAt: exp}
 	}
 	fresh, err := r.Get(ctx, taskID) // read back the stored result of the guarded write
 	if err != nil {
@@ -374,17 +376,14 @@ func (r *taskRepo) Heartbeat(ctx context.Context, taskID domain.ID, actor domain
 // ClaimConflictError fields, tolerating an absent lease (a zero-value Holder is
 // the "claim it first" signal on heartbeat).
 func holderOf(t domain.Task) domain.Actor {
-	if t.ClaimedBy != nil {
-		return *t.ClaimedBy
+	if by := t.Claim.By(); by != nil {
+		return *by
 	}
 	return domain.Actor{}
 }
 
 func expiryOf(t domain.Task) time.Time {
-	if t.ClaimExpiry != nil {
-		return *t.ClaimExpiry
-	}
-	return time.Time{}
+	return t.Claim.Expiry() // zero time when no lease is attached
 }
 
 // OpenTaskCounts computes per-(project, status) open task counts in ONE grouped
@@ -551,26 +550,29 @@ func scanTask(s scanner) (domain.Task, error) {
 	}
 	t.Assignee = actorOrNil(assigneeType, assigneeName)
 
+	// Lease columns → one all-or-nothing Claim. A well-formed row has either
+	// all five pieces or none; a corrupt partial row (any piece NULL, or a
+	// non-positive TTL) degrades to "unclaimed" via ClaimFromStored instead of
+	// smuggling a half-lease into the domain — reads stay lenient, the domain
+	// stays consistent.
 	if claimedByType != nil && claimedByName != nil {
 		holder := domain.Actor{Type: domain.ActorType(*claimedByType), Name: *claimedByName}
-		t.ClaimedBy = &holder
+		var at, exp *time.Time
 		if claimedAt != nil {
 			ts, err := parseTS(*claimedAt)
 			if err != nil {
 				return domain.Task{}, fmt.Errorf("task %s claimed_at %q: %w", t.ID, *claimedAt, err)
 			}
-			t.ClaimedAt = &ts
+			at = &ts
 		}
 		if claimExpiresAt != nil {
 			ts, err := parseTS(*claimExpiresAt)
 			if err != nil {
 				return domain.Task{}, fmt.Errorf("task %s claim_expires_at %q: %w", t.ID, *claimExpiresAt, err)
 			}
-			t.ClaimExpiry = &ts
+			exp = &ts
 		}
-		if claimTTL != nil {
-			t.ClaimTTLSeconds = *claimTTL
-		}
+		t.Claim = domain.ClaimFromStored(&holder, at, exp, claimTTL)
 	}
 
 	created, err := parseTS(createdAt)

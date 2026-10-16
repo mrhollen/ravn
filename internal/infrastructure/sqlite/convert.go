@@ -50,13 +50,25 @@ func actorNameOrNil(a *domain.Actor) any {
 	return a.Name
 }
 
-// claimTTLOrNil renders the lease TTL column: present only while a lease is
-// attached (mirrors the DDL — "TTL stored at claim; heartbeat reuses it").
-func claimTTLOrNil(t *domain.Task) any {
-	if t.ClaimedBy == nil || t.ClaimExpiry == nil {
-		return nil
+// claimLeaseArgs renders the task row's five lease columns in schema order —
+// (claimed_by_type, claimed_by_name, claimed_at, claim_expires_at,
+// claim_ttl_sec) — all-or-nothing from the domain's Claim value: present while
+// a lease is attached (any state, live or stale), all NULL together when the
+// task is unclaimed. A partial claim cannot be rendered because the type does
+// not admit one; this stays correct by construction rather than by check.
+func claimLeaseArgs(c domain.Claim) [5]any {
+	var out [5]any // all nils = unclaimed (the zero Claim)
+	if !c.Present() {
+		return out
 	}
-	return int(t.ClaimTTLSeconds)
+	out[0] = string(c.By().Type)
+	out[1] = c.By().Name
+	at := c.At()
+	exp := c.Expiry()
+	out[2] = formatTS(at)
+	out[3] = formatTS(exp)
+	out[4] = c.TTLSeconds()
+	return out
 }
 
 // boolToInt renders a Go bool as the schema's INTEGER 0/1 form.

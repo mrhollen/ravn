@@ -95,7 +95,7 @@ func TestClaimRacingAgents_ExactlyOneWinnerPerTask(t *testing.T) {
 					got, cerr := tasks.Claim(ctx, actor, task.ID, 600, false)
 					results[i] = cerr
 					if cerr == nil {
-						winners[i] = got.ClaimedBy
+						winners[i] = got.Claim.By()
 					}
 				}()
 			}
@@ -129,8 +129,8 @@ func TestClaimRacingAgents_ExactlyOneWinnerPerTask(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Get after race: %v", err)
 			}
-			if got.Status != domain.StatusDoing || got.ClaimedBy == nil {
-				t.Fatalf("settled row = (status %q holder %+v), want (doing, exactly one holder)", got.Status, got.ClaimedBy)
+			if got.Status != domain.StatusDoing || got.Claim.By() == nil {
+				t.Fatalf("settled row = (status %q holder %+v), want (doing, exactly one holder)", got.Status, got.Claim.By())
 			}
 			if got.Version != 2 {
 				t.Errorf("settled version = %d, want 2 (exactly one lease write won the CAS)", got.Version)
@@ -182,11 +182,12 @@ func TestClaimLazyExpiry_NoSweeper_TakeoverAfterClockAdvance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get after expiry: %v", err)
 	}
-	if stale.Status != domain.StatusDoing || stale.ClaimedBy == nil || stale.ClaimedBy.Name != agentA.Name {
+	byStale := stale.Claim.By()
+	if stale.Status != domain.StatusDoing || byStale == nil || byStale.Name != agentA.Name {
 		t.Fatalf("expired row = (status %q holder %+v), want still doing + holder agent-a on disk (lazy expiry, no sweeper)",
-			stale.Status, stale.ClaimedBy)
+			stale.Status, byStale)
 	}
-	if stale.ClaimExpiry == nil || !stale.ClaimExpiry.Before(tc.now) {
+	if !stale.Claim.Present() || !stale.Claim.Expiry().Before(tc.now) {
 		t.Fatalf("setup broken: lease should be expired at %s", tc.now)
 	}
 
@@ -195,8 +196,9 @@ func TestClaimLazyExpiry_NoSweeper_TakeoverAfterClockAdvance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("takeover by B after A's lease expired must win: %v", err)
 	}
-	if got.ClaimedBy == nil || got.ClaimedBy.Name != agentB.Name {
-		t.Errorf("holder after takeover = %+v, want agent-b", got.ClaimedBy)
+	byGot := got.Claim.By()
+	if byGot == nil || byGot.Name != agentB.Name {
+		t.Errorf("holder after takeover = %+v, want agent-b", byGot)
 	}
 	if got.Version != 3 {
 		t.Errorf("version after takeover = %d, want 3 (create=1, claim A=2, takeover B=3)", got.Version)
@@ -207,8 +209,9 @@ func TestClaimLazyExpiry_NoSweeper_TakeoverAfterClockAdvance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get final: %v", err)
 	}
-	if final.ClaimedBy == nil || final.ClaimedBy.Name != agentB.Name || final.Status != domain.StatusDoing {
-		t.Fatalf("final state = (status %q holder %+v), want (doing agent-b)", final.Status, final.ClaimedBy)
+	byFinal := final.Claim.By()
+	if byFinal == nil || byFinal.Name != agentB.Name || final.Status != domain.StatusDoing {
+		t.Fatalf("final state = (status %q holder %+v), want (doing agent-b)", final.Status, byFinal)
 	}
 
 	// The event ledger: created + claimed(fresh A) + claimed(takeover B).
@@ -260,8 +263,8 @@ func TestHeartbeatRealSQL_ExtendsLeaseWithoutBumpOrEvent(t *testing.T) {
 		t.Fatalf("heartbeat by active holder: %v", err)
 	}
 	wantExpiry := tc.now.Add(120 * time.Second) // base+180s — extended from the FRESH now with the stored ttl
-	if beaten.ClaimExpiry == nil || !beaten.ClaimExpiry.Equal(wantExpiry) {
-		t.Errorf("expiry after heartbeat = %v, want %s", beaten.ClaimExpiry, wantExpiry)
+	if !beaten.Claim.Present() || !beaten.Claim.Expiry().Equal(wantExpiry) {
+		t.Errorf("expiry after heartbeat = %v, want %s", beaten.Claim.Expiry(), wantExpiry)
 	}
 	if beaten.Version != 2 || held.Version != 2 {
 		t.Errorf("version after heartbeat = %d (held %d), want UNCHANGED 2", beaten.Version, held.Version)
@@ -317,9 +320,10 @@ func TestReleaseRealSQL_NonHolderConflictAndUnclaimedNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if stale.Version != held.Version || stale.Status != domain.StatusDoing || stale.ClaimedBy == nil || stale.ClaimedBy.Name != agentA.Name {
+	byStale := stale.Claim.By()
+	if stale.Version != held.Version || stale.Status != domain.StatusDoing || byStale == nil || byStale.Name != agentA.Name {
 		t.Errorf("failed release mutated the row: (v%d %q holder %+v), want unchanged (v2 doing agent-a)",
-			stale.Version, stale.Status, stale.ClaimedBy)
+			stale.Version, stale.Status, byStale)
 	}
 	if _, n := eventCounts(t, db, ctx, task.ID); n != eventsBefore {
 		t.Errorf("failed release appended an event (%d → %d)", eventsBefore, n)
@@ -335,8 +339,9 @@ func TestReleaseRealSQL_NonHolderConflictAndUnclaimedNoOp(t *testing.T) {
 	if released.Status != domain.StatusTodo || released.Version != 3 {
 		t.Errorf("released = (status %q v%d), want (todo 3)", released.Status, released.Version)
 	}
-	if released.ClaimedBy != nil || released.ClaimExpiry != nil || released.ClaimTTLSeconds != 0 {
-		t.Errorf("lease not cleared: %+v", released)
+	if released.Claim.Present() {
+		t.Errorf("lease not cleared: holder=%+v expiry=%v ttl=%d",
+			released.Claim.By(), released.Claim.Expiry(), released.Claim.TTLSeconds())
 	}
 	var kind, after string
 	err = db.QueryRowContext(ctx,
@@ -358,8 +363,9 @@ func TestReleaseRealSQL_NonHolderConflictAndUnclaimedNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("release of unclaimed task must be a no-op, got: %v", err)
 	}
-	if got.Version != 1 || got.ClaimedBy != nil {
-		t.Errorf("no-op release mutated the row: (v%d holder %+v), want (v1 unclaimed)", got.Version, got.ClaimedBy)
+	if got.Version != 1 || got.Claim.Present() {
+		t.Errorf("no-op release mutated the row: (v%d holder %+v expiry %v), want (v1 unclaimed)",
+			got.Version, got.Claim.By(), got.Claim.Expiry())
 	}
 	if _, n := eventCounts(t, db, ctx, fresh.ID); n != 1 { // only `created`
 		t.Errorf("no-op release appended an event (%d total, want 1)", n)

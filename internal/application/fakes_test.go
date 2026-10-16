@@ -276,29 +276,24 @@ func (f *fakeTasks) Claim(_ context.Context, id domain.ID, actor domain.Actor, t
 		return domain.Task{}, fmt.Errorf("%w: cannot claim completed task %s", domain.ErrInvalid, id)
 	}
 	switch {
-	case cur.ClaimedBy == nil || cur.ClaimExpiry == nil: // free
-	case cur.ClaimExpiry.Before(now): // expired → takeover (any claimant)
+	case !cur.Claim.Present(): // free
+	case cur.Claim.Expiry().Before(now): // expired → takeover (any claimant)
 	case sameLeaseHolder(&cur, actor): // active self-lease (NAME is the key) → idempotent re-claim
 	default:
-		return domain.Task{}, &domain.ClaimConflictError{Holder: *cur.ClaimedBy, ExpiresAt: *cur.ClaimExpiry}
+		holder, exp := cur.Claim.By(), cur.Claim.Expiry()
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *holder, ExpiresAt: exp}
 	}
-	holder := actor
 	start := now
-	expiry := now.Add(time.Duration(ttlSec) * time.Second)
 	cur.Status = domain.StatusDoing
-	cur.ClaimedBy = &holder
-	cur.ClaimedAt = &start
-	cur.ClaimExpiry = &expiry
-	cur.ClaimTTLSeconds = ttlSec
+	cur.Claim = domain.NewClaim(actor, start, ttlSec) // fresh period: expiry derived as at+ttl
 	cur.Version++
 	cur.UpdatedAt = start
 	f.byID[id] = cur
 	return cur, nil
 }
 
-// Release mirrors the adapter's holder-only CAS in memory: it clears the lease
-// Release mirrors sqlite's guarded release: it clears lease fields
-// and moves status→todo (bumping version) for the lease holder (active or
+// Release mirrors sqlite's guarded release in memory: it clears the lease and
+// moves status→todo (bumping version) for the lease holder (active or
 // expired). A foreign holder gets *domain.ClaimConflictError{Holder, ExpiresAt}.
 // When force is true, any lease is cleared regardless of holder.
 // A task with no lease at all is an idempotent no-op returning the
@@ -308,20 +303,18 @@ func (f *fakeTasks) Release(_ context.Context, id domain.ID, actor domain.Actor,
 	if !ok {
 		return domain.Task{}, domain.ErrNotFound
 	}
-	if cur.ClaimedBy == nil || cur.ClaimExpiry == nil {
+	if !cur.Claim.Present() {
 		return cur, nil // nothing to release: idempotent no-op, row untouched
 	}
 	if !force && !sameLeaseHolder(&cur, actor) {
-		return domain.Task{}, &domain.ClaimConflictError{Holder: *cur.ClaimedBy, ExpiresAt: *cur.ClaimExpiry}
+		holder, exp := cur.Claim.By(), cur.Claim.Expiry()
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *holder, ExpiresAt: exp}
 	}
 	start := now
 	if cur.Status != domain.StatusDone {
 		cur.Status = domain.StatusTodo
 	}
-	cur.ClaimedBy = nil
-	cur.ClaimedAt = nil
-	cur.ClaimExpiry = nil
-	cur.ClaimTTLSeconds = 0
+	cur.Claim = cur.Claim.Released() // all-or-nothing clear
 	cur.Version++
 	cur.UpdatedAt = start
 	f.byID[id] = cur
@@ -344,16 +337,17 @@ func (f *fakeTasks) Heartbeat(_ context.Context, id domain.ID, actor domain.Acto
 	if cur.Status == domain.StatusDone {
 		return domain.Task{}, fmt.Errorf("%w: cannot heartbeat completed task %s", domain.ErrInvalid, id)
 	}
-	if cur.ClaimedBy == nil || cur.ClaimExpiry == nil {
+	if !cur.Claim.Present() {
 		return domain.Task{}, &domain.ClaimConflictError{Holder: domain.Actor{}, ExpiresAt: time.Time{}}
 	}
-	active := !cur.ClaimExpiry.Before(now)
+	active := !cur.Claim.Expiry().Before(now)
 	if !active || !sameLeaseHolder(&cur, actor) {
-		return domain.Task{}, &domain.ClaimConflictError{Holder: *cur.ClaimedBy, ExpiresAt: *cur.ClaimExpiry}
+		holder, exp := cur.Claim.By(), cur.Claim.Expiry()
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *holder, ExpiresAt: exp}
 	}
-	expiry := now.Add(time.Duration(cur.ClaimTTLSeconds) * time.Second)
-	cur.ClaimExpiry = &expiry
-	f.byID[id] = cur // Version and UpdatedAt intentionally untouched
+	expiry := now.Add(time.Duration(cur.Claim.TTLSeconds()) * time.Second)
+	cur.Claim = cur.Claim.ExtendedTo(expiry) // only the expiry re-stamps (TTL + grant kept)
+	f.byID[id] = cur                         // Version and UpdatedAt intentionally untouched
 	return cur, nil
 }
 

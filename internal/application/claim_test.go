@@ -58,18 +58,18 @@ func TestTasksClaim_FreshClaimSetsLeaseDoingVersionAndEmitsClaimedEvent(t *testi
 	if got.Version != 2 {
 		t.Errorf("version = %d, want 2 (lease is a task-row mutation)", got.Version)
 	}
-	if got.ClaimedBy == nil || got.ClaimedBy.Type != domain.ActorAgent || got.ClaimedBy.Name != claimAgent.Name {
-		t.Fatalf("holder = %+v, want agent worker-7", got.ClaimedBy)
+	if by := got.Claim.By(); by == nil || by.Type != domain.ActorAgent || by.Name != claimAgent.Name {
+		t.Fatalf("holder = %+v, want agent worker-7", by)
 	}
-	if got.ClaimedAt == nil || !got.ClaimedAt.Equal(claimedAt) {
-		t.Errorf("claimed_at = %v, want the claim instant %s", got.ClaimedAt, claimedAt)
+	if !got.Claim.Present() || !got.Claim.At().Equal(claimedAt) {
+		t.Errorf("claimed_at = %v (present=%v), want the claim instant %s", got.Claim.At(), got.Claim.Present(), claimedAt)
 	}
 	wantExpiry := claimedAt.Add(600 * time.Second) // expiry = now + ttl
-	if got.ClaimExpiry == nil || !got.ClaimExpiry.Equal(wantExpiry) {
-		t.Errorf("claim_expires_at = %v, want %s", got.ClaimExpiry, wantExpiry)
+	if !got.Claim.Present() || !got.Claim.Expiry().Equal(wantExpiry) {
+		t.Errorf("claim_expires_at = %v, want %s", got.Claim.Expiry(), wantExpiry)
 	}
-	if got.ClaimTTLSeconds != 600 {
-		t.Errorf("stored ttl = %ds, want 600s", got.ClaimTTLSeconds)
+	if got.Claim.TTLSeconds() != 600 {
+		t.Errorf("stored ttl = %ds, want 600s", got.Claim.TTLSeconds())
 	}
 	if got.Assignee != nil {
 		t.Errorf("claim must NOT touch the durable assignee (got %+v)", got.Assignee)
@@ -124,15 +124,15 @@ func TestTasksClaim_IdempotentRenewalBySameActiveHolder(t *testing.T) {
 	if renewed.Version != 3 {
 		t.Errorf("renewal version = %d, want 3 (each successful claim is a task-row mutation)", renewed.Version)
 	}
-	if renewed.ClaimedBy == nil || renewed.ClaimedBy.Name != claimAgent.Name {
-		t.Fatalf("holder after renewal = %+v, want still worker-7", renewed.ClaimedBy)
+	if by := renewed.Claim.By(); by == nil || by.Name != claimAgent.Name {
+		t.Fatalf("holder after renewal = %+v, want still worker-7", by)
 	}
 	wantExpiry := fc.now.Add(900 * time.Second) // re-stamped from the FRESH now with the new ttl
-	if renewed.ClaimExpiry == nil || !renewed.ClaimExpiry.Equal(wantExpiry) {
-		t.Errorf("expiry after renewal = %v, want fresh now + override ttl = %s", renewed.ClaimExpiry, wantExpiry)
+	if !renewed.Claim.Present() || !renewed.Claim.Expiry().Equal(wantExpiry) {
+		t.Errorf("expiry after renewal = %v, want fresh now + override ttl = %s", renewed.Claim.Expiry(), wantExpiry)
 	}
-	if renewed.ClaimTTLSeconds != 900 {
-		t.Errorf("stored ttl after renewal = %ds, want the overridden 900s", renewed.ClaimTTLSeconds)
+	if renewed.Claim.TTLSeconds() != 900 {
+		t.Errorf("stored ttl after renewal = %ds, want the overridden 900s", renewed.Claim.TTLSeconds())
 	}
 
 	evs := leaseEvents(uow)
@@ -145,8 +145,8 @@ func TestTasksClaim_IdempotentRenewalBySameActiveHolder(t *testing.T) {
 	if !strings.Contains(evs[1].Before, `"name":"worker-7"`) {
 		t.Errorf("renewal Before %q must name the prior (same) holder", evs[1].Before)
 	}
-	if first.Version != 2 || first.ClaimExpiry == nil || first.ClaimedBy == nil { // sanity: initial state as expected
-		t.Errorf("initial claim = (v%d expiry %v holder %+v), want (v2, set)", first.Version, first.ClaimExpiry, first.ClaimedBy)
+	if first.Version != 2 || !first.Claim.Present() { // sanity: initial state as expected
+		t.Errorf("initial claim = (v%d expiry %v holder %+v), want (v2, set)", first.Version, first.Claim.Expiry(), first.Claim.By())
 	}
 
 	// The lease key is the actor NAME, not the type: a human-typed "worker-7"
@@ -157,8 +157,8 @@ func TestTasksClaim_IdempotentRenewalBySameActiveHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-claim by same NAME (different type) must succeed idempotently, got: %v", err)
 	}
-	if got.ClaimedBy == nil || got.ClaimedBy.Type != domain.ActorHuman || got.ClaimedBy.Name != "worker-7" {
-		t.Errorf("holder after same-name re-claim = %+v, want the human-typed worker-7", got.ClaimedBy)
+	if by := got.Claim.By(); by == nil || by.Type != domain.ActorHuman || by.Name != "worker-7" {
+		t.Errorf("holder after same-name re-claim = %+v, want the human-typed worker-7", by)
 	}
 	evs = leaseEvents(uow)
 	if !strings.Contains(evs[2].After, `"claim":"renewal"`) {
@@ -184,17 +184,18 @@ func TestTasksClaim_DifferentLiveHolderGetsConflictNothingMutated(t *testing.T) 
 	if cc.Holder.Type != claimAgent.Type || cc.Holder.Name != claimAgent.Name {
 		t.Errorf("conflict holder = %+v, want the live lease holder worker-7", cc.Holder)
 	}
-	if !cc.ExpiresAt.Equal(*held.ClaimExpiry) {
-		t.Errorf("conflict expiry = %s, want the stored lease expiry %s (the body is the recovery instruction)", cc.ExpiresAt, *held.ClaimExpiry)
+	if !cc.ExpiresAt.Equal(held.Claim.Expiry()) {
+		t.Errorf("conflict expiry = %s, want the stored lease expiry %s (the body is the recovery instruction)", cc.ExpiresAt, held.Claim.Expiry())
 	}
 
 	stored, err := svc.Get(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("Get after lost claim: %v", err)
 	}
-	if stored.Version != held.Version || stored.ClaimedBy == nil || stored.ClaimedBy.Name != claimAgent.Name {
+	byStored := stored.Claim.By()
+	if stored.Version != held.Version || byStored == nil || byStored.Name != claimAgent.Name {
 		t.Errorf("lost claim mutated the row: (v%d holder %+v), want unchanged (v%d worker-7)",
-			stored.Version, stored.ClaimedBy, held.Version)
+			stored.Version, byStored, held.Version)
 	}
 	if len(uow.events.events) != eventsBefore {
 		t.Errorf("lost claim appended an event (%d → %d); conflicts must not emit", eventsBefore, len(uow.events.events))
@@ -220,8 +221,8 @@ func TestTasksClaim_ExpiredLeaseTakeoverByAnotherActorAndByPreviousHolder(t *tes
 	if err != nil {
 		t.Fatalf("takeover of expired lease must win, got: %v", err)
 	}
-	if takeover.ClaimedBy == nil || takeover.ClaimedBy.Name != rival.Name {
-		t.Fatalf("holder after takeover = %+v, want worker-8", takeover.ClaimedBy)
+	if by := takeover.Claim.By(); by == nil || by.Name != rival.Name {
+		t.Fatalf("holder after takeover = %+v, want worker-8", by)
 	}
 	if takeover.Status != domain.StatusDoing || takeover.Version != 3 {
 		t.Errorf("takeover row = (status %q v%d), want (doing 3)", takeover.Status, takeover.Version)
@@ -242,8 +243,8 @@ func TestTasksClaim_ExpiredLeaseTakeoverByAnotherActorAndByPreviousHolder(t *tes
 	if err != nil {
 		t.Fatalf("self-takeover of own expired lease must win, got: %v", err)
 	}
-	if back.ClaimedBy == nil || back.ClaimedBy.Name != claimAgent.Name {
-		t.Errorf("holder = %+v, want worker-7 again", back.ClaimedBy)
+	if by := back.Claim.By(); by == nil || by.Name != claimAgent.Name {
+		t.Errorf("holder = %+v, want worker-7 again", by)
 	}
 	evs = leaseEvents(uow)
 	if len(evs) != 3 || !strings.Contains(evs[2].After, `"claim":"takeover"`) {
@@ -269,7 +270,7 @@ func TestTasksRelease_HolderClearsLeaseAndEmitsReleasedEvent(t *testing.T) {
 	rival := domain.Actor{Type: domain.ActorAgent, Name: "worker-8"}
 	_, err = svc.Release(ctx, rival, task.ID, "not mine")
 	cc := asClaimConflict(t, err)
-	if cc.Holder.Name != claimAgent.Name || !cc.ExpiresAt.Equal(*held.ClaimExpiry) {
+	if cc.Holder.Name != claimAgent.Name || !cc.ExpiresAt.Equal(held.Claim.Expiry()) {
 		t.Errorf("release conflict = (holder %+v expiry %s), want live holder worker-7 with stored expiry", cc.Holder, cc.ExpiresAt)
 	}
 	stored, err := svc.Get(ctx, task.ID)
@@ -291,8 +292,9 @@ func TestTasksRelease_HolderClearsLeaseAndEmitsReleasedEvent(t *testing.T) {
 	if released.Version != 3 {
 		t.Errorf("version after release = %d, want 3 (release is a task-row mutation)", released.Version)
 	}
-	if released.ClaimedBy != nil || released.ClaimedAt != nil || released.ClaimExpiry != nil || released.ClaimTTLSeconds != 0 {
-		t.Errorf("lease not fully cleared: %+v", released)
+	if released.Claim.Present() {
+		t.Errorf("lease not fully cleared: present=%v holder=%+v expiry=%v ttl=%d",
+			released.Claim.Present(), released.Claim.By(), released.Claim.Expiry(), released.Claim.TTLSeconds())
 	}
 	if released.Assignee != nil {
 		t.Errorf("release must NOT touch the durable assignee (got %+v)", released.Assignee)
@@ -357,8 +359,8 @@ func TestTasksRelease_ExpiredLease_OriginalHolderSucceedsAndRivalFails(t *testin
 		t.Fatalf("expected ClaimConflictError for rival release of expired lease, got nil")
 	}
 	cc := asClaimConflict(t, err)
-	if cc.Holder.Name != claimAgent.Name || !cc.ExpiresAt.Equal(*held.ClaimExpiry) {
-		t.Errorf("rival conflict = %+v, want holder %s expiry %s", cc, claimAgent.Name, held.ClaimExpiry)
+	if cc.Holder.Name != claimAgent.Name || !cc.ExpiresAt.Equal(held.Claim.Expiry()) {
+		t.Errorf("rival conflict = %+v, want holder %s expiry %s", cc, claimAgent.Name, held.Claim.Expiry())
 	}
 	if len(uow.events.events) != eventsBefore {
 		t.Errorf("failed rival release appended event")
@@ -375,8 +377,8 @@ func TestTasksRelease_ExpiredLease_OriginalHolderSucceedsAndRivalFails(t *testin
 	if released.Version != 3 {
 		t.Errorf("version = %d, want 3", released.Version)
 	}
-	if released.ClaimedBy != nil || released.ClaimExpiry != nil {
-		t.Errorf("lease not cleared: %+v", released)
+	if released.Claim.Present() {
+		t.Errorf("lease not cleared: holder=%+v expiry=%v", released.Claim.By(), released.Claim.Expiry())
 	}
 
 	evs := leaseEvents(uow)
@@ -413,8 +415,8 @@ func TestTasksRelease_ForceRelease_ByOperator(t *testing.T) {
 	if released.Version != 3 {
 		t.Errorf("version = %d, want 3", released.Version)
 	}
-	if released.ClaimedBy != nil {
-		t.Errorf("lease not cleared: %+v", released)
+	if released.Claim.Present() {
+		t.Errorf("lease not cleared: holder=%+v expiry=%v", released.Claim.By(), released.Claim.Expiry())
 	}
 
 	evs := leaseEvents(uow)
@@ -435,8 +437,8 @@ func TestTasksRelease_ForceRelease_ByOperator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("noop force release: %v", err)
 	}
-	if noop.Version != 3 || noop.ClaimedBy != nil {
-		t.Errorf("noop force release mutated row: %+v", noop)
+	if noop.Version != 3 || noop.Claim.Present() {
+		t.Errorf("noop force release mutated row: v=%d holder=%+v expiry=%v", noop.Version, noop.Claim.By(), noop.Claim.Expiry())
 	}
 	if len(uow.events.events) != eventsBefore {
 		t.Errorf("noop force release appended an event")
@@ -461,8 +463,8 @@ func TestTasksHeartbeat_ExtendsActiveLeaseWithoutVersionOrEvent(t *testing.T) {
 		t.Fatalf("heartbeat by active holder: %v", err)
 	}
 	wantExpiry := fc.now.Add(600 * time.Second) // now + STORED ttl (600s), not a new override
-	if beaten.ClaimExpiry == nil || !beaten.ClaimExpiry.Equal(wantExpiry) {
-		t.Errorf("expiry after heartbeat = %v, want now + stored ttl = %s", beaten.ClaimExpiry, wantExpiry)
+	if !beaten.Claim.Present() || !beaten.Claim.Expiry().Equal(wantExpiry) {
+		t.Errorf("expiry after heartbeat = %v, want now + stored ttl = %s", beaten.Claim.Expiry(), wantExpiry)
 	}
 	if beaten.Version != 2 {
 		t.Errorf("version after heartbeat = %d, want UNCHANGED (keep-alive bumps nothing)", beaten.Version)
@@ -510,11 +512,11 @@ func TestTasksClaim_TTLDefaultOverrideAndCap(t *testing.T) {
 		t.Fatalf("claim with ttl 0: %v", err)
 	}
 	wantExpiry := fc.now.Add(DefaultClaimTTL)
-	if got.ClaimExpiry == nil || !got.ClaimExpiry.Equal(wantExpiry) {
-		t.Errorf("expiry with ttlSec=0 = %v, want now + DefaultClaimTTL (%s)", got.ClaimExpiry, wantExpiry)
+	if !got.Claim.Present() || !got.Claim.Expiry().Equal(wantExpiry) {
+		t.Errorf("expiry with ttlSec=0 = %v, want now + DefaultClaimTTL (%s)", got.Claim.Expiry(), wantExpiry)
 	}
-	if got.ClaimTTLSeconds != int(DefaultClaimTTL.Seconds()) {
-		t.Errorf("stored ttl = %ds, want %d", got.ClaimTTLSeconds, int(DefaultClaimTTL.Seconds()))
+	if got.Claim.TTLSeconds() != int(DefaultClaimTTL.Seconds()) {
+		t.Errorf("stored ttl = %ds, want %d", got.Claim.TTLSeconds(), int(DefaultClaimTTL.Seconds()))
 	}
 
 	// Oversized override clamps to maxClaimTTL (3600s) rather than erroring.
@@ -523,8 +525,8 @@ func TestTasksClaim_TTLDefaultOverrideAndCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim with ttl 7200: %v", err)
 	}
-	if got.ClaimExpiry == nil || !got.ClaimExpiry.Equal(fc.now.Add(maxClaimTTL)) {
-		t.Errorf("expiry for ttlSec=7200 = %v, want now + max (%s)", got.ClaimExpiry, maxClaimTTL)
+	if !got.Claim.Present() || !got.Claim.Expiry().Equal(fc.now.Add(maxClaimTTL)) {
+		t.Errorf("expiry for ttlSec=7200 = %v, want now + max (%s)", got.Claim.Expiry(), maxClaimTTL)
 	}
 
 	// Negative TTL is invalid input: rejected, nothing written.
@@ -533,8 +535,9 @@ func TestTasksClaim_TTLDefaultOverrideAndCap(t *testing.T) {
 	if _, err := svc.Claim(ctx, claimAgent, victim.ID, -5, false); !errors.Is(err, domain.ErrInvalid) {
 		t.Errorf("claim with ttlSec=-5 err = %v, want wrapped domain.ErrInvalid", err)
 	}
-	if stored, _ := svc.Get(ctx, victim.ID); stored.Version != 1 || stored.ClaimedBy != nil {
-		t.Errorf("invalid TTL must not mutate the row (got v%d holder %+v)", stored.Version, stored.ClaimedBy)
+	if stored, _ := svc.Get(ctx, victim.ID); stored.Version != 1 || stored.Claim.Present() {
+		t.Errorf("invalid TTL must not mutate the row (got v%d holder %+v expiry %v)",
+			stored.Version, stored.Claim.By(), stored.Claim.Expiry())
 	}
 
 	// WithDefaultClaimTTL injects a custom default for ttlSec = 0 calls.
@@ -544,8 +547,8 @@ func TestTasksClaim_TTLDefaultOverrideAndCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim with injected default: %v", err)
 	}
-	if got.ClaimExpiry == nil || !got.ClaimExpiry.Equal(fc.now.Add(30*time.Second)) {
-		t.Errorf("expiry with injected 30s default = %v, want now + 30s", got.ClaimExpiry)
+	if !got.Claim.Present() || !got.Claim.Expiry().Equal(fc.now.Add(30*time.Second)) {
+		t.Errorf("expiry with injected 30s default = %v, want now + 30s", got.Claim.Expiry())
 	}
 }
 
@@ -581,8 +584,8 @@ func TestTasksClaim_CompletedOrArchived_ReturnsErrInvalidAndNoMutation(t *testin
 	if stored.Status != domain.StatusDone {
 		t.Errorf("stored status = %q, want done (must not be mutated to doing)", stored.Status)
 	}
-	if stored.ClaimedBy != nil {
-		t.Errorf("stored ClaimedBy = %+v, want nil", stored.ClaimedBy)
+	if stored.Claim.Present() {
+		t.Errorf("stored lease present (holder %+v expiry %v), want none", stored.Claim.By(), stored.Claim.Expiry())
 	}
 	if len(uow.events.events) != beforeEvCount {
 		t.Errorf("no events should be emitted on rejected claim (got %d events, want %d)", len(uow.events.events), beforeEvCount)
@@ -613,8 +616,8 @@ func TestTasksClaim_CompletedOrArchived_ReturnsErrInvalidAndNoMutation(t *testin
 	if stored.Status != domain.StatusTodo {
 		t.Errorf("stored status = %q, want todo", stored.Status)
 	}
-	if stored.ClaimedBy != nil {
-		t.Errorf("stored ClaimedBy = %+v, want nil", stored.ClaimedBy)
+	if stored.Claim.Present() {
+		t.Errorf("stored lease present (holder %+v expiry %v), want none", stored.Claim.By(), stored.Claim.Expiry())
 	}
 	if len(uow.events.events) != beforeEvCount {
 		t.Errorf("no events should be emitted on rejected claim (got %d events, want %d)", len(uow.events.events), beforeEvCount)
@@ -682,7 +685,7 @@ func TestTasksRelease_DoneStatusPreserved(t *testing.T) {
 	if released.Status != domain.StatusDone {
 		t.Errorf("released status = %q, want done (must NOT revert to todo)", released.Status)
 	}
-	if released.ClaimedBy != nil {
-		t.Errorf("released ClaimedBy = %+v, want nil", released.ClaimedBy)
+	if released.Claim.Present() {
+		t.Errorf("released lease present (holder %+v expiry %v), want none", released.Claim.By(), released.Claim.Expiry())
 	}
 }

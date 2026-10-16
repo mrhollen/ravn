@@ -395,8 +395,9 @@ func TestChallenger_R1_LeaseExactBoundaryConditions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Competitor takeover 1ns after expiry failed: %v", err)
 			}
-			if claimed.ClaimedBy == nil || claimed.ClaimedBy.Name != agentB.Name {
-				t.Fatalf("Competitor takeover holder = %v, want agent-b", claimed.ClaimedBy)
+			byClaimed := claimed.Claim.By()
+			if byClaimed == nil || byClaimed.Name != agentB.Name {
+				t.Fatalf("Competitor takeover holder = %v, want agent-b", byClaimed)
 			}
 		})
 	}

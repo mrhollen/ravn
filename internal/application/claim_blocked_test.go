@@ -75,9 +75,9 @@ func TestClaim_FreshClaimOnBlockedTask_RejectedStructuredNoMutation(t *testing.T
 	if err != nil {
 		t.Fatalf("Get after rejected claim: %v", err)
 	}
-	if stored.Version != 1 || stored.Status != domain.StatusTodo || stored.ClaimedBy != nil {
-		t.Errorf("rejected claim mutated the row: (v%d status %q holder %+v), want unchanged (v1 todo unclaimed)",
-			stored.Version, stored.Status, stored.ClaimedBy)
+	if stored.Version != 1 || stored.Status != domain.StatusTodo || stored.Claim.Present() {
+		t.Errorf("rejected claim mutated the row: (v%d status %q holder %+v expiry %v), want unchanged (v1 todo unclaimed)",
+			stored.Version, stored.Status, stored.Claim.By(), stored.Claim.Expiry())
 	}
 	if len(uow.events.events) != eventsBefore {
 		t.Errorf("rejected claim appended an event (%d → %d); rejections must not emit",
@@ -108,9 +108,10 @@ func TestClaim_AllBlockersDoneOrArchived_ClaimsNormally(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim with all blockers resolved: %v", err)
 	}
-	if got.Status != domain.StatusDoing || got.Version != 2 || got.ClaimedBy == nil || got.ClaimedBy.Name != claimAgent.Name {
+	byGot := got.Claim.By()
+	if got.Status != domain.StatusDoing || got.Version != 2 || byGot == nil || byGot.Name != claimAgent.Name {
 		t.Errorf("claim = (status %q v%d holder %+v), want doing v2 held by worker-7",
-			got.Status, got.Version, got.ClaimedBy)
+			got.Status, got.Version, byGot)
 	}
 
 	evs := leaseEvents(uow)
@@ -141,8 +142,9 @@ func TestClaim_OverrideBypassesOpenBlockerGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("override claim: %v", err)
 	}
-	if got.Status != domain.StatusDoing || got.ClaimedBy == nil || got.ClaimedBy.Name != claimAgent.Name {
-		t.Errorf("override claim = (status %q holder %+v), want doing held by worker-7", got.Status, got.ClaimedBy)
+	byOverride := got.Claim.By()
+	if got.Status != domain.StatusDoing || byOverride == nil || byOverride.Name != claimAgent.Name {
+		t.Errorf("override claim = (status %q holder %+v), want doing held by worker-7", got.Status, byOverride)
 	}
 
 	// Expiry passes; a RIVAL takeover of the expired lease is still gated...
@@ -158,8 +160,9 @@ func TestClaim_OverrideBypassesOpenBlockerGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("override takeover: %v", err)
 	}
-	if took.ClaimedBy == nil || took.ClaimedBy.Name != rival.Name || took.Status != domain.StatusDoing {
-		t.Errorf("takeover = (holder %+v status %q), want worker-8 doing", took.ClaimedBy, took.Status)
+	byTook := took.Claim.By()
+	if byTook == nil || byTook.Name != rival.Name || took.Status != domain.StatusDoing {
+		t.Errorf("takeover = (holder %+v status %q), want worker-8 doing", byTook, took.Status)
 	}
 	evs := leaseEvents(uow)
 	if len(evs) != 2 { // fresh (override) + takeover (override)
@@ -197,9 +200,10 @@ func TestClaim_RenewalByActiveHolderNotGatedByNewlyLandedBlockers(t *testing.T) 
 	if err != nil {
 		t.Fatalf("renewal by active holder must not be gated by blockers, got: %v", err)
 	}
-	if renewed.Version != claimed.Version+1 || renewed.ClaimedBy == nil || renewed.ClaimedBy.Name != claimAgent.Name {
+	byRenewed := renewed.Claim.By()
+	if renewed.Version != claimed.Version+1 || byRenewed == nil || byRenewed.Name != claimAgent.Name {
 		t.Errorf("renewal = (v%d holder %+v), want v%d held by worker-7",
-			renewed.Version, renewed.ClaimedBy, claimed.Version+1)
+			renewed.Version, byRenewed, claimed.Version+1)
 	}
 	evs := leaseEvents(uow)
 	if len(evs) != 2 || !strings.Contains(evs[1].After, `"claim":"renewal"`) {
@@ -238,17 +242,18 @@ func TestClaim_ActiveForeignLeaseOnBlockedTask_KeepsConflictError(t *testing.T) 
 	if cc.Holder.Type != claimAgent.Type || cc.Holder.Name != claimAgent.Name {
 		t.Errorf("conflict holder = %+v, want the live lease holder worker-7", cc.Holder)
 	}
-	if !cc.ExpiresAt.Equal(*held.ClaimExpiry) {
-		t.Errorf("conflict expiry = %s, want the stored lease expiry %s", cc.ExpiresAt, *held.ClaimExpiry)
+	if !cc.ExpiresAt.Equal(held.Claim.Expiry()) {
+		t.Errorf("conflict expiry = %s, want the stored lease expiry %s", cc.ExpiresAt, held.Claim.Expiry())
 	}
 
 	stored, err := svc.Get(ctx, x.ID)
 	if err != nil {
 		t.Fatalf("Get after lost claim: %v", err)
 	}
-	if stored.Version != held.Version || stored.ClaimedBy == nil || stored.ClaimedBy.Name != claimAgent.Name {
+	byStored := stored.Claim.By()
+	if stored.Version != held.Version || byStored == nil || byStored.Name != claimAgent.Name {
 		t.Errorf("lost claim mutated the row: (v%d holder %+v), want unchanged (v%d worker-7)",
-			stored.Version, stored.ClaimedBy, held.Version)
+			stored.Version, byStored, held.Version)
 	}
 	if len(uow.events.events) != eventsBefore {
 		t.Errorf("lost claim appended an event (%d → %d); conflicts must not emit", eventsBefore, len(uow.events.events))

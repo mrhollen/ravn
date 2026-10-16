@@ -22,6 +22,23 @@ var ErrNotFound = errors.New("not found")
 //	fmt.Errorf("%w: task title is required", ErrInvalid)
 var ErrInvalid = errors.New("invalid input")
 
+// InvariantError reports a domain entity that violates one of its structural
+// invariants — e.g. a done task without a completion stamp, a partial claim
+// lease, or an acceptance criterion whose Done flag disagrees with its
+// completed_by/completed_at pair. It is distinct from ErrInvalid (malformed
+// CALLER input): invariant violations are internal-consistency failures that
+// the Validate() methods on Task / AcceptanceCriterion / Claim surface and
+// the use cases assert against at their mutation sites, so an inconsistent row
+// can never reach an adapter.
+type InvariantError struct {
+	Entity string // "task" | "claim lease" | "acceptance criterion"
+	Detail string // which pieces are set/missing and why that is inconsistent
+}
+
+func (e *InvariantError) Error() string {
+	return fmt.Sprintf("%s invariant violated: %s", e.Entity, e.Detail)
+}
+
 // ConflictError is returned when a version-guarded write loses to a concurrent
 // one. Current carries the fresh row (new Version and UpdatedAt) so callers
 // can rebase instead of blind-retrying. The REST adapter maps it to 409 with
