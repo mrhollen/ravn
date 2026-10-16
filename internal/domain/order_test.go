@@ -83,7 +83,7 @@ func TestCanonicalLess_SortsMixedBag(t *testing.T) {
 		got = append(got, string(tk.ID))
 	}
 	want := []string{
-		"p5-nodue", // p5 first: priority DESC dominates null due + late creation
+		"p5-nodue",                                                          // p5 first: priority DESC dominates null due + late creation
 		"p3-due-early", "p3-due-tie-oldest", "p3-due-tie-newer", "p3-nodue", // p3: due ASC, created tiebreak, nulls last
 		"p2-due-mid",
 		"p0-due-soonest", // p0 last despite the soonest due date
