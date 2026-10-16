@@ -210,6 +210,27 @@ func (f *fakeTasks) List(_ context.Context, flt TaskFilter) ([]domain.Task, int6
 	return matched, total, nil
 }
 
+// OpenTitles mirrors the sqlite adapter: every open (non-archived, non-done)
+// task of projectID as a titles-only row, canonical order, unbounded. The
+// "open" predicate must stay in lockstep with taskMatches' Archived handling
+// and the SQL `status <> 'done' AND archived = 0` guard.
+func (f *fakeTasks) OpenTitles(_ context.Context, projectID domain.ID) ([]TaskTitle, error) {
+	matched := make([]domain.Task, 0, len(f.byID))
+	for _, t := range f.byID {
+		if t.ProjectID != projectID || t.Archived || t.Status == domain.StatusDone {
+			continue
+		}
+		matched = append(matched, t)
+	}
+	sort.Slice(matched, func(i, j int) bool { return domain.CanonicalLess(matched[i], matched[j]) })
+
+	out := make([]TaskTitle, 0, len(matched))
+	for _, t := range matched {
+		out = append(out, TaskTitle{ID: t.ID, Title: t.Title})
+	}
+	return out, nil
+}
+
 // OpenTaskCounts aggregates open tasks per (project, status), mirroring the
 // single grouped query in the sqlite adapter.
 func (f *fakeTasks) OpenTaskCounts(_ context.Context) ([]TaskCountRow, error) {

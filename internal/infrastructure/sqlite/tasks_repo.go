@@ -117,6 +117,36 @@ func (r *taskRepo) List(ctx context.Context, f application.TaskFilter) ([]domain
 	return out, total, rows.Err()
 }
 
+// OpenTitles returns every open (non-archived, non-done) task of projectID as
+// a titles-only (id, title) pair, in canonical order — UNBOUNDED. The WHERE is
+// the exact system-wide "open" predicate (ARCHITECTURE §4: not done and not
+// archived), and the ORDER BY is List's canonical expression verbatim so both
+// adapters can never disagree on scan order. This is the cheap pre-selection
+// behind FindDuplicateCandidates: it scores every open row in memory, then
+// hydrates only its top-N survivors via Get — no full rows are materialized for
+// a big project. The lookup rides idx_task_order's (project_id, …) prefix plus
+// the partial archived = 0 index; the status filter is residual (Tier 2 can
+// add FTS-backed matching, ARCHITECTURE §3).
+func (r *taskRepo) OpenTitles(ctx context.Context, projectID domain.ID) ([]application.TaskTitle, error) {
+	rows, err := r.q.QueryContext(ctx,
+		`SELECT id, title FROM task WHERE project_id = ? AND archived = 0 AND status <> 'done' `+
+			`ORDER BY priority DESC, (due_at IS NULL), due_at ASC, created_at ASC`, string(projectID))
+	if err != nil {
+		return nil, fmt.Errorf("open titles: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]application.TaskTitle, 0)
+	for rows.Next() {
+		var tt application.TaskTitle
+		if err := rows.Scan(&tt.ID, &tt.Title); err != nil {
+			return nil, fmt.Errorf("scan open-title row: %w", err)
+		}
+		out = append(out, tt)
+	}
+	return out, rows.Err()
+}
+
 // BlockersOf returns the open blockers of taskID — the targets of its outgoing
 // blocked-by edges whose target is NOT done and NOT archived, in edge-creation
 // order (created_at ASC, id ASC tie-break). Only DIRECT blockers count; there

@@ -26,14 +26,14 @@ const (
 	defaultEventLimit   = 20
 	maxEventLimit       = 100
 
-	// Duplicate-candidate scan limits (FindDuplicateCandidates, slice 2D2b). A
+	// Duplicate-candidate limits (FindDuplicateCandidates, slice 2D2b). A
 	// request for 0 asks for the default advisory set; requests above the list
-	// max are clamped to it. The in-Go scoring considers at most ONE page of the
-	// project's open tasks — no pagination: beyond that, an advisory ranking
-	// loses its value and Tier 2 can add FTS-backed matching (ARCHITECTURE §3).
+	// max are clamped to it. The SCAN itself is unbounded — every open task of
+	// the project is scored from a titles-only read (TaskRepository.OpenTitles,
+	// no full rows materialized); only this returned advisory list is capped,
+	// and Tier 2 can add FTS-backed matching (ARCHITECTURE §3).
 	defaultDuplicateLimit = 5
 	maxDuplicateLimit     = maxListLimit
-	scanDuplicateLimit    = maxListLimit
 )
 
 // Claim-lease TTL constants (slice 2C). DefaultClaimTTL applies when a caller
@@ -539,25 +539,31 @@ func (s *Tasks) Get(ctx context.Context, id domain.ID) (domain.Task, error) {
 // returns up to `limit` open (not done, not archived) tasks of projectID whose
 // titles look similar to `title`, most similar first. Matching is deliberately
 // simple and deterministic — NO new DB migration, NO FTS (Tier 2): the port's
-// existing List capability is used to fetch the project's open tasks, then a
-// lightweight in-Go scorer ranks them:
+// OpenTitles capability fetches EVERY open task's title in the project (a
+// titles-only read — no full rows are materialized), then a lightweight in-Go
+// scorer ranks them on domain.TitleSimilarity's 0–3 scale:
 //
 //  1. both titles are normalized (lowercased + trimmed);
-//  2. similarity scores 0–3 — 3: normalized-equal; 2: one normalized title
-//     contains the other (either direction); 1: at least half of the query's
+//  2. similarity scores 0–3, computed on token SETS, never byte strings —
+//     3: normalized-equal; 2: whole-token containment either direction (every
+//     significant token of one title is a WHOLE token of the other — "ui"
+//     does not match "build suite"); 1: at least half of the query's
 //     significant tokens (non-stopword alphanumeric runs) also occur in the
 //     candidate; 0: not returned;
 //  3. candidates rank score DESC, then ID ASC (deterministic), and are capped
 //     at `limit` (default 5 when limit <= 0).
 //
+// The SCAN is complete — every open task of the project is considered,
+// whatever its position in canonical order; only the RETURNED advisory list is
+// bounded. Each surviving top-N ID is hydrated with a Get inside the same unit
+// of work so the returned rows carry full summary fields (the advisory's JSON
+// shape is unchanged); a survivor that vanished between scan and hydration
+// (completed or archived) is dropped silently — this read is advisory only.
 // This is a NON-BLOCKING advisory read — it never fails a create; callers
-// surface hits as warnings ("possible_duplicate:<id>"). The scan is bounded to
-// one page (scanDuplicateLimit) of the project's open tasks, so in a project
-// with more than that many open tasks only the canonical-order head is
-// considered. The task just created for this title is NOT excluded here (this
-// method cannot know its ID): callers surfacing warnings for a fresh create
-// must drop the entry matching that task's own ID first — otherwise the new
-// row would warn about itself.
+// surface hits as warnings ("possible_duplicate:<id>"). The task just created
+// for this title is NOT excluded here (this method cannot know its ID):
+// callers surfacing warnings for a fresh create must drop the entry matching
+// that task's own ID first — otherwise the new row would warn about itself.
 func (s *Tasks) FindDuplicateCandidates(ctx context.Context, projectID domain.ID, title string, limit int) ([]domain.Task, error) {
 	if projectID.IsZero() {
 		return nil, fmt.Errorf("%w: project id is required", domain.ErrInvalid)
@@ -571,50 +577,52 @@ func (s *Tasks) FindDuplicateCandidates(ctx context.Context, projectID domain.ID
 	qNorm := domain.NormalizeTitle(title)
 	qTokens := domain.SignificantTokens(qNorm)
 
-	var scanned []domain.Task
+	var out []domain.Task
 	var r Repos
 	err := s.uow.Run(ctx, &r, func() error {
-		f := TaskFilter{ProjectID: projectID, Limit: scanDuplicateLimit} // Archived=false (zero value): open rows only
-		rows, _, lerr := r.Tasks.List(ctx, f)
+		titles, lerr := r.Tasks.OpenTitles(ctx, projectID) // ALL open tasks — titles only, unbounded
 		if lerr != nil {
 			return lerr
 		}
-		scanned = rows
+
+		type scored struct {
+			score int
+			id    domain.ID
+		}
+		cands := make([]scored, 0)
+		for _, tt := range titles {
+			candNorm := domain.NormalizeTitle(tt.Title)
+			sc := domain.TitleSimilarity(qNorm, candNorm, qTokens, domain.SignificantTokens(candNorm))
+			if sc > 0 {
+				cands = append(cands, scored{score: sc, id: tt.ID})
+			}
+		}
+
+		sort.Slice(cands, func(i, j int) bool {
+			if cands[i].score != cands[j].score {
+				return cands[i].score > cands[j].score
+			}
+			return cands[i].id < cands[j].id // deterministic tie-break (ULIDs sort by creation time)
+		})
+		if len(cands) > limit {
+			cands = cands[:limit]
+		}
+
+		out = make([]domain.Task, 0, len(cands))
+		for _, c := range cands {
+			t, gerr := r.Tasks.Get(ctx, c.id) // hydrate the full row for the summary JSON shape
+			if errors.Is(gerr, domain.ErrNotFound) {
+				continue // completed/archived between scan and read: advisory only, drop silently
+			}
+			if gerr != nil {
+				return gerr
+			}
+			out = append(out, t)
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	type scored struct {
-		score int
-		task  domain.Task
-	}
-	cands := make([]scored, 0)
-	for _, t := range scanned {
-		if t.Status == domain.StatusDone || t.Archived { // "open" = not done/archived (ARCHITECTURE §4)
-			continue
-		}
-		candNorm := domain.NormalizeTitle(t.Title)
-		sc := domain.TitleSimilarity(qNorm, candNorm, qTokens, domain.SignificantTokens(candNorm))
-		if sc > 0 {
-			cands = append(cands, scored{score: sc, task: t})
-		}
-	}
-
-	sort.Slice(cands, func(i, j int) bool {
-		if cands[i].score != cands[j].score {
-			return cands[i].score > cands[j].score
-		}
-		return cands[i].task.ID < cands[j].task.ID // deterministic tie-break (ULIDs sort by creation time)
-	})
-	if len(cands) > limit {
-		cands = cands[:limit]
-	}
-
-	out := make([]domain.Task, 0, len(cands))
-	for _, c := range cands {
-		out = append(out, c.task)
 	}
 	return out, nil
 }

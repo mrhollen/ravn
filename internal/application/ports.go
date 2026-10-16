@@ -131,6 +131,15 @@ type TaskCountRow struct {
 	Count     int64
 }
 
+// TaskTitle is one (id, title) pair produced by TaskRepository.OpenTitles. It
+// is a port-level result shape, not a domain entity: the duplicate-advisory
+// scan needs titles only — materializing full rows for every open task of a
+// big project would be needless memory traffic the scorer never reads.
+type TaskTitle struct {
+	ID    domain.ID
+	Title string
+}
+
 // TaskRepository persists tasks and their ephemeral claim leases. Concurrency
 // notes:
 //
@@ -156,6 +165,14 @@ type TaskRepository interface {
 	// f.UnblockedOnly is set both the rows and the total honor it (same
 	// predicate — slice 2D2b).
 	List(ctx context.Context, f TaskFilter) ([]domain.Task, int64, error)
+
+	// OpenTitles returns the (id, title) of EVERY open task in projectID —
+	// not done and not archived, the system-wide "open" predicate
+	// (ARCHITECTURE §4) — in canonical order. UNBOUNDED: it is the cheap,
+	// titles-only pre-selection behind FindDuplicateCandidates, whose scan
+	// must consider every open row of the project (no priority-page
+	// truncation) while materializing only the two columns the scorer reads.
+	OpenTitles(ctx context.Context, projectID domain.ID) ([]TaskTitle, error)
 
 	// OpenTaskCounts returns one row per (project, status) pair that has at
 	// least one open (non-archived) task, computed as ONE grouped query:
