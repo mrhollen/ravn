@@ -765,6 +765,14 @@ func TestClaimLifecycle(t *testing.T) {
 	if e.Error != "claim conflict" || e.Holder == nil || e.Holder.Name != "agent-a" || e.ExpiresAt == "" {
 		t.Fatalf("409 claim body = %+v, want error \"claim conflict\" holder agent-a with expiry", e)
 	}
+	// The message must carry the no-wait clarification (never sleep/poll for a
+	// lease expiry; close-out mutations are version-guarded, not claim-gated) —
+	// pinning the wording so it cannot silently regress.
+	for _, frag := range []string{"do not wait for the lease to expire", "close-out mutations (comments/notes/status/ACs) are open to non-holders", "explicit permission"} {
+		if !strings.Contains(e.Message, frag) {
+			t.Errorf("409 claim message %q missing no-wait clarification fragment %q", e.Message, frag)
+		}
+	}
 
 	// B heartbeats → 409 (not the active holder).
 	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/heartbeat", map[string]any{

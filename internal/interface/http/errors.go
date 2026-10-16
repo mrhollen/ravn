@@ -26,10 +26,13 @@ import (
 //	                            summary row under "current", so a stale caller can
 //	                            rebase without a separate read
 //	*domain.ClaimConflictError→ 409 {"error":"claim conflict","holder":{...},
-//	                            "expires_at":...} — holder + expiry ARE the
-//	                            recovery instruction ("wait until X, or work another
-//	                            task"). Always names a LIVE foreign holder (a
-//	                            no-lease heartbeat is ErrNotClaimed below)
+//	                            "expires_at":...} — holder + expiry name the live
+//	                            foreign holder; the message tells agents NOT to
+//	                            wait for expiry (only acquiring a lease is
+//	                            claim-gated — close-out mutations are open to
+//	                            non-holders with explicit permission). Always names
+//	                            a LIVE foreign holder (a no-lease heartbeat is
+//	                            ErrNotClaimed below)
 //	domain.ErrNotClaimed      → 409 {"error":"not claimed","resource":<type>,
 //	                            "id":...} — the operation needs an ACTIVE lease but
 //	                            the task has none at all; recovery is "claim first"
@@ -84,7 +87,7 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 			"holder":     holder,
 			"expires_at": rfc3339(claim.ExpiresAt),
 			"message": fmt.Sprintf(
-				"%q is held by %s (%s) until %s — wait for the lease to expire or work another task",
+				"%q is held by %s (%s) until %s — do not wait for the lease to expire: close-out mutations (comments/notes/status/ACs) are open to non-holders, but only with explicit permission (from the holder or a human) to work that task; otherwise stop and report",
 				string(id), claim.Holder.Type, claim.Holder.Name, rfc3339(claim.ExpiresAt)),
 		})
 		return

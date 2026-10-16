@@ -473,7 +473,7 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 func registerClaimTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("claim_task",
 		mcpgo.WithDescription(
-			"Atomically take a TTL lease on a task and move it to doing. Retry-safe: if YOU already hold the active lease, re-claiming just refreshes it. If ANOTHER actor holds the active lease the result is isError with the conflict body verbatim — it names the holder and claim_expires_at; wait for the expiry or work another task. ttl_sec is optional (default 900, max 3600, clamped server-side; negative → error)."+actorHint),
+			"Atomically take a TTL lease on a task and move it to doing. Retry-safe: if YOU already hold the active lease, re-claiming just refreshes it. If ANOTHER actor holds the active lease the result is isError with the conflict body verbatim — it names the holder and claim_expires_at. Do not wait/sleep/poll for expiry: only acquiring the lease is claim-gated; comments, notes, status and AC mutations are open to non-holders — proceed with those only if you have explicit permission (from the holder or a human) to work that task, otherwise stop and report. ttl_sec is optional (default 900, max 3600, clamped server-side; negative → error)."+actorHint),
 		mcpgo.WithString("id", mcpgo.Required(),
 			mcpgo.Description("Task ULID to claim.")),
 		actorProp(),

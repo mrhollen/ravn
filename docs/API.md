@@ -114,7 +114,8 @@ everything needed to rebase **without a separate read**:
 ### 409 claim conflict
 
 Returned by `claim` / `release` / `heartbeat` on a coordination collision. The
-holder + expiry **are** the recovery instruction:
+holder + expiry name who holds the lease and when it lapses — **not** an
+instruction to wait for them:
 
 ```json
 {
@@ -123,7 +124,7 @@ holder + expiry **are** the recovery instruction:
   "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
   "holder": { "type": "agent", "name": "runner-2" },
   "expires_at": "2026-09-26T15:53:00Z",
-  "message": "\"01J3ZK8WQ9X7M2P4R6S8T0U2V4\" is held by agent (runner-2) until 2026-09-26T15:53:00Z — wait for the lease to expire or work another task"
+  "message": "\"01J3ZK8WQ9X7M2P4R6S8T0U2V4\" is held by agent (runner-2) until 2026-09-26T15:53:00Z — do not wait for the lease to expire: close-out mutations (comments/notes/status/ACs) are open to non-holders, but only with explicit permission (from the holder or a human) to work that task; otherwise stop and report"
 }
 ```
 
@@ -132,6 +133,17 @@ but the active holder (an unclaimed task is an idempotent no-op, not an error);
 `heartbeat` by a non-holder or after expiry. The body ALWAYS names a live
 foreign holder — a heartbeat on a task with **no lease at all** is NOT a claim
 conflict; see `409 not claimed` below.
+
+> [!NOTE]
+> **For agents — holder-gated vs version-guarded.** Only the *lease* operations
+> (`claim`, and the holder-only `release`/`heartbeat`) are gated on holding the
+> active lease. All other task mutations — comments, notes, status, priority,
+> due date, assignee, archived, acceptance criteria — are **version-guarded only**
+> (optimistic concurrency via `version`) and are open to non-holders. A `409
+> claim conflict` therefore never requires sleeping, polling, or waiting for the
+> lease to expire: if you have explicit permission (from the holder or a human)
+> to work that task, proceed with those version-guarded mutations directly;
+> otherwise stop and report. Idling until `expires_at` is never correct.
 
 ### 409 not claimed
 
