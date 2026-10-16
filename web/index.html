@@ -579,9 +579,14 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   </header>
                   <div class="flex flex-col gap-2 p-2.5">
                     <template x-for="task in col.tasks" :key="task.id">
+                      <!-- Card accessible name = the title text only (labelledby points at the h3 below).
+                           A hard-coded aria-label on this focusable container overrode the whole subtree
+                           for AT, so priority/assignee/due/blocker/claim badges were never announced. With
+                           labelledby the name is just the title and every metadata badge stays real,
+                           traversable DOM content; column status comes from the section heading. -->
                       <article
                         tabindex="0"
-                        :aria-label="'Task: ' + task.title + ', status ' + statusLabel(col.status)"
+                        :aria-labelledby="'card-title-' + task.id"
                         draggable="true"
                         @dragstart="onDragStart($event, task, col.status)"
                         @dragend="onDragEnd()"
@@ -602,7 +607,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         ]"
                       >
                         <div class="flex items-start justify-between gap-2">
-                          <h3 class="min-w-0 break-words text-sm font-medium leading-snug" x-text="task.title"></h3>
+                          <h3 :id="'card-title-' + task.id"
+                              class="min-w-0 break-words text-sm font-medium leading-snug" x-text="task.title"></h3>
                           <!-- explicit touch alternative to drag-and-drop: pick a target status.
                                The ⋮ trigger and its dropdown share ONE relative wrapper: any click that
                                misses both dismisses the menu (@click.outside → AC1), and the dropdown is

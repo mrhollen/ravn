@@ -306,10 +306,15 @@ test.describe('Milestone 4: R8, R9, R10 Frontend Verification', () => {
     const cardRole = await card.getAttribute('role');
     expect(cardRole).toBeNull();
 
-    // 3. Card has tabindex="0" and aria-label
+    // 3. Card has tabindex="0". Its accessible name must come from the title via
+    //    aria-labelledby — NOT a hard-coded aria-label, which overrode the whole
+    //    card subtree for AT and hid priority/assignee/due/blocker/claim badges.
     expect(await card.getAttribute('tabindex')).toBe('0');
-    const ariaLabel = await card.getAttribute('aria-label');
-    expect(ariaLabel).toContain('Task: A11y Semantic Card Task');
+    expect(await card.getAttribute('aria-label')).toBeNull();
+    const labelledBy = await card.getAttribute('aria-labelledby');
+    expect(labelledBy).toBeTruthy();
+    const titleEl = page.locator(`#${labelledBy}`);
+    await expect(titleEl).toHaveText('A11y Semantic Card Task');
 
     // 4. Inner button exists and is an interactive child of <article> (valid ARIA structure)
     const menuToggle = card.locator('[data-testid="card-menu-toggle"]');
@@ -332,5 +337,86 @@ test.describe('Milestone 4: R8, R9, R10 Frontend Verification', () => {
     await page.keyboard.press('Enter');
     await expect(drawer).toBeVisible();
     await expect(drawer.getByRole('heading', { name: 'A11y Semantic Card Task' })).toBeVisible();
+  });
+
+  // Ticket 01M3MMV8KT57MNBEGKQN1KCJ5M — permanent regression proof that card
+  // metadata stays perceivable by AT: no subtree-overriding aria-label, and the
+  // priority/assignee/due/blocker badges are real DOM text inside the card.
+  test('R10b: card name via aria-labelledby→title; metadata badges are real traversable DOM content', async ({ page }) => {
+    // Seed a project with one task carrying the FULL visible-metadata set plus an open blocker.
+    const pRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'A11y Metadata Card Project', actor: { name: 'test', type: 'human' } }),
+    });
+    const proj = await pRes.json();
+
+    const blockerRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: proj.id,
+        title: 'Prereq Blocker Task',
+        priority: 3,
+        actor: { name: 'test', type: 'human' },
+      }),
+    });
+    expect(blockerRes.ok).toBe(true);
+    const blocker = (await blockerRes.json()).task;
+
+    // Due date: UTC midnight +3 days (timezone-stable by construction).
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const dueDay = new Date(Date.now() + 3 * 86400000);
+    const dueAt = `${dueDay.getUTCFullYear()}-${pad2(dueDay.getUTCMonth() + 1)}-${pad2(dueDay.getUTCDate())}T00:00:00Z`;
+    // Label the app renders (mirrors fmtDueDate in web/src/util.ts — UTC-anchored).
+    const anchor = new Date(Date.UTC(dueDay.getUTCFullYear(), dueDay.getUTCMonth(), dueDay.getUTCDate()));
+    const yearOpts =
+      dueDay.getUTCFullYear() === new Date().getFullYear() ? {} : { year: 'numeric' as const };
+    const expectedDueLabel = anchor.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...yearOpts, timeZone: 'UTC' });
+
+    const taskRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: proj.id,
+        title: 'Metadata Card Task',
+        priority: 3,
+        due_at: dueAt,
+        assignee: { name: 'e2e-owner', type: 'human' },
+        actor: { name: 'test', type: 'human' },
+      }),
+    });
+    expect(taskRes.ok).toBe(true);
+    const task = (await taskRes.json()).task;
+
+    // Open the blocker so the card's "blocked" badge is in play.
+    const relRes = await fetch(`${serverUrl}/api/v1/tasks/${task.id}/relations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ other_id: blocker.id, kind: 'blocked-by', actor: { name: 'test', type: 'human' } }),
+    });
+    expect(relRes.ok).toBe(true);
+
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, proj.id);
+
+    const card = page.locator('article', { hasText: 'Metadata Card Task' });
+    await expect(card).toBeVisible();
+
+    // (a) No subtree-overriding aria-label on the container…
+    expect(await card.getAttribute('aria-label')).toBeNull();
+
+    // …and the accessible name references the title element specifically.
+    const labelledBy = await card.getAttribute('aria-labelledby');
+    expect(labelledBy).toBe(`card-title-${task.id}`);
+    await expect(page.locator(`#${labelledBy}`)).toHaveText('Metadata Card Task');
+
+    // (b) Every metadata badge is real DOM content in the card subtree that AT
+    //     can traverse: priority, owner, due date, blocker.
+    await expect(card.getByText('P3', { exact: true })).toBeVisible();
+    await expect(card.getByText('Owner:')).toBeVisible();
+    await expect(card.getByText('e2e-owner')).toBeVisible();
+    await expect(card.locator('span[title^="Due "]')).toHaveText(expectedDueLabel);
+    await expect(card.getByText('blocked', { exact: true })).toBeVisible();
   });
 });
