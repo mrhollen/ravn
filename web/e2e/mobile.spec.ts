@@ -116,6 +116,14 @@ test.describe('Mobile experience (375px, touch)', () => {
       priority: 1,
       actor: { name: 'e2e-mobile-seed', type: 'agent' },
     });
+    // Long realistic title for the drawer-header title-room test below.
+    await postJson(`${serverUrl}/api/v1/tasks`, {
+      project_id: projectId,
+      title: 'Long title that used to wrap every word in the drawer header at phone widths',
+      description: 'Seeded so the mobile drawer-header assertions run against a wrapping title.',
+      priority: 2,
+      actor: { name: 'e2e-mobile-seed', type: 'agent' },
+    });
   });
 
   test.afterAll(async () => {
@@ -441,6 +449,10 @@ test.describe('Mobile experience (375px, touch)', () => {
     // (aria-labelledby → the <h3>); column status comes from the section heading.
     let card = page.getByRole('article', { name: 'Swipe me' });
     await expect(card).toBeVisible();
+    // CDP touch points are dispatched in viewport coordinates: keep the card's
+    // center on-screen (with the 3rd seeded card the columns can push it below
+    // the fold after the first move) or the gesture misses the target.
+    await card.scrollIntoViewIfNeeded();
     await swipeHorizontal(cdp, card, 'right');
 
     await expect(doingCol.getByText('Swipe me')).toBeVisible();
@@ -451,6 +463,7 @@ test.describe('Mobile experience (375px, touch)', () => {
     // Swipe left: doing -> todo.
     card = page.getByRole('article', { name: 'Swipe me' });
     await expect(card).toBeVisible();
+    await card.scrollIntoViewIfNeeded();
     await swipeHorizontal(cdp, card, 'left');
 
     await expect(todoCol.getByText('Swipe me')).toBeVisible();
@@ -495,6 +508,82 @@ test.describe('Mobile experience (375px, touch)', () => {
     await card.locator('[data-testid="card-move-todo"]').click();
     await expect(todoCol.getByText('Menu mover')).toBeVisible();
 
+    await context.close();
+  });
+
+  // Ticket 01M3MMWHCNEYPQ9K2HMEB6G2RB: the drawer header pinned every action
+  // button on the title's row; with the mobile 44px tap-target minimums the
+  // h2 was starved to its 4.5rem floor (an ~15-line title column at 360–390px).
+  // Below sm (640px) the cluster now wraps onto its own right-aligned toolbar
+  // line and "Start Task in OpenCode" collapses to icon-only — asserted here at
+  // the reference 390x844 viewport, with record screenshots at 360 and 768.
+  test('drawer header: title keeps ≥60% of viewport width and OpenCode button is icon-only at 390px', async ({ browser }, testInfo) => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && !msg.text().includes('status of 409')) {
+        errors.push(`[console.error] ${msg.text()}`);
+      }
+    });
+    page.on('pageerror', (err) => errors.push(`[uncaught pageerror] ${err.message}`));
+
+    await page.goto(serverUrl);
+    await expect(page).toHaveTitle('crowban');
+
+    // Below md a card click opens the full-page view — the mobile fallback skin.
+    const card = page.locator('article', { hasText: 'Long title that used to wrap every word' });
+    await expect(card).toBeVisible();
+    await card.click();
+
+    const title = page.locator('#task-detail-title');
+    await expect(title).toBeVisible();
+
+    // (a) "Start Task in OpenCode" collapses to icon-only below sm: its label
+    //     span is hidden…
+    const opencodeBtn = page.locator('[data-testid="start-opencode-btn"]');
+    await expect(opencodeBtn).toBeVisible();
+    const label = opencodeBtn.locator('span');
+    await expect(label).toBeHidden();
+    // …yet the button keeps its accessible name (aria-label) and stays a
+    // primary tap target under the NON-EXEMPT mobile 44px rule (icon-only:
+    // ≥44px wide by min-width, comfortably below a labelled-button width).
+    const ob = await opencodeBtn.boundingBox();
+    expect(ob, 'opencode button box missing').not.toBeNull();
+    expect(ob!.height, 'tap-target height').toBeGreaterThanOrEqual(44);
+    expect(ob!.width, 'icon-only width (≥44px min, <88px)').toBeGreaterThanOrEqual(44);
+    expect(ob!.width, 'icon-only width (<88px)').toBeLessThan(88);
+    await expect(opencodeBtn).toHaveAttribute('aria-label', 'Start Task in OpenCode');
+
+    // (b) The title gets at least 60% of the viewport width in the header row.
+    const tbox = await title.boundingBox();
+    expect(tbox, 'title box missing').not.toBeNull();
+    expect(tbox!.width).toBeGreaterThanOrEqual(0.6 * 390);
+
+    // No horizontal overflow at the reference width.
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
+
+    await page.screenshot({ path: path.join(testInfo.outputDir, 'drawer-header-390.png') });
+
+    // 360px (tightest phone): same two-tier header, title still ≥60% wide.
+    await page.setViewportSize({ width: 360, height: 740 });
+    const tbox360 = await title.boundingBox();
+    expect(tbox360!, 'title box at 360px').not.toBeNull();
+    expect(tbox360!.width).toBeGreaterThanOrEqual(0.6 * 360);
+    await page.screenshot({ path: path.join(testInfo.outputDir, 'drawer-header-360.png') });
+
+    // 768px (sm+): the single-row header returns and the label is visible again;
+    // title and cluster share one row.
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(label).toBeVisible();
+    const tbox768 = await title.boundingBox();
+    const ob768 = await opencodeBtn.boundingBox();
+    expect(tbox768!, 'title box at 768px').not.toBeNull();
+    expect(ob768!, 'opencode box at 768px').not.toBeNull();
+    expect(Math.abs(tbox768!.y - ob768!.y), 'title and cluster share one row at sm+').toBeLessThanOrEqual(4);
+    await page.screenshot({ path: path.join(testInfo.outputDir, 'drawer-header-768.png') });
+
+    expect(errors).toEqual([]);
     await context.close();
   });
 });

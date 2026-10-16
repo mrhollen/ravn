@@ -986,18 +986,19 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                    h-full overflow-y-auto container scrolled these headers away. -->
               <!-- header (view mode) -->
              <div x-show="!editingTask" class="shrink-0 border-b border-zinc-100 bg-white px-5 py-4 dark:border-zinc-800 dark:bg-zinc-900">
-                <!-- Never wraps: the button cluster stays pinned to the right of
-                     the title's FIRST line at any title length — the h2 is
-                     flex-basis-0 (flex-1), so its text width never drives shrink
-                     distribution; it simply takes all remaining row width and the
-                     full title word-wraps down as many lines as needed. The
-                     4.5rem floor only matters on over-full narrow rows (mobile,
-                     where the tap-target CSS gives every button a 44px minimum),
-                     where the cluster yields via the "Start Task in OpenCode"
-                     truncated span instead; every other button is shrink-0. -->
-                <div class="flex items-start justify-between gap-3">
-                  <h2 id="task-detail-title" class="flex-1 min-w-[4.5rem] break-words text-lg font-semibold leading-snug" x-text="detail.title"></h2>
-                  <div class="flex min-w-0 items-center justify-end gap-2">
+                <!-- Two-tier title row. At ≥sm (640px) this is the classic single
+                     row: h2 (flex-basis-0 via flex-1) takes all remaining width and
+                     word-wraps, cluster pinned to its right. BELOW sm the mobile
+                     tap-target CSS forces every button ≥44px wide, so one row would
+                     starve the title at 360–390px (it wrapped into a ~15-line
+                     column); here flex-wrap + h2 {width:100%} drops the action
+                     cluster onto its own right-aligned toolbar line and the title
+                     keeps the full header width. The OpenCode label also collapses
+                     to icon-only below sm (span is hidden/sm:inline) with an
+                     aria-label carrying the accessible name. -->
+                <div class="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+                  <h2 id="task-detail-title" class="w-full min-w-[4.5rem] break-words text-lg font-semibold leading-snug sm:w-auto sm:flex-1" x-text="detail.title"></h2>
+                  <div class="flex w-full min-w-0 flex-wrap items-center justify-end gap-2 sm:w-auto">
                     <!-- Full-page mode: back to the board (the drawer keeps its ×). -->
                     <button type="button" x-show="fullPageOpen" x-cloak @click="requestCloseDetail()"
                             data-testid="fullpage-back-btn" aria-label="Back to board" title="Back to board"
@@ -1007,10 +1008,12 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       </svg>
                       Board
                     </button>
+                    <!-- Icon-only below sm: label span hidden, name carried by aria-label. -->
                     <button
                       type="button"
                       @click="startTaskInOpenCode()"
                       :disabled="startingOpenCode"
+                      :aria-label="startingOpenCode ? 'Starting OpenCode…' : 'Start Task in OpenCode'"
                         class="flex min-w-0 max-w-[36vw] items-center gap-1.5 rounded-md bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 border border-indigo-200 shadow-sm transition hover:bg-indigo-100 hover:border-indigo-300 disabled:opacity-50 md:max-w-none dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800 dark:hover:bg-indigo-900 dark:hover:border-indigo-700"
                        title="Launch autonomous OpenCode session for this task"
                        data-testid="start-opencode-btn"
@@ -1018,7 +1021,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                        <svg class="h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                        </svg>
-                       <span class="min-w-0 truncate" x-text="startingOpenCode ? 'Starting OpenCode…' : 'Start Task in OpenCode'"></span>
+                       <span class="hidden min-w-0 truncate sm:inline" x-text="startingOpenCode ? 'Starting OpenCode…' : 'Start Task in OpenCode'"></span>
                      </button>
                     <!-- Drawer mode: entry point to the /tasks/<id> full-page view. -->
                      <button type="button" x-show="!fullPageOpen" x-cloak @click="openFullPage()"
