@@ -731,6 +731,16 @@ export function crowbanApp() {
       opencode_directory: "",
       opencode_model: "",
     },
+    /** Pristine copy of the form captured when the dialog opens (and re-synced
+     *  after the authoritative fetch) — the "has anything actually changed?"
+     *  reference for the discard guard (task 01M3MMZ188XJBGKFSWBGESK79D). */
+    projectSettingsBaseline: {
+      name: "",
+      description: "",
+      opencode_server_url: "",
+      opencode_directory: "",
+      opencode_model: "",
+    },
     projectSettingsBusy: false,
     showArchiveConfirm: false,
     archiveConfirmInput: "",
@@ -750,7 +760,17 @@ export function crowbanApp() {
           opencode_directory: p.opencode_directory ?? "",
           opencode_model: p.opencode_model ?? "",
         };
+      } else {
+        this.projectSettingsForm = {
+          name: "",
+          description: "",
+          opencode_server_url: "",
+          opencode_directory: "",
+          opencode_model: "",
+        };
       }
+      // Pristine reference for the discard guard (re-synced after the fetch).
+      this.projectSettingsBaseline = { ...this.projectSettingsForm };
       this.showProjectSettings = true;
       // Name field first — least destructive control in this dialog.
       this.projectSettingsFocus = this.openDialog("cb-project-settings", "input");
@@ -763,18 +783,46 @@ export function crowbanApp() {
           opencode_directory: full.opencode_directory ?? "",
           opencode_model: full.opencode_model ?? "",
         };
+        // The fetch is authoritative — re-base "pristine" on it.
+        this.projectSettingsBaseline = { ...this.projectSettingsForm };
       } catch {
         /* keep current list info */
       }
     },
 
-    /** Single close path for the settings modal (× / Cancel / backdrop / save / Esc). */
+    /** Single close path for the settings modal (save / archive success).
+     *  User-initiated dismissals (× / Cancel / backdrop / Esc) must go through
+     *  requestCloseProjectSettings() so unsaved changes are never lost. */
     closeProjectSettings(): void {
       this.showProjectSettings = false;
       this.showArchiveConfirm = false;
       this.archiveConfirmInput = "";
       this.closeDialog(this.projectSettingsFocus);
       this.projectSettingsFocus = null;
+    },
+
+    /** True when any settings field differs from what was loaded on open. */
+    projectSettingsDirty(): boolean {
+      const f = this.projectSettingsForm;
+      const b = this.projectSettingsBaseline;
+      return (
+        f.name !== b.name ||
+        f.description !== b.description ||
+        f.opencode_server_url !== b.opencode_server_url ||
+        f.opencode_directory !== b.opencode_directory ||
+        f.opencode_model !== b.opencode_model
+      );
+    },
+
+    /** Guarded close for the settings dialog (× / Cancel / backdrop / Esc):
+     *  asks first when unsaved changes would be lost. */
+    requestCloseProjectSettings(): void {
+      if (
+        this.projectSettingsDirty() &&
+        !this.confirmDiscard("Discard unsaved project settings changes?")
+      )
+        return;
+      this.closeProjectSettings();
     },
 
     openArchiveConfirm(): void {
@@ -1344,12 +1392,41 @@ export function crowbanApp() {
       this.newTaskFocus = this.openDialog('cb-new-task', 'input[x-model="newTask.title"]');
     },
 
-    /** Single close path for the new-task modal (× / Cancel / backdrop / create / Esc). */
+    /** Single close path for the new-task modal (create success). User-initiated
+     *  dismissals (× / Cancel / backdrop / Esc) must go through
+     *  requestCloseNewTask() so a half-typed draft is never lost. */
     closeNewTask(): void {
       this.showNewTask = false;
       this.duplicates = [];
       this.closeDialog(this.newTaskFocus);
       this.newTaskFocus = null;
+    },
+
+    /** True when the new-task form holds any content — openNewTask() resets
+     *  every field, so a freshly opened dialog is never dirty. */
+    newTaskDirty(): boolean {
+      const n = this.newTask;
+      return Boolean(
+        n.title.trim() ||
+          n.description.trim() ||
+          n.due !== "" ||
+          n.priority !== 0 ||
+          n.assigneeName.trim() ||
+          n.assigneeType !== "human" ||
+          n.acs.trim(),
+      );
+    },
+
+    /** Guarded close for the new-task dialog (× / Cancel / backdrop / Esc):
+     *  asks first when a draft would be lost. createTask() closes
+     *  UNCONDITIONALLY via closeNewTask() after a successful POST. */
+    requestCloseNewTask(): void {
+      if (
+        this.newTaskDirty() &&
+        !this.confirmDiscard("Discard this new task draft? Unsaved details will be lost.")
+      )
+        return;
+      this.closeNewTask();
     },
 
     clearDuplicates(): void {
@@ -1446,6 +1523,12 @@ export function crowbanApp() {
         this.promptUnsavedNotes({ kind: "open", taskId: id });
         return;
       }
+      // A dirty task-edit draft belongs to the task being left — same rule as
+      // unsaved notes above. (If both drafts are dirty, the user confirms each
+      // explicitly: the notes prompt first, then this one.)
+      if (this.editDraftDirty() && this.detailId !== id) {
+        if (!this.discardEditDraftIfConfirmed()) return;
+      }
       // Defensive: a scratchpad that belongs to another task is discarded up
       // front so it can never surface inside the drawer about to open (AC 2).
       if (this.notesDraftOwner !== null && this.notesDraftOwner !== id) {
@@ -1505,12 +1588,15 @@ export function crowbanApp() {
 
     /** Detail-close entry point for the backdrop, × buttons and Escape —
      *  valid from BOTH skins (centered modal and full page): asks first when
-     *  notes have unsaved edits (AC 3). */
+     *  notes have unsaved edits (AC 3) or a task-edit draft differs from the
+     *  loaded values (task 01M3MMZ188XJBGKFSWBGESK79D). */
     requestCloseDetail(): void {
       if (this.notesDirty) {
         this.promptUnsavedNotes({ kind: "close" });
         return;
       }
+      // A dirty task-edit draft is guarded by the same no-silent-loss rule.
+      if (!this.discardEditDraftIfConfirmed()) return;
       this.closeDetail();
     },
 
@@ -1876,6 +1962,16 @@ export function crowbanApp() {
       assigneeName: "",
       assigneeType: "human" as "human" | "agent",
     },
+    /** Snapshot of the loaded values taken when edit mode starts — the
+     *  "has anything actually changed?" reference for the discard guard. */
+    editDraftOriginal: {
+      title: "",
+      description: "",
+      priority: 0,
+      due: "",
+      assigneeName: "",
+      assigneeType: "human" as "human" | "agent",
+    },
 
     startEditing(): void {
       const t = this.detail;
@@ -1890,11 +1986,36 @@ export function crowbanApp() {
         assigneeName: t.assignee?.name ?? "",
         assigneeType: (t.assignee?.type as "human" | "agent") || "human",
       };
+      this.editDraftOriginal = { ...this.editDraft };
       this.editingTask = true;
     },
 
     cancelEditing(): void {
       this.editingTask = false;
+    },
+
+    /** True when the in-flight task edit differs from the values loaded when
+     *  edit mode started. Gated on editingTask so a stale snapshot can never
+     *  fire once save/cancel has exited edit mode. */
+    editDraftDirty(): boolean {
+      if (!this.editingTask) return false;
+      const d = this.editDraft;
+      const o = this.editDraftOriginal;
+      return (
+        d.title !== o.title ||
+        d.description !== o.description ||
+        d.priority !== o.priority ||
+        d.due !== o.due ||
+        d.assigneeName !== o.assigneeName ||
+        d.assigneeType !== o.assigneeType
+      );
+    },
+
+    /** Ask before throwing away an in-flight task edit (shared by the drawer's
+     *  close path and Escape). True = safe to proceed with the discard. */
+    discardEditDraftIfConfirmed(): boolean {
+      if (!this.editDraftDirty()) return true;
+      return this.confirmDiscard("Discard unsaved task edits? Changes to this task will be lost.");
     },
 
     async saveTaskEdit(): Promise<void> {
@@ -2944,19 +3065,34 @@ export function crowbanApp() {
       return shortId(id);
     },
 
-    /** Escape key: close the top-most overlay or cancel edit mode. */
+    /** Native discard prompt shared by every guarded close path. True = the
+     *  user accepted throwing the draft away. Defensive under node:test, where
+     *  there is no window to ask: a non-UI caller is never blocked. */
+    confirmDiscard(message: string): boolean {
+      if (typeof window === "undefined" || typeof window.confirm !== "function") return true;
+      return window.confirm(message);
+    },
+
+    /** Escape key: close the top-most overlay or cancel edit mode. Dirty
+     *  surfaces (task edit, new task, project settings) confirm first via
+     *  confirmDiscard() — Escape never silently discards a draft. */
     dismissTop(): void {
       if (this.previewModal && this.previewModal.open) this.closeImagePreview();
       else if (this.unsavedNotesAction) this.cancelUnsavedNotes(); // Escape = "keep editing"
       else if (this.showAuthModal) this.closeAuthModal();
       else if (this.showProjectSettings) {
         if (this.showArchiveConfirm) this.cancelArchiveConfirm();
-        else this.closeProjectSettings();
+        else this.requestCloseProjectSettings();
       }
       else if (this.editingAcSeq !== 0) this.cancelEditingAc();
-      else if (this.editingTask) this.cancelEditing();
+      else if (this.editingTask) {
+        // The edit form is the topmost surface inside the drawer: a dirty
+        // draft must be confirmed BEFORE Escape exits edit mode.
+        if (!this.discardEditDraftIfConfirmed()) return;
+        this.cancelEditing();
+      }
       else if (this.detailOpen) this.requestCloseDetail();
-      else if (this.showNewTask) this.closeNewTask();
+      else if (this.showNewTask) this.requestCloseNewTask();
       else if (this.projectMenuOpen) this.closeProjectMenu(true); // header dropdowns are topmost
       else if (this.headerMenuOpen) this.closeHeaderMenu(true);
       else if (this.showNewProject) this.showNewProject = false;

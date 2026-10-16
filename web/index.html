@@ -700,14 +700,14 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       </main>
 
       <!-- ================================================== project settings modal -->
-      <div id="cb-project-settings" role="dialog" aria-modal="true" aria-labelledby="project-settings-title" x-show="showProjectSettings" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="closeProjectSettings()">
+      <div id="cb-project-settings" role="dialog" aria-modal="true" aria-labelledby="project-settings-title" x-show="showProjectSettings" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="requestCloseProjectSettings()">
         <div class="mx-auto mt-16 w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
           <header class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
             <div>
               <h2 id="project-settings-title" class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Project settings</h2>
               <p class="text-xs text-zinc-600 dark:text-zinc-400">Edit project name and description</p>
             </div>
-            <button type="button" @click="closeProjectSettings()" class="text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100" aria-label="Close">
+            <button type="button" @click="requestCloseProjectSettings()" class="text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100" aria-label="Close">
               <span class="text-lg leading-none">&times;</span>
             </button>
           </header>
@@ -793,7 +793,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
             </div>
 
             <div x-show="!showArchiveConfirm" class="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
-              <button type="button" @click="closeProjectSettings()" class="btn-ghost text-xs">
+              <button type="button" @click="requestCloseProjectSettings()" class="btn-ghost text-xs">
                 Cancel
               </button>
               <button type="submit" :disabled="projectSettingsBusy || !projectSettingsForm.name.trim()" class="btn-primary text-xs">
@@ -855,14 +855,14 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       </div>
 
       <!-- ========================================================== new task -->
-      <div id="cb-new-task" role="dialog" aria-modal="true" aria-labelledby="new-task-title" x-show="showNewTask" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/30 p-4" @click.self="closeNewTask()">
+      <div id="cb-new-task" role="dialog" aria-modal="true" aria-labelledby="new-task-title" x-show="showNewTask" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/30 p-4" @click.self="requestCloseNewTask()">
         <div class="mx-auto mt-10 w-full max-w-lg rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
           <header class="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 px-5 py-3">
             <h2 id="new-task-title" class="text-base font-semibold">
               New task
               <span class="ml-1 text-xs font-normal text-zinc-600 dark:text-zinc-400" x-text="'→ ' + statusLabel(newTaskTarget)"></span>
             </h2>
-            <button type="button" @click="closeNewTask()" aria-label="Close"
+            <button type="button" @click="requestCloseNewTask()" aria-label="Close"
                     class="text-xl leading-none text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">&times;</button>
           </header>
           <form @submit.prevent="createTask()" class="flex flex-col gap-3 px-5 py-4">
@@ -904,7 +904,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         placeholder="login works&#10;logout works"></textarea>
             </label>
             <div class="flex justify-end gap-2 pt-1">
-              <button type="button" @click="closeNewTask()" class="btn-ghost">Cancel</button>
+              <button type="button" @click="requestCloseNewTask()" class="btn-ghost">Cancel</button>
               <button type="submit" :disabled="taskBusy || !newTask.title.trim()" class="btn-primary"
                       x-text="taskBusy ? 'Creating…' : 'Create task'"></button>
             </div>

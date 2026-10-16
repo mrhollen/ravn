@@ -1457,6 +1457,256 @@ test("ArchiveProject: open/cancel confirmation and Escape handling", () => {
   assert.equal(app.showProjectSettings, false, "second Escape closes settings modal");
 });
 
+// --------------------------------------------------------------------------- Discard guards (task 01M3MMZ188XJBGKFSWBGESK79D)
+/** Stub window.confirm to a fixed answer; restores the original binding. */
+function withConfirm(app: any, answer: boolean | ((msg: string) => boolean)) {
+  const origWindow = (globalThis as any).window;
+  let lastMessage = "";
+  (globalThis as any).window = {
+    confirm(msg: string) {
+      lastMessage = msg;
+      return typeof answer === "function" ? answer(msg) : answer;
+    },
+  };
+  return {
+    get lastMessage() {
+      return lastMessage;
+    },
+    restore() {
+      if (origWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = origWindow;
+    },
+  };
+}
+
+test("DiscardGuards: confirmDiscard delegates to window.confirm; unblocked where absent", () => {
+  const app = crowbanApp() as any;
+  const origWindow = (globalThis as any).window;
+  try {
+    // No window at all (node) → a non-UI caller is never blocked.
+    if (origWindow === undefined) delete (globalThis as any).window;
+    assert.equal(app.confirmDiscard("m?"), true, "no window → accept the discard");
+
+    const stub = withConfirm(app, false);
+    try {
+      assert.equal(app.confirmDiscard("discard me?"), false);
+      assert.equal(stub.lastMessage, "discard me?", "message passed through verbatim");
+    } finally {
+      stub.restore();
+    }
+  } finally {
+    if (origWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = origWindow;
+  }
+});
+
+test("DiscardGuards: newTaskDirty flags any real content, never a fresh/blank form", () => {
+  const app = crowbanApp() as any;
+  assert.equal(app.newTaskDirty(), false, "freshly opened dialog is clean");
+
+  // Each field independently counts as a draft.
+  app.newTask.title = "Fix login";
+  assert.equal(app.newTaskDirty(), true);
+  app.newTask = { ...app.newTask, title: "" };
+
+  app.newTask.description = "details";
+  assert.equal(app.newTaskDirty(), true);
+  app.newTask = { ...app.newTask, description: "" };
+
+  app.newTask.priority = 3;
+  assert.equal(app.newTaskDirty(), true);
+  app.newTask = { ...app.newTask, priority: 0 };
+
+  app.newTask.due = "2026-10-17";
+  assert.equal(app.newTaskDirty(), true);
+  app.newTask = { ...app.newTask, due: "" };
+
+  app.newTask.assigneeName = "alice";
+  assert.equal(app.newTaskDirty(), true);
+  app.newTask = { ...app.newTask, assigneeName: "" };
+
+  app.newTask.assigneeType = "agent";
+  assert.equal(app.newTaskDirty(), true);
+  app.newTask = { ...app.newTask, assigneeType: "human" };
+
+  app.newTask.acs = "one\n two";
+  assert.equal(app.newTaskDirty(), true);
+  app.newTask = { ...app.newTask, acs: "" };
+
+  assert.equal(app.newTaskDirty(), false, "back to a clean form");
+});
+
+test("DiscardGuards: requestCloseNewTask asks when dirty — decline stays, accept closes", () => {
+  const app = crowbanApp() as any;
+  app.showNewTask = true;
+  app.newTask.title = "WIP draft";
+
+  // Dirty close asks; declining keeps the draft and the dialog.
+  const stub = withConfirm(app, false);
+  try {
+    app.requestCloseNewTask();
+    assert.equal(app.showNewTask, true, "dirty → still open on decline");
+    assert.equal(stub.lastMessage.length > 0, true, "the discard prompt was asked");
+
+    const accept = withConfirm(app, true);
+    try {
+      app.requestCloseNewTask();
+      assert.equal(app.showNewTask, false, "accept discards the draft and closes");
+    } finally {
+      accept.restore();
+    }
+  } finally {
+    stub.restore();
+  }
+
+  // A clean form closes WITHOUT asking: a hostile confirm must never be reached.
+  const fresh = crowbanApp() as any;
+  fresh.showNewTask = true;
+  const strict = withConfirm(fresh, () => {
+    assert.fail("clean close must not call window.confirm");
+    return false;
+  });
+  try {
+    fresh.requestCloseNewTask();
+    assert.equal(fresh.showNewTask, false);
+  } finally {
+    strict.restore();
+  }
+});
+
+test("DiscardGuards: projectSettingsDirty is baseline-relative; guarded close honors it", () => {
+  const app = crowbanApp() as any;
+  const form = { name: "Alpha", description: "d", opencode_server_url: "", opencode_directory: "", opencode_model: "" };
+  app.projectSettingsForm = { ...form };
+  app.projectSettingsBaseline = { ...form };
+  app.showProjectSettings = true;
+
+  assert.equal(app.projectSettingsDirty(), false, "unmodified form is clean");
+
+  const strict = withConfirm(app, () => {
+    assert.fail("clean close must not call window.confirm");
+    return false;
+  });
+  try {
+    app.requestCloseProjectSettings();
+    assert.equal(app.showProjectSettings, false, "clean settings close without asking");
+  } finally {
+    strict.restore();
+  }
+
+  // Now dirty (re-open the flag): decline keeps the modal (values intact), accept closes it.
+  app.showProjectSettings = true;
+  app.projectSettingsForm = { ...form, name: "Alpha WIP" };
+  assert.equal(app.projectSettingsDirty(), true);
+  const deny = withConfirm(app, false);
+  try {
+    app.requestCloseProjectSettings();
+    assert.equal(app.showProjectSettings, true, "decline keeps the modal");
+    assert.equal(app.projectSettingsForm.name, "Alpha WIP", "draft untouched on decline");
+  } finally {
+    deny.restore();
+  }
+  const allow = withConfirm(app, true);
+  try {
+    app.requestCloseProjectSettings();
+    assert.equal(app.showProjectSettings, false, "accept closes the modal");
+  } finally {
+    allow.restore();
+  }
+});
+
+test("DiscardGuards: editDraftDirty compares against the startEditing snapshot", () => {
+  const app = crowbanApp() as any;
+  app.detail = { id: "A", title: "Orig", description: "desc", priority: 2, due_at: null, assignee: undefined };
+
+  assert.equal(app.editDraftDirty(), false, "not editing → never dirty");
+  app.startEditing();
+  assert.equal(app.editingTask, true);
+  assert.equal(app.editDraftDirty(), false, "fresh edit form is clean");
+
+  app.editDraft.title = "Changed";
+  assert.equal(app.editDraftDirty(), true, "title change counts");
+  app.editDraft.title = "Orig";
+
+  app.editDraft.priority = 5;
+  assert.equal(app.editDraftDirty(), true, "priority change counts");
+  app.cancelEditing();
+  assert.equal(app.editDraftDirty(), false, "stale snapshot gated by editingTask after cancel");
+});
+
+test("DiscardGuards: Escape on a dirty task edit confirms before exiting edit mode", () => {
+  const app = crowbanApp() as any;
+  app.detailOpen = true;
+  app.detailId = "A";
+  app.detail = { id: "A", title: "Orig", description: "", priority: 0, due_at: null, assignee: undefined };
+  app.startEditing();
+  app.editDraft.title = "WIP";
+
+  const deny = withConfirm(app, false);
+  try {
+    app.dismissTop(); // first Escape — decline the discard
+    assert.equal(app.editingTask, true, "decline keeps edit mode");
+    assert.equal(app.detailOpen, true, "drawer stays open too");
+  } finally {
+    deny.restore();
+  }
+  const allow = withConfirm(app, true);
+  try {
+    app.dismissTop(); // second Escape — accept the discard
+    assert.equal(app.editingTask, false, "accept exits edit mode (cancelEditing)");
+    assert.equal(app.detailOpen, true, "...but the drawer itself remains open");
+  } finally {
+    allow.restore();
+  }
+});
+
+test("DiscardGuards: requestCloseDetail guards a dirty task edit (after the notes check)", () => {
+  const app = crowbanApp() as any;
+  app.detailOpen = true;
+  app.detailId = "A";
+  app.notesDirty = false; // notes branch must not fire — this test is about the edit draft
+  app.detail = { id: "A", title: "Orig", description: "", priority: 0, due_at: null, assignee: undefined };
+  app.startEditing();
+  app.editDraft.description = "wip";
+
+  const deny = withConfirm(app, false);
+  try {
+    app.requestCloseDetail();
+    assert.equal(app.detailOpen, true, "decline keeps the drawer open");
+    assert.equal(app.editingTask, true, "draft mode intact on decline");
+    assert.equal(app.unsavedNotesAction, null, "no notes prompt involved");
+  } finally {
+    deny.restore();
+  }
+  const allow = withConfirm(app, true);
+  try {
+    app.requestCloseDetail();
+    assert.equal(app.detailOpen, false, "accept discards the draft and closes");
+    assert.equal(app.editingTask, false);
+  } finally {
+    allow.restore();
+  }
+});
+
+test("DiscardGuards: openTask with a dirty edit draft prompts; decline stays on the old task", () => {
+  const app = crowbanApp() as any;
+  app.detailOpen = true;
+  app.detailId = "A";
+  app.notesDirty = false;
+  app.detail = { id: "A", title: "Orig", description: "", priority: 0, due_at: null, assignee: undefined };
+  app.startEditing();
+  app.editDraft.title = "WIP on A";
+
+  const deny = withConfirm(app, false);
+  try {
+    void app.openTask("B");
+    assert.equal(app.detailId, "A", "decline keeps the open task");
+    assert.equal(app.editingTask, true, "draft mode survives a declined switch");
+  } finally {
+    deny.restore();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Toast notifications: dismiss button, slide+fade transitions, kind icons.
 
