@@ -287,6 +287,48 @@ func TestHeartbeatRealSQL_ExtendsLeaseWithoutBumpOrEvent(t *testing.T) {
 	}
 }
 
+// TestHeartbeatRealSQL_UnclaimedTask_ErrNotClaimed pins the hardening: a
+// heartbeat on a task with NO lease at all (over real SQL) is NOT a
+// ClaimConflictError — the old zero-holder form rendered as
+// "task claimed by \"\" until 0001-01-01T00:00:00Z" — but a specific
+// domain.ErrNotClaimed naming the task, with nothing mutated.
+func TestHeartbeatRealSQL_UnclaimedTask_ErrNotClaimed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openTestDB(t)
+	tc := &testClock{now: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)}
+	tasks, projects := newClaimUseCase(t, db, tc)
+	p := mustCreateProject(t, ctx, projects)
+
+	agentA := domain.Actor{Type: domain.ActorAgent, Name: "agent-a"}
+	task, err := tasks.Create(ctx, agentA, application.TaskInput{Title: "Never claimed", ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_, err = tasks.Heartbeat(ctx, agentA, task.ID)
+	if !errors.Is(err, domain.ErrNotClaimed) {
+		t.Fatalf("heartbeat on unclaimed task err = %v (%T), want wrapped domain.ErrNotClaimed", err, err)
+	}
+	var cc *domain.ClaimConflictError
+	if errors.As(err, &cc) {
+		t.Fatalf("unclaimed heartbeat must not be a ClaimConflictError (even a zero-holder one): %+v", cc)
+	}
+	if !strings.Contains(err.Error(), string(task.ID)) || !strings.Contains(err.Error(), "claim first") {
+		t.Errorf("unclaimed heartbeat message = %q, want it to name the task and say claim first", err.Error())
+	}
+
+	// A failed heartbeat must not touch the row (no version bump, no lease).
+	stored, gerr := tasks.Get(ctx, task.ID)
+	if gerr != nil {
+		t.Fatalf("Get: %v", gerr)
+	}
+	if stored.Version != 1 || stored.Claim.Present() || stored.Status != domain.StatusTodo {
+		t.Errorf("failed heartbeat mutated the row: v=%d holder=%v status=%s, want v1 unclaimed todo",
+			stored.Version, stored.Claim.By(), stored.Status)
+	}
+}
+
 // --- release over real SQL ---------------------------------------------------------
 
 func TestReleaseRealSQL_NonHolderConflictAndUnclaimedNoOp(t *testing.T) {

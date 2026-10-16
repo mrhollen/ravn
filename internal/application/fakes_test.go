@@ -323,9 +323,10 @@ func (f *fakeTasks) Release(_ context.Context, id domain.ID, actor domain.Actor,
 
 // Heartbeat mirrors the adapter's guarded extension in memory: it extends
 // claim_expires_at to now + the STORED TTL only for the current holder of an
-// ACTIVE lease; a foreign or expired holder — or no lease at all (zero-value
-// Holder = "claim it first") — gets *domain.ClaimConflictError. Deliberately no
-// version bump and no UpdatedAt change: keep-alive is not a state change.
+// ACTIVE lease; a foreign or expired holder gets *domain.ClaimConflictError,
+// while NO lease at all is domain.ErrNotClaimed ("claim it first" — nobody to
+// wait for). Deliberately no version bump and no UpdatedAt change: keep-alive
+// is not a state change.
 func (f *fakeTasks) Heartbeat(_ context.Context, id domain.ID, actor domain.Actor, now time.Time) (domain.Task, error) {
 	cur, ok := f.byID[id]
 	if !ok {
@@ -338,7 +339,7 @@ func (f *fakeTasks) Heartbeat(_ context.Context, id domain.ID, actor domain.Acto
 		return domain.Task{}, fmt.Errorf("%w: cannot heartbeat completed task %s", domain.ErrInvalid, id)
 	}
 	if !cur.Claim.Present() {
-		return domain.Task{}, &domain.ClaimConflictError{Holder: domain.Actor{}, ExpiresAt: time.Time{}}
+		return domain.Task{}, fmt.Errorf("%w: task %s has no claim lease — call claim first", domain.ErrNotClaimed, id)
 	}
 	active := !cur.Claim.Expiry().Before(now)
 	if !active || !sameLeaseHolder(&cur, actor) {

@@ -715,10 +715,19 @@ func TestTasksUpdate_StatusTransitionsValidation(t *testing.T) {
 	todo := domain.StatusTodo
 	bogus := domain.Status("bogus")
 
-	// 1. Invalid: todo -> done (skipping doing)
-	_, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("Update todo -> done err = %v, want domain.ErrInvalid", err)
+	var err error
+
+	// 1. Invalid: todo -> done (skipping doing) — a structured TransitionError
+	// recording the refused move (no longer a wrapped ErrInvalid string).
+	var tr *domain.TransitionError
+	_, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
+	if !errors.As(err, &tr) {
+		t.Fatalf("Update todo -> done err = %v (%T), want *domain.TransitionError", err, err)
+	} else if tr.From != domain.StatusTodo || tr.To != domain.StatusDone {
+		t.Fatalf("TransitionError endpoints = %q → %q, want todo → done", tr.From, tr.To)
+	}
+	if got, want := tr.Error(), `cannot transition status from "todo" to "done"`; got != want {
+		t.Errorf("TransitionError message = %q, want %q", got, want)
 	}
 
 	// 2. Invalid: unknown status
@@ -745,10 +754,12 @@ func TestTasksUpdate_StatusTransitionsValidation(t *testing.T) {
 		t.Errorf("status = %q, want done", task.Status)
 	}
 
-	// 5. Invalid: done -> doing (cannot skip todo)
+	// 5. Invalid: done -> doing (cannot skip todo) — same structured error,
+	// now recording the done → doing endpoints.
+	var tr2 *domain.TransitionError
 	_, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &doing})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("Update done -> doing err = %v, want domain.ErrInvalid", err)
+	if !errors.As(err, &tr2) || tr2.From != domain.StatusDone || tr2.To != domain.StatusDoing {
+		t.Fatalf("Update done -> doing err = %v (%T), want *domain.TransitionError with From=done To=doing", err, err)
 	}
 
 	// 6. Valid: done -> todo (reopen)

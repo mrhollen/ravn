@@ -1009,6 +1009,68 @@ func TestClaimAndHeartbeat_DoneAndArchived_HTTP(t *testing.T) {
 	}
 }
 
+func TestTransitionRejectionAndUnclaimedHeartbeat_Bodies(t *testing.T) {
+	t.Parallel()
+	stk := newStack(t)
+	p := createProject(t, stk, "Error Bodies")
+	task := newTask(t, stk, p.ID, "body shapes")
+
+	// 1. Illegal status move (todo → done, skipping doing) — the SAME 400
+	//    "invalid input" shape as before the structured TransitionError, with
+	//    the message naming both endpoints (web/src/moves.ts pattern-matches it).
+	code, body := doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID, map[string]any{
+		"actor":   actor("eve"),
+		"version": 1,
+		"status":  "done",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("PATCH todo→done = %d, want 400 (body %s)", code, string(body))
+	}
+	e := mustDecode[errResp](t, body)
+	wantMsg := `cannot transition status from "todo" to "done"`
+	if e.Error != "invalid input" || e.Message != wantMsg {
+		t.Fatalf("400 body = %+v, want error \"invalid input\" message %q", e, wantMsg)
+	}
+
+	// 2. Heartbeat on an UNCLAIMED task — NOT a claim conflict with an empty
+	//    holder ("claimed by \"\" until 0001-…"), but 409 "not claimed" telling
+	//    the agent to claim first (MCP propagates this body verbatim).
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/heartbeat", map[string]any{
+		"actor": actor("agent-b"),
+	})
+	if code != http.StatusConflict {
+		t.Fatalf("unclaimed heartbeat = %d, want 409 (body %s)", code, string(body))
+	}
+	e = mustDecode[errResp](t, body)
+	if e.Error != "not claimed" || e.Resource != "task" || e.ID != task.ID {
+		t.Fatalf("409 body = %+v, want error \"not claimed\" resource task id %s", e, task.ID)
+	}
+	if e.Holder != nil {
+		t.Errorf("not-claimed body carries a holder (%+v); the tag IS the signal now", e.Holder)
+	}
+	if !strings.Contains(e.Message, "claim first") {
+		t.Errorf("not-claimed message = %q, want it to say claim first", e.Message)
+	}
+
+	// 3. A FOREIGN holder still gets the classic 409 claim conflict (unchanged).
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
+		"actor": actor("agent-a"),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("claim: %d", code)
+	}
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/heartbeat", map[string]any{
+		"actor": actor("agent-b"),
+	})
+	if code != http.StatusConflict {
+		t.Fatalf("foreign heartbeat = %d, want 409 (body %s)", code, string(body))
+	}
+	e = mustDecode[errResp](t, body)
+	if e.Error != "claim conflict" || e.Holder == nil || e.Holder.Name != "agent-a" {
+		t.Fatalf("foreign heartbeat 409 = %+v, want claim conflict naming agent-a", e)
+	}
+}
+
 func TestCommentsAddListAndErrors(t *testing.T) {
 	t.Parallel()
 	stk := newStack(t)

@@ -333,7 +333,10 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 
 		if statusChanged {
 			if !domain.CanTransition(cur.Status, *in.Status) {
-				return fmt.Errorf("%w: cannot transition status from %q to %q", domain.ErrInvalid, cur.Status, *in.Status)
+				// Structured so REST/MCP/UI can name the refused move: From/To are
+				// recorded on the error (REST maps it to 400 — the same status the
+				// old wrapped-ErrInvalid form produced; see domain.TransitionError).
+				return &domain.TransitionError{From: cur.Status, To: *in.Status}
 			}
 
 			if *in.Status == domain.StatusDone {
@@ -932,8 +935,9 @@ func (s *Tasks) Release(ctx context.Context, actor domain.Actor, id domain.ID, n
 // holder of an ACTIVE (unexpired) lease succeeds; a foreign holder or an expired
 // lease — including actor's own zombie lease — propagates
 // *domain.ClaimConflictError{Holder, ExpiresAt} untouched. A task with no lease
-// at all is also a conflict carrying a zero-value Holder: the recovery
-// instruction there is "claim it first".
+// at all is NOT a claim conflict (there is nobody to wait for): it surfaces as
+// domain.ErrNotClaimed wrapped with the task id — the recovery instruction is
+// "claim it first".
 func (s *Tasks) Heartbeat(ctx context.Context, actor domain.Actor, id domain.ID) (domain.Task, error) {
 	a, err := normalizeActor(actor)
 	if err != nil {

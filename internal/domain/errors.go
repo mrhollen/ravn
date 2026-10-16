@@ -52,11 +52,24 @@ func (e *ConflictError) Error() string {
 		e.Current.Version, e.Current.UpdatedAt.UTC().Format(time.RFC3339))
 }
 
+// Is makes EVERY *ConflictError instance compare equal under errors.Is to ANY
+// other ConflictError: callers check the KIND of conflict without knowing which
+// row lost, e.g. errors.Is(err, &ConflictError{}) matches a conflict no matter
+// how deeply it is wrapped in %w. (The value type never implements error —
+// Error() has a pointer receiver — so only *ConflictError targets exist and
+// every instance in the chain compares against one.)
+func (e *ConflictError) Is(target error) bool {
+	_, ok := target.(*ConflictError)
+	return ok
+}
+
 // ClaimConflictError is returned when a claim — or a holder-only release /
 // heartbeat — collides with a live lease held by someone else. Holder and
 // ExpiresAt double as the recovery instruction for agents ("wait until <expiry>,
 // or work another task"), so they always travel with the error. The REST
-// adapter maps it to 409 with error="already_claimed".
+// adapter maps it to 409 with error="claim conflict". A ClaimConflictError
+// ALWAYS names a live foreign holder (zero-value Holder/ExpiresAt are never
+// constructed — an operation on a task with no lease at all is ErrNotClaimed).
 type ClaimConflictError struct {
 	Holder    Actor
 	ExpiresAt time.Time
@@ -65,6 +78,49 @@ type ClaimConflictError struct {
 func (e *ClaimConflictError) Error() string {
 	return fmt.Sprintf("task claimed by %s %q until %s",
 		e.Holder.Type, e.Holder.Name, e.ExpiresAt.UTC().Format(time.RFC3339))
+}
+
+// Is makes EVERY *ClaimConflictError instance compare equal under errors.Is to
+// ANY other ClaimConflictError: callers check the KIND of conflict without
+// knowing which lease it lost to, e.g. errors.Is(err, &ClaimConflictError{}).
+// As with ConflictError, only pointer targets exist (the value type does not
+// implement error), and the two conflict kinds stay distinct under Is — a claim
+// conflict never matches a version-conflict target and vice versa.
+func (e *ClaimConflictError) Is(target error) bool {
+	_, ok := target.(*ClaimConflictError)
+	return ok
+}
+
+// ErrNotClaimed is returned when an operation that requires the actor to hold
+// an ACTIVE claim lease finds no lease at all — today: Heartbeat on an
+// unclaimed task. It is deliberately distinct from ClaimConflictError (someone
+// ELSE holds the lease — wait or work another task): here there is nobody to
+// wait for, and the recovery instruction is "claim it first". Wrap it where the
+// detail is known:
+//
+//	fmt.Errorf("%w: task %s has no claim lease — call claim first", ErrNotClaimed, id)
+//
+// The REST adapter maps it to 409 with error="not claimed" (same status family
+// as the claim conflicts; MCP propagates the body verbatim as the agent's
+// recovery hint).
+var ErrNotClaimed = errors.New("not claimed")
+
+// TransitionError is returned when a requested status move is not in the
+// allowed-transition matrix (CanTransition / AllowedTransitions — today: any
+// move other than todo→doing, doing→done|todo, done→todo). From and To are the
+// recorded endpoints of the refused move, so the error names exactly what was
+// rejected without string archaeology. The REST adapter maps it to 400 (an
+// invalid transition IS malformed caller input — the SAME status the old
+// wrapped-ErrInvalid form produced), with a message that web/src/moves.ts
+// pattern-matches onto a friendly toast; keep the "cannot transition status
+// from … to …" phrasing stable when touching either side.
+type TransitionError struct {
+	From Status
+	To   Status
+}
+
+func (e *TransitionError) Error() string {
+	return fmt.Sprintf("cannot transition status from %q to %q", e.From, e.To)
 }
 
 // TaskBlockedError is returned when a claim or a transition to StatusDone is

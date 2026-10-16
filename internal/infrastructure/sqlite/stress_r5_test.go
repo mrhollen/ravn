@@ -122,7 +122,7 @@ func TestChallenger_R5_ApplicationStatusTransitions(t *testing.T) {
 	})
 
 	// Subtest 2: Disallowed Transitions
-	t.Run("Disallowed transitions return domain.ErrInvalid", func(t *testing.T) {
+	t.Run("Disallowed transitions return *domain.TransitionError", func(t *testing.T) {
 		// todo -> done (skipping doing)
 		taskTodo, err := tasks.Create(ctx, testActor, application.TaskInput{
 			ProjectID: p.ID,
@@ -133,8 +133,9 @@ func TestChallenger_R5_ApplicationStatusTransitions(t *testing.T) {
 		}
 		done := domain.StatusDone
 		_, err = tasks.Update(ctx, testActor, taskTodo.ID, application.TaskUpdateInput{Status: &done})
-		if !errors.Is(err, domain.ErrInvalid) {
-			t.Errorf("Update todo -> done err = %v, want domain.ErrInvalid", err)
+		var tr *domain.TransitionError
+		if !errors.As(err, &tr) || tr.From != domain.StatusTodo || tr.To != domain.StatusDone {
+			t.Errorf("Update todo -> done err = %v (%T), want *domain.TransitionError todo→done", err, err)
 		}
 
 		// Move to doing, then done
@@ -150,8 +151,9 @@ func TestChallenger_R5_ApplicationStatusTransitions(t *testing.T) {
 
 		// done -> doing (cannot jump to doing without reopening to todo first)
 		_, err = tasks.Update(ctx, testActor, taskDone.ID, application.TaskUpdateInput{Status: &doing})
-		if !errors.Is(err, domain.ErrInvalid) {
-			t.Errorf("Update done -> doing err = %v, want domain.ErrInvalid", err)
+		var tr2 *domain.TransitionError
+		if !errors.As(err, &tr2) || tr2.From != domain.StatusDone || tr2.To != domain.StatusDoing {
+			t.Errorf("Update done -> doing err = %v (%T), want *domain.TransitionError done→doing", err, err)
 		}
 
 		// Invalid status strings from any status

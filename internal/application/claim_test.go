@@ -488,15 +488,20 @@ func TestTasksHeartbeat_ExtendsActiveLeaseWithoutVersionOrEvent(t *testing.T) {
 		t.Errorf("heartbeat after expiry err = %v, want *domain.ClaimConflictError", err)
 	}
 
-	// Heartbeating an unclaimed task is also a conflict with a zero-value
-	// Holder — the "claim it first" signal.
+	// Heartbeating an unclaimed task is NOT a claim conflict — there is nobody
+	// to wait for — but a specific domain.ErrNotClaimed ("claim it first"),
+	// with the task id in the message.
 	fresh := mustCreateTask(t, svc, "Beat Me Too", 1, nil)
-	var ccUnclaimed *domain.ClaimConflictError
-	if _, err := svc.Heartbeat(ctx, claimAgent, fresh.ID); !errors.As(err, &ccUnclaimed) {
-		t.Errorf("heartbeat on unclaimed task err = %v, want *domain.ClaimConflictError", err)
+	_, err = svc.Heartbeat(ctx, claimAgent, fresh.ID)
+	if !errors.Is(err, domain.ErrNotClaimed) {
+		t.Fatalf("heartbeat on unclaimed task err = %v (%T), want wrapped domain.ErrNotClaimed", err, err)
 	}
-	if ccUnclaimed.Holder != (domain.Actor{}) {
-		t.Errorf("unclaimed heartbeat conflict holder = %+v, want zero-value Holder (claim it first)", ccUnclaimed.Holder)
+	var ccZero *domain.ClaimConflictError
+	if errors.As(err, &ccZero) {
+		t.Errorf("unclaimed heartbeat must not be a ClaimConflictError (even a zero-holder one): %+v", ccZero)
+	}
+	if !strings.Contains(err.Error(), string(fresh.ID)) {
+		t.Errorf("unclaimed heartbeat message %q should name the task id", err.Error())
 	}
 }
 

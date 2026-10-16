@@ -523,7 +523,7 @@ func registerReleaseTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 func registerHeartbeatTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("heartbeat_task",
 		mcpgo.WithDescription(
-			"Keep-alive for YOUR active claim lease during long silent work — call it regularly while working so the lease does not expire mid-task. Deliberately bumps NO version and touches NO updated_at (a heartbeat never invalidates a working agent's read base). The returned fresh summary row doubles as a health/state check: it shows status, claimed_by, and the new claim_expires_at. If you are not the holder, or the task has no lease at all → isError with the 409 claim-conflict body verbatim (an empty holder.type means \"claim_task first\")."+actorHint),
+			"Keep-alive for YOUR active claim lease during long silent work — call it regularly while working so the lease does not expire mid-task. Deliberately bumps NO version and touches NO updated_at (a heartbeat never invalidates a working agent's read base). The returned fresh summary row doubles as a health/state check: it shows status, claimed_by, and the new claim_expires_at. If you are not the holder, or your lease expired → isError with the 409 claim-conflict body verbatim naming the real holder and expiry; if the task has NO lease at all → isError with a 409 \"not claimed\" body — call claim_task first."+actorHint),
 		mcpgo.WithString("id", mcpgo.Required(),
 			mcpgo.Description("Task ULID whose lease you hold.")),
 		actorProp(),

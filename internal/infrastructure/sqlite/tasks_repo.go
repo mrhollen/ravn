@@ -324,8 +324,9 @@ func (r *taskRepo) Release(ctx context.Context, taskID domain.ID, actor domain.A
 // between the read and the write. Deliberately does NOT bump version and does
 // NOT touch updated_at: a keep-alive is not a state change and must never cause
 // 409s against a working agent's stale read (ADR 2026-09-26). A foreign or
-// expired holder — or no lease at all (zero-value Holder on the error, meaning
-// "claim it first") — gets *domain.ClaimConflictError{Holder, ExpiresAt}.
+// expired holder gets *domain.ClaimConflictError{Holder, ExpiresAt} naming the
+// live lease; NO lease at all is NOT a claim conflict — there is nobody to wait
+// for — and surfaces as domain.ErrNotClaimed ("claim it first").
 // Returns the fresh row; one call doubles as a health check.
 func (r *taskRepo) Heartbeat(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time) (domain.Task, error) {
 	var (
@@ -351,7 +352,10 @@ func (r *taskRepo) Heartbeat(ctx context.Context, taskID domain.ID, actor domain
 		return domain.Task{}, fmt.Errorf("%w: cannot heartbeat completed task %s", domain.ErrInvalid, taskID)
 	}
 	if holder == nil || ttl == nil { // row exists but carries no lease at all
-		return domain.Task{}, &domain.ClaimConflictError{Holder: domain.Actor{}, ExpiresAt: time.Time{}} // "claim it first"
+		// NOT a claim conflict — nobody holds the lease, there is nothing to wait
+		// for. ErrNotClaimed names the recovery: claim it first (REST 409
+		// "not claimed"; MCP propagates the body verbatim).
+		return domain.Task{}, fmt.Errorf("%w: task %s has no claim lease — call claim first", domain.ErrNotClaimed, taskID)
 	}
 	newExpiry := formatTS(now.Add(time.Duration(*ttl) * time.Second))
 	res, uerr := r.q.ExecContext(ctx, `
@@ -370,27 +374,17 @@ func (r *taskRepo) Heartbeat(ctx context.Context, taskID domain.ID, actor domain
 		if gerr != nil {
 			return domain.Task{}, gerr
 		}
-		return domain.Task{}, &domain.ClaimConflictError{Holder: holderOf(current), ExpiresAt: expiryOf(current)}
+		if !current.Claim.Present() {
+			return domain.Task{}, fmt.Errorf("%w: task %s has no claim lease — call claim first", domain.ErrNotClaimed, taskID)
+		}
+		holder, exp := current.Claim.By(), current.Claim.Expiry()
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *holder, ExpiresAt: exp}
 	}
 	fresh, err := r.Get(ctx, taskID) // return the stored row — it doubles as a health check
 	if err != nil {
 		return domain.Task{}, fmt.Errorf("re-read task %s after heartbeat: %w", taskID, err)
 	}
 	return fresh, nil
-}
-
-// holderOf / expiryOf render the lease of a stored task into the
-// ClaimConflictError fields, tolerating an absent lease (a zero-value Holder is
-// the "claim it first" signal on heartbeat).
-func holderOf(t domain.Task) domain.Actor {
-	if by := t.Claim.By(); by != nil {
-		return *by
-	}
-	return domain.Actor{}
-}
-
-func expiryOf(t domain.Task) time.Time {
-	return t.Claim.Expiry() // zero time when no lease is attached
 }
 
 // OpenTaskCounts computes per-(project, status) open task counts in ONE grouped

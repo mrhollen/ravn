@@ -129,9 +129,25 @@ holder + expiry **are** the recovery instruction:
 
 Cases that produce it: `claim` on a foreign active lease; `release` by anyone
 but the active holder (an unclaimed task is an idempotent no-op, not an error);
-`heartbeat` by a non-holder — including a heartbeat with **no lease at all**,
-where `holder` is `{ "type": "" }` (the empty name field is omitted) and the
-meaning is “claim it first”.
+`heartbeat` by a non-holder or after expiry. The body ALWAYS names a live
+foreign holder — a heartbeat on a task with **no lease at all** is NOT a claim
+conflict; see `409 not claimed` below.
+
+### 409 not claimed
+
+Returned by `heartbeat` when the task has no lease at all (there is nobody to
+wait for — the recovery instruction is “claim it first”). Same 409 family as
+the claim conflicts so clients branch on status and handle both together; the
+body tag names the real state.
+
+```json
+{
+  "error": "not claimed",
+  "resource": "task",
+  "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
+  "message": "not claimed: task 01J3ZK8WQ9X7M2P4R6S8T0U2V4 has no claim lease — call claim first"
+}
+```
 
 ### 409 parent conflict
 
@@ -488,7 +504,7 @@ All other fields optional (omitted = unchanged):
 {
   "actor": { "name": "eve" },
   "version": 3,
-  "status": "doing",           // validated against the transition map → 400 when illegal
+  "status": "doing",           // validated against the transition map → 400 invalid input naming from→to when illegal
   "title": null,               // any of: title, description, status, priority (0–5),
   "priority": 2,
   "due_at": "2026-10-02T00:00:00Z",   // RFC3339 to set…
@@ -562,9 +578,9 @@ released event (it is NOT posted as a comment). `200` fresh summary row.
 Keep-alive for the active self-holder: extends `claim_expires_at` by the
 **stored** ttl. Deliberately **does not bump the version and does not touch
 `updated_at`** — a heartbeat is not a state change, so it never invalidates a
-working agent's read base. Foreign holder / expired lease / no lease at all →
-`409 claim conflict` (no-lease ⇒ `holder.type` empty = “claim it first”). The
-fresh row doubles as the liveness answer: `200` summary row.
+working agent's read base. Foreign holder / expired lease → `409 claim
+conflict`; **no lease at all** → `409 not claimed` (recovery: claim first).
+The fresh row doubles as the liveness answer: `200` summary row.
 
 ### POST /tasks/{id}/comments → `add_comment`
 

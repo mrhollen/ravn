@@ -16,6 +16,12 @@ import (
 //
 //	domain.ErrNotFound        → 404 {"error":"not found","resource":<type>,...}
 //	domain.ErrInvalid         → 400 {"error":"invalid input","message":<detail>}
+//	*domain.TransitionError   → 400 {"error":"invalid input","message":"cannot
+//	                            transition status from \"…\" to \"…\""} — an
+//	                            illegal status move IS malformed caller input, so
+//	                            it keeps the SAME 400 "invalid input" shape the old
+//	                            wrapped-ErrInvalid form produced (the message is
+//	                            pattern-matched by web/src/moves.ts)
 //	*domain.ConflictError     → 409 version conflict: the body carries
 //	                            "current_version" AND the fresh current task as a
 //	                            summary row under "current", so a stale caller can
@@ -23,7 +29,11 @@ import (
 //	*domain.ClaimConflictError→ 409 {"error":"claim conflict","holder":{...},
 //	                            "expires_at":...} — holder + expiry ARE the
 //	                            recovery instruction ("wait until X, or work another
-//	                            task")
+//	                            task"). Always names a LIVE foreign holder (a
+//	                            no-lease heartbeat is ErrNotClaimed below)
+//	domain.ErrNotClaimed      → 409 {"error":"not claimed","resource":<type>,
+//	                            "id":...} — the operation needs an ACTIVE lease but
+//	                            the task has none at all; recovery is "claim first"
 //	*domain.TaskBlockedError  → 409 {"error":"task blocked","blockers":[<id>...]}
 //	                            — a claim or completion (transition to done) on
 //	                            a task with open blockers; the IDs name what to
@@ -80,6 +90,31 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 			"message": fmt.Sprintf(
 				"%q is held by %s (%s) until %s — wait for the lease to expire or work another task",
 				string(id), claim.Holder.Type, claim.Holder.Name, rfc3339(claim.ExpiresAt)),
+		})
+		return
+	}
+
+	if errors.Is(err, domain.ErrNotClaimed) {
+		// No lease at all — NOT a claim conflict (there is nobody to wait for).
+		// Same 409 family as the claim conflicts so callers that branch on
+		// status handle it alongside them; the body tag names the real state.
+		writeJSONError(w, http.StatusConflict, map[string]any{
+			"error":    "not claimed",
+			"resource": resource,
+			"id":       string(id),
+			"message":  err.Error(),
+		})
+		return
+	}
+
+	var transition *domain.TransitionError
+	if errors.As(err, &transition) {
+		// Illegal status move: malformed caller input — the SAME 400 "invalid
+		// input" shape the old wrapped-ErrInvalid form produced (status code
+		// unchanged; web/src/moves.ts pattern-matches the message text).
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": err.Error(),
 		})
 		return
 	}

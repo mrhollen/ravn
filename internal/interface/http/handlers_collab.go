@@ -127,9 +127,10 @@ func (a *App) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 // active self-holder: extends claim_expires_at by the STORED ttl without
 // bumping the version and without touching updated_at — a heartbeat is not a
 // state change, so it never disturbs a working agent's read base. Foreign or
-// expired holder, or no lease at all (zero-value Holder on the 409 body =
-// "claim it first"), → 409 claim conflict. The fresh row doubles as the
-// liveness answer.
+// expired holder → 409 claim conflict (holder + expiry); no lease at all →
+// 409 "not claimed" (domain.ErrNotClaimed — the recovery is "claim first",
+// and there is nobody to wait for). The fresh row doubles as the liveness
+// answer.
 func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := pathID(w, r)
@@ -147,7 +148,7 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	fresh, err := a.Tasks.Heartbeat(ctx, actor, id)
 	if err != nil {
-		writeAppError(w, err, "task", id) // ClaimConflictError → 409 holder+expiry
+		writeAppError(w, err, "task", id) // ClaimConflictError → 409 holder+expiry; ErrNotClaimed → 409 not claimed
 		return
 	}
 	writeJSON(w, http.StatusOK, toSummary(fresh))
