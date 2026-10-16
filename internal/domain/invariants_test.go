@@ -107,12 +107,12 @@ func TestClaimConstructors_CannotForgePartials(t *testing.T) {
 		exp := now.Add(5 * time.Minute)
 		ttl := 300
 		zeros := []Claim{
-			ClaimFromStored(nil, &at, &exp, &ttl),                  // no holder
-			ClaimFromStored(&by, nil, &exp, &ttl),                  // no grant instant
-			ClaimFromStored(&by, &at, nil, &ttl),                   // no expiry
-			ClaimFromStored(&by, &at, &exp, nil),                   // no ttl
-			ClaimFromStored(&by, &at, &exp, intPtr(0)),             // zero ttl
-			ClaimFromStored(&by, &at, &exp, intPtr(-1)),            // negative ttl
+			ClaimFromStored(nil, &at, &exp, &ttl),       // no holder
+			ClaimFromStored(&by, nil, &exp, &ttl),       // no grant instant
+			ClaimFromStored(&by, &at, nil, &ttl),        // no expiry
+			ClaimFromStored(&by, &at, &exp, nil),        // no ttl
+			ClaimFromStored(&by, &at, &exp, intPtr(0)),  // zero ttl
+			ClaimFromStored(&by, &at, &exp, intPtr(-1)), // negative ttl
 		}
 		for i, c := range zeros {
 			if c.Present() {
@@ -242,12 +242,20 @@ func TestAcceptanceCriterionValidate(t *testing.T) {
 		})
 	}
 
-	base := func() AcceptanceCriterion { return AcceptanceCriterion{ID: ID("ac"), TaskID: ID("tk"), Seq: 2, Text: "verify the build"} }
+	base := func() AcceptanceCriterion {
+		return AcceptanceCriterion{ID: ID("ac"), TaskID: ID("tk"), Seq: 2, Text: "verify the build"}
+	}
 
 	mustFail("checked with neither by nor at", func() AcceptanceCriterion { ac := base(); ac.Done = true; return ac }())
 	mustFail("checked with at but no by", func() AcceptanceCriterion { ac := base(); ac.Done = true; ac.CompletedAt = &when; return ac }())
 	mustFail("checked with by but no at", func() AcceptanceCriterion { ac := base(); ac.Done = true; ac.CompletedBy = &checker; return ac }())
-	mustPass("checked with both", func() AcceptanceCriterion { ac := base(); ac.Done = true; ac.CompletedBy = &checker; ac.CompletedAt = &when; return ac }())
+	mustPass("checked with both", func() AcceptanceCriterion {
+		ac := base()
+		ac.Done = true
+		ac.CompletedBy = &checker
+		ac.CompletedAt = &when
+		return ac
+	}())
 	mustFail("unchecked still carrying by", func() AcceptanceCriterion { ac := base(); ac.CompletedBy = &checker; return ac }())
 	mustFail("unchecked still carrying at", func() AcceptanceCriterion { ac := base(); ac.CompletedAt = &when; return ac }())
 	mustPass("unchecked and clean", base())
