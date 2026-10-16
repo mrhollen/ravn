@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/mrhollen/crowban/internal/domain"
 )
@@ -522,8 +521,8 @@ func (s *Tasks) FindDuplicateCandidates(ctx context.Context, projectID domain.ID
 		limit = maxDuplicateLimit
 	}
 
-	qNorm := normalizeTitle(title)
-	qTokens := significantTokens(qNorm)
+	qNorm := domain.NormalizeTitle(title)
+	qTokens := domain.SignificantTokens(qNorm)
 
 	var scanned []domain.Task
 	var r Repos
@@ -549,8 +548,8 @@ func (s *Tasks) FindDuplicateCandidates(ctx context.Context, projectID domain.ID
 		if t.Status == domain.StatusDone || t.Archived { // "open" = not done/archived (ARCHITECTURE §4)
 			continue
 		}
-		candNorm := normalizeTitle(t.Title)
-		sc := titleSimilarity(qNorm, candNorm, qTokens, significantTokens(candNorm))
+		candNorm := domain.NormalizeTitle(t.Title)
+		sc := domain.TitleSimilarity(qNorm, candNorm, qTokens, domain.SignificantTokens(candNorm))
 		if sc > 0 {
 			cands = append(cands, scored{score: sc, task: t})
 		}
@@ -1034,82 +1033,6 @@ func actorEqual(a, b *domain.Actor) bool {
 		return a == nil && b == nil
 	}
 	return a.Type == b.Type && a.Name == b.Name
-}
-
-// duplicateStopwords carry no identity in a task title and are dropped before
-// token comparison. Punctuation is not a stopword — the tokenizer strips it
-// (tokens are alphanumeric runs).
-var duplicateStopwords = map[string]struct{}{
-	"a": {}, "an": {}, "and": {}, "as": {}, "are": {}, "at": {}, "be": {},
-	"by": {}, "for": {}, "from": {}, "in": {}, "is": {}, "it": {}, "on": {},
-	"or": {}, "the": {}, "to": {}, "was": {}, "with": {},
-}
-
-// normalizeTitle is the canonical comparison form for duplicate detection:
-// lowercased + trimmed (ARCHITECTURE §4's "normalized-equal title").
-func normalizeTitle(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
-}
-
-// significantTokens splits a NORMALIZED title (normalizeTitle's output — it
-// must already be lowercase and trimmed) into alphanumeric runs, drops
-// stopwords, and returns the surviving set. Runs are split on any run of other
-// characters, so punctuation never leaks into a token ("auth!" → "auth").
-func significantTokens(normalizedTitle string) map[string]struct{} {
-	tokens := make(map[string]struct{})
-	var run []rune
-	flush := func() {
-		if len(run) > 0 {
-			token, r := string(run), []rune(nil)
-			run = r
-			if _, stop := duplicateStopwords[token]; !stop {
-				tokens[token] = struct{}{}
-			}
-		}
-	}
-	for _, c := range normalizedTitle {
-		if unicode.IsLetter(c) || unicode.IsDigit(c) {
-			run = append(run, c)
-			continue
-		}
-		flush()
-	}
-	flush()
-	return tokens
-}
-
-// titleSimilarity ranks a candidate against a query on an integer scale (higher
-// = more similar; 0 = not a candidate). Both normalized forms are
-// normalizeTitle output:
-//
-//	3 — normalized-equal titles ("Refactor auth" vs " refactor auth ")
-//	2 — one normalized title contains the other, either direction
-//	   ("refactor auth" ⊂ "refactor authentication")
-//	1 — at least half of the query's significant tokens occur in the candidate
-//	   ("refactor auth!" vs "refactor authorization flow": both carry "refactor")
-//	0 — no containment and fewer than half the query's tokens shared
-func titleSimilarity(queryNorm, candNorm string, qTokens, cTokens map[string]struct{}) int {
-	if queryNorm == "" {
-		return 0 // nothing to match on
-	}
-	if candNorm == queryNorm {
-		return 3
-	}
-	if strings.Contains(candNorm, queryNorm) || strings.Contains(queryNorm, candNorm) {
-		return 2
-	}
-	if len(qTokens) > 0 {
-		shared := 0
-		for tok := range qTokens {
-			if _, ok := cTokens[tok]; ok {
-				shared++
-			}
-		}
-		if 2*shared >= len(qTokens) { // ≥ half of the query's significant tokens
-			return 1
-		}
-	}
-	return 0
 }
 
 // dueAtJSON renders an optional deadline for event payloads: RFC3339 or null.

@@ -195,7 +195,7 @@ func (f *fakeTasks) List(_ context.Context, flt TaskFilter) ([]domain.Task, int6
 		}
 		matched = append(matched, t)
 	}
-	sort.Slice(matched, func(i, j int) bool { return taskLess(matched[i], matched[j]) })
+	sort.Slice(matched, func(i, j int) bool { return domain.CanonicalLess(matched[i], matched[j]) })
 
 	total := int64(len(matched))
 	if flt.Offset > 0 {
@@ -406,22 +406,6 @@ func taskMatches(t domain.Task, f TaskFilter) bool {
 	// Note: f.UnblockedOnly is NOT checked here — it depends on relation edges,
 	// which only fakeTasks.List can see through its rel reference (slice 2D2b).
 	return true
-}
-
-// taskLess is the canonical "what's next" ordering: priority DESC, due_at ASC
-// nulls-last (SQLite's `(due_at IS NULL)` trick), created_at ASC.
-func taskLess(a, b domain.Task) bool {
-	if a.Priority != b.Priority {
-		return a.Priority > b.Priority
-	}
-	aNil, bNil := a.DueAt == nil, b.DueAt == nil
-	if aNil || bNil {
-		return !aNil // non-null due dates sort before nulls
-	}
-	if !a.DueAt.Equal(*b.DueAt) {
-		return a.DueAt.Before(*b.DueAt)
-	}
-	return a.CreatedAt.Before(b.CreatedAt)
 }
 
 // fakeACs is an in-memory AcceptanceCriterionRepository: the creation/initial-

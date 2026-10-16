@@ -135,8 +135,8 @@ func TestTitleSimilarity_ScoringTable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := titleSimilarity(normalizeTitle(tc.q), normalizeTitle(tc.c),
-				significantTokens(normalizeTitle(tc.q)), significantTokens(normalizeTitle(tc.c)))
+			got := domain.TitleSimilarity(domain.NormalizeTitle(tc.q), domain.NormalizeTitle(tc.c),
+				domain.SignificantTokens(domain.NormalizeTitle(tc.q)), domain.SignificantTokens(domain.NormalizeTitle(tc.c)))
 			if got != tc.want {
 				t.Errorf("titleSimilarity(%q, %q) = %d, want %d", tc.q, tc.c, got, tc.want)
 			}
