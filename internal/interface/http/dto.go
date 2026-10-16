@@ -414,7 +414,6 @@ type updateTaskReq struct {
 	ClearAssignee    bool        `json:"clear_assignee"`
 	Archived         *bool       `json:"archived"`
 	OverrideBlockers bool        `json:"override_blockers"`
-	OverrideACs      bool        `json:"override_acs"`
 }
 
 // --- slice 3b request bodies ------------------------------------------------------

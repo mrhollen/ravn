@@ -131,6 +131,12 @@ test.describe('Web E2E test suite', () => {
         // checkbox revert + error toast). Scoped to that test so real failures
         // in other tests stay visible.
         if (title.includes('failed AC toggle') && msg.text().includes('status of 500')) return;
+        // The done-gate test deliberately trips the AC rejection, which the
+        // API surfaces as a 400 invalid input (no override exists) — Chrome
+        // logs that HTTP error as a resource error. Expected noise, not an app
+        // bug (asserted via the toast text). Scoped to that test so real
+        // failures in other tests stay visible.
+        if (title.includes('transitioning to done') && msg.text().includes('status of 400')) return;
         uncaughtConsoleErrors.push(`[console.error] ${msg.text()}`);
       }
     });
@@ -1662,9 +1668,9 @@ test.describe('Web E2E test suite', () => {
     });
     expect(moveB2.ok).toBe(true);
 
-    // Step 6: Attempt to move to Done while ACs are incomplete -> rejected with unsatisfied ACs error toast
+    // Step 6: Attempt to move to Done while ACs are incomplete -> rejected with the "incomplete acceptance criteria" invalid-input toast
     await doneBtn.click();
-    await expect(toast).toContainText('unsatisfied acceptance criteria');
+    await expect(toast).toContainText('incomplete acceptance criteria');
     await expect(doingBtn).toHaveAttribute('aria-pressed', 'true');
     await expect(doneBtn).toHaveAttribute('aria-pressed', 'false');
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/mrhollen/crowban/internal/domain"
@@ -38,9 +37,6 @@ import (
 //	                            — a claim or completion (transition to done) on
 //	                            a task with open blockers; the IDs name what to
 //	                            complete or archive first (or override_blockers)
-//	*domain.TaskUnsatisfiedACsError → 409 {"error":"unsatisfied_acceptance_criteria",
-//	                            "unmet_acs":[<seq>...]} — completion on a task with
-//	                            unsatisfied criteria; complete or override_acs
 //	domain.ErrParentConflict  → 409 {"error":"parent conflict",...}
 //	anything else             → 500 {"error":"internal"} (logged)
 //
@@ -133,24 +129,6 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 			"message": fmt.Sprintf(
 				"%q is blocked by %d unresolved blocker(s) (%s) — complete or archive them first, or override with override_blockers=true",
 				string(id), len(ids), strings.Join(ids, ", ")),
-		})
-		return
-	}
-
-	var unmetACs *domain.TaskUnsatisfiedACsError
-	if errors.As(err, &unmetACs) {
-		seqStrs := make([]string, len(unmetACs.UnmetSeqs))
-		for i, s := range unmetACs.UnmetSeqs {
-			seqStrs[i] = strconv.Itoa(s)
-		}
-		writeJSONError(w, http.StatusConflict, map[string]any{
-			"error":     "unsatisfied_acceptance_criteria",
-			"resource":  resource,
-			"id":        string(id),
-			"unmet_acs": unmetACs.UnmetSeqs,
-			"message": fmt.Sprintf(
-				"%q has %d unsatisfied acceptance criteria (seq %s) — complete criteria first, or override with override_acs=true",
-				string(id), len(unmetACs.UnmetSeqs), strings.Join(seqStrs, ", ")),
 		})
 		return
 	}

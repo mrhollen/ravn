@@ -182,7 +182,6 @@ func (a *App) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		ClearDue:         req.ClearDue,
 		ClearAssignee:    req.ClearAssignee,
 		OverrideBlockers: req.OverrideBlockers,
-		OverrideACs:      req.OverrideACs,
 	}
 	if req.Title != nil {
 		in.Title = req.Title

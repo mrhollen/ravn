@@ -6,14 +6,6 @@ import (
 	"testing"
 )
 
-type unmetACsErr struct {
-	Error    string `json:"error"`
-	Resource string `json:"resource"`
-	ID       string `json:"id"`
-	UnmetACs []int  `json:"unmet_acs"`
-	Message  string `json:"message"`
-}
-
 func TestUpdateDone_BlockedTask_409BodyShape(t *testing.T) {
 	t.Parallel()
 	stk := newStack(t)
@@ -72,7 +64,11 @@ func TestUpdateDone_BlockedTask_409BodyShape(t *testing.T) {
 	}
 }
 
-func TestUpdateDone_UnsatisfiedACs_409BodyShape(t *testing.T) {
+// TestUpdateDone_IncompleteACs_400InvalidInput pins the unconditional AC gate:
+// a done transition with incomplete criteria is refused with the standard 400
+// invalid-input envelope (NO override flag exists), and completing the
+// criteria clears the refusal.
+func TestUpdateDone_IncompleteACs_400InvalidInput(t *testing.T) {
 	t.Parallel()
 	stk := newStack(t)
 	p := createProject(t, stk, "AC Done Gate")
@@ -100,30 +96,29 @@ func TestUpdateDone_UnsatisfiedACs_409BodyShape(t *testing.T) {
 	}
 	doingSummary := mustDecode[taskSummaryDTO](t, body)
 
-	// (a) Attempt move to done with incomplete ACs -> 409
+	// (a) Attempt move to done with both ACs incomplete -> 400 invalid input
 	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+created.Task.ID, map[string]any{
 		"actor":   actor("alice"),
 		"version": doingSummary.Version,
 		"status":  "done",
 	})
-	if code != http.StatusConflict {
-		t.Fatalf("update to done with unmet ACs = %d, want 409 (body %s)", code, string(body))
+	if code != http.StatusBadRequest {
+		t.Fatalf("update to done with unmet ACs = %d, want 400 (body %s)", code, string(body))
 	}
-	e := mustDecode[unmetACsErr](t, body)
-	if e.Error != "unsatisfied_acceptance_criteria" {
-		t.Errorf("error = %q, want \"unsatisfied_acceptance_criteria\"", e.Error)
+	e := mustDecode[errResp](t, body)
+	if e.Error != "invalid input" {
+		t.Errorf("error = %q, want \"invalid input\"", e.Error)
 	}
-	if e.Resource != "task" || e.ID != created.Task.ID {
-		t.Errorf("envelope = (%s %s), want (task %s)", e.Resource, e.ID, created.Task.ID)
-	}
-	if len(e.UnmetACs) != 2 || e.UnmetACs[0] != 1 || e.UnmetACs[1] != 2 {
-		t.Fatalf("unmet_acs = %v, want [1, 2]", e.UnmetACs)
-	}
-	if !strings.Contains(e.Message, "unsatisfied acceptance criteria") {
-		t.Errorf("message %q must explain unsatisfied ACs", e.Message)
+	for _, frag := range []string{
+		"2 incomplete acceptance criteria (seq 1, 2)",
+		"reopen or complete acceptance criteria first",
+	} {
+		if !strings.Contains(e.Message, frag) {
+			t.Errorf("message %q must contain %q", e.Message, frag)
+		}
 	}
 
-	// (b) Toggle AC 1 to done
+	// (b) Toggle AC 1 to done; retry -> 400 naming only seq 2
 	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+created.Task.ID+"/acceptance-criteria/1", map[string]any{
 		"actor": actor("alice"),
 		"done":  true,
@@ -132,30 +127,34 @@ func TestUpdateDone_UnsatisfiedACs_409BodyShape(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("toggle AC 1 = %d (%s)", code, string(body))
 	}
+	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+created.Task.ID, map[string]any{
+		"actor":   actor("alice"),
+		"version": doingSummary.Version, // AC toggles are child-row: task version unchanged
+		"status":  "done",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("update to done with unmet AC 2 = %d, want 400 (body %s)", code, string(body))
+	}
+	e = mustDecode[errResp](t, body)
+	if !strings.Contains(e.Message, "1 incomplete acceptance criteria (seq 2)") {
+		t.Errorf("message %q must name the remaining unmet criterion", e.Message)
+	}
 
-	// Attempt move to done again -> 409 with unmet_acs = [2]
+	// (c) Complete AC 2; done now succeeds with NO override flag
+	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+created.Task.ID+"/acceptance-criteria/2", map[string]any{
+		"actor": actor("alice"),
+		"done":  true,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("toggle AC 2 = %d (%s)", code, string(body))
+	}
 	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+created.Task.ID, map[string]any{
 		"actor":   actor("alice"),
 		"version": doingSummary.Version,
 		"status":  "done",
 	})
-	if code != http.StatusConflict {
-		t.Fatalf("update to done with unmet AC 2 = %d, want 409 (body %s)", code, string(body))
-	}
-	e = mustDecode[unmetACsErr](t, body)
-	if len(e.UnmetACs) != 1 || e.UnmetACs[0] != 2 {
-		t.Fatalf("unmet_acs = %v, want [2]", e.UnmetACs)
-	}
-
-	// (c) Override ACs -> 200 OK
-	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+created.Task.ID, map[string]any{
-		"actor":        actor("alice"),
-		"version":      doingSummary.Version,
-		"status":       "done",
-		"override_acs": true,
-	})
 	if code != http.StatusOK {
-		t.Fatalf("override update to done = %d, want 200 (body %s)", code, string(body))
+		t.Fatalf("update to done with satisfied ACs = %d, want 200 (body %s)", code, string(body))
 	}
 	res := mustDecode[taskSummaryDTO](t, body)
 	if res.Status != "done" {

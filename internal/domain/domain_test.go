@@ -207,15 +207,4 @@ func TestRelationKindValidVsStored(t *testing.T) {
 	}
 }
 
-func TestTaskUnsatisfiedACsError(t *testing.T) {
-	err := &TaskUnsatisfiedACsError{
-		TaskID:    ID("01J3ZK8WQ9X7M2P4R6S8T0U2V4"),
-		UnmetSeqs: []int{1, 3},
-	}
-	want := "task 01J3ZK8WQ9X7M2P4R6S8T0U2V4 has 2 unsatisfied acceptance criteria (seq 1, 3)"
-	if got := err.Error(); got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
-	}
-}
-
 func timePtr(t time.Time) *time.Time { return &t }

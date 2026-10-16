@@ -246,7 +246,6 @@ type UpdateTaskRequest struct {
 	ClearAssignee    bool    `json:"clear_assignee,omitempty"`
 	Archived         *bool   `json:"archived,omitempty"`
 	OverrideBlockers bool    `json:"override_blockers,omitempty"`
-	OverrideACs      bool    `json:"override_acs,omitempty"`
 }
 
 // ClaimTaskRequest is POST /tasks/{id}/claim. TTLSec is optional: 0 means

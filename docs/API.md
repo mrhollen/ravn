@@ -511,8 +511,7 @@ All other fields optional (omitted = unchanged):
   "clear_due": true,           // …or clear the deadline
   "assignee": { "type": "human", "name": "ada" },  // durable ownership; or "clear_assignee": true
   "archived": false,
-  "override_blockers": false,  // true bypasses unresolved blocker gate when moving to done
-  "override_acs": false        // true bypasses unsatisfied acceptance criteria gate when moving to done
+  "override_blockers": false   // true bypasses unresolved blocker gate when moving to done
 }
 ```
 
@@ -521,7 +520,7 @@ events; this is the only field that touches `completed_at`.
 
 Transitioning to `status: "done"` validates that:
 1. The task has no open blockers (`blocked-by` targets that are not done and not archived). If open blockers exist and `override_blockers` is false, returns `409` (`{"error": "task blocked", "blockers": [...]}`).
-2. All acceptance criteria on the task are satisfied (`done: true`). If unsatisfied criteria exist and `override_acs` is false, returns `409` (`{"error": "unsatisfied_acceptance_criteria", "unmet_acs": [...]}`).
+2. All acceptance criteria on the task are satisfied (`done: true`). If any criterion is incomplete, returns `400` (`{"error": "invalid input"}`) with a message naming the count and seq of every unmet criterion — e.g. `"…has 2 incomplete acceptance criteria (seq 1, 2) — reopen or complete acceptance criteria first"`. **There is no override flag**: complete the criteria (or reopen a task that was completed with them left open). A task with zero criteria passes vacuously. The blocker gate is checked first when both would fire.
 
 
 ### POST /tasks/{id}/claim → `claim_task`
@@ -639,6 +638,15 @@ every edit would only add round-trips:
 task → `404`.
 
 ### PATCH /tasks/{id}/acceptance-criteria/{seq} → `complete_ac` · `edit_ac`
+
+**Settled-parent rule (applies to EVERY criterion mutation on this and the
+following AC endpoints — toggle, reword, add, remove):** while the parent task
+is completed (`status: "done"`) or archived, all of them are refused with
+`400` (`{"error": "invalid input"}`) naming the recovery —
+`"…completed task <id> — reopen the task first"` / `"…archived task <id> —
+unarchive it first"`. Nothing is written and no event is emitted. Reopening
+(`done→todo`) or unarchiving restores full mutability. Note: re-checking an
+ALREADY-DONE criterion on a done task is refused by design under this rule.
 
 `{seq}` is the **1-based** criterion sequence in the URL. Non-numeric or < 1 →
 `400`; unknown task **or** unknown seq → `404`.

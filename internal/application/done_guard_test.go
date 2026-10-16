@@ -3,19 +3,31 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mrhollen/crowban/internal/domain"
 )
 
-func asTaskUnsatisfiedACs(t *testing.T, err error) *domain.TaskUnsatisfiedACsError {
+// assertIncompleteACsError pins the unconditional done-gate rejection: a
+// wrapped domain.ErrInvalid (the standard 400 invalid-input surface) naming
+// the count of incomplete criteria, their seqs, and the recovery instruction.
+func assertIncompleteACsError(t *testing.T, err error, wantCount int, wantSeqs string) {
 	t.Helper()
-	var ue *domain.TaskUnsatisfiedACsError
-	if !errors.As(err, &ue) {
-		t.Fatalf("err = %v (%T), want *domain.TaskUnsatisfiedACsError", err, err)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("err = %v (%T), want wrapped domain.ErrInvalid", err, err)
 	}
-	return ue
+	msg := err.Error()
+	for _, frag := range []string{
+		fmt.Sprintf("%d incomplete acceptance criteria (seq %s)", wantCount, wantSeqs),
+		"reopen or complete acceptance criteria first",
+	} {
+		if !strings.Contains(msg, frag) {
+			t.Fatalf("error %q must contain %q", msg, frag)
+		}
+	}
 }
 
 func TestUpdateDone_BlockedTask_RejectedWithTaskBlockedError(t *testing.T) {
@@ -108,7 +120,7 @@ func TestUpdateDone_ResolvedBlockers_SucceedsNormally(t *testing.T) {
 	}
 }
 
-func TestUpdateDone_UnmetAcceptanceCriteria_RejectedWithTaskUnsatisfiedACsError(t *testing.T) {
+func TestUpdateDone_UnmetAcceptanceCriteria_RejectedWithPinnedErrInvalidMessage(t *testing.T) {
 	ctx := context.Background()
 	svc, fc, uow := newTaskTestEnv(t)
 	task, err := svc.Create(ctx, testAgent, TaskInput{
@@ -128,16 +140,10 @@ func TestUpdateDone_UnmetAcceptanceCriteria_RejectedWithTaskUnsatisfiedACsError(
 	fc.SetNow(fc.now.Add(time.Minute))
 	eventsBefore := len(uow.events.events)
 
-	// All 3 criteria are incomplete
+	// All 3 criteria are incomplete -> rejected, message pins count + seqs
 	done := domain.StatusDone
 	_, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
-	ue := asTaskUnsatisfiedACs(t, err)
-	if ue.TaskID != task.ID {
-		t.Errorf("TaskID = %s, want %s", ue.TaskID, task.ID)
-	}
-	if len(ue.UnmetSeqs) != 3 || ue.UnmetSeqs[0] != 1 || ue.UnmetSeqs[1] != 2 || ue.UnmetSeqs[2] != 3 {
-		t.Fatalf("UnmetSeqs = %v, want [1, 2, 3]", ue.UnmetSeqs)
-	}
+	assertIncompleteACsError(t, err, 3, "1, 2, 3")
 
 	// Verify no row mutation or event
 	stored, err := svc.Get(ctx, task.ID)
@@ -157,38 +163,26 @@ func TestUpdateDone_UnmetAcceptanceCriteria_RejectedWithTaskUnsatisfiedACsError(
 		t.Fatalf("ToggleAC 1: %v", err)
 	}
 
-	// Now only criteria 2 and 3 are unmet
+	// Now only criteria 2 and 3 are unmet -> rejection narrows accordingly
 	_, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
-	ue = asTaskUnsatisfiedACs(t, err)
-	if len(ue.UnmetSeqs) != 2 || ue.UnmetSeqs[0] != 2 || ue.UnmetSeqs[1] != 3 {
-		t.Fatalf("UnmetSeqs = %v, want [2, 3]", ue.UnmetSeqs)
-	}
+	assertIncompleteACsError(t, err, 2, "2, 3")
 }
 
-func TestUpdateDone_UnmetAcceptanceCriteria_OverrideACsSucceeds(t *testing.T) {
+func TestUpdateDone_ZeroAcceptanceCriteria_TransitionsFreely(t *testing.T) {
 	ctx := context.Background()
 	svc, _, _ := newTaskTestEnv(t)
-	task, err := svc.Create(ctx, testAgent, TaskInput{
-		Title:     "Feature with criteria",
-		ProjectID: testProjectID,
-		ACs:       []string{"Write tests"},
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
+	task := mustCreateTask(t, svc, "No criteria", 1, nil) // zero ACs
 
 	doing := domain.StatusDoing
 	if _, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &doing}); err != nil {
 		t.Fatalf("move to doing: %v", err)
 	}
 
+	// A task with zero criteria passes the gate vacuously.
 	done := domain.StatusDone
-	updated, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{
-		Status:      &done,
-		OverrideACs: true,
-	})
+	updated, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
 	if err != nil {
-		t.Fatalf("Update with OverrideACs: %v", err)
+		t.Fatalf("Update with zero criteria must pass vacuously: %v", err)
 	}
 	if updated.Status != domain.StatusDone {
 		t.Errorf("status = %q, want done", updated.Status)
@@ -233,7 +227,7 @@ func TestUpdateDone_AllCriteriaCompleted_SucceedsNormally(t *testing.T) {
 
 func TestUpdateDone_BlockedAndUnmetACs_BlockerCheckedFirst(t *testing.T) {
 	ctx := context.Background()
-	svc, rels, _, _ := newClaimBlockedEnv(t)
+	svc, rels, fc, uow := newClaimBlockedEnv(t)
 	task, err := svc.Create(ctx, testAgent, TaskInput{
 		Title:     "Blocked and incomplete ACs",
 		ProjectID: testProjectID,
@@ -256,21 +250,28 @@ func TestUpdateDone_BlockedAndUnmetACs_BlockerCheckedFirst(t *testing.T) {
 	_, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
 	asTaskBlocked(t, err)
 
-	// 2. Override blockers -> AC error next
+	// 2. Override blockers -> AC gate refuses next (unconditional — no override)
 	_, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{
 		Status:           &done,
 		OverrideBlockers: true,
 	})
-	asTaskUnsatisfiedACs(t, err)
+	assertIncompleteACsError(t, err, 1, "1")
 
-	// 3. Both overridden -> success
+	// 3. Complete the criterion; the blocker gate still refuses without its override
+	acSvc := NewAcceptance(uow, fc, &fakeIDGen{})
+	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 1, true, "done"); err != nil {
+		t.Fatalf("ToggleAC: %v", err)
+	}
+	_, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
+	asTaskBlocked(t, err)
+
+	// 4. Satisfied criteria + blocker override -> success
 	updated, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{
 		Status:           &done,
 		OverrideBlockers: true,
-		OverrideACs:      true,
 	})
 	if err != nil {
-		t.Fatalf("Update with both overrides: %v", err)
+		t.Fatalf("Update with satisfied ACs and blocker override: %v", err)
 	}
 	if updated.Status != domain.StatusDone {
 		t.Errorf("status = %q, want done", updated.Status)
@@ -279,7 +280,7 @@ func TestUpdateDone_BlockedAndUnmetACs_BlockerCheckedFirst(t *testing.T) {
 
 func TestUpdateDone_ReopenToTodo_SkipsDoneGates(t *testing.T) {
 	ctx := context.Background()
-	svc, _, _ := newTaskTestEnv(t)
+	svc, fc, uow := newTaskTestEnv(t)
 	task, err := svc.Create(ctx, testAgent, TaskInput{
 		Title:     "Feature",
 		ProjectID: testProjectID,
@@ -294,12 +295,14 @@ func TestUpdateDone_ReopenToTodo_SkipsDoneGates(t *testing.T) {
 		t.Fatalf("move to doing: %v", err)
 	}
 
-	// Move to done with OverrideACs
+	// Complete the criterion, then move to done (the sanctioned path now that
+	// the AC gate is unconditional — there is no override).
+	acSvc := NewAcceptance(uow, fc, &fakeIDGen{})
+	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 1, true, "done"); err != nil {
+		t.Fatalf("ToggleAC: %v", err)
+	}
 	done := domain.StatusDone
-	if _, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{
-		Status:      &done,
-		OverrideACs: true,
-	}); err != nil {
+	if _, err := svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done}); err != nil {
 		t.Fatalf("move to done: %v", err)
 	}
 

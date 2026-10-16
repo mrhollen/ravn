@@ -19,6 +19,15 @@ import (
 // mutation — it touches only the acceptance_criterion table plus the event
 // log. The parent task row's version and updated_at are never touched, so a
 // working agent holding a stale read cannot be 409'd by a check-off.
+//
+// Settled-parent rule (frozenACError): EVERY mutation — add, edit, toggle in
+// both directions, remove — is rejected with domain.ErrInvalid while the
+// parent task is completed (status=done) or archived. A done task must not
+// drift into "completed with incomplete criteria", and an archived record is
+// immutable; clients must reopen (done→todo per the transition map) and/or
+// unarchive before touching criteria again. Note: checking an already-done
+// criterion on a done task is blocked by design under this rule — reopen
+// first.
 type Acceptance struct {
 	uow   UnitOfWork
 	clock Clock
@@ -31,6 +40,27 @@ type Acceptance struct {
 // supplies the completion instant recorded on transition (ADR).
 func NewAcceptance(uow UnitOfWork, clock Clock, idgen IDGenerator) *Acceptance {
 	return &Acceptance{uow: uow, clock: clock, idgen: idgen}
+}
+
+// frozenACError is the shared rejection for every AC mutation when the parent
+// task is SETTLED: completed (status=done) or archived. Mutating criteria
+// there would resurrect a semantic contradiction — a done task left with open
+// or rewritten criteria, or edits to an archived record — so ALL mutations
+// (add / edit / toggle in BOTH directions / remove) are refused until the
+// task is reopened (done→todo per the transition map) and/or unarchived.
+// The message doubles as the recovery instruction; it wraps domain.ErrInvalid
+// so REST renders the standard 400 invalid-input body and MCP surfaces it
+// verbatim. Archived is checked first (mirrors Claim's guard order), so a
+// done+archived task is told to unarchive before the reopen rule applies.
+// The clause carries its own preposition ("toggling … on", "adding … to").
+func frozenACError(t domain.Task, clause string) error {
+	if t.Archived {
+		return fmt.Errorf("%w: %s archived task %s — unarchive it first", domain.ErrInvalid, clause, t.ID)
+	}
+	if t.Status == domain.StatusDone {
+		return fmt.Errorf("%w: %s completed task %s — reopen the task first", domain.ErrInvalid, clause, t.ID)
+	}
+	return nil
 }
 
 // ToggleAC flips the criterion at 1-based seq under taskID to done (or
@@ -61,6 +91,9 @@ func (s *Acceptance) ToggleAC(ctx context.Context, actor domain.Actor, taskID do
 		t, gerr := r.Tasks.Get(ctx, taskID)
 		if gerr != nil {
 			return gerr // ErrNotFound for unknown tasks
+		}
+		if err := frozenACError(t, "toggling an acceptance criterion on"); err != nil {
+			return err // settled parent: reopen/unarchive first (no write, no event)
 		}
 		acs, lerr := r.ACs.ListByTask(ctx, taskID)
 		if lerr != nil {
@@ -144,6 +177,9 @@ func (s *Acceptance) AddAC(ctx context.Context, actor domain.Actor, taskID domai
 		if gerr != nil {
 			return gerr // ErrNotFound for unknown tasks
 		}
+		if err := frozenACError(t, "adding an acceptance criterion to"); err != nil {
+			return err // settled parent: reopen/unarchive first (no write, no event)
+		}
 		acs, lerr := r.ACs.ListByTask(ctx, taskID)
 		if lerr != nil {
 			return lerr
@@ -198,6 +234,9 @@ func (s *Acceptance) EditACText(ctx context.Context, actor domain.Actor, taskID 
 		t, gerr := r.Tasks.Get(ctx, taskID)
 		if gerr != nil {
 			return gerr // ErrNotFound for unknown tasks
+		}
+		if err := frozenACError(t, "editing an acceptance criterion on"); err != nil {
+			return err // settled parent: reopen/unarchive first (no write, no event)
 		}
 		acs, lerr := r.ACs.ListByTask(ctx, taskID)
 		if lerr != nil {
@@ -258,6 +297,9 @@ func (s *Acceptance) RemoveAC(ctx context.Context, actor domain.Actor, taskID do
 		t, gerr := r.Tasks.Get(ctx, taskID)
 		if gerr != nil {
 			return gerr // ErrNotFound for unknown tasks
+		}
+		if err := frozenACError(t, "removing an acceptance criterion from"); err != nil {
+			return err // settled parent: reopen/unarchive first (no write, no event)
 		}
 		removed, derr := r.ACs.Delete(ctx, taskID, seq)
 		if derr != nil {

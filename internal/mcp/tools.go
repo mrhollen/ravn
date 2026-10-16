@@ -418,8 +418,6 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 			mcpgo.Description("Archive (true) or unarchive (false) the task.")),
 		mcpgo.WithBoolean("override_blockers",
 			mcpgo.Description("true = bypass unresolved blocker check when transitioning to done.")),
-		mcpgo.WithBoolean("override_acs",
-			mcpgo.Description("true = bypass unsatisfied acceptance criteria check when transitioning to done.")),
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -464,7 +462,6 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 			body.Archived = &b
 		}
 		body.OverrideBlockers = req.GetBool("override_blockers", false)
-		body.OverrideACs = req.GetBool("override_acs", false)
 		row, err := c.UpdateTask(ctx, id, body)
 		if err != nil {
 			return fail(c, err), nil

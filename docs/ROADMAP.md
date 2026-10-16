@@ -38,7 +38,7 @@ All Tier 1 items are built, tested, and verified end-to-end (live E2E smoke: bot
 - ✅ **REST API + MCP server**: Full HTTP contract ([API.md](API.md)) and all 14 MCP tools over stateless Streamable-HTTP ([MCP.md](MCP.md)). (`bd9ba62`, `d19799b`, `e0aca8b`)
 - ✅ **Docker-first deployment**: Multi-stage build, compose with DB volume + healthchecks, smoke script. (`74b9dc2`)
 
-**Explicitly ALLOWED in MVP**: Marking a task `done` is allowed even if acceptance criteria are unchecked or no artifact attached (Definition-of-Done *enforcement* is Tier 2). Token auth (`CROWBAN_TOKEN`) is OPTIONAL for local dev: off by default, and when set the server enforces it on all `/api/v1/*` routes with `401`.
+**Explicitly ALLOWED in MVP**: Marking a task `done` without any artifact attached (artifact attachment is not enforced). NOT allowed: completing a task while any acceptance criterion is unchecked — the done transition is rejected with `400 invalid input` naming the unmet seqs, and there is **no override** (see [API.md](API.md)); likewise every AC mutation on a completed or archived task is refused until it is reopened / unarchived. Token auth (`CROWBAN_TOKEN`) is OPTIONAL for local dev: off by default, and when set the server enforces it on all `/api/v1/*` routes with `401`.
 
 ### Post-MVP waves — shipped after the initial MVP
 

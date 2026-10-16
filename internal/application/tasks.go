@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -113,8 +114,6 @@ type TaskUpdateInput struct {
 
 	// OverrideBlockers bypasses the open-blocker gate when transitioning to StatusDone.
 	OverrideBlockers bool
-	// OverrideACs bypasses the unsatisfied acceptance criteria gate when transitioning to StatusDone.
-	OverrideACs bool
 
 	// ExpectedVersion is the stored version the caller last read. >0 enables
 	// the optimistic-concurrency guard: INSIDE the write transaction, if the
@@ -384,8 +383,14 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 					}
 				}
 
-				// Acceptance criteria gate: cannot complete a task with incomplete criteria unless overridden
-				if !in.OverrideACs && r.ACs != nil {
+				// Acceptance criteria gate (UNCONDITIONAL — no override): a task
+				// cannot be completed while any criterion is unmet. The error is
+				// a wrapped domain.ErrInvalid (the standard 400 invalid-input
+				// surface) whose message lists the offending seqs and doubles as
+				// the recovery instruction: complete the criteria first, or
+				// reopen a task that was completed with them left open. A task
+				// with ZERO criteria passes vacuously.
+				if r.ACs != nil {
 					acs, aerr := r.ACs.ListByTask(ctx, id)
 					if aerr != nil {
 						return aerr
@@ -397,7 +402,13 @@ func (s *Tasks) Update(ctx context.Context, actor domain.Actor, id domain.ID, in
 						}
 					}
 					if len(unmet) > 0 {
-						return &domain.TaskUnsatisfiedACsError{TaskID: id, UnmetSeqs: unmet}
+						seqStrs := make([]string, len(unmet))
+						for i, seq := range unmet {
+							seqStrs[i] = strconv.Itoa(seq)
+						}
+						return fmt.Errorf(
+							"%w: task %s has %d incomplete acceptance criteria (seq %s) — reopen or complete acceptance criteria first",
+							domain.ErrInvalid, id, len(unmet), strings.Join(seqStrs, ", "))
 					}
 				}
 			}
