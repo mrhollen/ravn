@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mrhollen/crowban/internal/application"
 	"github.com/mrhollen/crowban/internal/domain"
@@ -88,6 +89,47 @@ func (r *commentRepo) CountByTask(ctx context.Context, taskID domain.ID) (int64,
 		return 0, fmt.Errorf("count comments for task %s: %w", taskID, err)
 	}
 	return n, nil
+}
+
+// CountsByTasks returns the total comment count for each given task in ONE
+// grouped query (the batch form of CountByTask, no N+1). Tasks with zero
+// comments are omitted from the map; empty input short-circuits without SQL.
+func (r *commentRepo) CountsByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]int64, error) {
+	out := make(map[domain.ID]int64, len(taskIDs))
+	if len(taskIDs) == 0 {
+		return out, nil
+	}
+	query, args := inByTaskID("comment", taskIDs)
+	rows, err := r.q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("count comments for %d tasks: %w", len(taskIDs), err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			taskID string
+			n      int64
+		)
+		if err := rows.Scan(&taskID, &n); err != nil {
+			return nil, fmt.Errorf("scan comment count row: %w", err)
+		}
+		out[domain.ID(taskID)] = n
+	}
+	return out, rows.Err()
+}
+
+// inByTaskID builds a "SELECT task_id, COUNT(*) FROM <table> WHERE task_id IN
+// (…)" grouped-count query for the given ids. Shared by the batch count reads
+// on child tables keyed by task_id.
+func inByTaskID(table string, taskIDs []domain.ID) (string, []any) {
+	placeholders := make([]string, len(taskIDs))
+	args := make([]any, len(taskIDs))
+	for i, id := range taskIDs {
+		placeholders[i] = "?"
+		args[i] = string(id)
+	}
+	return `SELECT task_id, COUNT(*) FROM ` + table + ` WHERE task_id IN (` + strings.Join(placeholders, ", ") + `) GROUP BY task_id`, args
 }
 
 // scanComment maps one row (in commentColumns order) to a domain.Comment.

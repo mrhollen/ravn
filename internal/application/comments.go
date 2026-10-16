@@ -139,6 +139,34 @@ func (s *Comments) List(ctx context.Context, taskID domain.ID, limit, offset int
 	return rows, total, nil
 }
 
+// Counts returns the total comment count for each of the given tasks — the
+// batch form of List's CountByTask — in ONE grouped read (no N+1). It backs
+// the board snapshot's per-card comment-count badge: counts only, no bodies.
+// Tasks with zero comments are omitted from the result map; empty input
+// returns an empty map without querying. The read runs through the unit of
+// work for uniformity and is read-only: it appends no events and touches
+// nothing. (Task existence is not checked — counts of unknown tasks simply
+// stay absent.)
+func (s *Comments) Counts(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]int64, error) {
+	if len(taskIDs) == 0 {
+		return map[domain.ID]int64{}, nil
+	}
+	var out map[domain.ID]int64
+	var r Repos
+	err := s.uow.Run(ctx, &r, func() error {
+		counts, cerr := r.Comments.CountsByTasks(ctx, taskIDs)
+		if cerr != nil {
+			return cerr
+		}
+		out = counts
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // truncateEventBody shortens a comment body to at most n runes for event
 // payloads, appending an ellipsis when something was cut.
 func truncateEventBody(s string, n int) string {

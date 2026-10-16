@@ -237,6 +237,14 @@ Optional fields (`due_at`, `assignee`, `claimed_by`, `claim_expires_at`) are
 lease holder and is distinct from the durable `assignee`; claiming/releasing/
 heartbeating never touches the assignee.
 
+Three more optional fields — `ac_total`, `ac_done`, and `comment_count` — are
+populated **only on board-snapshot summary rows** (see
+`GET /projects/{id}/board` below): the acceptance-criteria total, how many of
+them are done, and the comment-thread length. They back the web UI's per-card
+badges and are **omitted entirely** when zero — list/create/update/claim and
+the detail rows never carry them, keeping those payloads compact. They are
+computed with one grouped query per child table (no N+1).
+
 **Task detail row** — `GET /tasks/{id}` only: the summary fields (flattened),
 plus:
 
@@ -394,13 +402,32 @@ inside each column.
   "counts": { "todo": 2, "doing": 1, "done": 1 },
   "tasks": {
     "todo":  [ /* summary rows */ ],
-    "doing": [ /* summary rows */ ],
+    "doing": [ /* summary rows, incl. ac_total / ac_done / comment_count */ ],
     "done":  [ /* summary rows */ ]
   }
 }
 ```
 
 All three columns always present (`[]` when empty). `404` for unknown project.
+Each summary row here additionally carries the card-badge fields — e.g. a task
+with 3 criteria (1 done) and 2 comments renders:
+
+```json
+{
+  "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
+  "title": "Fix login bug",
+  "status": "doing",
+  "priority": 3,
+  "ac_total": 3,
+  "ac_done": 1,
+  "comment_count": 2,
+  "version": 4,
+  "created_at": "2026-09-25T18:02:11Z",
+  "updated_at": "2026-09-26T15:48:03Z"
+}
+```
+
+A row with no criteria and no comments omits all three badge keys.
 
 ### GET /projects/{id}/events · GET /events — realtime SSE streams
 

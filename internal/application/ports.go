@@ -140,6 +140,16 @@ type TaskTitle struct {
 	Title string
 }
 
+// TaskACProgress is one (task, total, done) aggregate produced by
+// AcceptanceCriterionRepository.ProgressByTasks. It is a port-level result
+// shape, not a domain entity: nothing persists it — board snapshots fold it
+// into summary-row ac_total/ac_done fields so cards can render checklist
+// progress without loading every task's full criterion list.
+type TaskACProgress struct {
+	Total int64
+	Done  int64
+}
+
 // TaskRepository persists tasks and their ephemeral claim leases. Concurrency
 // notes:
 //
@@ -253,6 +263,14 @@ type AcceptanceCriterionRepository interface {
 	// DELETED row so the caller can carry it on an event payload. Surviving
 	// rows keep their seq values (gaps stay). Unknown pair → domain.ErrNotFound.
 	Delete(ctx context.Context, taskID domain.ID, seq int) (domain.AcceptanceCriterion, error)
+
+	// ProgressByTasks returns one TaskACProgress per given task — the total
+	// criterion count and how many are done — computed by ONE grouped query
+	// over all the passed ids (no N+1). Tasks with NO criteria at all are
+	// omitted from the map; callers treat a missing key as zero/zero. Empty
+	// input returns an empty map without querying. This is the batch read
+	// behind the board snapshot's per-card AC-progress badge.
+	ProgressByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]TaskACProgress, error)
 }
 
 // CommentRepository appends and reads a task's comment thread. Comments are
@@ -265,6 +283,13 @@ type CommentRepository interface {
 	// CountByTask returns the total number of comments on taskID BEFORE any
 	// paging — the `total` of the paged GET /tasks/{id}/comments envelope.
 	CountByTask(ctx context.Context, taskID domain.ID) (int64, error)
+
+	// CountsByTasks returns the total comment count for EACH given task,
+	// computed by ONE grouped query over all the passed ids (no N+1). Tasks
+	// with zero comments are omitted from the map; callers treat a missing key
+	// as zero. Empty input returns an empty map without querying. This is the
+	// batch read behind the board snapshot's per-card comment-count badge.
+	CountsByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]int64, error)
 }
 
 // ArtifactRepository appends and reads a task's evidence attachments

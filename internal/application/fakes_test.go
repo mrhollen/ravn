@@ -503,6 +503,27 @@ func (f *fakeACs) UpdateText(_ context.Context, taskID domain.ID, seq int, text 
 	return domain.AcceptanceCriterion{}, domain.ErrNotFound
 }
 
+// ProgressByTasks mirrors the SQLite adapter's grouped aggregate in memory:
+// one TaskACProgress per requested task with at least one criterion; tasks
+// with none are omitted.
+func (f *fakeACs) ProgressByTasks(_ context.Context, taskIDs []domain.ID) (map[domain.ID]TaskACProgress, error) {
+	out := make(map[domain.ID]TaskACProgress, len(taskIDs))
+	for _, id := range taskIDs {
+		rows := f.byTask[id]
+		if len(rows) == 0 {
+			continue
+		}
+		var done int64
+		for _, c := range rows {
+			if c.Done {
+				done++
+			}
+		}
+		out[id] = TaskACProgress{Total: int64(len(rows)), Done: done}
+	}
+	return out, nil
+}
+
 // Delete mirrors the SQLite adapter: removes exactly the (taskID, seq) row and
 // returns the DELETED row (its before-state rides on the caller's event).
 // Surviving rows keep their seqs (gaps stay). Unknown pair → domain.ErrNotFound.
@@ -539,6 +560,19 @@ func (f *fakeComments) Add(_ context.Context, c domain.Comment) error {
 // CountByTask returns the stored comment count for a task (before paging).
 func (f *fakeComments) CountByTask(_ context.Context, taskID domain.ID) (int64, error) {
 	return int64(len(f.byTask[taskID])), nil
+}
+
+// CountsByTasks mirrors the SQLite adapter's grouped count in memory: one
+// entry per requested task with at least one comment; tasks with none are
+// omitted.
+func (f *fakeComments) CountsByTasks(_ context.Context, taskIDs []domain.ID) (map[domain.ID]int64, error) {
+	out := make(map[domain.ID]int64, len(taskIDs))
+	for _, id := range taskIDs {
+		if n := len(f.byTask[id]); n > 0 {
+			out[id] = int64(n)
+		}
+	}
+	return out, nil
 }
 
 // ListByTask returns up to limit comments newest first (created_at DESC,

@@ -283,6 +283,107 @@ test.describe('Web E2E test suite', () => {
     await expect(drawerTitle).not.toBeVisible();
   });
 
+  test('card metadata badges: short ID, AC progress, and comment count', async ({
+    page,
+  }, testInfo) => {
+    // -------------------------------------------------------------------------
+    // Seed one "rich" task (3 criteria, 1 done, 2 comments) and one plain task
+    // -------------------------------------------------------------------------
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Card Badge Project',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    const richRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Rich Badge Task',
+        priority: 2,
+        acceptance_criteria: ['First criterion', 'Second criterion', 'Third criterion'],
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(richRes.ok).toBe(true);
+    const rich = (await richRes.json()).task;
+
+    // Mark AC 1 done, then post two comments.
+    const acToggleRes = await fetch(`${serverUrl}/api/v1/tasks/${rich.id}/acceptance-criteria/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actor: { name: 'e2e-seed', type: 'agent' }, done: true }),
+    });
+    expect(acToggleRes.ok).toBe(true);
+    for (let i = 1; i <= 2; i++) {
+      const cRes = await fetch(`${serverUrl}/api/v1/tasks/${rich.id}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actor: { name: `badge-agent-${i}`, type: 'agent' },
+          kind: 'progress',
+          body: `Badge comment ${i}`,
+        }),
+      });
+      expect(cRes.ok).toBe(true);
+    }
+
+    const plainRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Plain Badge Task',
+        priority: 3,
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(plainRes.ok).toBe(true);
+    const plain = (await plainRes.json()).task;
+
+    // -------------------------------------------------------------------------
+    // Load the board and assert the per-card badges
+    // -------------------------------------------------------------------------
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, project.id);
+
+    const shortOf = (id: string) => (id.length > 10 ? `${id.slice(0, 8)}…` : id);
+
+    const richCard = page.locator('article', { hasText: 'Rich Badge Task' });
+    await expect(richCard).toBeVisible();
+
+    // AC1: the card carries a muted monospace short-ID chip (full ULID in title)
+    const richIdChip = richCard.getByTestId('card-short-id');
+    await expect(richIdChip).toHaveText(shortOf(rich.id));
+    await expect(richIdChip).toHaveAttribute('title', `Task ${rich.id}`);
+
+    // AC2: AC progress badge reads 1/3 with an accessible tooltip
+    const acBadge = richCard.getByTestId('card-ac-progress');
+    await expect(acBadge).toContainText('1/3');
+    await expect(acBadge).toHaveAttribute('title', '1 of 3 acceptance criteria complete');
+
+    // AC3: comment count badge reads 2
+    const commentBadge = richCard.getByTestId('card-comment-count');
+    await expect(commentBadge).toContainText('2');
+    await expect(commentBadge).toHaveAttribute('title', '2 comments');
+
+    // Plain task: short-ID chip present, AC and comment badges hidden.
+    const plainCard = page.locator('article', { hasText: 'Plain Badge Task' });
+    await expect(plainCard).toBeVisible();
+    await expect(plainCard.getByTestId('card-short-id')).toHaveText(shortOf(plain.id));
+    await expect(plainCard.getByTestId('card-ac-progress')).not.toBeVisible();
+    await expect(plainCard.getByTestId('card-comment-count')).not.toBeVisible();
+
+    // QA evidence for the ticket: both cards with their badges in one shot.
+    await page.screenshot({ path: path.join(testInfo.outputDir, 'card-metadata-badges.png') });
+  });
+
   test('relate & unrelate tasks, second-parent conflict, and claim/release controls', async ({
     page,
   }) => {

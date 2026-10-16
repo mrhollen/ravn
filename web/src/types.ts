@@ -110,6 +110,10 @@ export interface TaskSummary {
   version: number;
   created_at: string;
   updated_at: string;
+  // Board-snapshot card badges (omitted/absent on list + create/update rows):
+  ac_total?: number; // acceptance-criteria count, omitted when none
+  ac_done?: number; // how many of them are done
+  comment_count?: number; // comment-thread length, omitted when zero
 }
 
 export interface BlockerRef {

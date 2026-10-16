@@ -318,3 +318,30 @@ func (s *Acceptance) RemoveAC(ctx context.Context, actor domain.Actor, taskID do
 	})
 	return err
 }
+
+// Progress returns the (total, done) acceptance-criterion aggregate for each
+// of the given tasks — in ONE grouped read (no N+1). It backs the board
+// snapshot's per-card AC-progress badge: counts only, no criterion text.
+// Tasks with no criteria at all are omitted from the result map; empty input
+// returns an empty map without querying. The read runs through the unit of
+// work for uniformity and is read-only: it appends no events and touches
+// nothing. (Task existence is not checked — unknown tasks simply stay absent.)
+func (s *Acceptance) Progress(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]TaskACProgress, error) {
+	if len(taskIDs) == 0 {
+		return map[domain.ID]TaskACProgress{}, nil
+	}
+	var out map[domain.ID]TaskACProgress
+	var r Repos
+	err := s.uow.Run(ctx, &r, func() error {
+		progress, perr := r.ACs.ProgressByTasks(ctx, taskIDs)
+		if perr != nil {
+			return perr
+		}
+		out = progress
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}

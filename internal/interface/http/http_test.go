@@ -1606,6 +1606,24 @@ func TestBoardSnapshot(t *testing.T) {
 	patchTask(t, stk, doneT.ID, 1, map[string]any{"status": "doing"})
 	patchTask(t, stk, doneT.ID, 2, map[string]any{"status": "done"})
 
+	// Badge fields: give "low priority todo" 3 criteria (1 done) and 2 comments;
+	// every other board task keeps zero badge data (fields omitted on the wire).
+	for _, text := range []string{"ac one", "ac two", "ac three"} {
+		doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+low.ID+"/acceptance-criteria", map[string]any{
+			"actor": actor("eve"), "text": text,
+		})
+	}
+	if code, _ := doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+low.ID+"/acceptance-criteria/1", map[string]any{
+		"actor": actor("eve"), "done": true,
+	}); code != http.StatusOK {
+		t.Fatalf("toggle ac 1 = %d, want 200", code)
+	}
+	for i := 0; i < 2; i++ {
+		doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+low.ID+"/comments", map[string]any{
+			"actor": actor("eve"), "kind": "note", "body": "board badge comment",
+		})
+	}
+
 	code, body := doReq(t, stk.Handler, "GET", "/api/v1/projects/"+p.ID+"/board", nil)
 	if code != http.StatusOK {
 		t.Fatalf("GET board = %d, want 200 (body %s)", code, string(body))
@@ -1621,6 +1639,37 @@ func TestBoardSnapshot(t *testing.T) {
 	wantIDs(t, idsOf(b.Tasks.Todo), []string{high.ID, low.ID}, "todo column (canonical order)")
 	wantIDs(t, idsOf(b.Tasks.Doing), []string{doingT.ID}, "doing column")
 	wantIDs(t, idsOf(b.Tasks.Done), []string{doneT.ID}, "done column")
+
+	// AC1/AC2/AC3: per-card badge fields ride on the summary rows.
+	findRow := func(id string) *taskSummaryDTO {
+		for i := range b.Tasks.Todo {
+			if b.Tasks.Todo[i].ID == id {
+				return &b.Tasks.Todo[i]
+			}
+		}
+		return nil
+	}
+	lowRow := findRow(low.ID)
+	if lowRow == nil {
+		t.Fatalf("low row missing from board todo column")
+	}
+	if lowRow.AcTotal != 3 || lowRow.AcDone != 1 {
+		t.Fatalf("low ac badge = %d/%d, want 1/3", lowRow.AcDone, lowRow.AcTotal)
+	}
+	if lowRow.CommentCount != 2 {
+		t.Fatalf("low comment badge = %d, want 2", lowRow.CommentCount)
+	}
+	for _, col := range [][]taskSummaryDTO{b.Tasks.Todo, b.Tasks.Doing, b.Tasks.Done} {
+		for i := range col {
+			row := &col[i]
+			if row.ID == low.ID {
+				continue
+			}
+			if row.AcTotal != 0 || row.AcDone != 0 || row.CommentCount != 0 {
+				t.Fatalf("task %s badge fields = %+v, want all zero (omitted)", row.ID, *row)
+			}
+		}
+	}
 
 	// Empty board shape stays well-formed ([] not null).
 	empty := createProject(t, stk, "Empty Board")

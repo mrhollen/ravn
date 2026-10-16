@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mrhollen/crowban/internal/application"
@@ -192,6 +193,42 @@ func (r *acceptanceCriterionRepo) Delete(ctx context.Context, taskID domain.ID, 
 		return domain.AcceptanceCriterion{}, domain.ErrNotFound
 	}
 	return c, nil
+}
+
+// ProgressByTasks returns (total, done) criterion aggregates for each given
+// task in ONE grouped query — no N+1. Tasks with no criteria are omitted from
+// the map; empty input short-circuits without SQL.
+func (r *acceptanceCriterionRepo) ProgressByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]application.TaskACProgress, error) {
+	out := make(map[domain.ID]application.TaskACProgress, len(taskIDs))
+	if len(taskIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(taskIDs))
+	args := make([]any, len(taskIDs))
+	for i, id := range taskIDs {
+		placeholders[i] = "?"
+		args[i] = string(id)
+	}
+	rows, err := r.q.QueryContext(ctx,
+		`SELECT task_id, COUNT(*), COALESCE(SUM(done), 0) FROM acceptance_criterion WHERE task_id IN (`+strings.Join(placeholders, ", ")+`) GROUP BY task_id`,
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("count acceptance criteria for %d tasks: %w", len(taskIDs), err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			taskID string
+			total  int64
+			done   int64
+		)
+		if err := rows.Scan(&taskID, &total, &done); err != nil {
+			return nil, fmt.Errorf("scan acceptance criterion progress row: %w", err)
+		}
+		out[domain.ID(taskID)] = application.TaskACProgress{Total: total, Done: done}
+	}
+	return out, rows.Err()
 }
 
 // scanAcceptanceCriterion maps one row (in acceptanceColumns order) to a

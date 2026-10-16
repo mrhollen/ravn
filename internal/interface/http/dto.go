@@ -42,6 +42,15 @@ type taskSummaryDTO struct {
 	Version        int       `json:"version"`
 	CreatedAt      string    `json:"created_at"`
 	UpdatedAt      string    `json:"updated_at"`
+
+	// Per-card progress badges, populated by the board snapshot only; omitted
+	// (zero) on list/create/update rows so other consumers keep the compact
+	// shape. AcTotal = acceptance-criteria count, AcDone = how many are done,
+	// CommentCount = comment-thread length. The board fills them via one
+	// grouped query per child table — no N+1.
+	AcTotal      int `json:"ac_total,omitempty"`
+	AcDone       int `json:"ac_done,omitempty"`
+	CommentCount int `json:"comment_count,omitempty"`
 }
 
 func toSummary(t domain.Task) taskSummaryDTO {
