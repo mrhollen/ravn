@@ -216,4 +216,3 @@ func ValidateOpenCodeVariant(variant string) error {
 	}
 	return nil
 }
-
