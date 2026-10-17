@@ -8,6 +8,7 @@ import {
   dateInputToIso,
   dueCalendarDate,
   fmtDueDate,
+  formatClaimCountdown,
   isOverdue,
   localCalendarToday,
   safeStorage,
@@ -2574,4 +2575,101 @@ test("OpenCode: index.html wires all configurable agent and variant test IDs", (
   assert.match(html, /data-testid="task-opencode-variant-input"/);
   assert.match(html, /data-testid="opencode-config-start-btn"/);
 });
+
+// ---------------------------------------------------------------------------
+// Operational bar consolidation (task 01M55HBQP76ZPA33KNAB7D2A0V)
+// ---------------------------------------------------------------------------
+
+test("Countdown: formatClaimCountdown formats durations and handles boundaries cleanly", () => {
+  const baseNow = 1700000000000;
+  // Empty, null, undefined, invalid
+  assert.equal(formatClaimCountdown(undefined, baseNow), "");
+  assert.equal(formatClaimCountdown(null, baseNow), "");
+  assert.equal(formatClaimCountdown("", baseNow), "");
+  assert.equal(formatClaimCountdown("not-a-date", baseNow), "");
+
+  // Expired / 0 seconds
+  assert.equal(formatClaimCountdown(new Date(baseNow).toISOString(), baseNow), "0:00");
+  assert.equal(formatClaimCountdown(new Date(baseNow - 10000).toISOString(), baseNow), "0:00");
+
+  // 5 seconds
+  assert.equal(formatClaimCountdown(new Date(baseNow + 5000).toISOString(), baseNow), "0:05");
+
+  // 14 minutes 59 seconds
+  assert.equal(formatClaimCountdown(new Date(baseNow + (14 * 60 + 59) * 1000).toISOString(), baseNow), "14:59");
+
+  // 60 minutes
+  assert.equal(formatClaimCountdown(new Date(baseNow + 60 * 60 * 1000).toISOString(), baseNow), "60:00");
+
+  // 75 minutes 3 seconds
+  assert.equal(formatClaimCountdown(new Date(baseNow + (75 * 60 + 3) * 1000).toISOString(), baseNow), "75:03");
+});
+
+test("Countdown: crowbanApp.claimCountdown references reactive nowTick", () => {
+  const app = crowbanApp() as any;
+  const baseNow = 1700000000000;
+  app.nowTick = baseNow;
+
+  const expiry = new Date(baseNow + 90000).toISOString(); // 1m 30s
+  assert.equal(app.claimCountdown({ claim_expires_at: expiry }), "1:30");
+
+  // Fast forward nowTick by 10s
+  app.nowTick += 10000;
+  assert.equal(app.claimCountdown({ claim_expires_at: expiry }), "1:20");
+
+  // Missing or expired
+  assert.equal(app.claimCountdown(null), "");
+  assert.equal(app.claimCountdown({}), "");
+  app.nowTick += 100000;
+  assert.equal(app.claimCountdown({ claim_expires_at: expiry }), "0:00");
+});
+
+test("OperationalBar: status menu and owner popover toggle and mutual exclusion", () => {
+  const app = crowbanApp() as any;
+  assert.equal(app.statusMenuOpen, false);
+  assert.equal(app.ownerPopoverOpen, false);
+
+  // Open status menu
+  app.toggleStatusMenu();
+  assert.equal(app.statusMenuOpen, true);
+  assert.equal(app.ownerPopoverOpen, false);
+
+  // Toggling owner popover closes status menu
+  app.detail = { id: "task-1", assignee: { name: "alice", type: "agent" } };
+  app.toggleOwnerPopover();
+  assert.equal(app.statusMenuOpen, false);
+  assert.equal(app.ownerPopoverOpen, true);
+  assert.equal(app.assigneeInputName, "alice");
+  assert.equal(app.assigneeInputType, "agent");
+
+  // Escape key via dismissTop closes topmost popover
+  app.dismissTop();
+  assert.equal(app.ownerPopoverOpen, false);
+  assert.equal(app.statusMenuOpen, false);
+});
+
+test("OperationalBar: index.html markup contains unified card, split-capsules, and removes heartbeat", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+
+  // Unified card container
+  assert.match(html, /divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-zinc-50\/70 text-xs/);
+
+  // Status dropdown trigger and menu
+  assert.match(html, /data-testid="status-dropdown-trigger"/);
+  assert.match(html, /role="group" aria-label="Status"/);
+
+  // Owner popover trigger
+  assert.match(html, /data-testid="owner-popover-trigger"/);
+  assert.match(html, /aria-label="Durable Owner"/);
+
+  // Claim controls
+  assert.match(html, /role="group" aria-label="Claim Controls"/);
+  assert.match(html, /claimCountdown\(detail\)/);
+  assert.match(html, /class="live-countdown/);
+
+  // Heartbeat button MUST NOT be present in index.html
+  assert.doesNotMatch(html, /heartbeatTask\(\)/);
+  assert.doesNotMatch(html, />\s*Heartbeat\s*</);
+});
+
 

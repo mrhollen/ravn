@@ -554,8 +554,8 @@ test.describe('theme (dark mode)', () => {
       expectContrast('drawer "No artifacts attached."', await sampleContrast(page.getByText('No artifacts attached.', { exact: true })));
       expectContrast('drawer "No relations"', await sampleContrast(page.getByText('No relations', { exact: true })));
       expectContrast(
-        'drawer lease note',
-        await sampleContrast(page.getByText(/No active lease/)),
+        'drawer claim button',
+        await sampleContrast(page.locator('[role="group"][aria-label="Claim Controls"]').getByRole('button', { name: 'Claim', exact: true })),
       );
 
       // Activity log entries (seeded task has creation events).
@@ -589,20 +589,15 @@ test.describe('theme (dark mode)', () => {
         await sampleContrast(page.locator('article').getByText(/until \d{2}:\d{2}/)),
       );
 
-      // Drawer claim box: "Expires:" row + its hint span (on the translucent indigo surface).
+      // Drawer claim split-capsule: holder name + live countdown meet WCAG 1.4.3.
       await openDrawer(page);
       expectContrast(
-        'drawer "Expires:" label',
-        await sampleContrast(page.getByText('Expires:', { exact: true })),
+        'drawer claim holder name',
+        await sampleContrast(page.locator('[role="group"][aria-label="Claim Controls"]').getByText('e2e-seed')),
       );
       expectContrast(
-        'drawer claim-expiry hint',
-        await sampleContrast(page.locator('aside').getByText(/\(until \d{2}:\d{2}/)),
-      );
-      // "Held by" line inherits the box's indigo-950 text on the indigo surface.
-      expectContrast(
-        'drawer "Held by" line',
-        await sampleContrast(page.locator('aside').getByText(/Held by/)),
+        'drawer claim live countdown',
+        await sampleContrast(page.locator('.live-countdown')),
       );
     });
   });
@@ -650,14 +645,14 @@ test.describe('theme (dark mode)', () => {
         .first();
       expectContrast('drawer activity entry', await sampleContrast(activityLi));
 
-      // Claim box on the translucent dark indigo surface.
+      // Claim split-capsule on the dark surface: holder name + live countdown.
       expectContrast(
-        'drawer "Expires:" label',
-        await sampleContrast(page.getByText('Expires:', { exact: true })),
+        'drawer claim holder name',
+        await sampleContrast(page.locator('[role="group"][aria-label="Claim Controls"]').getByText('e2e-seed')),
       );
       expectContrast(
-        'drawer claim-expiry hint',
-        await sampleContrast(page.locator('aside').getByText(/\(until \d{2}:\d{2}/)),
+        'drawer claim live countdown',
+        await sampleContrast(page.locator('.live-countdown')),
       );
 
       // "Unsaved changes" chip (amber) on the dark drawer.

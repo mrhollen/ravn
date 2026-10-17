@@ -263,11 +263,15 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     const desc = panel.locator('.md-body', { hasText: 'line one' });
     await expect(desc).toBeVisible();
 
-    // Status segmented control (all three destinations, legal ones enabled).
+    // Status control (dropdown trigger + options menu)
     const statusGroup = panel.locator('[role="group"][aria-label="Status"]');
+    const statusTrigger = statusGroup.getByTestId('status-dropdown-trigger');
+    await expect(statusTrigger).toBeVisible();
+    await statusTrigger.click();
     for (const label of ['To Do', 'Doing', 'Done']) {
       await expect(statusGroup.getByRole('button', { name: label })).toBeVisible();
     }
+    await page.keyboard.press('Escape');
 
     // Owner (durable assignee) chip.
     await expect(panel.getByText('fixture-owner').first()).toBeVisible();
@@ -357,8 +361,9 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     expect(b1.title).toBe('B renamed from full page');
     expect(b1.priority).toBe(4);
 
-    // --- status via the segmented control ----------------------------------
+    // --- status via the dropdown ----------------------------------
     const statusGroup = panel.locator('[role="group"][aria-label="Status"]');
+    await statusGroup.getByTestId('status-dropdown-trigger').click();
     await statusGroup.getByRole('button', { name: 'Doing' }).click();
     await expect(async () => {
       const t = await getJson(`${serverUrl}/api/v1/tasks/${taskB.id}`);
@@ -472,6 +477,7 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
 
     // Status control is tappable at this width too (todo → doing).
     const statusGroup = panel.locator('[role="group"][aria-label="Status"]');
+    await statusGroup.getByTestId('status-dropdown-trigger').click();
     await statusGroup.getByRole('button', { name: 'Doing' }).click();
     await expect(async () => {
       const t = await getJson(`${serverUrl}/api/v1/tasks/${taskA.id}`);

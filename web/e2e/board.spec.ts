@@ -240,13 +240,15 @@ test.describe('Web E2E test suite', () => {
     const drawerTitle = page.locator('aside h2', { hasText: 'Task To Move' });
     await expect(drawerTitle).toBeVisible();
 
-    // Move task to "Doing" via the status button group
+    // Move task to "Doing" via the status dropdown
     const statusGroup = page.getByRole('group', { name: 'Status' });
+    const statusTrigger = statusGroup.getByTestId('status-dropdown-trigger');
+    await statusTrigger.click();
     const doingBtn = statusGroup.getByRole('button', { name: 'Doing' });
     await doingBtn.click();
 
-    // Verify status button shows active
-    await expect(doingBtn).toHaveAttribute('aria-pressed', 'true');
+    // Verify status trigger shows active
+    await expect(statusTrigger).toContainText('Doing');
 
     // Close detail drawer
     const closeBtn = page.locator('aside button[aria-label="Close"]').first();
@@ -448,38 +450,28 @@ test.describe('Web E2E test suite', () => {
     const drawer = page.locator('aside');
     await expect(drawer.getByRole('heading', { name: 'Child Task' })).toBeVisible();
 
-    // Check initial unclaimed state
-    await expect(drawer.getByText('Unclaimed')).toBeVisible();
-    const claimBtn = drawer.getByRole('button', { name: 'Claim', exact: true });
-    const releaseBtn = drawer.getByRole('button', { name: 'Release', exact: true });
-    const heartbeatBtn = drawer.getByRole('button', { name: 'Heartbeat', exact: true });
-
+    // Check initial unclaimed state in claim controls (AC 5, AC 6)
+    const claimControls = drawer.locator('[role="group"][aria-label="Claim Controls"]');
+    const claimBtn = claimControls.getByRole('button', { name: 'Claim', exact: true });
+    await expect(claimBtn).toBeVisible();
     await expect(claimBtn).toBeEnabled();
-    await expect(releaseBtn).toBeDisabled();
-    await expect(heartbeatBtn).toBeDisabled();
-    await expect(releaseBtn).toHaveClass(/btn-secondary/);
-    await expect(heartbeatBtn).toHaveClass(/btn-secondary/);
 
     // Click Claim
     await claimBtn.click();
 
-    // Live update check: should now be Claimed by Human Tester
-    await expect(drawer.getByText('Claimed', { exact: true })).toBeVisible();
-    await expect(drawer.locator('b', { hasText: 'Human Tester' })).toBeVisible();
-    await expect(drawer.getByText('Expires:')).toBeVisible();
+    // Live update check: split capsule shows holder and live countdown, release button enabled
+    await expect(claimControls.getByText('Human Tester')).toBeVisible();
+    await expect(claimControls.locator('.live-countdown')).toBeVisible();
+    const releaseBtn = claimControls.getByRole('button', { name: 'Release', exact: true });
+    await expect(releaseBtn).toBeVisible();
     await expect(releaseBtn).toBeEnabled();
-    await expect(heartbeatBtn).toBeEnabled();
-
-    // Click Heartbeat
-    await heartbeatBtn.click();
-    await expect(page.getByText('Heartbeat recorded — lease extended')).toBeVisible();
 
     // Click Release
     await releaseBtn.click();
     await expect(page.getByText('Released claim on task')).toBeVisible();
-    await expect(drawer.getByText('Unclaimed')).toBeVisible();
-    await expect(releaseBtn).toBeDisabled();
-    await expect(heartbeatBtn).toBeDisabled();
+    await expect(claimBtn).toBeVisible();
+    await expect(claimBtn).toBeEnabled();
+    await expect(releaseBtn).not.toBeVisible();
 
     // -------------------------------------------------------------------------
     // Step 4: Add relation and verify both views (AC 1)
@@ -662,19 +654,22 @@ test.describe('Web E2E test suite', () => {
     await expect(drawer.getByRole('heading', { name: 'Gamma Low Task' })).toBeVisible();
     await expect(drawer.getByText('Unassigned')).toBeVisible();
 
-    // Set assignee via inline drawer picker
+    // Set assignee via owner popover
+    const ownerTrigger = drawer.getByTestId('owner-popover-trigger');
+    await ownerTrigger.click();
     const assigneeInput = drawer.getByPlaceholder('Assignee name (e.g. alice, agent-1)');
+    await expect(assigneeInput).toBeVisible();
     await assigneeInput.fill('charlie-human');
     await drawer.getByRole('button', { name: 'Assign' }).click();
     await expect(page.getByText('Assigned to charlie-human')).toBeVisible();
-    await expect(drawer.locator('span', { hasText: 'Owner' }).first()).toBeVisible();
     await expect(drawer.getByText('charlie-human').first()).toBeVisible();
 
     // Now claim the task to verify ephemeral claim lease is distinct from durable owner
-    await drawer.getByRole('button', { name: 'Claim', exact: true }).click();
+    const claimControls = drawer.locator('[role="group"][aria-label="Claim Controls"]');
+    await claimControls.getByRole('button', { name: 'Claim', exact: true }).click();
     await expect(page.getByText('Claimed task as')).toBeVisible();
-    await expect(drawer.getByText('Claimed', { exact: true })).toBeVisible();
-    await expect(drawer.getByText('Owner', { exact: true }).first()).toBeVisible();
+    await expect(claimControls.locator('.live-countdown')).toBeVisible();
+    await expect(drawer.getByText('charlie-human').first()).toBeVisible();
 
     // Close drawer and verify card shows both owner and claimer distinctly
     const closeBtn = drawer.locator('button[aria-label="Close"]').first();
@@ -682,8 +677,9 @@ test.describe('Web E2E test suite', () => {
     const card3Updated = page.locator('article', { hasText: 'Gamma Low Task' });
     await expect(card3Updated.locator('span.bg-amber-50')).toContainText('charlie-human');
 
-    // Reopen drawer, clear assignee
+    // Reopen drawer, clear assignee via owner popover
     await card3Updated.click();
+    await ownerTrigger.click();
     await drawer.getByRole('button', { name: 'Clear' }).click();
     await expect(page.getByText('Assignee cleared')).toBeVisible();
     await expect(drawer.getByText('Unassigned')).toBeVisible();
@@ -1294,8 +1290,10 @@ test.describe('Web E2E test suite', () => {
     const claimed = await claimRes.json();
 
     // Drawer reflects claim live
-    await expect(drawer.getByText('Claimed', { exact: true })).toBeVisible({ timeout: 10000 });
-    await expect(drawer.locator('text=Held by agent-worker')).toBeVisible();
+    const claimControls = drawer.locator('[role="group"][aria-label="Claim Controls"]');
+    await expect(claimControls.getByText('agent-worker')).toBeVisible({ timeout: 10000 });
+    await expect(claimControls.locator('.live-countdown')).toBeVisible();
+    await expect(claimControls.getByRole('button', { name: 'Release', exact: true })).toBeVisible();
 
     // External agent posts a comment via API
     const commentRes = await fetch(`${serverUrl}/api/v1/tasks/${task.id}/comments`, {
@@ -1325,9 +1323,10 @@ test.describe('Web E2E test suite', () => {
     });
     expect(finishRes.ok).toBe(true);
 
-    // Drawer status button reflects "Done" as active
-    const doneBtn = drawer.getByRole('button', { name: 'Done' });
-    await expect(doneBtn).toHaveAttribute('aria-pressed', 'true', { timeout: 10000 });
+    // Drawer status dropdown reflects "Done" as active
+    const statusGroup = drawer.locator('[role="group"][aria-label="Status"]');
+    const statusTrigger = statusGroup.getByTestId('status-dropdown-trigger');
+    await expect(statusTrigger).toContainText('Done', { timeout: 10000 });
 
     // Close drawer
     await drawer.locator('button[aria-label="Close"]').first().click();
@@ -1614,8 +1613,7 @@ test.describe('Web E2E test suite', () => {
       await expect(drawer.locator('text=OpenCode autonomous session')).toBeVisible();
 
       // Verify task claim reflects opencode
-      await expect(drawer.getByText('Claimed', { exact: true })).toBeVisible();
-      await expect(drawer.locator('text=Held by opencode')).toBeVisible();
+      await expect(drawer.locator('[role="group"][aria-label="Claim Controls"]').getByText('opencode')).toBeVisible();
     } finally {
       await new Promise<void>((resolve) => mockOpenCodeServer.close(() => resolve()));
     }
@@ -1893,11 +1891,14 @@ test.describe('Web E2E test suite', () => {
     await expect(drawer).toBeVisible();
 
     const statusGroup = page.getByRole('group', { name: 'Status' });
+    const statusTrigger = statusGroup.getByTestId('status-dropdown-trigger');
+    await statusTrigger.click();
     const doingBtn = statusGroup.getByRole('button', { name: 'Doing' });
     await doingBtn.click();
-    await expect(doingBtn).toHaveAttribute('aria-pressed', 'true');
+    await expect(statusTrigger).toContainText('Doing');
 
     // Step 4: Attempt to move to Done while blocked -> rejected with blocker error toast
+    await statusTrigger.click();
     const doneBtn = statusGroup.getByRole('button', { name: 'Done' });
     await doneBtn.click();
 
@@ -1905,8 +1906,7 @@ test.describe('Web E2E test suite', () => {
     const toast = page.getByTestId('toast-stack');
     await expect(toast).toContainText('blocked by 1 unresolved blocker(s)');
     // Status must remain Doing
-    await expect(doingBtn).toHaveAttribute('aria-pressed', 'true');
-    await expect(doneBtn).toHaveAttribute('aria-pressed', 'false');
+    await expect(statusTrigger).toContainText('Doing');
 
     // Step 5: Resolve blocker via API (move blocker to doing then done)
     const moveB1 = await fetch(`${serverUrl}/api/v1/tasks/${blocker.id}`, {
@@ -1924,10 +1924,10 @@ test.describe('Web E2E test suite', () => {
     expect(moveB2.ok).toBe(true);
 
     // Step 6: Attempt to move to Done while ACs are incomplete -> rejected with the "incomplete acceptance criteria" invalid-input toast
+    await statusTrigger.click();
     await doneBtn.click();
     await expect(toast).toContainText('incomplete acceptance criteria');
-    await expect(doingBtn).toHaveAttribute('aria-pressed', 'true');
-    await expect(doneBtn).toHaveAttribute('aria-pressed', 'false');
+    await expect(statusTrigger).toContainText('Doing');
 
     // Step 7: Complete all acceptance criteria via UI checkboxes
     const ac1Box = drawer.locator('li', { hasText: 'Must be tested in browser' }).locator('input[type="checkbox"]');
@@ -1938,9 +1938,9 @@ test.describe('Web E2E test suite', () => {
     await expect(ac2Box).toBeChecked();
 
     // Step 8: Move to Done now that blockers are resolved and ACs are checked -> succeeds!
+    await statusTrigger.click();
     await doneBtn.click();
-    await expect(doneBtn).toHaveAttribute('aria-pressed', 'true');
-    await expect(doingBtn).toHaveAttribute('aria-pressed', 'false');
+    await expect(statusTrigger).toContainText('Done');
   });
 
   // -----------------------------------------------------------------------

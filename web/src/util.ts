@@ -131,6 +131,19 @@ export function claimHint(t: Pick<TaskSummary, "claimed_by" | "claim_expires_at"
   return `until ${timeOfDay(t.claim_expires_at)} (${humanDuration(diff)})`;
 }
 
+/** Real-time MM:SS countdown until lease expiry for the claim capsule. */
+export function formatClaimCountdown(claimExpiresAt?: string | null, nowMs = Date.now()): string {
+  if (!claimExpiresAt) return "";
+  const target = Date.parse(claimExpiresAt);
+  if (Number.isNaN(target)) return "";
+  const diffMs = target - nowMs;
+  if (diffMs <= 0) return "0:00";
+  const totalSec = Math.floor(diffMs / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s < 10 ? "0" : ""}${s}`;
+}
+
 /** Priority badge classes — p0 (red/urgent) through p5 (zinc/trivial). */
 const PRIORITY_CLASSES = [
   "bg-red-100 text-red-700 ring-red-200 dark:bg-red-950 dark:text-red-300 dark:ring-red-800",

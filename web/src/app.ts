@@ -44,6 +44,7 @@ import {
   dateInputToIso,
   dueCalendarDate,
   dueLabel,
+  formatClaimCountdown,
   isOverdue,
   localCalendarToday,
   initials,
@@ -1699,6 +1700,8 @@ export function crowbanApp() {
       this.detail = null;
       // Never carry a previous task's error state into the one being opened.
       this.detailLoadError = null;
+      this.statusMenuOpen = false;
+      this.ownerPopoverOpen = false;
       this.editingTask = false;
       this.totalComments = 0;
       this.loadingOlderComments = false;
@@ -1748,6 +1751,8 @@ export function crowbanApp() {
     closeDetail(): void {
       const wasFullPage = this.fullPageOpen;
       const pushedEntry = this.fullPagePushed;
+      this.statusMenuOpen = false;
+      this.ownerPopoverOpen = false;
       this.editingTask = false;
       // The drawer's error state never outlives its drawer (same rule as the
       // notes scratchpad). openTask() also clears it, so a re-open starts clean.
@@ -2120,6 +2125,7 @@ export function crowbanApp() {
     assigneeBusy: false,
 
     async saveAssignee(): Promise<void> {
+      this.ownerPopoverOpen = false;
       const d = this.detail;
       if (!d || this.assigneeBusy) return;
       const name = this.assigneeInputName.trim();
@@ -2128,6 +2134,7 @@ export function crowbanApp() {
     },
 
     async clearAssignee(): Promise<void> {
+      this.ownerPopoverOpen = false;
       this.assigneeInputName = "";
       await this.updateAssignee("", "human");
     },
@@ -2667,10 +2674,29 @@ export function crowbanApp() {
       }
     },
 
+    // -------------------------------------------------------- operational bar
+    statusMenuOpen: false,
+    ownerPopoverOpen: false,
+
+    toggleStatusMenu(): void {
+      this.statusMenuOpen = !this.statusMenuOpen;
+      this.ownerPopoverOpen = false;
+    },
+
+    toggleOwnerPopover(): void {
+      this.ownerPopoverOpen = !this.ownerPopoverOpen;
+      this.statusMenuOpen = false;
+      if (this.ownerPopoverOpen && this.detail) {
+        this.assigneeInputName = this.detail.assignee?.name ?? "";
+        this.assigneeInputType = (this.detail.assignee?.type as "human" | "agent") || "human";
+      }
+    },
+
     /** Version-guarded status move from detail drawer. On 409 version_conflict:
      *  re-read the task, re-apply the SAME intent once with the fresh version;
      *  a second conflict just refreshes and says so (per docs/API.md error contract). */
     async moveStatus(status: Status): Promise<void> {
+      this.statusMenuOpen = false;
       const t = this.detail;
       // Per-task: only the open task's own in-flight move blocks its buttons.
       if (!t || this.isTaskBusy(t.id) || t.status === status) return;
@@ -3125,6 +3151,13 @@ export function crowbanApp() {
 
     // ---------------------------------------------------------------- claims
     claimBusy: false,
+    nowTick: Date.now(),
+    _tickerId: null as ReturnType<typeof setInterval> | null,
+
+    /** Live-ticking MM:SS countdown until lease expiry for the claim capsule. */
+    claimCountdown(t?: Pick<TaskSummary, "claim_expires_at"> | null): string {
+      return formatClaimCountdown(t?.claim_expires_at, this.nowTick);
+    },
 
     async claimCurrentTask(): Promise<void> {
       const d = this.detail;
@@ -3362,6 +3395,8 @@ export function crowbanApp() {
         this.cancelEditing();
       }
       else if (this.showTaskOpenCodeConfig) this.showTaskOpenCodeConfig = false;
+      else if (this.statusMenuOpen) this.statusMenuOpen = false;
+      else if (this.ownerPopoverOpen) this.ownerPopoverOpen = false;
       else if (this.detailOpen) this.requestCloseDetail();
       else if (this.showNewTask) this.requestCloseNewTask();
       else if (this.projectMenuOpen) this.closeProjectMenu(true); // header dropdowns are topmost
@@ -3392,6 +3427,7 @@ export function crowbanApp() {
     isOverdue,
     dueLabel,
     claimHint,
+    formatClaimCountdown,
     actorLabel,
     initials,
     shortId,
@@ -3411,6 +3447,12 @@ export function crowbanApp() {
 
     // ---------------------------------------------------------------------- init
     async init(): Promise<void> {
+      this._tickerId = setInterval(() => {
+        this.nowTick = Date.now();
+      }, 1000);
+      if (typeof (this._tickerId as any)?.unref === "function") {
+        (this._tickerId as any).unref();
+      }
       // Coalescer for SSE-triggered board/projects reloads (handleSseEvent):
       // a burst of events → ONE round after the quiet window. Created before any
       // network work so even an early event burst can't fire uncoalesced loads.
@@ -3420,6 +3462,7 @@ export function crowbanApp() {
       }, SSE_RELOAD_DEBOUNCE_MS);
       if (typeof window !== "undefined") {
         window.addEventListener("beforeunload", () => {
+          if (this._tickerId) clearInterval(this._tickerId);
           this.disconnectSse(true);
         });
         // Track live OS preference changes — only relevant while in system mode.
