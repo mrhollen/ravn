@@ -768,6 +768,65 @@ test.describe('Web E2E test suite', () => {
     await expect(deltaCard.locator('span.bg-amber-50')).toContainText('elena-human');
   });
 
+  test('priority filter dropdown labels are identical to creation modal labels (P0..P5)', async ({
+    page,
+  }) => {
+    // Regression lock: the board FILTER select and the task CREATION modal must
+    // render their priority option labels from the same single source of truth
+    // (priorityName in src/util.ts). The filter once hardcoded stale names
+    // ("P3 (normal)", "P4 (low)", "P5 (backlog)") while the modals used
+    // dynamic ones ("P3 — low", "P4 — background", "P5 — trivial"). This test
+    // reads both rendered option lists and deep-compares them, so any drift in
+    // wording, ordering, or format fails here.
+
+    // Seed a fresh project (self-contained per repo convention).
+    const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Priority Label Consistency Project',
+        description: 'Seeded for the filter/modal priority label parity regression test',
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(projRes.ok).toBe(true);
+    const project = await projRes.json();
+
+    // Load UI and select the seeded project via the real dropdown.
+    await page.goto(serverUrl);
+    await expect(page).toHaveTitle('crowban');
+    await selectProjectViaDropdown(page, project.id);
+    await expectProjectSelected(page, 'Priority Label Consistency Project');
+
+    // Board filter bar: read all priority option labels (scoped to the filter
+    // select — the only select[x-model="filterPriority"] on the page).
+    const filterSelect = page.locator('select[x-model="filterPriority"]');
+    await expect(filterSelect).toBeVisible();
+    const filterLabels = (await filterSelect.locator('option').allTextContents()).map((s) => s.trim());
+
+    // The first option is the leading "All" sentinel; P0..P5 follow in order.
+    expect(filterLabels[0]).toBe('All');
+    const filterPriorityLabels = filterLabels.slice(1);
+
+    // Creation modal: open it, then read its priority option labels.
+    await page.getByRole('button', { name: '+ New task' }).click();
+    const createSelect = page.locator('select[x-model\\.number="newTask.priority"]');
+    await expect(createSelect).toBeVisible();
+    const createLabels = (await createSelect.locator('option').allTextContents()).map((s) => s.trim());
+
+    // Exactly six P0..P5 options, deep-equal between the two dropdowns.
+    expect(createLabels).toHaveLength(6);
+    expect(filterPriorityLabels).toEqual(createLabels);
+
+    // Lock in the shared label format: "P<digit> — <name>" (em dash), so a
+    // silent switch back to the old "P# (name)" style also fails this test.
+    for (let p = 0; p <= 5; p++) {
+      const labelShape = new RegExp(`^P${p} — `);
+      expect(createLabels[p]).toMatch(labelShape);
+      expect(filterPriorityLabels[p]).toMatch(labelShape);
+    }
+  });
+
   test('acceptance criteria management: add, inline edit, delete, and toggle', async ({ page }) => {
     // -------------------------------------------------------------------------
     // Seed project and task with 1 initial AC

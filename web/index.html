@@ -477,12 +477,9 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <span class="font-medium text-zinc-600 dark:text-zinc-400">Priority</span>
                 <select x-model="filterPriority" class="field py-1 text-xs">
                   <option value="">All</option>
-                  <option value="0">P0 (urgent)</option>
-                  <option value="1">P1 (high)</option>
-                  <option value="2">P2 (medium)</option>
-                  <option value="3">P3 (normal)</option>
-                  <option value="4">P4 (low)</option>
-                  <option value="5">P5 (backlog)</option>
+                  <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
+                    <option :value="p" x-text="'P' + p + ' — ' + priorityName(p)"></option>
+                  </template>
                 </select>
               </label>
 
