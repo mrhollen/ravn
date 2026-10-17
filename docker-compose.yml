@@ -28,6 +28,8 @@ services:
       CROWBAN_ARTIFACTS_DIR: "/artifacts"
       CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
       OPENCODE_MODEL: "${OPENCODE_MODEL:-llama.cpp/Qwen Medium Long Context}" # default model for autonomous sessions
+      OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
+      OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)
     volumes:
       - crowban-data:/data
       - crowban-artifacts:/artifacts
