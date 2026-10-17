@@ -220,6 +220,8 @@ func TestProjectsRepo_OpenCodeSettingsRoundTrip(t *testing.T) {
 		OpenCodeServerURL: "http://localhost:5555",
 		OpenCodeDirectory: "/home/test/workspace",
 		OpenCodeModel:     "llama.cpp/Qwen Nano",
+		OpenCodeAgent:     "build",
+		OpenCodeVariant:   "thinking",
 		CreatedAt:         time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC),
 		UpdatedAt:         time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC),
 	}
@@ -241,14 +243,16 @@ func TestProjectsRepo_OpenCodeSettingsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.OpenCodeServerURL != p.OpenCodeServerURL || got.OpenCodeDirectory != p.OpenCodeDirectory || got.OpenCodeModel != p.OpenCodeModel {
-		t.Fatalf("got OpenCode settings (%q, %q, %q), want (%q, %q, %q)", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel, p.OpenCodeServerURL, p.OpenCodeDirectory, p.OpenCodeModel)
+	if got.OpenCodeServerURL != p.OpenCodeServerURL || got.OpenCodeDirectory != p.OpenCodeDirectory || got.OpenCodeModel != p.OpenCodeModel || got.OpenCodeAgent != p.OpenCodeAgent || got.OpenCodeVariant != p.OpenCodeVariant {
+		t.Fatalf("got OpenCode settings (%q, %q, %q, %q, %q), want (%q, %q, %q, %q, %q)", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel, got.OpenCodeAgent, got.OpenCodeVariant, p.OpenCodeServerURL, p.OpenCodeDirectory, p.OpenCodeModel, p.OpenCodeAgent, p.OpenCodeVariant)
 	}
 
 	// Test Update
 	p.OpenCodeServerURL = "http://localhost:6666"
 	p.OpenCodeDirectory = "/home/test/newdir"
 	p.OpenCodeModel = "llama.cpp/Qwen Small"
+	p.OpenCodeAgent = "plan"
+	p.OpenCodeVariant = "high"
 	err = uow.Run(ctx, &r, func() error {
 		return r.Projects.Update(ctx, p)
 	})
@@ -264,8 +268,8 @@ func TestProjectsRepo_OpenCodeSettingsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get after update: %v", err)
 	}
-	if got.OpenCodeServerURL != "http://localhost:6666" || got.OpenCodeDirectory != "/home/test/newdir" || got.OpenCodeModel != "llama.cpp/Qwen Small" {
-		t.Fatalf("got updated settings (%q, %q, %q), want (http://localhost:6666, /home/test/newdir, llama.cpp/Qwen Small)", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel)
+	if got.OpenCodeServerURL != "http://localhost:6666" || got.OpenCodeDirectory != "/home/test/newdir" || got.OpenCodeModel != "llama.cpp/Qwen Small" || got.OpenCodeAgent != "plan" || got.OpenCodeVariant != "high" {
+		t.Fatalf("got updated settings (%q, %q, %q, %q, %q), want (http://localhost:6666, /home/test/newdir, llama.cpp/Qwen Small, plan, high)", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel, got.OpenCodeAgent, got.OpenCodeVariant)
 	}
 }
 

@@ -72,6 +72,12 @@
             <span class="min-w-0 flex-1">
               <span class="font-semibold" x-text="t.kind === 'error' ? 'Error: ' : ''"></span>
               <span x-text="t.msg"></span>
+              <template x-if="t.action">
+                <a :href="t.action.href" target="_blank" rel="noreferrer noopener"
+                   data-testid="toast-action-link"
+                   class="ml-1.5 inline-flex items-center gap-0.5 font-semibold text-indigo-600 underline decoration-indigo-300 hover:text-indigo-800 dark:text-indigo-400 dark:decoration-indigo-700 dark:hover:text-indigo-200"
+                   x-text="t.action.label + ' ↗'"></a>
+              </template>
             </span>
             <button type="button" @click="dismissToast(t.id)" aria-label="Dismiss notification"
                     class="-my-0.5 shrink-0 rounded p-1 text-zinc-600 hover:text-zinc-900 hover:bg-black/5 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-white/10 leading-none transition">
@@ -757,11 +763,25 @@ DOM-placed after the collapsible strip: on md+ it renders flush
             </label>
 
             <div class="border-t border-zinc-100 pt-3 flex flex-col gap-3">
-              <div class="flex items-center gap-1.5">
-                <svg class="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-                <span class="text-xs font-semibold text-zinc-900 dark:text-zinc-100">OpenCode Autonomous Agent Integration</span>
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-1.5">
+                  <svg class="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <span class="text-xs font-semibold text-zinc-900 dark:text-zinc-100">OpenCode Autonomous Agent Integration</span>
+                </div>
+                <template x-if="openCodeOptions?.reachable">
+                  <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-emerald-600/20 dark:bg-emerald-950/60 dark:text-emerald-300 dark:ring-emerald-500/30">
+                    <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                    Connected
+                  </span>
+                </template>
+                <template x-if="openCodeOptions && !openCodeOptions.reachable">
+                  <span class="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-600 ring-1 ring-zinc-400/20 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-600/30">
+                    <span class="h-1.5 w-1.5 rounded-full bg-zinc-400"></span>
+                    Offline (free-text fallback)
+                  </span>
+                </template>
               </div>
 
               <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
@@ -779,10 +799,84 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               </label>
 
               <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                OpenCode Model (providerID/modelID)
-                <input type="text" x-model="projectSettingsForm.opencode_model" placeholder="llama.cpp/Qwen Medium Long Context"
+                Default OpenCode Agent
+                <input type="text"
+                       list="project-opencode-agents-datalist"
+                       x-model="projectSettingsForm.opencode_agent"
+                       placeholder="build"
+                       data-testid="project-opencode-agent-input"
                        class="field font-mono text-xs w-full" />
+                <datalist id="project-opencode-agents-datalist">
+                  <template x-for="a in availableOpenCodeAgents()" :key="a.name">
+                    <option :value="a.name" x-text="a.name + (a.mode ? ' (' + a.mode + ')' : '')"></option>
+                  </template>
+                </datalist>
+                <div x-show="availableOpenCodeAgents().length > 0" class="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <span class="text-[11px] text-zinc-600 dark:text-zinc-400">Discovered:</span>
+                  <template x-for="a in availableOpenCodeAgents()" :key="a.name">
+                    <button type="button"
+                            @click="projectSettingsForm.opencode_agent = a.name"
+                            :class="projectSettingsForm.opencode_agent === a.name ? 'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-900/60 dark:text-indigo-200 dark:border-indigo-700' : 'bg-zinc-100 text-zinc-700 border-zinc-200 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700 dark:hover:bg-zinc-700'"
+                            class="rounded border px-1.5 py-0.5 font-mono text-[11px] transition">
+                      <span x-text="a.name"></span>
+                    </button>
+                  </template>
+                </div>
+                <span class="text-[11px] font-normal text-zinc-600 dark:text-zinc-400">Agent for dispatched sessions; defaults to "build" or $OPENCODE_AGENT</span>
+              </label>
+
+              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                OpenCode Model (providerID/modelID)
+                <input type="text"
+                       list="project-opencode-models-datalist"
+                       x-model="projectSettingsForm.opencode_model"
+                       placeholder="llama.cpp/Qwen Medium Long Context"
+                       data-testid="project-opencode-model-input"
+                       class="field font-mono text-xs w-full" />
+                <datalist id="project-opencode-models-datalist">
+                  <template x-for="m in availableOpenCodeModels()" :key="m.ref">
+                    <option :value="m.ref" x-text="m.model_name ? m.ref + ' (' + m.model_name + ')' : m.ref"></option>
+                  </template>
+                </datalist>
+                <div x-show="availableOpenCodeModels().length > 0" class="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <span class="text-[11px] text-zinc-600 dark:text-zinc-400">Discovered:</span>
+                  <template x-for="m in availableOpenCodeModels().slice(0, 6)" :key="m.ref">
+                    <button type="button"
+                            @click="projectSettingsForm.opencode_model = m.ref"
+                            :class="projectSettingsForm.opencode_model === m.ref ? 'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-900/60 dark:text-indigo-200 dark:border-indigo-700' : 'bg-zinc-100 text-zinc-700 border-zinc-200 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700 dark:hover:bg-zinc-700'"
+                            class="rounded border px-1.5 py-0.5 font-mono text-[11px] transition">
+                      <span x-text="m.ref"></span>
+                    </button>
+                  </template>
+                </div>
                 <span class="text-[11px] font-normal text-zinc-600 dark:text-zinc-400">Model for dispatched sessions; defaults to $OPENCODE_MODEL or the OpenCode server's default</span>
+              </label>
+
+              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                Default OpenCode Model Variant
+                <input type="text"
+                       list="project-opencode-variants-datalist"
+                       x-model="projectSettingsForm.opencode_variant"
+                       placeholder="e.g. low, medium, xhigh"
+                       data-testid="project-opencode-variant-input"
+                       class="field font-mono text-xs w-full" />
+                <datalist id="project-opencode-variants-datalist">
+                  <template x-for="v in availableOpenCodeVariantsFor(projectSettingsForm.opencode_model)" :key="v">
+                    <option :value="v" x-text="v"></option>
+                  </template>
+                </datalist>
+                <div x-show="availableOpenCodeVariantsFor(projectSettingsForm.opencode_model).length > 0" class="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <span class="text-[11px] text-zinc-600 dark:text-zinc-400">Available variants:</span>
+                  <template x-for="v in availableOpenCodeVariantsFor(projectSettingsForm.opencode_model)" :key="v">
+                    <button type="button"
+                            @click="projectSettingsForm.opencode_variant = v"
+                            :class="projectSettingsForm.opencode_variant === v ? 'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-900/60 dark:text-indigo-200 dark:border-indigo-700' : 'bg-zinc-100 text-zinc-700 border-zinc-200 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700 dark:hover:bg-zinc-700'"
+                            class="rounded border px-1.5 py-0.5 font-mono text-[11px] transition">
+                      <span x-text="v"></span>
+                    </button>
+                  </template>
+                </div>
+                <span class="text-[11px] font-normal text-zinc-600 dark:text-zinc-400">Variant for the selected model (e.g. "low", "medium", "xhigh"); defaults to $OPENCODE_VARIANT or empty</span>
               </label>
             </div>
 
@@ -1039,21 +1133,36 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       </svg>
                       Board
                     </button>
-                    <!-- Icon-only below sm: label span hidden, name carried by aria-label. -->
-                    <button
-                      type="button"
-                      @click="startTaskInOpenCode()"
-                      :disabled="startingOpenCode"
-                      :aria-label="startingOpenCode ? 'Starting OpenCode…' : 'Start Task in OpenCode'"
-                        class="flex min-w-0 max-w-[36vw] items-center gap-1.5 rounded-md bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 border border-indigo-200 shadow-sm transition hover:bg-indigo-100 hover:border-indigo-300 disabled:opacity-50 md:max-w-none dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800 dark:hover:bg-indigo-900 dark:hover:border-indigo-700"
-                       title="Launch autonomous OpenCode session for this task"
-                       data-testid="start-opencode-btn"
-                     >
-                       <svg class="h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                       </svg>
-                       <span class="hidden min-w-0 truncate sm:inline" x-text="startingOpenCode ? 'Starting OpenCode…' : 'Start Task in OpenCode'"></span>
-                     </button>
+                    <!-- OpenCode start split-button: button + config toggle -->
+                    <div class="relative inline-flex items-center rounded-md shadow-sm">
+                      <button
+                        type="button"
+                        @click="startTaskInOpenCode()"
+                        :disabled="startingOpenCode"
+                        :aria-label="startingOpenCode ? 'Starting OpenCode…' : 'Start Task in OpenCode'"
+                        class="flex min-w-0 max-w-[36vw] items-center gap-1.5 rounded-l-md bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 border border-r-0 border-indigo-200 shadow-sm transition hover:bg-indigo-100 hover:border-indigo-300 disabled:opacity-50 md:max-w-none dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800 dark:hover:bg-indigo-900 dark:hover:border-indigo-700"
+                        title="Launch autonomous OpenCode session for this task"
+                        data-testid="start-opencode-btn"
+                      >
+                        <svg class="h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <span class="hidden min-w-0 truncate sm:inline" x-text="startingOpenCode ? 'Starting OpenCode…' : 'Start Task in OpenCode'"></span>
+                      </button>
+                      <button
+                        type="button"
+                        @click="toggleOpenCodeConfig()"
+                        :aria-expanded="showTaskOpenCodeConfig"
+                        aria-label="Configure OpenCode session"
+                        title="Configure OpenCode agent and model variant"
+                        data-testid="opencode-config-toggle"
+                        class="inline-flex items-center rounded-r-md bg-indigo-50 px-1.5 py-1 text-xs font-medium text-indigo-700 border border-indigo-200 shadow-sm transition hover:bg-indigo-100 hover:border-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800 dark:hover:bg-indigo-900 dark:hover:border-indigo-700"
+                      >
+                        <svg class="h-3.5 w-3.5 transition-transform duration-150" :class="showTaskOpenCodeConfig ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    </div>
                     <!-- Drawer mode: entry point to the /tasks/<id> full-page view. -->
                      <button type="button" x-show="!fullPageOpen" x-cloak @click="openFullPage()"
                              data-testid="open-fullpage-btn" title="Open this task as a full page (shareable /tasks/&lt;id&gt; URL)"
@@ -1089,6 +1198,121 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         :title="'Copy full ID: ' + detail.id" @click="copyTaskId(detail.id)" data-testid="task-id-badge" x-text="shortId(detail.id)"></code>
                   <span>updated</span>
                   <time :title="detail.updated_at" x-text="relTime(detail.updated_at)"></time>
+                </div>
+              </div>
+
+              <!-- Per-task OpenCode session configuration panel -->
+              <div x-show="showTaskOpenCodeConfig" x-cloak data-testid="opencode-config-panel"
+                   class="border-b border-indigo-200 bg-indigo-50/80 p-4 text-xs dark:border-indigo-900/60 dark:bg-indigo-950/50 flex flex-col gap-3">
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center gap-1.5">
+                    <svg class="h-4 w-4 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                    </svg>
+                    <span class="font-semibold text-zinc-900 dark:text-zinc-100">Configure OpenCode Session</span>
+                  </div>
+                  <button type="button" @click="showTaskOpenCodeConfig = false" aria-label="Close config"
+                          class="text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 text-base leading-none">&times;</button>
+                </div>
+                <p class="text-[11px] text-zinc-600 dark:text-zinc-400 leading-normal">
+                  Override the agent, model, and model variant for this dispatch. Leave as-is to use project defaults.
+                </p>
+
+                <div class="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                  <!-- Agent -->
+                  <label class="flex flex-col gap-1">
+                    <span class="font-medium text-zinc-700 dark:text-zinc-300">Agent</span>
+                    <select x-show="availableOpenCodeAgents().length > 0"
+                            data-testid="task-opencode-agent-select"
+                            :value="taskOpenCodeForm.agent"
+                            @change="taskOpenCodeForm.agent = $event.target.value"
+                            class="field text-xs py-1">
+                      <option value="">Default (build)</option>
+                      <template x-for="a in availableOpenCodeAgents()" :key="a.name">
+                        <option :value="a.name" x-text="a.name + (a.mode ? ' (' + a.mode + ')' : '')"></option>
+                      </template>
+                    </select>
+                    <input type="text"
+                           data-testid="task-opencode-agent-input"
+                           list="task-opencode-agents-datalist"
+                           x-model="taskOpenCodeForm.agent"
+                           placeholder="build"
+                           class="field font-mono text-xs py-1" />
+                    <datalist id="task-opencode-agents-datalist">
+                      <template x-for="a in availableOpenCodeAgents()" :key="a.name">
+                        <option :value="a.name" x-text="a.name"></option>
+                      </template>
+                    </datalist>
+                  </label>
+
+                  <!-- Model -->
+                  <label class="flex flex-col gap-1">
+                    <span class="font-medium text-zinc-700 dark:text-zinc-300">Model</span>
+                    <select x-show="availableOpenCodeModels().length > 0"
+                            data-testid="task-opencode-model-select"
+                            :value="taskOpenCodeForm.model"
+                            @change="taskOpenCodeForm.model = $event.target.value"
+                            class="field text-xs py-1">
+                      <option value="">Default (project setting)</option>
+                      <template x-for="m in availableOpenCodeModels()" :key="m.ref">
+                        <option :value="m.ref" x-text="m.model_name ? m.ref + ' (' + m.model_name + ')' : m.ref"></option>
+                      </template>
+                    </select>
+                    <input type="text"
+                           data-testid="task-opencode-model-input"
+                           list="task-opencode-models-datalist"
+                           x-model="taskOpenCodeForm.model"
+                           placeholder="providerID/modelID"
+                           class="field font-mono text-xs py-1" />
+                    <datalist id="task-opencode-models-datalist">
+                      <template x-for="m in availableOpenCodeModels()" :key="m.ref">
+                        <option :value="m.ref" x-text="m.ref"></option>
+                      </template>
+                    </datalist>
+                  </label>
+
+                  <!-- Variant -->
+                  <label class="flex flex-col gap-1">
+                    <span class="font-medium text-zinc-700 dark:text-zinc-300">Variant</span>
+                    <select x-show="availableOpenCodeVariantsFor(taskOpenCodeForm.model).length > 0"
+                            data-testid="task-opencode-variant-select"
+                            :value="taskOpenCodeForm.variant"
+                            @change="taskOpenCodeForm.variant = $event.target.value"
+                            class="field text-xs py-1">
+                      <option value="">Default (none / default)</option>
+                      <template x-for="v in availableOpenCodeVariantsFor(taskOpenCodeForm.model)" :key="v">
+                        <option :value="v" x-text="v"></option>
+                      </template>
+                    </select>
+                    <input type="text"
+                           data-testid="task-opencode-variant-input"
+                           list="task-opencode-variants-datalist"
+                           x-model="taskOpenCodeForm.variant"
+                           placeholder="e.g. low, medium, xhigh"
+                           class="field font-mono text-xs py-1" />
+                    <datalist id="task-opencode-variants-datalist">
+                      <template x-for="v in availableOpenCodeVariantsFor(taskOpenCodeForm.model)" :key="v">
+                        <option :value="v" x-text="v"></option>
+                      </template>
+                    </datalist>
+                  </label>
+                </div>
+
+                <div class="flex items-center justify-between pt-1">
+                  <span class="text-[11px] text-zinc-600 dark:text-zinc-400"
+                        x-text="taskOpenCodeDirty() ? '• Custom dispatch override active' : 'Using project defaults'"></span>
+                  <div class="flex items-center gap-2">
+                    <button type="button" @click="showTaskOpenCodeConfig = false" class="btn-ghost text-xs py-1 px-2.5">
+                      Cancel
+                    </button>
+                    <button type="button"
+                            @click="startTaskInOpenCode()"
+                            :disabled="startingOpenCode"
+                            data-testid="opencode-config-start-btn"
+                            class="btn-primary text-xs py-1 px-3">
+                      <span x-text="startingOpenCode ? 'Starting OpenCode…' : 'Start Session'"></span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1273,6 +1497,26 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     No active lease. Click Claim to begin working on this task.
                   </div>
                 </div>
+
+                <!-- opencode session status & link -->
+                <template x-if="activeOpenCodeSession(detail)">
+                  <div data-testid="opencode-session-banner"
+                       class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">
+                    <div class="flex flex-wrap items-center gap-2 min-w-0">
+                      <span class="h-2 w-2 shrink-0 rounded-full bg-emerald-500"></span>
+                      <span data-testid="opencode-session-status" class="font-semibold">OpenCode session active</span>
+                      <code data-testid="opencode-session-id"
+                            class="rounded bg-emerald-100/80 px-1.5 py-0.5 font-mono text-[11px] text-emerald-900 dark:bg-emerald-900/70 dark:text-emerald-200"
+                            x-text="activeOpenCodeSession(detail)?.session_id"></code>
+                    </div>
+                    <a :href="activeOpenCodeSession(detail)?.session_url"
+                       target="_blank" rel="noreferrer noopener"
+                       data-testid="opencode-session-link"
+                       class="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white shadow-sm transition hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-400">
+                      Open Session ↗
+                    </a>
+                  </div>
+                </template>
 
                 <!-- description -->
                 <section x-show="!editingTask">

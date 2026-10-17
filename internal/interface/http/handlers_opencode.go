@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -55,6 +56,46 @@ func resolveOpenCodeModel(projectModel string) string {
 	return "llama.cpp/Qwen Medium Long Context"
 }
 
+// resolveOpenCodeModelWithOverride resolves the OpenCode model reference from an optional override,
+// falling back to resolveOpenCodeModel(projectModel).
+func resolveOpenCodeModelWithOverride(override *string, projectModel string) string {
+	if override != nil && strings.TrimSpace(*override) != "" {
+		return strings.TrimSpace(*override)
+	}
+	return resolveOpenCodeModel(projectModel)
+}
+
+// resolveOpenCodeAgent resolves the OpenCode agent name from an optional override,
+// the project setting, the OPENCODE_AGENT environment variable, or defaults to "build".
+func resolveOpenCodeAgent(override *string, projectAgent string) string {
+	if override != nil && strings.TrimSpace(*override) != "" {
+		return strings.TrimSpace(*override)
+	}
+	if s := strings.TrimSpace(projectAgent); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(os.Getenv("OPENCODE_AGENT")); s != "" {
+		return s
+	}
+	return "build"
+}
+
+// resolveOpenCodeVariant resolves the OpenCode model variant from an optional override,
+// the project setting, the OPENCODE_VARIANT environment variable, or defaults to "".
+// NOTE: a non-nil empty string "" in override explicitly clears the project/env default variant for this task dispatch!
+func resolveOpenCodeVariant(override *string, projectVariant string) string {
+	if override != nil {
+		return strings.TrimSpace(*override)
+	}
+	if s := strings.TrimSpace(projectVariant); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(os.Getenv("OPENCODE_VARIANT")); s != "" {
+		return s
+	}
+	return ""
+}
+
 // parseOpenCodeModel splits a "providerID/modelID" reference into its two
 // halves. The provider ID is everything before the first slash; model IDs may
 // themselves contain slashes (e.g. "openrouter/meta-llama/..." style refs).
@@ -92,12 +133,33 @@ func formatOpenCodePrompt(task domain.Task, acs []domain.AcceptanceCriterion) st
 }
 
 // handleOpenCodeStart → POST /api/v1/tasks/{id}/opencode/start.
-// Dispatches an autonomous OpenCode session with agent 'build' for the given task.
+// Dispatches an autonomous OpenCode session for the given task.
 func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := pathID(w, r)
 	if !ok {
 		return
+	}
+
+	var req openCodeStartReq
+	if r.Body != nil && r.Body != http.NoBody {
+		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, map[string]any{
+				"error":   "invalid input",
+				"message": "failed to read request body",
+			})
+			return
+		}
+		if len(bytes.TrimSpace(bodyBytes)) > 0 {
+			if err := json.Unmarshal(bodyBytes, &req); err != nil {
+				writeJSONError(w, http.StatusBadRequest, map[string]any{
+					"error":   "invalid input",
+					"message": fmt.Sprintf("invalid json body: %v", err),
+				})
+				return
+			}
+		}
 	}
 
 	detail, err := a.Tasks.GetDetail(ctx, id, 0, 0)
@@ -128,7 +190,17 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	modelRef := resolveOpenCodeModel(proj.OpenCodeModel)
+
+	agentName := resolveOpenCodeAgent(req.Agent, proj.OpenCodeAgent)
+	if err := domain.ValidateOpenCodeAgent(agentName); err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": fmt.Sprintf("invalid opencode agent: %v", err),
+		})
+		return
+	}
+
+	modelRef := resolveOpenCodeModelWithOverride(req.Model, proj.OpenCodeModel)
 	var modelProviderID, modelID string
 	if modelRef != "" {
 		modelProviderID, modelID, err = parseOpenCodeModel(modelRef)
@@ -140,6 +212,18 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	variant := resolveOpenCodeVariant(req.Variant, proj.OpenCodeVariant)
+	if variant != "" {
+		if err := domain.ValidateOpenCodeVariant(variant); err != nil {
+			writeJSONError(w, http.StatusBadRequest, map[string]any{
+				"error":   "invalid input",
+				"message": fmt.Sprintf("invalid opencode variant: %v", err),
+			})
+			return
+		}
+	}
+
 	promptText := formatOpenCodePrompt(detail.Task, detail.AcceptanceCriteria)
 
 	// Step 1: Create OpenCode session
@@ -161,13 +245,17 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	// "Authentication Error" before doing any work.
 	sessionCreateBody := map[string]any{
 		"title": "CrowBan: " + detail.Task.Title,
-		"agent": "build",
+		"agent": agentName,
 	}
 	if modelProviderID != "" {
-		sessionCreateBody["model"] = map[string]string{
+		modelMap := map[string]string{
 			"id":         modelID,
 			"providerID": modelProviderID,
 		}
+		if variant != "" {
+			modelMap["variant"] = variant
+		}
+		sessionCreateBody["model"] = modelMap
 	}
 	sessionReqBody, err := json.Marshal(sessionCreateBody)
 	if err != nil {
@@ -234,15 +322,19 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	pq.Set("directory", dir)
 	promptURLParsed.RawQuery = pq.Encode()
 
-	promptReqBody, err := json.Marshal(map[string]any{
-		"agent": "build",
+	promptMap := map[string]any{
+		"agent": agentName,
 		"parts": []map[string]string{
 			{
 				"type": "text",
 				"text": promptText,
 			},
 		},
-	})
+	}
+	if variant != "" {
+		promptMap["variant"] = variant
+	}
+	promptReqBody, err := json.Marshal(promptMap)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
 			"error":   "internal",
@@ -299,9 +391,285 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		_, _ = a.Tasks.Claim(ctx, opencodeActor, detail.Task.ID, 3600, false)
 	}
 
-	// Step 5: Return 200 with session_id and session_url
+	// Step 5: Return 200 with session_id, session_url, agent, model, variant
 	writeJSON(w, http.StatusOK, openCodeStartResponse{
 		SessionID:  sessionID,
 		SessionURL: openCodeSessionURL,
+		Agent:      agentName,
+		Model:      modelRef,
+		Variant:    variant,
+	})
+}
+
+// handleOpenCodeOptions → GET /api/v1/projects/{id}/opencode/options.
+// Queries the configured OpenCode server for available agents and models.
+func (a *App) handleOpenCodeOptions(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+
+	proj, err := a.Projects.Get(ctx, id)
+	if err != nil {
+		writeAppError(w, err, "project", id)
+		return
+	}
+
+	serverURLParam := strings.TrimSpace(r.URL.Query().Get("server_url"))
+	var serverURL string
+	if serverURLParam != "" {
+		serverURL = strings.TrimRight(serverURLParam, "/")
+	} else {
+		serverURL = resolveOpenCodeServerURL(proj.OpenCodeServerURL)
+	}
+
+	dirParam := strings.TrimSpace(r.URL.Query().Get("directory"))
+	var dir string
+	if dirParam != "" {
+		dir = dirParam
+	} else {
+		dir = resolveOpenCodeDirectory(proj.OpenCodeDirectory)
+	}
+
+	if err := application.ValidateOpenCodeServerURL(serverURL); err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": fmt.Sprintf("invalid opencode server URL: %v", err),
+		})
+		return
+	}
+	if err := application.ValidateOpenCodeDirectory(dir); err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": fmt.Sprintf("invalid opencode directory: %v", err),
+		})
+		return
+	}
+
+	resolvedAgent := resolveOpenCodeAgent(nil, proj.OpenCodeAgent)
+	resolvedModel := resolveOpenCodeModel(proj.OpenCodeModel)
+	resolvedVariant := resolveOpenCodeVariant(nil, proj.OpenCodeVariant)
+
+	agents := make([]openCodeAgentOptionDTO, 0)
+	models := make([]openCodeModelOptionDTO, 0)
+
+	// Upstream query 1: GET {serverURL}/agent?directory={dir}
+	agentURLParsed, err := url.Parse(serverURL + "/agent")
+	if err != nil {
+		writeJSON(w, http.StatusOK, openCodeOptionsResponse{
+			Reachable:       false,
+			ResolvedAgent:   resolvedAgent,
+			ResolvedModel:   resolvedModel,
+			ResolvedVariant: resolvedVariant,
+			Agents:          agents,
+			Models:          models,
+		})
+		return
+	}
+	aq := agentURLParsed.Query()
+	aq.Set("directory", dir)
+	agentURLParsed.RawQuery = aq.Encode()
+
+	agentReq, err := http.NewRequestWithContext(ctx, http.MethodGet, agentURLParsed.String(), nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, openCodeOptionsResponse{
+			Reachable:       false,
+			ResolvedAgent:   resolvedAgent,
+			ResolvedModel:   resolvedModel,
+			ResolvedVariant: resolvedVariant,
+			Agents:          agents,
+			Models:          models,
+		})
+		return
+	}
+
+	agentResp, err := a.HTTPClient.Do(agentReq)
+	if err != nil || agentResp.StatusCode < 200 || agentResp.StatusCode >= 300 {
+		if agentResp != nil {
+			_ = agentResp.Body.Close()
+		}
+		writeJSON(w, http.StatusOK, openCodeOptionsResponse{
+			Reachable:       false,
+			ResolvedAgent:   resolvedAgent,
+			ResolvedModel:   resolvedModel,
+			ResolvedVariant: resolvedVariant,
+			Agents:          agents,
+			Models:          models,
+		})
+		return
+	}
+	defer agentResp.Body.Close()
+
+	type rawAgent struct {
+		Name   string `json:"name"`
+		Mode   string `json:"mode"`
+		Hidden *bool  `json:"hidden"`
+		Model  *struct {
+			ProviderID string `json:"providerID"`
+			ModelID    string `json:"modelID"`
+			ID         string `json:"id"`
+		} `json:"model"`
+		Variant *string `json:"variant"`
+	}
+
+	var rawAgents []rawAgent
+	if err := json.NewDecoder(agentResp.Body).Decode(&rawAgents); err != nil {
+		writeJSON(w, http.StatusOK, openCodeOptionsResponse{
+			Reachable:       false,
+			ResolvedAgent:   resolvedAgent,
+			ResolvedModel:   resolvedModel,
+			ResolvedVariant: resolvedVariant,
+			Agents:          agents,
+			Models:          models,
+		})
+		return
+	}
+
+	for _, a := range rawAgents {
+		name := strings.TrimSpace(a.Name)
+		if name == "" {
+			continue
+		}
+		if a.Hidden != nil && *a.Hidden {
+			continue
+		}
+		opt := openCodeAgentOptionDTO{
+			Name: name,
+			Mode: a.Mode,
+		}
+		if a.Model != nil {
+			mID := a.Model.ModelID
+			if mID == "" {
+				mID = a.Model.ID
+			}
+			if a.Model.ProviderID != "" && mID != "" {
+				opt.Model = a.Model.ProviderID + "/" + mID
+			}
+		}
+		if a.Variant != nil {
+			opt.Variant = *a.Variant
+		}
+		agents = append(agents, opt)
+	}
+
+	sort.Slice(agents, func(i, j int) bool {
+		if agents[i].Name == "build" && agents[j].Name != "build" {
+			return true
+		}
+		if agents[i].Name != "build" && agents[j].Name == "build" {
+			return false
+		}
+		return agents[i].Name < agents[j].Name
+	})
+
+	// Upstream query 2: GET {serverURL}/config/providers?directory={dir}
+	configURLParsed, err := url.Parse(serverURL + "/config/providers")
+	if err != nil {
+		writeJSON(w, http.StatusOK, openCodeOptionsResponse{
+			Reachable:       false,
+			ResolvedAgent:   resolvedAgent,
+			ResolvedModel:   resolvedModel,
+			ResolvedVariant: resolvedVariant,
+			Agents:          agents,
+			Models:          models,
+		})
+		return
+	}
+	cq := configURLParsed.Query()
+	cq.Set("directory", dir)
+	configURLParsed.RawQuery = cq.Encode()
+
+	configReq, err := http.NewRequestWithContext(ctx, http.MethodGet, configURLParsed.String(), nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, openCodeOptionsResponse{
+			Reachable:       false,
+			ResolvedAgent:   resolvedAgent,
+			ResolvedModel:   resolvedModel,
+			ResolvedVariant: resolvedVariant,
+			Agents:          agents,
+			Models:          models,
+		})
+		return
+	}
+
+	configResp, err := a.HTTPClient.Do(configReq)
+	if err != nil || configResp.StatusCode < 200 || configResp.StatusCode >= 300 {
+		if configResp != nil {
+			_ = configResp.Body.Close()
+		}
+		writeJSON(w, http.StatusOK, openCodeOptionsResponse{
+			Reachable:       false,
+			ResolvedAgent:   resolvedAgent,
+			ResolvedModel:   resolvedModel,
+			ResolvedVariant: resolvedVariant,
+			Agents:          agents,
+			Models:          models,
+		})
+		return
+	}
+	defer configResp.Body.Close()
+
+	var rawConfig struct {
+		Providers []struct {
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+			Models map[string]struct {
+				Name     string         `json:"name"`
+				Variants map[string]any `json:"variants"`
+			} `json:"models"`
+		} `json:"providers"`
+	}
+
+	if err := json.NewDecoder(configResp.Body).Decode(&rawConfig); err != nil {
+		writeJSON(w, http.StatusOK, openCodeOptionsResponse{
+			Reachable:       false,
+			ResolvedAgent:   resolvedAgent,
+			ResolvedModel:   resolvedModel,
+			ResolvedVariant: resolvedVariant,
+			Agents:          agents,
+			Models:          models,
+		})
+		return
+	}
+
+	for _, prov := range rawConfig.Providers {
+		provID := strings.TrimSpace(prov.ID)
+		if provID == "" {
+			continue
+		}
+		for modelID, modelData := range prov.Models {
+			modelID = strings.TrimSpace(modelID)
+			if modelID == "" {
+				continue
+			}
+			variants := make([]string, 0, len(modelData.Variants))
+			for vKey := range modelData.Variants {
+				variants = append(variants, vKey)
+			}
+			sort.Strings(variants)
+
+			models = append(models, openCodeModelOptionDTO{
+				Ref:          provID + "/" + modelID,
+				ProviderID:   provID,
+				ProviderName: prov.Name,
+				ModelID:      modelID,
+				ModelName:    modelData.Name,
+				Variants:     variants,
+			})
+		}
+	}
+
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].Ref < models[j].Ref
+	})
+
+	writeJSON(w, http.StatusOK, openCodeOptionsResponse{
+		Reachable:       true,
+		ResolvedAgent:   resolvedAgent,
+		ResolvedModel:   resolvedModel,
+		ResolvedVariant: resolvedVariant,
+		Agents:          agents,
+		Models:          models,
 	})
 }

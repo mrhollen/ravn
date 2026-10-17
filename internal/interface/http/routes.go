@@ -13,6 +13,7 @@ const apiPrefix = "/api/v1"
 //	POST  /api/v1/projects              create project → 201
 //	GET   /api/v1/projects/{id}         get project (404 when unknown)
 //	PUT   /api/v1/projects/{id}         update name/description
+//	GET   /api/v1/projects/{id}/opencode/options  list reachable OpenCode agents and models for project
 //	GET   /api/v1/projects/{id}/board   whole-project board snapshot (UI extra)
 //	GET   /api/v1/projects/{id}/events  realtime SSE stream for the project; replays events missed since Last-Event-ID (header or ?last_event_id) on reconnect
 //	GET   /api/v1/events                same stream scoped by ?project_id= (+ the same replay cursor)
@@ -38,6 +39,7 @@ func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("POST "+apiPrefix+"/projects", app.handleCreateProject)
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}", app.handleGetProject)
 	mux.HandleFunc("PUT "+apiPrefix+"/projects/{id}", app.handleUpdateProject)
+	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/opencode/options", app.handleOpenCodeOptions)
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/board", app.handleBoard)
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/events", app.handleProjectEvents)
 	mux.HandleFunc("GET "+apiPrefix+"/events", app.handleEvents)

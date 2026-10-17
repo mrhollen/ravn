@@ -270,6 +270,8 @@ type projectDTO struct {
 	OpenCodeServerURL string `json:"opencode_server_url,omitempty"`
 	OpenCodeDirectory string `json:"opencode_directory,omitempty"`
 	OpenCodeModel     string `json:"opencode_model,omitempty"`
+	OpenCodeAgent     string `json:"opencode_agent,omitempty"`
+	OpenCodeVariant   string `json:"opencode_variant,omitempty"`
 	Archived          bool   `json:"archived"`
 	CreatedAt         string `json:"created_at"`
 	UpdatedAt         string `json:"updated_at"`
@@ -283,6 +285,8 @@ func toProject(p domain.Project) projectDTO {
 		OpenCodeServerURL: p.OpenCodeServerURL,
 		OpenCodeDirectory: p.OpenCodeDirectory,
 		OpenCodeModel:     p.OpenCodeModel,
+		OpenCodeAgent:     p.OpenCodeAgent,
+		OpenCodeVariant:   p.OpenCodeVariant,
 		Archived:          p.Archived,
 		CreatedAt:         rfc3339(p.CreatedAt),
 		UpdatedAt:         rfc3339(p.UpdatedAt),
@@ -388,6 +392,8 @@ type updateProjectReq struct {
 	OpenCodeServerURL *string    `json:"opencode_server_url"`
 	OpenCodeDirectory *string    `json:"opencode_directory"`
 	OpenCodeModel     *string    `json:"opencode_model"`
+	OpenCodeAgent     *string    `json:"opencode_agent"`
+	OpenCodeVariant   *string    `json:"opencode_variant"`
 	Archived          *bool      `json:"archived"`
 }
 
@@ -588,8 +594,43 @@ func extractEventStatus(e domain.Event) string {
 	return ""
 }
 
+// openCodeStartReq is the optional body for POST /tasks/{id}/opencode/start.
+type openCodeStartReq struct {
+	Agent   *string `json:"agent"`
+	Model   *string `json:"model"`
+	Variant *string `json:"variant"`
+}
+
 // openCodeStartResponse is POST /tasks/{id}/opencode/start response body.
 type openCodeStartResponse struct {
 	SessionID  string `json:"session_id"`
 	SessionURL string `json:"session_url"`
+	Agent      string `json:"agent,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Variant    string `json:"variant,omitempty"`
+}
+
+type openCodeAgentOptionDTO struct {
+	Name    string `json:"name"`
+	Mode    string `json:"mode,omitempty"`
+	Model   string `json:"model,omitempty"` // "providerID/modelID" if agent has a default model
+	Variant string `json:"variant,omitempty"`
+}
+
+type openCodeModelOptionDTO struct {
+	Ref          string   `json:"ref"` // provider.ID + "/" + modelID
+	ProviderID   string   `json:"provider_id"`
+	ProviderName string   `json:"provider_name,omitempty"`
+	ModelID      string   `json:"model_id"`
+	ModelName    string   `json:"model_name,omitempty"`
+	Variants     []string `json:"variants"` // sorted keys of Variants map; []string{} when empty, never null
+}
+
+type openCodeOptionsResponse struct {
+	Reachable       bool                     `json:"reachable"`
+	ResolvedAgent   string                   `json:"resolved_agent"`
+	ResolvedModel   string                   `json:"resolved_model"`
+	ResolvedVariant string                   `json:"resolved_variant"`
+	Agents          []openCodeAgentOptionDTO `json:"agents"`
+	Models          []openCodeModelOptionDTO `json:"models"`
 }

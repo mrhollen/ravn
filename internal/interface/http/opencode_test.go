@@ -21,26 +21,30 @@ func TestUpdateProject_OpenCodeSettings(t *testing.T) {
 		t.Fatalf("GET /projects/%s = %d, want 200", p.ID, code)
 	}
 	got := mustDecode[projectDTO](t, body)
-	if got.OpenCodeServerURL != "" || got.OpenCodeDirectory != "" || got.OpenCodeModel != "" {
-		t.Fatalf("initial opencode settings not empty: url=%q dir=%q model=%q", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel)
+	if got.OpenCodeServerURL != "" || got.OpenCodeDirectory != "" || got.OpenCodeModel != "" || got.OpenCodeAgent != "" || got.OpenCodeVariant != "" {
+		t.Fatalf("initial opencode settings not empty: url=%q dir=%q model=%q agent=%q variant=%q", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel, got.OpenCodeAgent, got.OpenCodeVariant)
 	}
 
-	// 2. PUT updates opencode_server_url and opencode_directory
+	// 2. PUT updates opencode_server_url, opencode_directory, opencode_model, opencode_agent, opencode_variant
 	serverURL := "http://localhost:4444"
 	dir := "/home/test/workspace"
 	modelRef := "llama.cpp/Qwen Nano"
+	agentName := "custom-builder"
+	variantName := "thinking"
 	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
 		"actor":               actor("admin"),
 		"opencode_server_url": serverURL,
 		"opencode_directory":  dir,
 		"opencode_model":      modelRef,
+		"opencode_agent":      agentName,
+		"opencode_variant":    variantName,
 	})
 	if code != http.StatusOK {
 		t.Fatalf("PUT /projects/%s = %d, want 200 (body %s)", p.ID, code, string(body))
 	}
 	updated := mustDecode[projectDTO](t, body)
-	if updated.OpenCodeServerURL != serverURL || updated.OpenCodeDirectory != dir || updated.OpenCodeModel != modelRef {
-		t.Fatalf("PUT response mismatch: url=%q dir=%q model=%q, want url=%q dir=%q model=%q", updated.OpenCodeServerURL, updated.OpenCodeDirectory, updated.OpenCodeModel, serverURL, dir, modelRef)
+	if updated.OpenCodeServerURL != serverURL || updated.OpenCodeDirectory != dir || updated.OpenCodeModel != modelRef || updated.OpenCodeAgent != agentName || updated.OpenCodeVariant != variantName {
+		t.Fatalf("PUT response mismatch: url=%q dir=%q model=%q agent=%q variant=%q, want url=%q dir=%q model=%q agent=%q variant=%q", updated.OpenCodeServerURL, updated.OpenCodeDirectory, updated.OpenCodeModel, updated.OpenCodeAgent, updated.OpenCodeVariant, serverURL, dir, modelRef, agentName, variantName)
 	}
 
 	// 3. GET confirms persistence
@@ -49,8 +53,8 @@ func TestUpdateProject_OpenCodeSettings(t *testing.T) {
 		t.Fatalf("GET after PUT /projects/%s = %d", p.ID, code)
 	}
 	got = mustDecode[projectDTO](t, body)
-	if got.OpenCodeServerURL != serverURL || got.OpenCodeDirectory != dir || got.OpenCodeModel != modelRef {
-		t.Fatalf("persisted settings mismatch: url=%q dir=%q model=%q", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel)
+	if got.OpenCodeServerURL != serverURL || got.OpenCodeDirectory != dir || got.OpenCodeModel != modelRef || got.OpenCodeAgent != agentName || got.OpenCodeVariant != variantName {
+		t.Fatalf("persisted settings mismatch: url=%q dir=%q model=%q agent=%q variant=%q", got.OpenCodeServerURL, got.OpenCodeDirectory, got.OpenCodeModel, got.OpenCodeAgent, got.OpenCodeVariant)
 	}
 
 	// 4. PUT clears settings with empty string
@@ -60,13 +64,15 @@ func TestUpdateProject_OpenCodeSettings(t *testing.T) {
 		"opencode_server_url": empty,
 		"opencode_directory":  empty,
 		"opencode_model":      empty,
+		"opencode_agent":      empty,
+		"opencode_variant":    empty,
 	})
 	if code != http.StatusOK {
 		t.Fatalf("PUT clear settings = %d", code)
 	}
 	cleared := mustDecode[projectDTO](t, body)
-	if cleared.OpenCodeServerURL != "" || cleared.OpenCodeDirectory != "" || cleared.OpenCodeModel != "" {
-		t.Fatalf("settings not cleared: url=%q dir=%q model=%q", cleared.OpenCodeServerURL, cleared.OpenCodeDirectory, cleared.OpenCodeModel)
+	if cleared.OpenCodeServerURL != "" || cleared.OpenCodeDirectory != "" || cleared.OpenCodeModel != "" || cleared.OpenCodeAgent != "" || cleared.OpenCodeVariant != "" {
+		t.Fatalf("settings not cleared: url=%q dir=%q model=%q agent=%q variant=%q", cleared.OpenCodeServerURL, cleared.OpenCodeDirectory, cleared.OpenCodeModel, cleared.OpenCodeAgent, cleared.OpenCodeVariant)
 	}
 }
 
@@ -576,4 +582,372 @@ func TestOpenCodeStart_PromptAsyncErrorNoLeakage(t *testing.T) {
 	if strings.Contains(string(body), "supersecret123") {
 		t.Fatalf("502 response leaked body snippet from prompt_async: %s", string(body))
 	}
+}
+
+func TestOpenCodeStart_ResolutionOrder(t *testing.T) {
+	t.Setenv("OPENCODE_ALLOW_PRIVATE_IPS", "true")
+
+	var lastSessionBody map[string]any
+	var lastPromptBody map[string]any
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/session":
+			var m map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&m)
+			lastSessionBody = m
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":    "sess-res-123",
+				"title": m["title"],
+			})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/prompt_async"):
+			var m map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&m)
+			lastPromptBody = m
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockServer.Close()
+
+	stk := newStack(t)
+	stk.App.HTTPClient = mockServer.Client()
+
+	p := createProject(t, stk, "Resolution Project")
+	// Set server URL so start can connect
+	_, _ = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":               actor("admin"),
+		"opencode_server_url": mockServer.URL,
+	})
+
+	// 1. Built-in defaults (no request body, no project settings, no env vars)
+	t.Run("built-in defaults", func(t *testing.T) {
+		t.Setenv("OPENCODE_AGENT", "")
+		t.Setenv("OPENCODE_MODEL", "")
+		t.Setenv("OPENCODE_VARIANT", "")
+
+		task := makeTask(t, stk, p.ID, "Task 1", nil)
+		code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/opencode/start", nil)
+		if code != http.StatusOK {
+			t.Fatalf("POST start = %d: %s", code, string(body))
+		}
+		var resp openCodeStartResponse
+		_ = json.Unmarshal(body, &resp)
+		if resp.Agent != "build" {
+			t.Errorf("resp.Agent = %q, want build", resp.Agent)
+		}
+		if resp.Model != "llama.cpp/Qwen Medium Long Context" {
+			t.Errorf("resp.Model = %q, want llama.cpp/Qwen Medium Long Context", resp.Model)
+		}
+		if resp.Variant != "" {
+			t.Errorf("resp.Variant = %q, want empty", resp.Variant)
+		}
+
+		if lastSessionBody["agent"] != "build" {
+			t.Errorf("session agent = %v, want build", lastSessionBody["agent"])
+		}
+		modelMap, ok := lastSessionBody["model"].(map[string]any)
+		if !ok || modelMap["providerID"] != "llama.cpp" || modelMap["id"] != "Qwen Medium Long Context" {
+			t.Errorf("session model = %+v", lastSessionBody["model"])
+		}
+		if _, hasVariant := modelMap["variant"]; hasVariant {
+			t.Errorf("session model should not have variant: %+v", modelMap)
+		}
+
+		if lastPromptBody["agent"] != "build" {
+			t.Errorf("prompt agent = %v, want build", lastPromptBody["agent"])
+		}
+		if _, hasVariant := lastPromptBody["variant"]; hasVariant {
+			t.Errorf("prompt should not have variant: %+v", lastPromptBody)
+		}
+	})
+
+	// 2. Env var fallback
+	t.Run("env var fallback", func(t *testing.T) {
+		t.Setenv("OPENCODE_AGENT", "env-agent")
+		t.Setenv("OPENCODE_MODEL", "env-provider/env-model")
+		t.Setenv("OPENCODE_VARIANT", "env-variant")
+
+		task := makeTask(t, stk, p.ID, "Task 2", nil)
+		code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/opencode/start", map[string]any{})
+		if code != http.StatusOK {
+			t.Fatalf("POST start = %d: %s", code, string(body))
+		}
+		var resp openCodeStartResponse
+		_ = json.Unmarshal(body, &resp)
+		if resp.Agent != "env-agent" || resp.Model != "env-provider/env-model" || resp.Variant != "env-variant" {
+			t.Errorf("resp mismatch: got agent=%q model=%q variant=%q", resp.Agent, resp.Model, resp.Variant)
+		}
+
+		if lastSessionBody["agent"] != "env-agent" {
+			t.Errorf("session agent = %v, want env-agent", lastSessionBody["agent"])
+		}
+		modelMap, ok := lastSessionBody["model"].(map[string]any)
+		if !ok || modelMap["variant"] != "env-variant" || modelMap["providerID"] != "env-provider" || modelMap["id"] != "env-model" {
+			t.Errorf("session model = %+v", lastSessionBody["model"])
+		}
+		if lastPromptBody["agent"] != "env-agent" || lastPromptBody["variant"] != "env-variant" {
+			t.Errorf("prompt mismatch: %+v", lastPromptBody)
+		}
+	})
+
+	// 3. Project settings override env vars
+	t.Run("project settings override env vars", func(t *testing.T) {
+		t.Setenv("OPENCODE_AGENT", "env-agent")
+		t.Setenv("OPENCODE_MODEL", "env-provider/env-model")
+		t.Setenv("OPENCODE_VARIANT", "env-variant")
+
+		_, _ = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+			"actor":            actor("admin"),
+			"opencode_agent":   "proj-agent",
+			"opencode_model":   "proj-provider/proj-model",
+			"opencode_variant": "proj-variant",
+		})
+
+		task := makeTask(t, stk, p.ID, "Task 3", nil)
+		code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/opencode/start", nil)
+		if code != http.StatusOK {
+			t.Fatalf("POST start = %d: %s", code, string(body))
+		}
+		var resp openCodeStartResponse
+		_ = json.Unmarshal(body, &resp)
+		if resp.Agent != "proj-agent" || resp.Model != "proj-provider/proj-model" || resp.Variant != "proj-variant" {
+			t.Errorf("resp mismatch: got agent=%q model=%q variant=%q", resp.Agent, resp.Model, resp.Variant)
+		}
+
+		if lastSessionBody["agent"] != "proj-agent" {
+			t.Errorf("session agent = %v, want proj-agent", lastSessionBody["agent"])
+		}
+		modelMap := lastSessionBody["model"].(map[string]any)
+		if modelMap["variant"] != "proj-variant" || modelMap["providerID"] != "proj-provider" || modelMap["id"] != "proj-model" {
+			t.Errorf("session model = %+v", modelMap)
+		}
+		if lastPromptBody["agent"] != "proj-agent" || lastPromptBody["variant"] != "proj-variant" {
+			t.Errorf("prompt mismatch: %+v", lastPromptBody)
+		}
+	})
+
+	// 4. Request body override
+	t.Run("request body override", func(t *testing.T) {
+		task := makeTask(t, stk, p.ID, "Task 4", nil)
+		code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/opencode/start", map[string]any{
+			"agent":   "req-agent",
+			"model":   "req-provider/req-model",
+			"variant": "req-variant",
+		})
+		if code != http.StatusOK {
+			t.Fatalf("POST start = %d: %s", code, string(body))
+		}
+		var resp openCodeStartResponse
+		_ = json.Unmarshal(body, &resp)
+		if resp.Agent != "req-agent" || resp.Model != "req-provider/req-model" || resp.Variant != "req-variant" {
+			t.Errorf("resp mismatch: got agent=%q model=%q variant=%q", resp.Agent, resp.Model, resp.Variant)
+		}
+
+		if lastSessionBody["agent"] != "req-agent" {
+			t.Errorf("session agent = %v, want req-agent", lastSessionBody["agent"])
+		}
+		modelMap := lastSessionBody["model"].(map[string]any)
+		if modelMap["variant"] != "req-variant" || modelMap["providerID"] != "req-provider" || modelMap["id"] != "req-model" {
+			t.Errorf("session model = %+v", modelMap)
+		}
+		if lastPromptBody["agent"] != "req-agent" || lastPromptBody["variant"] != "req-variant" {
+			t.Errorf("prompt mismatch: %+v", lastPromptBody)
+		}
+	})
+
+	// 5. Explicit empty-string variant override clears project default variant
+	t.Run("explicit empty-string variant override clears project default", func(t *testing.T) {
+		task := makeTask(t, stk, p.ID, "Task 5", nil)
+		code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/opencode/start", map[string]any{
+			"variant": "",
+		})
+		if code != http.StatusOK {
+			t.Fatalf("POST start = %d: %s", code, string(body))
+		}
+		var resp openCodeStartResponse
+		_ = json.Unmarshal(body, &resp)
+		if resp.Variant != "" {
+			t.Errorf("resp.Variant = %q, want empty", resp.Variant)
+		}
+
+		modelMap := lastSessionBody["model"].(map[string]any)
+		if _, hasVariant := modelMap["variant"]; hasVariant {
+			t.Errorf("session model should not have variant when explicitly cleared: %+v", modelMap)
+		}
+		if _, hasVariant := lastPromptBody["variant"]; hasVariant {
+			t.Errorf("prompt should not have variant when explicitly cleared: %+v", lastPromptBody)
+		}
+	})
+}
+
+func TestOpenCodeOptions_Endpoints(t *testing.T) {
+	t.Setenv("OPENCODE_ALLOW_PRIVATE_IPS", "true")
+
+	hiddenTrue := true
+	mockAgents := []map[string]any{
+		{"name": "build", "mode": "primary", "model": map[string]string{"providerID": "openai", "modelID": "gpt-4o"}},
+		{"name": "explore", "mode": "subagent", "hidden": &hiddenTrue},
+		{"name": "", "mode": "invalid"},
+		{"name": "coder", "mode": "primary", "model": map[string]string{"providerID": "anthropic", "id": "claude-3-7-sonnet"}},
+		{"name": "architect", "mode": "subagent", "variant": "deep"},
+	}
+
+	mockConfig := map[string]any{
+		"providers": []map[string]any{
+			{
+				"id":   "openai",
+				"name": "OpenAI",
+				"models": map[string]any{
+					"gpt-4o": map[string]any{
+						"name":     "GPT-4o",
+						"variants": map[string]any{"low": nil, "high": nil},
+					},
+					"o3-mini": map[string]any{
+						"name":     "o3-mini",
+						"variants": map[string]any{},
+					},
+				},
+			},
+			{
+				"id":   "anthropic",
+				"name": "Anthropic",
+				"models": map[string]any{
+					"claude-3-7-sonnet": map[string]any{
+						"name":     "Claude 3.7 Sonnet",
+						"variants": map[string]any{"thinking": nil},
+					},
+				},
+			},
+		},
+	}
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/agent":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(mockAgents)
+		case r.Method == http.MethodGet && r.URL.Path == "/config/providers":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(mockConfig)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockServer.Close()
+
+	stk := newStack(t)
+	stk.App.HTTPClient = mockServer.Client()
+
+	p := createProject(t, stk, "Options Project")
+	_, _ = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+p.ID, map[string]any{
+		"actor":               actor("admin"),
+		"opencode_server_url": mockServer.URL,
+		"opencode_directory":  "/home/test/worktree",
+		"opencode_agent":      "coder",
+		"opencode_model":      "openai/gpt-4o",
+		"opencode_variant":    "high",
+	})
+
+	// 1. Success case
+	t.Run("success parsing agents and models", func(t *testing.T) {
+		code, body := doReq(t, stk.Handler, "GET", "/api/v1/projects/"+p.ID+"/opencode/options", nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET options = %d: %s", code, string(body))
+		}
+		var resp openCodeOptionsResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			t.Fatalf("decode options resp: %v", err)
+		}
+		if !resp.Reachable {
+			t.Errorf("reachable = false, want true")
+		}
+		if resp.ResolvedAgent != "coder" || resp.ResolvedModel != "openai/gpt-4o" || resp.ResolvedVariant != "high" {
+			t.Errorf("resolved mismatch: agent=%q model=%q variant=%q", resp.ResolvedAgent, resp.ResolvedModel, resp.ResolvedVariant)
+		}
+
+		// Agents should filter out hidden and empty, sort "build" first then alphabetically
+		// Expecting: build, architect, coder
+		if len(resp.Agents) != 3 {
+			t.Fatalf("expected 3 agents, got %d: %+v", len(resp.Agents), resp.Agents)
+		}
+		if resp.Agents[0].Name != "build" || resp.Agents[0].Model != "openai/gpt-4o" {
+			t.Errorf("agents[0] = %+v, want build (openai/gpt-4o)", resp.Agents[0])
+		}
+		if resp.Agents[1].Name != "architect" || resp.Agents[1].Variant != "deep" {
+			t.Errorf("agents[1] = %+v, want architect (variant: deep)", resp.Agents[1])
+		}
+		if resp.Agents[2].Name != "coder" || resp.Agents[2].Model != "anthropic/claude-3-7-sonnet" {
+			t.Errorf("agents[2] = %+v, want coder", resp.Agents[2])
+		}
+
+		// Models should be sorted by ref
+		// Expecting: anthropic/claude-3-7-sonnet, openai/gpt-4o, openai/o3-mini
+		if len(resp.Models) != 3 {
+			t.Fatalf("expected 3 models, got %d: %+v", len(resp.Models), resp.Models)
+		}
+		if resp.Models[0].Ref != "anthropic/claude-3-7-sonnet" || len(resp.Models[0].Variants) != 1 || resp.Models[0].Variants[0] != "thinking" {
+			t.Errorf("models[0] = %+v", resp.Models[0])
+		}
+		if resp.Models[1].Ref != "openai/gpt-4o" || len(resp.Models[1].Variants) != 2 || resp.Models[1].Variants[0] != "high" || resp.Models[1].Variants[1] != "low" {
+			t.Errorf("models[1] = %+v", resp.Models[1])
+		}
+		if resp.Models[2].Ref != "openai/o3-mini" || len(resp.Models[2].Variants) != 0 {
+			t.Errorf("models[2] = %+v", resp.Models[2])
+		}
+	})
+
+	// 2. Query overrides
+	t.Run("query overrides server_url and directory", func(t *testing.T) {
+		code, body := doReq(t, stk.Handler, "GET", "/api/v1/projects/"+p.ID+"/opencode/options?server_url="+mockServer.URL+"&directory=/home/override", nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET options with query = %d: %s", code, string(body))
+		}
+		var resp openCodeOptionsResponse
+		_ = json.Unmarshal(body, &resp)
+		if !resp.Reachable {
+			t.Errorf("reachable = false, want true")
+		}
+	})
+
+	// 3. Graceful offline degradation
+	t.Run("offline graceful degradation returns 200 with reachable false", func(t *testing.T) {
+		pOffline := createProject(t, stk, "Offline Project")
+		_, _ = doReq(t, stk.Handler, "PUT", "/api/v1/projects/"+pOffline.ID, map[string]any{
+			"actor":               actor("admin"),
+			"opencode_server_url": "http://127.0.0.1:54321", // unused port
+		})
+		code, body := doReq(t, stk.Handler, "GET", "/api/v1/projects/"+pOffline.ID+"/opencode/options", nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET options offline = %d, want 200: %s", code, string(body))
+		}
+		var resp openCodeOptionsResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			t.Fatalf("decode offline resp: %v", err)
+		}
+		if resp.Reachable {
+			t.Errorf("expected reachable false, got true")
+		}
+		if len(resp.Agents) != 0 || len(resp.Models) != 0 {
+			t.Errorf("expected empty agents and models, got %d agents, %d models", len(resp.Agents), len(resp.Models))
+		}
+		if resp.ResolvedAgent != "build" {
+			t.Errorf("resolved agent = %q, want default build", resp.ResolvedAgent)
+		}
+	})
+
+	// 4. SSRF and Path Traversal Rejections
+	t.Run("SSRF and directory path traversal rejected with 400", func(t *testing.T) {
+		code, body := doReq(t, stk.Handler, "GET", "/api/v1/projects/"+p.ID+"/opencode/options?server_url=http://169.254.169.254", nil)
+		if code != http.StatusBadRequest {
+			t.Fatalf("GET options with metadata IP = %d, want 400: %s", code, string(body))
+		}
+
+		code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects/"+p.ID+"/opencode/options?directory=../../etc", nil)
+		if code != http.StatusBadRequest {
+			t.Fatalf("GET options with traversal = %d, want 400: %s", code, string(body))
+		}
+	})
 }

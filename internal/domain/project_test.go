@@ -256,3 +256,119 @@ func TestValidateOpenCodeModel(t *testing.T) {
 		})
 	}
 }
+
+func TestProjectValidate_Agent(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		ok   bool
+	}{
+		{"valid simple", "build", true},
+		{"valid custom", "frontend-expert", true},
+		{"empty allowed", "", true},
+		{"whitespace allowed (clears/empty)", "   ", true},
+		{"exactly at cap", strings.Repeat("a", MaxOpenCodeAgentLen), true},
+		{"multi-byte at cap counts runes", strings.Repeat("🤖", MaxOpenCodeAgentLen), true},
+		{"one over cap", strings.Repeat("a", MaxOpenCodeAgentLen+1), false},
+		{"contains newline control char", "build\nagent", false},
+		{"contains null control char", "build\x00agent", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validProject()
+			p.OpenCodeAgent = tc.in
+			err := p.Validate()
+			if tc.ok && err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+			if !tc.ok && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Validate() = %v, want wrapped domain.ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func TestProjectValidate_Variant(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		ok   bool
+	}{
+		{"valid simple", "thinking", true},
+		{"valid high", "high", true},
+		{"empty allowed", "", true},
+		{"whitespace allowed (clears/empty)", "   ", true},
+		{"exactly at cap", strings.Repeat("v", MaxOpenCodeVariantLen), true},
+		{"multi-byte at cap counts runes", strings.Repeat("⚡", MaxOpenCodeVariantLen), true},
+		{"one over cap", strings.Repeat("v", MaxOpenCodeVariantLen+1), false},
+		{"contains carriage return control char", "high\rvariant", false},
+		{"contains bell control char", "thinking\x07", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validProject()
+			p.OpenCodeVariant = tc.in
+			err := p.Validate()
+			if tc.ok && err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+			if !tc.ok && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Validate() = %v, want wrapped domain.ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func TestValidateOpenCodeAgent(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		ok   bool
+	}{
+		{"empty allowed", "", true},
+		{"whitespace allowed", "   \t\n", true},
+		{"valid name", "build", true},
+		{"valid hyphens and underscores", "agent_1-test", true},
+		{"exactly at cap", strings.Repeat("x", MaxOpenCodeAgentLen), true},
+		{"one over cap", strings.Repeat("x", MaxOpenCodeAgentLen+1), false},
+		{"control character tab inside string", "build\tagent", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateOpenCodeAgent(tc.in)
+			if tc.ok && err != nil {
+				t.Fatalf("ValidateOpenCodeAgent(%q) = %v, want nil", tc.in, err)
+			}
+			if !tc.ok && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("ValidateOpenCodeAgent(%q) = %v, want wrapped domain.ErrInvalid", tc.in, err)
+			}
+		})
+	}
+}
+
+func TestValidateOpenCodeVariant(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		ok   bool
+	}{
+		{"empty allowed", "", true},
+		{"whitespace allowed", "  ", true},
+		{"valid variant", "low", true},
+		{"valid complex", "variant-4k-context", true},
+		{"exactly at cap", strings.Repeat("y", MaxOpenCodeVariantLen), true},
+		{"one over cap", strings.Repeat("y", MaxOpenCodeVariantLen+1), false},
+		{"control character inside", "var\x1b[0miant", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateOpenCodeVariant(tc.in)
+			if tc.ok && err != nil {
+				t.Fatalf("ValidateOpenCodeVariant(%q) = %v, want nil", tc.in, err)
+			}
+			if !tc.ok && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("ValidateOpenCodeVariant(%q) = %v, want wrapped domain.ErrInvalid", tc.in, err)
+			}
+		})
+	}
+}

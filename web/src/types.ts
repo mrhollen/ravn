@@ -82,6 +82,8 @@ export interface Project {
   opencode_server_url?: string;
   opencode_directory?: string;
   opencode_model?: string;
+  opencode_agent?: string;
+  opencode_variant?: string;
   archived?: boolean;
   created_at: string;
   updated_at: string;
@@ -234,12 +236,50 @@ export interface UpdateProjectReq {
   opencode_server_url?: string;
   opencode_directory?: string;
   opencode_model?: string;
+  opencode_agent?: string;
+  opencode_variant?: string;
   archived?: boolean;
+}
+
+export type UpdateProjectInput = UpdateProjectReq;
+
+export interface OpenCodeAgentOption {
+  name: string;
+  mode?: string;
+  model?: string;
+  variant?: string;
+}
+
+export interface OpenCodeModelOption {
+  ref: string; // "providerID/modelID"
+  provider_id: string;
+  provider_name?: string;
+  model_id: string;
+  model_name?: string;
+  variants: string[]; // e.g. ["low", "medium", "xhigh"]
+}
+
+export interface OpenCodeOptionsResponse {
+  reachable: boolean;
+  resolved_agent: string;
+  resolved_model: string;
+  resolved_variant: string;
+  agents: OpenCodeAgentOption[];
+  models: OpenCodeModelOption[];
+}
+
+export interface StartOpenCodeInput {
+  agent?: string;
+  model?: string;
+  variant?: string;
 }
 
 export interface StartOpenCodeResponse {
   session_id: string;
   session_url: string;
+  agent?: string;
+  model?: string;
+  variant?: string;
 }
 
 export interface CreateTaskReq {

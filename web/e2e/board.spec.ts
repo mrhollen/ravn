@@ -1340,18 +1340,57 @@ test.describe('Web E2E test suite', () => {
     const mockPort = await getFreePort();
     let sessionCreated = false;
     let promptDispatched = false;
+    let sessionBody: any = null;
+    let promptBody: any = null;
 
     const mockOpenCodeServer = http.createServer((req, res) => {
+      if (req.method === 'GET' && req.url?.startsWith('/agent')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify([
+          { name: 'build', mode: 'all' },
+          { name: 'plan', mode: 'plan' },
+          { name: 'qa', mode: 'review' },
+        ]));
+        return;
+      }
+      if (req.method === 'GET' && req.url?.startsWith('/config/providers')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          providers: [
+            {
+              id: 'mockprov',
+              name: 'Mock Provider',
+              models: {
+                'mock-model': {
+                  name: 'Mock Model',
+                  variants: { low: {}, medium: {}, high: {} },
+                },
+              },
+            },
+          ],
+        }));
+        return;
+      }
       if (req.method === 'POST' && req.url?.startsWith('/session') && !req.url.includes('/prompt_async')) {
         sessionCreated = true;
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ id: 'mock-opencode-session-456' }));
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          try { sessionBody = JSON.parse(body); } catch {}
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ id: 'mock-opencode-session-456' }));
+        });
         return;
       }
       if (req.method === 'POST' && req.url?.includes('/prompt_async')) {
         promptDispatched = true;
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'dispatched' }));
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          try { promptBody = JSON.parse(body); } catch {}
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'dispatched' }));
+        });
         return;
       }
       res.writeHead(404);
@@ -1389,8 +1428,8 @@ test.describe('Web E2E test suite', () => {
       await selectProjectViaDropdown(page, proj.id);
 
       // -----------------------------------------------------------------------
-      // AC 1: Project settings modal allows configuring OpenCode Server URL & dir
-      // (opened from the gear icon attached to the Projects dropdown)
+      // AC 1 & AC 4: Project settings modal allows configuring OpenCode Server URL,
+      // dir, default agent, model, and model variant
       // -----------------------------------------------------------------------
       const settingsBtn = page.getByTestId('project-settings-btn');
       await expect(settingsBtn).toBeVisible();
@@ -1398,12 +1437,22 @@ test.describe('Web E2E test suite', () => {
 
       const serverUrlInput = page.getByPlaceholder('http://localhost:4444');
       const dirInput = page.getByPlaceholder('/home/hollen/Code/...');
+      const agentInput = page.getByTestId('project-opencode-agent-input');
+      const modelInput = page.getByTestId('project-opencode-model-input');
+      const variantInput = page.getByTestId('project-opencode-variant-input');
       await expect(serverUrlInput).toBeVisible();
       await expect(dirInput).toBeVisible();
+      await expect(agentInput).toBeVisible();
+      await expect(modelInput).toBeVisible();
+      await expect(variantInput).toBeVisible();
 
       await serverUrlInput.fill(`http://127.0.0.1:${mockPort}`);
       await dirInput.fill('/tmp/mock-opencode-worktree');
+      await agentInput.fill('plan');
+      await modelInput.fill('mockprov/mock-model');
+      await variantInput.fill('high');
 
+      await page.screenshot({ path: 'test-results/opencode-project-settings.png' });
       await page.getByRole('button', { name: 'Save changes' }).click();
       await expect(serverUrlInput).not.toBeVisible();
 
@@ -1411,10 +1460,14 @@ test.describe('Web E2E test suite', () => {
       await settingsBtn.click();
       await expect(serverUrlInput).toHaveValue(`http://127.0.0.1:${mockPort}`);
       await expect(dirInput).toHaveValue('/tmp/mock-opencode-worktree');
+      await expect(agentInput).toHaveValue('plan');
+      await expect(modelInput).toHaveValue('mockprov/mock-model');
+      await expect(variantInput).toHaveValue('high');
       await page.getByRole('button', { name: 'Cancel' }).click();
 
       // -----------------------------------------------------------------------
-      // AC 2: Task detail drawer renders 'Start Task in OpenCode' button
+      // AC 2 & AC 5: Task detail drawer renders 'Start Task in OpenCode' with
+      // split-button config toggle, pre-populated defaults, and per-task override
       // -----------------------------------------------------------------------
       const taskCard = page.locator('h3', { hasText: 'Implement Payment Gateway' });
       await taskCard.click();
@@ -1426,8 +1479,31 @@ test.describe('Web E2E test suite', () => {
       await expect(startOpenCodeBtn).toBeVisible();
       await expect(startOpenCodeBtn).toContainText('Start Task in OpenCode');
 
+      const configToggle = drawer.getByTestId('opencode-config-toggle');
+      await expect(configToggle).toBeVisible();
+      await configToggle.click();
+
+      const configPanel = drawer.getByTestId('opencode-config-panel');
+      await expect(configPanel).toBeVisible();
+
+      const taskAgentInput = drawer.getByTestId('task-opencode-agent-input');
+      const taskModelInput = drawer.getByTestId('task-opencode-model-input');
+      const taskVariantInput = drawer.getByTestId('task-opencode-variant-input');
+
+      // Pre-filled with project defaults
+      await expect(taskAgentInput).toHaveValue('plan');
+      await expect(taskModelInput).toHaveValue('mockprov/mock-model');
+      await expect(taskVariantInput).toHaveValue('high');
+
+      // Override agent and variant before dispatching
+      await taskAgentInput.fill('qa');
+      await taskVariantInput.fill('low');
+
+      await page.screenshot({ path: 'test-results/opencode-config-panel.png' });
+
       // -----------------------------------------------------------------------
-      // AC 3: Clicking button launches session, confirms, attaches link & opens tab
+      // AC 3 & AC 5: Clicking button launches session with overrides, confirms,
+      // attaches link & reflects opencode agent claim
       // -----------------------------------------------------------------------
       // Intercept window.open
       await page.evaluate(() => {
@@ -1438,30 +1514,49 @@ test.describe('Web E2E test suite', () => {
         };
       });
 
-      await startOpenCodeBtn.click();
+      const configStartBtn = drawer.getByTestId('opencode-config-start-btn');
+      await expect(configStartBtn).toBeVisible();
+      await configStartBtn.click();
 
-      // Feedback toast appears
+      // Feedback toast appears with session ID and actionable link
+      const expectedSessionUrl = `http://127.0.0.1:${mockPort}/session/mock-opencode-session-456`;
       const toast = page.locator('text=OpenCode session started');
       await expect(toast).toBeVisible({ timeout: 5000 });
+      await expect(toast).toContainText('mock-opencode-session-456');
+      const toastActionLink = page.locator('[data-testid="toast-action-link"]');
+      await expect(toastActionLink).toBeVisible();
+      await expect(toastActionLink).toHaveAttribute('href', expectedSessionUrl);
+      await expect(toastActionLink).toHaveAttribute('target', '_blank');
 
-      // Verify mock server received the requests
+      // Verify mock server received the requests with overridden agent and variant
       expect(sessionCreated).toBe(true);
       expect(promptDispatched).toBe(true);
+      expect(sessionBody?.agent).toBe('qa');
+      expect(sessionBody?.model?.variant).toBe('low');
+      expect(promptBody?.agent).toBe('qa');
+      expect(promptBody?.variant).toBe('low');
 
       // Verify window.open was NOT called (task starts silently server-side without navigating away)
       const openedUrls = await page.evaluate(() => (window as any).__openedUrls);
       expect(openedUrls).toHaveLength(0);
 
+      // Verify OpenCode session banner in detail drawer
+      await expect(drawer.getByTestId('opencode-session-banner')).toBeVisible({ timeout: 5000 });
+      await expect(drawer.getByTestId('opencode-session-status')).toHaveText('OpenCode session active');
+      await expect(drawer.getByTestId('opencode-session-id')).toHaveText('mock-opencode-session-456');
+      const sessionLink = drawer.getByTestId('opencode-session-link');
+      await expect(sessionLink).toBeVisible();
+      await expect(sessionLink).toContainText('Open Session');
+      await expect(sessionLink).toHaveAttribute('target', '_blank');
+      await expect(sessionLink).toHaveAttribute('href', expectedSessionUrl);
+
       // Verify session URL artifact appears in detail drawer
-      await expect(drawer.locator('a', { hasText: 'mock-opencode-session-456' })).toBeVisible({ timeout: 5000 });
+      await expect(drawer.locator('a', { hasText: 'mock-opencode-session-456' }).first()).toBeVisible({ timeout: 5000 });
       await expect(drawer.locator('text=OpenCode autonomous session')).toBeVisible();
 
       // Verify task claim reflects opencode
       await expect(drawer.getByText('Claimed', { exact: true })).toBeVisible();
       await expect(drawer.locator('text=Held by opencode')).toBeVisible();
-
-      // Close drawer
-      await drawer.locator('button[aria-label="Close"]').first().click();
     } finally {
       await new Promise<void>((resolve) => mockOpenCodeServer.close(() => resolve()));
     }

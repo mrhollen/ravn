@@ -20,8 +20,10 @@ import type {
   ListTasksParams,
   ListTasksResponse,
   NotesReq,
+  OpenCodeOptionsResponse,
   Project,
   RelationRow,
+  StartOpenCodeInput,
   StartOpenCodeResponse,
   TaskDetail,
   TaskSummary,
@@ -411,8 +413,19 @@ export const api = {
   },
 
   // --- opencode autonomous integration --------------------------------------
-  startOpenCode(taskId: string): Promise<StartOpenCodeResponse> {
-    return post<StartOpenCodeResponse>(`/tasks/${taskId}/opencode/start`, {});
+  getOpenCodeOptions(
+    projectId: string,
+    params?: { server_url?: string; directory?: string },
+  ): Promise<OpenCodeOptionsResponse> {
+    const qs = new URLSearchParams();
+    if (params?.server_url?.trim()) qs.set("server_url", params.server_url.trim());
+    if (params?.directory?.trim()) qs.set("directory", params.directory.trim());
+    const q = qs.toString();
+    return request<OpenCodeOptionsResponse>(`/projects/${projectId}/opencode/options${q ? `?${q}` : ""}`);
+  },
+
+  startOpenCode(taskId: string, input?: StartOpenCodeInput): Promise<StartOpenCodeResponse> {
+    return post<StartOpenCodeResponse>(`/tasks/${taskId}/opencode/start`, input ?? {});
   },
 
   // --- collaboration endpoints (agents use these via MCP; the UI is read-only

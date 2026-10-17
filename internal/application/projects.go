@@ -20,6 +20,8 @@ type ProjectUpdate struct {
 	OpenCodeServerURL *string // optional OpenCode server URL; empty string allowed to clear
 	OpenCodeDirectory *string // optional OpenCode worktree directory; empty string allowed to clear
 	OpenCodeModel     *string // optional OpenCode model "providerID/modelID"; empty string allowed to clear
+	OpenCodeAgent     *string // optional OpenCode agent name; empty string allowed to clear
+	OpenCodeVariant   *string // optional OpenCode model variant; empty string allowed to clear
 	Archived          *bool   // optional archive state
 }
 
@@ -234,11 +236,25 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 			return domain.Project{}, err
 		}
 	}
+	newAgent, hasAgent := "", false
+	if u.OpenCodeAgent != nil {
+		newAgent, hasAgent = strings.TrimSpace(*u.OpenCodeAgent), true
+		if err := domain.ValidateOpenCodeAgent(newAgent); err != nil {
+			return domain.Project{}, err
+		}
+	}
+	newVariant, hasVariant := "", false
+	if u.OpenCodeVariant != nil {
+		newVariant, hasVariant = strings.TrimSpace(*u.OpenCodeVariant), true
+		if err := domain.ValidateOpenCodeVariant(newVariant); err != nil {
+			return domain.Project{}, err
+		}
+	}
 	newArchived, hasArchived := false, false
 	if u.Archived != nil {
 		newArchived, hasArchived = *u.Archived, true
 	}
-	if !hasName && !hasDesc && !hasServerURL && !hasDir && !hasModel && !hasArchived {
+	if !hasName && !hasDesc && !hasServerURL && !hasDir && !hasModel && !hasAgent && !hasVariant && !hasArchived {
 		return domain.Project{}, fmt.Errorf("%w: no project fields to update", domain.ErrInvalid)
 	}
 
@@ -277,6 +293,16 @@ func (s *Projects) Update(ctx context.Context, actor domain.Actor, id domain.ID,
 			before["opencode_model"] = p.OpenCodeModel
 			after["opencode_model"] = newModel
 			p.OpenCodeModel = newModel
+		}
+		if hasAgent {
+			before["opencode_agent"] = p.OpenCodeAgent
+			after["opencode_agent"] = newAgent
+			p.OpenCodeAgent = newAgent
+		}
+		if hasVariant {
+			before["opencode_variant"] = p.OpenCodeVariant
+			after["opencode_variant"] = newVariant
+			p.OpenCodeVariant = newVariant
 		}
 		if hasArchived {
 			before["archived"] = strconv.FormatBool(p.Archived)

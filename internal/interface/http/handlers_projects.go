@@ -82,6 +82,8 @@ func (a *App) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		OpenCodeServerURL: req.OpenCodeServerURL,
 		OpenCodeDirectory: req.OpenCodeDirectory,
 		OpenCodeModel:     req.OpenCodeModel,
+		OpenCodeAgent:     req.OpenCodeAgent,
+		OpenCodeVariant:   req.OpenCodeVariant,
 		Archived:          req.Archived,
 	})
 	if err != nil {

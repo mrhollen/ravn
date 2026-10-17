@@ -2213,3 +2213,365 @@ test("BlockedCache: a detail payload for the CURRENT project still learns blocke
   assert.equal(app.knownBlocked["b9"], true, "current-project task's blocked state is learned");
   assert.equal(app.isBlocked("b9"), true);
 });
+
+// ---------------------------------------------------------------------------
+// OpenCode session URL & status (task 01M3MMZPDPNNP1TRQXTK4HEDGM)
+// ---------------------------------------------------------------------------
+
+test("OpenCode: startTaskInOpenCode captures session_id and session_url, records in openCodeSessions, and emits actionable toast", async () => {
+  const origStartOpenCode = api.startOpenCode;
+  try {
+    let calledWithId = "";
+    (api as any).startOpenCode = async (id: string) => {
+      calledWithId = id;
+      return {
+        session_id: "ses_abc123",
+        session_url: "http://127.0.0.1:4096/dir/session/ses_abc123",
+      };
+    };
+
+    const app = crowbanApp() as any;
+    app.detail = { id: "task-oc-1", title: "Test OpenCode", artifacts: [] };
+    app.refreshDetail = async () => true;
+    app.loadBoard = async () => {};
+
+    await app.startTaskInOpenCode();
+
+    assert.equal(calledWithId, "task-oc-1");
+    assert.deepEqual(app.openCodeSessions["task-oc-1"], {
+      session_id: "ses_abc123",
+      session_url: "http://127.0.0.1:4096/dir/session/ses_abc123",
+    });
+    assert.deepEqual(app.activeOpenCodeSession(), {
+      session_id: "ses_abc123",
+      session_url: "http://127.0.0.1:4096/dir/session/ses_abc123",
+    });
+
+    assert.equal(app.toasts.length, 1);
+    assert.equal(app.toasts[0].kind, "info");
+    assert.match(app.toasts[0].msg, /ses_abc123/);
+    assert.deepEqual(app.toasts[0].action, {
+      label: "Open Session",
+      href: "http://127.0.0.1:4096/dir/session/ses_abc123",
+    });
+  } finally {
+    (api as any).startOpenCode = origStartOpenCode;
+  }
+});
+
+test("OpenCode: activeOpenCodeSession falls back to latest 'OpenCode autonomous session' artifact when cache is empty", () => {
+  const app = crowbanApp() as any;
+  assert.equal(app.activeOpenCodeSession(null), null);
+
+  const detailWithArtifacts: any = {
+    id: "task-oc-2",
+    artifacts: [
+      {
+        id: "art-1",
+        kind: "url",
+        ref: "http://127.0.0.1:4096/p/session/ses_older",
+        summary: "OpenCode autonomous session",
+      },
+      {
+        id: "art-2",
+        kind: "log",
+        ref: "https://example.com/build.log",
+        summary: "Build log",
+      },
+      {
+        id: "art-3",
+        kind: "url",
+        ref: "http://127.0.0.1:4096/p/session/ses_newer",
+        summary: "OpenCode autonomous session",
+      },
+    ],
+  };
+
+  assert.deepEqual(app.activeOpenCodeSession(detailWithArtifacts), {
+    session_id: "ses_newer",
+    session_url: "http://127.0.0.1:4096/p/session/ses_newer",
+  });
+});
+
+test("OpenCode: index.html wires opencode-session-banner and toast-action-link", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  assert.match(html, /data-testid="toast-action-link"/, "toast template renders actionable link");
+  assert.match(html, /data-testid="opencode-session-banner"/, "detail drawer renders opencode session banner");
+  assert.match(html, /data-testid="opencode-session-link"/, "detail drawer renders opencode session link");
+  assert.match(html, /data-testid="opencode-session-id"/, "detail drawer renders opencode session id");
+});
+
+// ---------------------------------------------------------------------------
+// OpenCode configurable agent & variant (task 01M53XWXG5Q5Q53MPYDCJWNHSW)
+// ---------------------------------------------------------------------------
+
+test("OpenCode options: helpers filter models, agents, and variants gracefully", async () => {
+  const app = crowbanApp() as any;
+  assert.deepEqual(app.availableOpenCodeAgents(), []);
+  assert.deepEqual(app.availableOpenCodeModels(), []);
+  assert.deepEqual(app.availableOpenCodeVariantsFor("any"), []);
+
+  app.openCodeOptions = {
+    reachable: true,
+    resolved_agent: "build",
+    resolved_model: "provider-a/model-1",
+    resolved_variant: "medium",
+    agents: [
+      { name: "build", mode: "primary" },
+      { name: "plan", mode: "primary" },
+      { name: "review", mode: "subagent" },
+    ],
+    models: [
+      {
+        ref: "provider-a/model-1",
+        provider_id: "provider-a",
+        model_id: "model-1",
+        model_name: "Model One",
+        variants: ["low", "medium", "high"],
+      },
+      {
+        ref: "provider-b/model-2",
+        provider_id: "provider-b",
+        model_id: "model-2",
+        model_name: "Model Two",
+        variants: ["flash", "pro"],
+      },
+    ],
+  };
+
+  assert.equal(app.availableOpenCodeAgents().length, 3);
+  assert.equal(app.availableOpenCodeAgents()[0].name, "build");
+  assert.equal(app.availableOpenCodeModels().length, 2);
+
+  // Specific model match by ref
+  assert.deepEqual(app.availableOpenCodeVariantsFor("provider-a/model-1"), ["low", "medium", "high"]);
+  // Specific model match by model_id
+  assert.deepEqual(app.availableOpenCodeVariantsFor("model-2"), ["flash", "pro"]);
+  // Empty ref falls back to resolved_model ("provider-a/model-1")
+  assert.deepEqual(app.availableOpenCodeVariantsFor(""), ["low", "medium", "high"]);
+  assert.deepEqual(app.availableOpenCodeVariantsFor(undefined), ["low", "medium", "high"]);
+  // Unknown model returns deduplicated union across all models
+  assert.deepEqual(app.availableOpenCodeVariantsFor("unknown-ref"), ["low", "medium", "high", "flash", "pro"]);
+});
+
+test("OpenCode options: fetchOpenCodeOptions catches errors silently without toast", async () => {
+  const origGetOptions = api.getOpenCodeOptions;
+  try {
+    const app = crowbanApp() as any;
+    app.selectedProjectId = "p-fail";
+    app.projects = [{ id: "p-fail", name: "Fail Project", opencode_server_url: "http://mock-opencode:4444" }];
+
+    // Simulate network error / offline OpenCode
+    (api as any).getOpenCodeOptions = async () => {
+      throw new Error("connection refused");
+    };
+
+    const res = await app.fetchOpenCodeOptions("p-fail");
+    assert.equal(res, null);
+    assert.equal(app.openCodeOptions, null);
+    assert.equal(app.loadingOpenCodeOptions, false);
+    // Silent catch: no error toast emitted
+    assert.equal(app.toasts.length, 0);
+
+    // Simulate reachable: false response
+    (api as any).getOpenCodeOptions = async () => {
+      return {
+        reachable: false,
+        resolved_agent: "build",
+        resolved_model: "",
+        resolved_variant: "",
+        agents: [],
+        models: [],
+      };
+    };
+
+    const offlineRes = await app.fetchOpenCodeOptions("p-fail", true);
+    assert.equal(offlineRes?.reachable, false);
+    assert.deepEqual(app.availableOpenCodeAgents(), []);
+    assert.deepEqual(app.availableOpenCodeModels(), []);
+  } finally {
+    (api as any).getOpenCodeOptions = origGetOptions;
+  }
+});
+
+test("ProjectSettings: form loading, dirty tracking, and saving opencode_agent and opencode_variant", async () => {
+  const origUpdateProject = api.updateProject;
+  const origGetProject = api.getProject;
+  const origGetOptions = api.getOpenCodeOptions;
+  try {
+    const app = crowbanApp() as any;
+    app.selectedProjectId = "proj-1";
+    app.projects = [
+      {
+        id: "proj-1",
+        name: "Test Project",
+        description: "Desc",
+        opencode_server_url: "http://localhost:4444",
+        opencode_directory: "/dir",
+        opencode_model: "llama.cpp/Qwen",
+        opencode_agent: "plan",
+        opencode_variant: "high",
+      },
+    ];
+
+    (api as any).getProject = async () => app.projects[0];
+    (api as any).getOpenCodeOptions = async () => ({
+      reachable: true,
+      resolved_agent: "build",
+      resolved_model: "",
+      resolved_variant: "",
+      agents: [],
+      models: [],
+    });
+
+    await app.openProjectSettings();
+    assert.equal(app.projectSettingsForm.opencode_agent, "plan");
+    assert.equal(app.projectSettingsForm.opencode_variant, "high");
+    assert.equal(app.projectSettingsDirty(), false, "clean on initial open");
+
+    // Modify agent -> dirty
+    app.projectSettingsForm.opencode_agent = "build";
+    assert.equal(app.projectSettingsDirty(), true, "agent modification marks form dirty");
+
+    // Revert agent -> clean
+    app.projectSettingsForm.opencode_agent = "plan";
+    assert.equal(app.projectSettingsDirty(), false, "reverted agent marks form clean");
+
+    // Modify variant -> dirty
+    app.projectSettingsForm.opencode_variant = "low";
+    assert.equal(app.projectSettingsDirty(), true, "variant modification marks form dirty");
+
+    // Save project settings passes opencode_agent and opencode_variant
+    let sentReq: any = null;
+    (api as any).updateProject = async (_id: string, req: any) => {
+      sentReq = req;
+      return { ...app.projects[0], ...req };
+    };
+
+    await app.saveProjectSettings();
+    assert.equal(sentReq.opencode_agent, "plan");
+    assert.equal(sentReq.opencode_variant, "low");
+
+    // Now test clearing: if baseline had "plan" and "high", setting to "" sends "" to clear
+    app.projectSettingsBaseline = {
+      name: "Test Project",
+      description: "Desc",
+      opencode_server_url: "",
+      opencode_directory: "",
+      opencode_model: "",
+      opencode_agent: "plan",
+      opencode_variant: "high",
+    };
+    app.projectSettingsForm = {
+      ...app.projectSettingsBaseline,
+      opencode_agent: "",
+      opencode_variant: "",
+    };
+
+    await app.saveProjectSettings();
+    assert.equal(sentReq.opencode_agent, "");
+    assert.equal(sentReq.opencode_variant, "");
+  } finally {
+    (api as any).updateProject = origUpdateProject;
+    (api as any).getProject = origGetProject;
+    (api as any).getOpenCodeOptions = origGetOptions;
+  }
+});
+
+test("OpenCode dispatch: per-task override state and startTaskInOpenCode payload", async () => {
+  const origStartOpenCode = api.startOpenCode;
+  const origGetOptions = api.getOpenCodeOptions;
+  try {
+    const app = crowbanApp() as any;
+    app.selectedProjectId = "proj-1";
+    app.projects = [
+      {
+        id: "proj-1",
+        name: "Test Project",
+        opencode_agent: "build",
+        opencode_model: "llama.cpp/Qwen",
+        opencode_variant: "medium",
+      },
+    ];
+    app.detail = { id: "task-override-1", title: "Task with Override", artifacts: [] };
+    app.refreshDetail = async () => true;
+    app.loadBoard = async () => {};
+
+    // 1. Initial configuration seeds from project defaults
+    app.initTaskOpenCodeConfig();
+    assert.deepEqual(app.taskOpenCodeForm, {
+      agent: "build",
+      model: "llama.cpp/Qwen",
+      variant: "medium",
+    });
+    assert.equal(app.taskOpenCodeDirty(), false);
+    assert.equal(app.showTaskOpenCodeConfig, false);
+
+    // 2. Toggle config panel
+    app.toggleOpenCodeConfig();
+    assert.equal(app.showTaskOpenCodeConfig, true);
+
+    // 3. Dismiss via dismissTop (Escape)
+    app.dismissTop();
+    assert.equal(app.showTaskOpenCodeConfig, false);
+
+    // 4. Calling startTaskInOpenCode without overrides sends undefined / {}
+    let capturedPayload: any = "NOT_CALLED";
+    (api as any).startOpenCode = async (_id: string, input?: any) => {
+      capturedPayload = input;
+      return { session_id: "ses_default", session_url: "http://localhost:4444/session/ses_default" };
+    };
+
+    await app.startTaskInOpenCode();
+    assert.equal(capturedPayload, undefined, "untouched start sends undefined input for backend resolution");
+
+    // 5. Modifying taskOpenCodeForm marks it dirty and passes the overrides
+    app.taskOpenCodeForm.agent = "plan";
+    app.taskOpenCodeForm.variant = "xhigh";
+    assert.equal(app.taskOpenCodeDirty(), true);
+
+    await app.startTaskInOpenCode();
+    assert.deepEqual(capturedPayload, {
+      agent: "plan",
+      model: "llama.cpp/Qwen",
+      variant: "xhigh",
+    });
+
+    // 6. Config panel start button (showTaskOpenCodeConfig=true) passes values and closes panel
+    app.showTaskOpenCodeConfig = true;
+    app.taskOpenCodeForm.agent = "editor-in-chief";
+    await app.startTaskInOpenCode();
+    assert.equal(capturedPayload.agent, "editor-in-chief");
+    assert.equal(app.showTaskOpenCodeConfig, false, "panel closes on start");
+
+    // 7. Clearing variant when baseline had a variant explicitly sends variant: ""
+    app.initTaskOpenCodeConfig(); // baseline has variant: "medium"
+    app.taskOpenCodeForm.variant = ""; // user cleared it to default/none
+    assert.equal(app.taskOpenCodeDirty(), true);
+    await app.startTaskInOpenCode();
+    assert.equal(capturedPayload.variant, "", "clearing variant from non-empty baseline sends empty string override");
+  } finally {
+    (api as any).startOpenCode = origStartOpenCode;
+    (api as any).getOpenCodeOptions = origGetOptions;
+  }
+});
+
+test("OpenCode: index.html wires all configurable agent and variant test IDs", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  // Project settings inputs
+  assert.match(html, /data-testid="project-opencode-agent-input"/);
+  assert.match(html, /data-testid="project-opencode-model-input"/);
+  assert.match(html, /data-testid="project-opencode-variant-input"/);
+
+  // Task detail drawer per-task override UI
+  assert.match(html, /data-testid="opencode-config-toggle"/);
+  assert.match(html, /data-testid="opencode-config-panel"/);
+  assert.match(html, /data-testid="task-opencode-agent-select"/);
+  assert.match(html, /data-testid="task-opencode-agent-input"/);
+  assert.match(html, /data-testid="task-opencode-model-select"/);
+  assert.match(html, /data-testid="task-opencode-model-input"/);
+  assert.match(html, /data-testid="task-opencode-variant-select"/);
+  assert.match(html, /data-testid="task-opencode-variant-input"/);
+  assert.match(html, /data-testid="opencode-config-start-btn"/);
+});
+

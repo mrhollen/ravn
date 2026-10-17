@@ -20,13 +20,19 @@ import type {
   CommentKind,
   CommentRow,
   ListTasksParams,
+  OpenCodeAgentOption,
+  OpenCodeModelOption,
+  OpenCodeOptionsResponse,
   ProjectWithCounts,
   RealtimeEventPayload,
   RelationRow,
   SseConnectionStatus,
+  StartOpenCodeInput,
+  StartOpenCodeResponse,
   Status,
   TaskDetail,
   TaskSummary,
+  UpdateProjectReq,
   UpdateTaskReq,
 } from "./types";
 import { STATUSES, STATUS_LABEL } from "./types";
@@ -234,6 +240,7 @@ export interface Toast {
   id: number;
   msg: string;
   kind: "error" | "info";
+  action?: { label: string; href: string };
   /** True while the leave transition plays (x-show hides it), then the row is
    *  dropped from the list. x-for removes nodes instantly, so the exit
    *  animation has to be driven through x-show first. */
@@ -302,9 +309,11 @@ export function crowbanApp() {
     toasts: [] as Toast[],
     toastSeq: 0,
 
-    toast(msg: string, kind: "error" | "info" = "info"): void {
+    toast(msg: string, kind: "error" | "info" = "info", action?: { label: string; href: string }): void {
       const id = ++this.toastSeq;
-      this.toasts = [...this.toasts, { id, msg, kind }];
+      const item: Toast = { id, msg, kind };
+      if (action) item.action = action;
+      this.toasts = [...this.toasts, item];
       // Global setTimeout (not window.setTimeout): identical in the browser,
       // but keeps async error paths unit-testable without a full window mock.
       setTimeout(() => {
@@ -722,6 +731,65 @@ export function crowbanApp() {
       }
     },
 
+    // ------------------------------------------------------------ opencode options
+    openCodeOptions: null as OpenCodeOptionsResponse | null,
+    openCodeOptionsProjectId: "" as string,
+    loadingOpenCodeOptions: false,
+
+    availableOpenCodeAgents(): OpenCodeAgentOption[] {
+      return this.openCodeOptions?.agents ?? [];
+    },
+
+    availableOpenCodeModels(): OpenCodeModelOption[] {
+      return this.openCodeOptions?.models ?? [];
+    },
+
+    availableOpenCodeVariantsFor(modelRef?: string): string[] {
+      const models = this.availableOpenCodeModels();
+      if (!models.length) return [];
+      const target = (modelRef ?? "").trim() || (this.openCodeOptions?.resolved_model ?? "").trim();
+      if (target) {
+        const found = models.find((m) => m.ref === target || m.model_id === target);
+        if (found && Array.isArray(found.variants)) {
+          return [...new Set(found.variants)];
+        }
+      }
+      const union = new Set<string>();
+      for (const m of models) {
+        if (Array.isArray(m.variants)) {
+          for (const v of m.variants) {
+            if (v) union.add(v);
+          }
+        }
+      }
+      return [...union];
+    },
+
+    async fetchOpenCodeOptions(projectId?: string, force = false): Promise<OpenCodeOptionsResponse | null> {
+      const pid = projectId || this.selectedProjectId;
+      if (!pid) return null;
+      const p = this.projects.find((x) => x.id === pid);
+      if (p && !p.opencode_server_url && (!this.showProjectSettings || !this.projectSettingsForm.opencode_server_url)) {
+        this.openCodeOptions = null;
+        return null;
+      }
+      if (!force && this.openCodeOptions && this.openCodeOptionsProjectId === pid) {
+        return this.openCodeOptions;
+      }
+      this.loadingOpenCodeOptions = true;
+      try {
+        const res = await api.getOpenCodeOptions(pid);
+        this.openCodeOptions = res;
+        this.openCodeOptionsProjectId = pid;
+        return res;
+      } catch {
+        this.openCodeOptions = null;
+        return null;
+      } finally {
+        this.loadingOpenCodeOptions = false;
+      }
+    },
+
     // ------------------------------------------------------------ project settings
     showProjectSettings: false,
     projectSettingsForm: {
@@ -730,6 +798,8 @@ export function crowbanApp() {
       opencode_server_url: "",
       opencode_directory: "",
       opencode_model: "",
+      opencode_agent: "",
+      opencode_variant: "",
     },
     /** Pristine copy of the form captured when the dialog opens (and re-synced
      *  after the authoritative fetch) — the "has anything actually changed?"
@@ -740,6 +810,8 @@ export function crowbanApp() {
       opencode_server_url: "",
       opencode_directory: "",
       opencode_model: "",
+      opencode_agent: "",
+      opencode_variant: "",
     },
     projectSettingsBusy: false,
     showArchiveConfirm: false,
@@ -759,6 +831,8 @@ export function crowbanApp() {
           opencode_server_url: p.opencode_server_url ?? "",
           opencode_directory: p.opencode_directory ?? "",
           opencode_model: p.opencode_model ?? "",
+          opencode_agent: p.opencode_agent ?? "",
+          opencode_variant: p.opencode_variant ?? "",
         };
       } else {
         this.projectSettingsForm = {
@@ -767,6 +841,8 @@ export function crowbanApp() {
           opencode_server_url: "",
           opencode_directory: "",
           opencode_model: "",
+          opencode_agent: "",
+          opencode_variant: "",
         };
       }
       // Pristine reference for the discard guard (re-synced after the fetch).
@@ -774,6 +850,7 @@ export function crowbanApp() {
       this.showProjectSettings = true;
       // Name field first — least destructive control in this dialog.
       this.projectSettingsFocus = this.openDialog("cb-project-settings", "input");
+
       try {
         const full = await api.getProject(this.selectedProjectId);
         this.projectSettingsForm = {
@@ -782,9 +859,14 @@ export function crowbanApp() {
           opencode_server_url: full.opencode_server_url ?? "",
           opencode_directory: full.opencode_directory ?? "",
           opencode_model: full.opencode_model ?? "",
+          opencode_agent: full.opencode_agent ?? "",
+          opencode_variant: full.opencode_variant ?? "",
         };
         // The fetch is authoritative — re-base "pristine" on it.
         this.projectSettingsBaseline = { ...this.projectSettingsForm };
+        if (full.opencode_server_url) {
+          void this.fetchOpenCodeOptions(this.selectedProjectId);
+        }
       } catch {
         /* keep current list info */
       }
@@ -806,11 +888,13 @@ export function crowbanApp() {
       const f = this.projectSettingsForm;
       const b = this.projectSettingsBaseline;
       return (
-        f.name !== b.name ||
-        f.description !== b.description ||
-        f.opencode_server_url !== b.opencode_server_url ||
-        f.opencode_directory !== b.opencode_directory ||
-        f.opencode_model !== b.opencode_model
+        (f.name ?? "") !== (b.name ?? "") ||
+        (f.description ?? "") !== (b.description ?? "") ||
+        (f.opencode_server_url ?? "") !== (b.opencode_server_url ?? "") ||
+        (f.opencode_directory ?? "") !== (b.opencode_directory ?? "") ||
+        (f.opencode_model ?? "") !== (b.opencode_model ?? "") ||
+        (f.opencode_agent ?? "") !== (b.opencode_agent ?? "") ||
+        (f.opencode_variant ?? "") !== (b.opencode_variant ?? "")
       );
     },
 
@@ -889,14 +973,23 @@ export function crowbanApp() {
       if (!this.selectedProjectId || !name || this.projectSettingsBusy) return;
       this.projectSettingsBusy = true;
       try {
-        await api.updateProject(this.selectedProjectId, {
+        const agentTrim = this.projectSettingsForm.opencode_agent?.trim() ?? "";
+        const variantTrim = this.projectSettingsForm.opencode_variant?.trim() ?? "";
+        const serverUrlTrim = this.projectSettingsForm.opencode_server_url?.trim() ?? "";
+        const directoryTrim = this.projectSettingsForm.opencode_directory?.trim() ?? "";
+        const modelTrim = this.projectSettingsForm.opencode_model?.trim() ?? "";
+
+        const updatePayload: UpdateProjectReq = {
           actor: this.actor(),
           name,
-          description: this.projectSettingsForm.description.trim() || undefined,
-          opencode_server_url: this.projectSettingsForm.opencode_server_url.trim() || undefined,
-          opencode_directory: this.projectSettingsForm.opencode_directory.trim() || undefined,
-          opencode_model: this.projectSettingsForm.opencode_model.trim() || undefined,
-        });
+          description: this.projectSettingsForm.description?.trim() || undefined,
+          opencode_server_url: serverUrlTrim || (this.projectSettingsBaseline.opencode_server_url ? "" : undefined),
+          opencode_directory: directoryTrim || (this.projectSettingsBaseline.opencode_directory ? "" : undefined),
+          opencode_model: modelTrim || (this.projectSettingsBaseline.opencode_model ? "" : undefined),
+          opencode_agent: agentTrim || (this.projectSettingsBaseline.opencode_agent ? "" : undefined),
+          opencode_variant: variantTrim || (this.projectSettingsBaseline.opencode_variant ? "" : undefined),
+        };
+        await api.updateProject(this.selectedProjectId, updatePayload);
         await this.loadProjects();
         this.closeProjectSettings();
         this.toast("Project updated");
@@ -1105,6 +1198,8 @@ export function crowbanApp() {
         safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
       } catch { /* ignore */ }
       this.board = null;
+      this.openCodeOptions = null;
+      this.openCodeOptionsProjectId = "";
       // The blocked-state cache belongs to the project being LEFT: reset it,
       // scoped to the new selection, so the fresh board starts from no stale
       // badges (isBlocked()'s scope check also covers the entry points that
@@ -1607,6 +1702,7 @@ export function crowbanApp() {
       this.editingTask = false;
       this.totalComments = 0;
       this.loadingOlderComments = false;
+      this.initTaskOpenCodeConfig();
       if (!switching) {
         // Defensive: a stale session must never survive to capture a new trigger.
         this.closeDialog(this.detailFocus);
@@ -1662,6 +1758,7 @@ export function crowbanApp() {
       this.totalComments = 0;
       this.loadingOlderComments = false;
       this.startingOpenCode = false;
+      this.showTaskOpenCodeConfig = false;
       // AC 1: the notes scratchpad never outlives its drawer — otherwise a
       // dirty draft would leak into whatever task is opened next.
       this.resetNotesDraft();
@@ -1786,14 +1883,100 @@ export function crowbanApp() {
 
     // ---------------------------------------------------------------- opencode
     startingOpenCode: false,
+    openCodeSessions: {} as Record<string, StartOpenCodeResponse>,
+    showTaskOpenCodeConfig: false,
+    taskOpenCodeForm: {
+      agent: "",
+      model: "",
+      variant: "",
+    },
+    taskOpenCodeBaseline: {
+      agent: "",
+      model: "",
+      variant: "",
+    },
 
-    async startTaskInOpenCode(): Promise<void> {
+    initTaskOpenCodeConfig(): void {
+      this.showTaskOpenCodeConfig = false;
+      const p = this.projects.find((x) => x.id === this.selectedProjectId);
+      const agent = p?.opencode_agent || this.openCodeOptions?.resolved_agent || "build";
+      const model = p?.opencode_model || this.openCodeOptions?.resolved_model || "";
+      const variant = p?.opencode_variant || this.openCodeOptions?.resolved_variant || "";
+      this.taskOpenCodeForm = { agent, model, variant };
+      this.taskOpenCodeBaseline = { agent, model, variant };
+    },
+
+    toggleOpenCodeConfig(): void {
+      this.showTaskOpenCodeConfig = !this.showTaskOpenCodeConfig;
+      if (this.showTaskOpenCodeConfig && (!this.openCodeOptions || this.openCodeOptionsProjectId !== this.selectedProjectId)) {
+        void this.fetchOpenCodeOptions(this.selectedProjectId).then((opts) => {
+          if (opts && !this.taskOpenCodeDirty()) {
+            const pNow = this.projects.find((x) => x.id === this.selectedProjectId);
+            const a = pNow?.opencode_agent || opts.resolved_agent || "build";
+            const m = pNow?.opencode_model || opts.resolved_model || "";
+            const v = pNow?.opencode_variant || opts.resolved_variant || "";
+            this.taskOpenCodeForm = { agent: a, model: m, variant: v };
+            this.taskOpenCodeBaseline = { agent: a, model: m, variant: v };
+          }
+        });
+      }
+    },
+
+    taskOpenCodeDirty(): boolean {
+      return (
+        (this.taskOpenCodeForm.agent ?? "") !== (this.taskOpenCodeBaseline.agent ?? "") ||
+        (this.taskOpenCodeForm.model ?? "") !== (this.taskOpenCodeBaseline.model ?? "") ||
+        (this.taskOpenCodeForm.variant ?? "") !== (this.taskOpenCodeBaseline.variant ?? "")
+      );
+    },
+
+    activeOpenCodeSession(d?: TaskDetail | null): StartOpenCodeResponse | null {
+      const target = d === undefined ? this.detail : d;
+      if (!target) return null;
+      const cached = this.openCodeSessions[target.id];
+      if (cached && cached.session_url) return cached;
+      const artifacts = target.artifacts;
+      if (Array.isArray(artifacts)) {
+        for (let i = artifacts.length - 1; i >= 0; i--) {
+          const a = artifacts[i];
+          const ref = a?.ref?.trim();
+          if (a?.summary === "OpenCode autonomous session" && ref) {
+            const idx = ref.lastIndexOf("/session/");
+            const tail = idx !== -1 ? ref.slice(idx + "/session/".length).replace(/[/?#].*$/, "") : "";
+            const session_id = tail || ref;
+            return { session_id, session_url: ref };
+          }
+        }
+      }
+      return null;
+    },
+
+    async startTaskInOpenCode(customInput?: StartOpenCodeInput): Promise<void> {
       const d = this.detail;
       if (!d || this.startingOpenCode) return;
       this.startingOpenCode = true;
       try {
-        await api.startOpenCode(d.id);
-        this.toast("OpenCode session started");
+        let input: StartOpenCodeInput | undefined = customInput;
+        if (!input && (this.taskOpenCodeDirty() || this.showTaskOpenCodeConfig)) {
+          const p: StartOpenCodeInput = {};
+          if (this.taskOpenCodeForm.agent?.trim()) p.agent = this.taskOpenCodeForm.agent.trim();
+          if (this.taskOpenCodeForm.model?.trim()) p.model = this.taskOpenCodeForm.model.trim();
+          const variantTrim = this.taskOpenCodeForm.variant?.trim() ?? "";
+          if (variantTrim || (this.taskOpenCodeBaseline.variant ?? "").trim()) {
+            p.variant = variantTrim;
+          }
+          input = p;
+        }
+        const res = await api.startOpenCode(d.id, input);
+        if (res && res.session_url) {
+          this.openCodeSessions = { ...this.openCodeSessions, [d.id]: res };
+        }
+        this.toast(
+          res?.session_id ? `OpenCode session started (${res.session_id})` : "OpenCode session started",
+          "info",
+          res?.session_url ? { label: "Open Session", href: res.session_url } : undefined,
+        );
+        this.showTaskOpenCodeConfig = false;
         await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
       } catch (e) {
         this.toast(errMsg(e), "error");
@@ -3178,6 +3361,7 @@ export function crowbanApp() {
         if (!this.discardEditDraftIfConfirmed()) return;
         this.cancelEditing();
       }
+      else if (this.showTaskOpenCodeConfig) this.showTaskOpenCodeConfig = false;
       else if (this.detailOpen) this.requestCloseDetail();
       else if (this.showNewTask) this.requestCloseNewTask();
       else if (this.projectMenuOpen) this.closeProjectMenu(true); // header dropdowns are topmost

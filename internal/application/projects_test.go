@@ -460,3 +460,78 @@ func TestProjectsList_ArchivedFilter(t *testing.T) {
 		t.Fatalf("List archived = %+v, want only p2", archivedProjects)
 	}
 }
+
+func TestProjectsUpdate_OpenCodeAgentAndVariant(t *testing.T) {
+	ctx := context.Background()
+	svc, _, fp, fe := newProjectTestEnv(t)
+
+	p, err := svc.Create(ctx, testAgent, "Agent Project", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// 1. Rejects invalid agent (over cap)
+	badAgent := strings.Repeat("a", domain.MaxOpenCodeAgentLen+1)
+	if _, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{OpenCodeAgent: &badAgent}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Update(badAgent) err = %v, want ErrInvalid", err)
+	}
+
+	// 2. Rejects invalid agent (control char)
+	badAgentCtrl := "build\x00agent"
+	if _, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{OpenCodeAgent: &badAgentCtrl}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Update(badAgentCtrl) err = %v, want ErrInvalid", err)
+	}
+
+	// 3. Rejects invalid variant (over cap)
+	badVariant := strings.Repeat("v", domain.MaxOpenCodeVariantLen+1)
+	if _, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{OpenCodeVariant: &badVariant}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Update(badVariant) err = %v, want ErrInvalid", err)
+	}
+
+	// 4. Rejects invalid variant (control char)
+	badVariantCtrl := "high\x07"
+	if _, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{OpenCodeVariant: &badVariantCtrl}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Update(badVariantCtrl) err = %v, want ErrInvalid", err)
+	}
+
+	// Verify nothing was written
+	if fp.byID[p.ID].OpenCodeAgent != "" || fp.byID[p.ID].OpenCodeVariant != "" {
+		t.Fatalf("failed updates modified state: agent=%q variant=%q", fp.byID[p.ID].OpenCodeAgent, fp.byID[p.ID].OpenCodeVariant)
+	}
+
+	// 5. Update agent only
+	agentName := "custom-builder"
+	updated, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{OpenCodeAgent: &agentName})
+	if err != nil {
+		t.Fatalf("Update agent: %v", err)
+	}
+	if updated.OpenCodeAgent != agentName || fp.byID[p.ID].OpenCodeAgent != agentName {
+		t.Fatalf("agent not updated: got (%q, %q)", updated.OpenCodeAgent, fp.byID[p.ID].OpenCodeAgent)
+	}
+
+	// 6. Update variant only
+	variantName := "thinking"
+	updated, err = svc.Update(ctx, testAgent, p.ID, ProjectUpdate{OpenCodeVariant: &variantName})
+	if err != nil {
+		t.Fatalf("Update variant: %v", err)
+	}
+	if updated.OpenCodeVariant != variantName || fp.byID[p.ID].OpenCodeVariant != variantName {
+		t.Fatalf("variant not updated: got (%q, %q)", updated.OpenCodeVariant, fp.byID[p.ID].OpenCodeVariant)
+	}
+
+	// 7. Verify events recorded before/after
+	lastEv := fe.events[len(fe.events)-1]
+	if !strings.Contains(lastEv.After, `"opencode_variant":"thinking"`) {
+		t.Fatalf("expected opencode_variant in event after: %s", lastEv.After)
+	}
+
+	// 8. Clear both with empty strings
+	empty := ""
+	cleared, err := svc.Update(ctx, testAgent, p.ID, ProjectUpdate{OpenCodeAgent: &empty, OpenCodeVariant: &empty})
+	if err != nil {
+		t.Fatalf("Update clear: %v", err)
+	}
+	if cleared.OpenCodeAgent != "" || cleared.OpenCodeVariant != "" {
+		t.Fatalf("expected agent and variant cleared, got (%q, %q)", cleared.OpenCodeAgent, cleared.OpenCodeVariant)
+	}
+}

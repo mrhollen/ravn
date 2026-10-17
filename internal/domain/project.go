@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -18,6 +19,8 @@ type Project struct {
 	OpenCodeServerURL string // optional URL to OpenCode server (e.g. http://localhost:4444)
 	OpenCodeDirectory string // optional worktree directory for OpenCode
 	OpenCodeModel     string // optional model "providerID/modelID" for dispatched sessions; empty = server default
+	OpenCodeAgent     string // optional agent name (e.g. "build"); empty = default agent
+	OpenCodeVariant   string // optional model variant (e.g. "thinking", "high"); empty = default variant
 	Archived          bool
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
@@ -46,6 +49,12 @@ const MaxProjectDescriptionLen = 64 * 1024
 // rules for update input).
 const MaxOpenCodeDirectoryLen = 512
 
+// MaxOpenCodeAgentLen caps an OpenCode agent name's length in runes.
+const MaxOpenCodeAgentLen = 100
+
+// MaxOpenCodeVariantLen caps an OpenCode model variant's length in runes.
+const MaxOpenCodeVariantLen = 100
+
 // Validate reports whether p satisfies the Project field invariants:
 //
 //   - Name is non-empty (after trimming) and at most MaxProjectNameLen runes;
@@ -59,7 +68,11 @@ const MaxOpenCodeDirectoryLen = 512
 //     EXACTLY the sense parseOpenCodeModel (internal/interface/http) requires
 //     at dispatch time: a first slash with non-empty provider and model on
 //     both sides; further slashes belong to the model ID. Empty = server
-//     default — allowed.
+//     default — allowed;
+//   - OpenCodeAgent, when non-empty, is at most MaxOpenCodeAgentLen runes and
+//     contains no control characters. Empty = default agent — allowed;
+//   - OpenCodeVariant, when non-empty, is at most MaxOpenCodeVariantLen runes and
+//     contains no control characters. Empty = default variant — allowed.
 //
 // Errors wrap ErrInvalid, so use cases can return them verbatim and the REST
 // layer maps them to 400. Validate is deliberately a pure predicate: it runs
@@ -85,6 +98,16 @@ func (p Project) Validate() error {
 	}
 	if p.OpenCodeModel != "" {
 		if err := ValidateOpenCodeModel(p.OpenCodeModel); err != nil {
+			return err
+		}
+	}
+	if p.OpenCodeAgent != "" {
+		if err := ValidateOpenCodeAgent(p.OpenCodeAgent); err != nil {
+			return err
+		}
+	}
+	if p.OpenCodeVariant != "" {
+		if err := ValidateOpenCodeVariant(p.OpenCodeVariant); err != nil {
 			return err
 		}
 	}
@@ -157,3 +180,40 @@ func ValidateOpenCodeModel(ref string) error {
 	}
 	return nil
 }
+
+// ValidateOpenCodeAgent reports whether agent is valid: at most MaxOpenCodeAgentLen runes
+// and contains no control characters. Empty = default agent, allowed. Wraps ErrInvalid.
+func ValidateOpenCodeAgent(agent string) error {
+	agent = strings.TrimSpace(agent)
+	if agent == "" {
+		return nil
+	}
+	if runes := utf8.RuneCountInString(agent); runes > MaxOpenCodeAgentLen {
+		return fmt.Errorf("%w: opencode agent is %d runes, max is %d", ErrInvalid, runes, MaxOpenCodeAgentLen)
+	}
+	for _, r := range agent {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("%w: opencode agent must not contain control characters", ErrInvalid)
+		}
+	}
+	return nil
+}
+
+// ValidateOpenCodeVariant reports whether variant is valid: at most MaxOpenCodeVariantLen runes
+// and contains no control characters. Empty = omit variant, allowed. Wraps ErrInvalid.
+func ValidateOpenCodeVariant(variant string) error {
+	variant = strings.TrimSpace(variant)
+	if variant == "" {
+		return nil
+	}
+	if runes := utf8.RuneCountInString(variant); runes > MaxOpenCodeVariantLen {
+		return fmt.Errorf("%w: opencode variant is %d runes, max is %d", ErrInvalid, runes, MaxOpenCodeVariantLen)
+	}
+	for _, r := range variant {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("%w: opencode variant must not contain control characters", ErrInvalid)
+		}
+	}
+	return nil
+}
+
