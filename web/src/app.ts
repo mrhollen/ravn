@@ -381,9 +381,20 @@ export function crowbanApp() {
       this.authToken = api.getAuthToken();
       this.closeAuthModal();
       this.loadError = "";
-      if (this.selectedProjectId) this.connectSse();
       void this.loadProjects().then(() => {
-        if (this.selectedProjectId) void this.loadBoard();
+        // A bad/expired token re-triggers the auth modal + loadError inside
+        // loadProjectsCore; leave the boot-error/retry path to surface it.
+        if (this.loadError) return;
+        // First-visit enters the auth modal from a 401 during boot, which left
+        // bootError set — clear it now that projects loaded so the freshly
+        // auto-selected board isn't hidden behind the boot-error overlay.
+        this.bootError = false;
+        const deepLinkedTaskId =
+          typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
+        // Reuse the boot continuation: keeps a valid manual selection, else
+        // auto-selects the first project (canonical server order), persists it,
+        // loads its board + SSE; with zero projects shows the empty state.
+        void this.continueBoot(deepLinkedTaskId);
       });
     },
 
