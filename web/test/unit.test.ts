@@ -15,7 +15,7 @@ import {
 } from "../src/util.ts";
 import { escapeHtml, isAllowedHref, renderMarkdown } from "../src/md.ts";
 import { ApiError, api } from "../src/api.ts";
-import { crowbanApp, isMobileDetailViewport, MOBILE_DETAIL_MAX_WIDTH, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
+import { crowbanApp, isMobileDetailViewport, MOBILE_DETAIL_MAX_WIDTH, sseTelemetry, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
 import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, shouldApplyBoard } from "../src/refresh.ts";
@@ -1941,6 +1941,211 @@ test("Boot: first visit (no stored id) on a successful load selects and persists
   } finally {
     (api as any).listProjects = origListProjects;
     (api as any).getBoard = origGetBoard;
+    safeStorage.removeItem("crowban.project");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Ticket 01M3VJ5PQEAJ60B0QGPNZT8NKP: Alpine invokes the root component's
+// init() TWICE per page load — x-data auto-runs a data object's init method,
+// then the explicit x-init="init()" runs it again (verified empirically against
+// the shipped bundle: two invocation stacks ~6ms apart, the second carrying
+// Alpine's `[Alpine] init()` eval frame). The init() guard must make every boot
+// side effect happen AT MOST ONCE per component instance.
+
+/** Harness for the idempotence tests: a fake window (counting addEventListener),
+ *  a counting global setInterval wrapper, and a counting FakeEventSource so the
+ *  SSE path is actually exercised (without it connectSse() bails on Node).
+ *  Mirrors the R8 safeStorage global-swap convention; restore() in `finally`. */
+function bootIdempotencyHarness() {
+  const origWindow = (globalThis as any).window;
+  const origEventSource = (globalThis as any).EventSource;
+  const origSetInterval = (globalThis as any).setInterval;
+
+  const listenerCounts: Record<string, number> = {};
+  const intervalCalls: unknown[] = [];
+  let esConstructed = 0;
+
+  (globalThis as any).setInterval = (...args: Parameters<typeof setInterval>) => {
+    intervalCalls.push(args);
+    return origSetInterval(...args);
+  };
+
+  (globalThis as any).window = {
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    location: { pathname: "/" }, // every real browser has one; boot reads it for deep links
+    addEventListener: (t: string) => {
+      listenerCounts[t] = (listenerCounts[t] ?? 0) + 1;
+    },
+    setTimeout: (...args: unknown[]) => setTimeout(...(args as Parameters<typeof setTimeout>)),
+    clearTimeout: (...args: unknown[]) => clearTimeout(...(args as Parameters<typeof clearTimeout>)),
+  };
+
+  class FakeEventSource {
+    url: string;
+    onopen: any = null;
+    onerror: any = null;
+    onmessage: any = null;
+    closed = false;
+    constructor(url: string) {
+      this.url = url;
+      esConstructed++;
+    }
+    addEventListener() {}
+    close() {
+      this.closed = true;
+    }
+  }
+  (globalThis as any).EventSource = FakeEventSource;
+
+  return {
+    listenerCounts,
+    intervalCalls,
+    getEsConstructed: () => esConstructed,
+    /** The module-level SSE counters are shared across tests — reset so each
+     *  test asserts its own steady state. */
+    resetSseCounters() {
+      sseTelemetry.opened = 0;
+      sseTelemetry.closed = 0;
+    },
+    restore() {
+      (globalThis as any).setInterval = origSetInterval;
+      if (origWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = origWindow;
+      if (origEventSource === undefined) delete (globalThis as any).EventSource;
+      else (globalThis as any).EventSource = origEventSource;
+    },
+  };
+}
+
+test("InitIdempotence: concurrent double init() shares ONE boot — fetch, ticker, listeners and EventSource each run exactly once", async () => {
+  safeStorage.removeItem("crowban.project");
+  const origListProjects = api.listProjects;
+  const origGetBoard = api.getBoard;
+  let listCalls = 0;
+  let boardCalls = 0;
+  const h = bootIdempotencyHarness();
+  h.resetSseCounters();
+  try {
+    (api as any).listProjects = async () => {
+      listCalls++;
+      return { projects: [{ id: "p-alpha", name: "Alpha", task_counts: { todo: 1, doing: 0, done: 0 } }] };
+    };
+    (api as any).getBoard = async (pid: string) => {
+      boardCalls++;
+      return emptyBoard(pid);
+    };
+
+    const app = crowbanApp() as any;
+    app.polling = false; // unit env: never start the 15s poll interval
+
+    // The exact Alpine failure mode: two inits overlap at boot.
+    const [p1, p2] = await Promise.all([app.init(), app.init()]);
+    assert.equal(p1, p2, "both calls return the SAME memoized boot promise");
+
+    assert.equal(app.appBooted, true, "boot completed and marked booted");
+    assert.equal(listCalls, 1, "list-projects fetched exactly once");
+    assert.equal(boardCalls, 1, "board loaded exactly once");
+    assert.equal(h.getEsConstructed(), 1, "EventSource constructed exactly once");
+    assert.equal(sseTelemetry.opened, 1, "SSE telemetry: one stream opened");
+    assert.equal(sseTelemetry.closed, 0, "SSE telemetry: no premature close of a first stream");
+    assert.equal(sseTelemetry.openCount(), 1, "SSE telemetry: exactly one open stream at steady state");
+    assert.equal(app.sseStatus, "connecting", "the single stream is live (FakeEventSource never fires onopen)");
+    assert.equal(h.listenerCounts["beforeunload"], 1, "one beforeunload listener registered");
+    assert.equal(h.listenerCounts["popstate"], 1, "one popstate listener registered");
+    assert.equal(h.intervalCalls.length, 1, "one ticker interval created");
+    assert.equal(h.intervalCalls[0][1], 1000, "the ticker is the 1s nowTick interval");
+    assert.ok(app._tickerId, "the single ticker is recorded on the instance");
+
+    // A third call (any future directive double-run) still no-ops.
+    const p3 = await app.init();
+    assert.equal(p3, p1, "a later init() keeps returning the first boot's promise");
+    assert.equal(listCalls, 1);
+    assert.equal(boardCalls, 1);
+    assert.equal(h.getEsConstructed(), 1);
+    assert.equal(h.intervalCalls.length, 1);
+  } finally {
+    (api as any).listProjects = origListProjects;
+    (api as any).getBoard = origGetBoard;
+    h.restore();
+    safeStorage.removeItem("crowban.project");
+  }
+});
+
+test("InitIdempotence: sequential double init() also shares ONE boot", async () => {
+  safeStorage.removeItem("crowban.project");
+  const origListProjects = api.listProjects;
+  const origGetBoard = api.getBoard;
+  let listCalls = 0;
+  const h = bootIdempotencyHarness();
+  h.resetSseCounters();
+  try {
+    (api as any).listProjects = async () => {
+      listCalls++;
+      return { projects: [{ id: "p-alpha", name: "Alpha", task_counts: { todo: 0, doing: 1, done: 0 } }] };
+    };
+    (api as any).getBoard = async (pid: string) => emptyBoard(pid);
+
+    const app = crowbanApp() as any;
+    app.polling = false;
+
+    const p1 = await app.init();
+    assert.equal(app.appBooted, true, "first init completes the boot");
+    const p2 = await app.init();
+    assert.equal(p2, p1, "the second call returns the SAME (completed) boot promise");
+
+    assert.equal(listCalls, 1, "list-projects fetched exactly once across both calls");
+    assert.equal(h.getEsConstructed(), 1, "EventSource constructed exactly once");
+    assert.equal(sseTelemetry.openCount(), 1, "exactly one open stream at steady state");
+    assert.equal(h.intervalCalls.length, 1, "ticker created exactly once");
+    assert.equal(h.listenerCounts["beforeunload"], 1);
+    assert.equal(h.listenerCounts["popstate"], 1);
+  } finally {
+    (api as any).listProjects = origListProjects;
+    (api as any).getBoard = origGetBoard;
+    h.restore();
+    safeStorage.removeItem("crowban.project");
+  }
+});
+
+test("InitIdempotence: a failed boot keeps the memo — repeated init() no-ops and Retry stays the sole recovery path", async () => {
+  safeStorage.setItem("crowban.project", "proj-stored");
+  const origListProjects = api.listProjects;
+  const origGetBoard = api.getBoard;
+  let listCalls = 0;
+  const h = bootIdempotencyHarness();
+  h.resetSseCounters();
+  try {
+    (api as any).listProjects = async () => {
+      listCalls++;
+      throw new TypeError("fetch failed");
+    };
+    (api as any).getBoard = async (pid: string) => emptyBoard(pid);
+
+    const app = crowbanApp() as any;
+    app.polling = false;
+    const p1 = await app.init();
+    assert.equal(app.bootError, true, "failed boot shows the dedicated retry screen");
+
+    // A second init() must NOT re-run boot (no extra fetch): recovery is
+    // exclusively retryBoot()'s job — the memo survives a failed boot.
+    const p2 = await app.init();
+    assert.equal(p2, p1, "a repeat init() returns the first (failed) boot's promise");
+    assert.equal(listCalls, 1, "no duplicate projects fetch from the repeated init()");
+
+    // And Retry recovers with the same continuation as a normal boot.
+    (api as any).listProjects = async () => ({
+      projects: [{ id: "proj-stored", name: "Stored", task_counts: { todo: 0, doing: 0, done: 0 } }],
+    });
+    await app.retryBoot();
+    assert.equal(app.bootError, false, "Retry clears the boot-error screen");
+    assert.ok(app.board, "board loaded through Retry's continuation");
+    assert.equal(h.getEsConstructed(), 1, "SSE connected exactly once (via Retry, not a second init)");
+    assert.equal(sseTelemetry.openCount(), 1);
+  } finally {
+    (api as any).listProjects = origListProjects;
+    (api as any).getBoard = origGetBoard;
+    h.restore();
     safeStorage.removeItem("crowban.project");
   }
 });

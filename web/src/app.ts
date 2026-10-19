@@ -237,6 +237,28 @@ const SSE_EVENT_KINDS = [
   "ac-removed",
 ];
 
+/** TEST-SUPPORT telemetry for the SSE singleton guarantee (ticket
+ *  01M3VJ5PQEAJ60B0QGPNZT8NKP): counts EventSource constructions and close
+ *  paths so unit + browser tests can assert "exactly one open stream" without
+ *  reaching into a live socket. No production behavior reads these counters —
+ *  they only accumulate. Browser tests reach them via the component reference
+ *  (`Alpine.$data(root)._sseTelemetry`, see `_sseTelemetry` below) instead of
+ *  a window flag, so shipped bundles stay clean. */
+export const sseTelemetry = {
+  /** Every successful `new EventSource(...)` in connectSse(). */
+  opened: 0,
+  /** Every close path that actually closed a live stream (disconnectSse +
+   *  handleSseDisconnect). A double-close can't skew this: the counter fires
+   *  only while `this.sse` is non-null. */
+  closed: 0,
+  /** Currently-open streams = opened − closed. Steady state must be exactly 1
+   *  after boot and STAYS 1 across reconnect cycles (each close+open nets to
+   *  zero). */
+  openCount(): number {
+    return this.opened - this.closed;
+  },
+};
+
 export interface Toast {
   id: number;
   msg: string;
@@ -468,6 +490,11 @@ export function crowbanApp() {
     /** Flips on at the end of init(); gates the trigger so a pre-boot click
      *  can't open an empty, inert menu (and e2e can wait for it to enable). */
     appBooted: false,
+    /** Boot memo (the init() guard — see init()): holds the in-flight or
+     *  completed _runBoot() promise so a second invocation returns it instead
+     *  of re-running boot. Null until the first init(); cleared only if that
+     *  boot threw a genuine (non-network) error. */
+    _bootPromise: null as Promise<void> | null,
     _projectMenuOutsideHandler: null as ((e: Event) => void) | null,
 
     projectSelectLabel(): string {
@@ -1311,6 +1338,11 @@ export function crowbanApp() {
     // project's backlog after a switch.
     sseLastEventId: "" as string,
     sseLastEventProjectId: "" as string,
+    /** TEST-SUPPORT: reference to the module-level SSE singleton counters so
+     *  browser tests can read them via Alpine.$data(root)._sseTelemetry
+     *  (see sseTelemetry above). Carried on the component instead of a window
+     *  flag so shipped bundles stay free of global test hooks. */
+    _sseTelemetry: sseTelemetry,
 
     connectSse(): void {
       this.disconnectSse(false);
@@ -1350,6 +1382,7 @@ export function crowbanApp() {
       }
 
       this.sse = es;
+      sseTelemetry.opened++; // TEST-SUPPORT: count every constructed stream
 
       es.onopen = () => {
         if (this.sse === es) {
@@ -1427,6 +1460,7 @@ export function crowbanApp() {
       if (this.sse) {
         this.sse.close();
         this.sse = null;
+        sseTelemetry.closed++; // TEST-SUPPORT: a live stream was actually closed
       }
       this.sseStatus = "connecting";
 
@@ -1457,6 +1491,7 @@ export function crowbanApp() {
       if (this.sse) {
         this.sse.close();
         this.sse = null;
+        sseTelemetry.closed++; // TEST-SUPPORT: a live stream was actually closed
       }
       if (resetBackoff) {
         this.sseBackoffMs = 2000;
@@ -3446,7 +3481,39 @@ export function crowbanApp() {
     },
 
     // ---------------------------------------------------------------------- init
+    /** Boot guard (ticket 01M3VJ5PQEAJ60B0QGPNZT8NKP): Alpine invokes the
+     *  component's init() TWICE per page load — once because x-data auto-runs
+     *  a data object's init method, and again from the root element's explicit
+     *  x-init="init()" (directive order runs x-data first; verified empirically
+     *  against the shipped bundle: two invocation stacks ~6ms apart, the second
+     *  carrying Alpine's `[Alpine] init()` eval frame). The memo makes any
+     *  repeat call return the FIRST boot's promise instead of re-running it, so
+     *  no duplicate ticker intervals, debouncers, window listeners, projects
+     *  fetches or SSE EventSources are created. (loadProjects' in-flight
+     *  coalescer had already masked only the fetch; everything else still
+     *  duplicated — including one open-then-immediately-closed EventSource.)
+     *
+     *  The memo is never re-triggered on a failed boot by design: _runBoot()
+     *  catches every network error into loadError/state, and the boot-error
+     *  screen's Retry runs retryBoot(), which re-runs loadProjects +
+     *  continueBoot directly WITHOUT calling init(). A rejected promise would
+     *  therefore only mean a genuine programming bug — in that case clear the
+     *  memo so a later call can retry. */
     async init(): Promise<void> {
+      if (!this._bootPromise) {
+        this._bootPromise = this._runBoot();
+        this._bootPromise.catch(() => {
+          // Only reachable on a genuine (non-network) throw — see above.
+          this._bootPromise = null;
+        });
+      }
+      return this._bootPromise;
+    },
+
+    /** The actual boot sequence — run at most ONCE per component instance
+     *  (see the init() guard above). Kept as its own method so the memo stays
+     *  trivially inspectable and unit-testable. */
+    async _runBoot(): Promise<void> {
       this._tickerId = setInterval(() => {
         this.nowTick = Date.now();
       }, 1000);
