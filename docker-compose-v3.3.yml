@@ -19,6 +19,8 @@
 # named volume and its /data mount — is equivalent to docker-compose.yml.
 # Host ports default to 127.0.0.1:3311 (server) and 127.0.0.1:9311 (mcp); containers ALWAYS
 # listen on 8080/9080 internally, so the MCP upstream URL stays stable.
+# RAVN_DATA_DIR / RAVN_ARTIFACTS_DIR default to named volumes (ravn-data, ravn-artifacts),
+# or can be set to host paths (e.g. ./data, ./artifacts).
 #
 # Run:
 #   docker-compose -f docker-compose-v3.3.yml up -d
@@ -40,8 +42,8 @@ services:
       OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
       OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)
     volumes:
-      - ravn-data:/data
-      - ravn-artifacts:/artifacts
+      - "${RAVN_DATA_DIR:-ravn-data}:/data"
+      - "${RAVN_ARTIFACTS_DIR:-ravn-artifacts}:/artifacts"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 15s

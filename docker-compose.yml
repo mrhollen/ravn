@@ -7,9 +7,11 @@
 #
 # Host-side ports are overridable via .env (copied from .env.example) or the
 # environment — compose interpolates ${VAR:-default} automatically:
-#   RAVN_BIND_IP      default 127.0.0.1 (loopback; set to 0.0.0.0 only with RAVN_TOKEN set!)
-#   RAVN_SERVER_PORT  default 3311   (ravn-server publishes :8080 inside)
-#   RAVN_MCP_PORT     default 9311   (ravn-mcp    publishes :9080 inside)
+#   RAVN_BIND_IP       default 127.0.0.1 (loopback; set to 0.0.0.0 only with RAVN_TOKEN set!)
+#   RAVN_SERVER_PORT   default 3311   (ravn-server publishes :8080 inside)
+#   RAVN_MCP_PORT      default 9311   (ravn-mcp    publishes :9080 inside)
+#   RAVN_DATA_DIR      default ravn-data (named volume; set to e.g. ./data for host bind mount)
+#   RAVN_ARTIFACTS_DIR default ravn-artifacts (named volume; set to e.g. ./artifacts for host bind mount)
 # Containers ALWAYS listen on 8080/9080 internally; only the host mapping
 # changes, which keeps the MCP container's upstream URL stable.
 
@@ -31,8 +33,8 @@ services:
       OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
       OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)
     volumes:
-      - ravn-data:/data
-      - ravn-artifacts:/artifacts
+      - "${RAVN_DATA_DIR:-ravn-data}:/data"
+      - "${RAVN_ARTIFACTS_DIR:-ravn-artifacts}:/artifacts"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 15s

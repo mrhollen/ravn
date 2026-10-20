@@ -58,7 +58,7 @@ Older `docker-compose` (v1.x, Compose schema v3.3) can't parse the modern file �
 
 **Port overrides.** Host-side published ports are env-overridable (`RAVN_SERVER_PORT`, default `3311`; `RAVN_MCP_PORT`, default `9311`). The containers always listen on 8080/9080 *internally* — only the host mapping changes, so the MCP→server upstream URL stays stable. If another process already owns the port you want, set e.g. `RAVN_SERVER_PORT=18080` in `.env` (do **not** kill what's there) and run `make up`; point UI/clients at http://localhost:18080.
 
-**Persistence.** The SQLite database lives in the named Docker volume `ravn-data` (mounted at `/data`) and survives rebuilds and `make down`. Backups = a consistent copy of that volume (stop the container first, or use SQLite's `.backup`).
+**Persistence.** The SQLite database lives in the named Docker volume `ravn-data` (mounted at `/data`) and survives rebuilds and `make down`. Backups = a consistent copy of that volume (stop the container first, or use SQLite's `.backup`). To mount local host directories instead (e.g. `./data` and `./artifacts`), set `RAVN_DATA_DIR=./data` and `RAVN_ARTIFACTS_DIR=./artifacts` in `.env`.
 
 ### Direct binaries (development)
 

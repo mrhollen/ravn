@@ -31,7 +31,10 @@ go.work.sum
 # Local binaries
 /bin/
 
-# Uploaded artifacts (local development)
+# Persistent data directory (local development / host bind mount)
+/data/
+
+# Uploaded artifacts (local development / host bind mount)
 /artifacts/
 
 # Agents working directory
