@@ -59,7 +59,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v); err != nil {
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
 			"error":   "invalid input",
 			"message": "malformed JSON body: " + err.Error(),
@@ -67,6 +69,54 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+// decodeOptionalJSON decodes the request body into v if present. If the request
+// body is empty (nil, http.NoBody, or 0 bytes / whitespace only), it returns
+// (false, true) without modifying v. If a non-empty body is present, it enforces
+// that Content-Type is application/json (or media type application/json with parameters),
+// returning 415 ({"error":"unsupported media type"}) if mismatched.
+// Misspelled or unknown fields, or malformed JSON return 400 ({"error":"invalid input"})
+// and the function returns (false, false). On success, it returns (true, true).
+func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any) (hasBody bool, ok bool) {
+	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+		return false, true
+	}
+
+	rawBody, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": "unreadable request body: " + err.Error(),
+		})
+		return false, false
+	}
+
+	if len(strings.TrimSpace(string(rawBody))) == 0 {
+		return false, true
+	}
+
+	ct := r.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil || mediaType != "application/json" {
+		writeJSONError(w, http.StatusUnsupportedMediaType, map[string]any{
+			"error":   "unsupported media type",
+			"message": "Content-Type must be application/json",
+		})
+		return false, false
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(rawBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": "malformed JSON body: " + err.Error(),
+		})
+		return false, false
+	}
+
+	return true, true
 }
 
 // pathID extracts and validates the {id} path parameter. ULIDs are plain
