@@ -113,6 +113,18 @@ jobs:
             echo "Docker Compose is not available in runner environment; skipping."
           fi
 
+      - name: Build container images (multi-stage)
+        run: |
+          if command -v docker >/dev/null 2>&1; then
+            echo "Building image target: server-runtime..."
+            docker build --target server-runtime -t test-server .
+            echo "Building image target: mcp-runtime..."
+            docker build --target mcp-runtime -t test-mcp .
+            echo "Both image targets built successfully."
+          else
+            echo "Docker is not available in runner environment; skipping image build."
+          fi
+
   publish:
     name: Build and Push Image
     needs: ci
