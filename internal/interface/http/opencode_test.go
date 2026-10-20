@@ -106,8 +106,8 @@ func TestOpenCodeStart_Success(t *testing.T) {
 				http.Error(w, "expected agent 'build'", http.StatusBadRequest)
 				return
 			}
-			if !strings.HasPrefix(req.Title, "CrowBan: ") {
-				http.Error(w, "expected title prefix 'CrowBan: '", http.StatusBadRequest)
+			if !strings.HasPrefix(req.Title, "Rävn: ") {
+				http.Error(w, "expected title prefix 'Rävn: '", http.StatusBadRequest)
 				return
 			}
 			if req.Model != nil {
@@ -230,7 +230,7 @@ func TestOpenCodeStart_Success(t *testing.T) {
 	if !strings.Contains(receivedPromptText, "Feature works on Linux") || !strings.Contains(receivedPromptText, "Unit tests pass 100%") {
 		t.Errorf("prompt missing acceptance criteria: %s", receivedPromptText)
 	}
-	expectedInstructions := "Instructions: You are assigned to autonomously work on and complete this task in CrowBan. This task has already been automatically claimed on your behalf under actor 'opencode' before this session started, granting you explicit permission to work on it (you do not need to claim it again, and must not halt if you see the 'opencode' lease; if you refresh or release the lease, use actor 'opencode'). Use the CrowBan MCP tools (or REST API) as you progress: update notes with your plan and progress, complete acceptance criteria using complete_ac as you verify them, and mark the task done when all criteria are met. When tests or verification commands produce output, upload it as evidence with attach_artifact (kind command-output/log/screenshot, ref = URL or data_base64 = base64 file content) so a human can verify your work — encouraged, not required. Once all acceptance criteria are verified and tests pass, commit and push your code changes to the git repository."
+	expectedInstructions := "Instructions: You are assigned to autonomously work on and complete this task in Rävn. This task has already been automatically claimed on your behalf under actor 'opencode' before this session started, granting you explicit permission to work on it (you do not need to claim it again, and must not halt if you see the 'opencode' lease; if you refresh or release the lease, use actor 'opencode'). Use the Rävn MCP tools (or REST API) as you progress: update notes with your plan and progress, complete acceptance criteria using complete_ac as you verify them, and mark the task done when all criteria are met. When tests or verification commands produce output, upload it as evidence with attach_artifact (kind command-output/log/screenshot, ref = URL or data_base64 = base64 file content) so a human can verify your work — encouraged, not required. Once all acceptance criteria are verified and tests pass, commit and push your code changes to the git repository."
 	if !strings.Contains(receivedPromptText, expectedInstructions) {
 		t.Errorf("prompt missing required instructions: %s", receivedPromptText)
 	}

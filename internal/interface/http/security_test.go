@@ -83,7 +83,7 @@ func TestCORSMiddleware_ConfiguredOrigins(t *testing.T) {
 	t.Parallel()
 
 	opts := CORSOptions{
-		AllowedOrigins: []string{"http://localhost:5173", "https://crowban.lan"},
+		AllowedOrigins: []string{"http://localhost:5173", "https://ravn.lan"},
 		AllowedMethods: []string{"GET", "POST", "DELETE"},
 		AllowedHeaders: []string{"Authorization", "Content-Type"},
 		MaxAge:         3600,

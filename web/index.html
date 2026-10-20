@@ -6,14 +6,14 @@
     <title>Rävn</title>
     <!-- Favicons: OS color scheme is the baseline; the pre-paint script below
          overrides these media attributes when the user's stored theme choice
-         (localStorage["crowban.theme"]) differs from the OS preference. -->
+         (localStorage["ravn_theme"]) differs from the OS preference. -->
     <link id="favicon-light" rel="icon" type="image/svg+xml" href="/logo-mascot.svg" media="(prefers-color-scheme: light)" />
     <link id="favicon-dark" rel="icon" type="image/svg+xml" href="/logo-mascot-dark.svg" media="(prefers-color-scheme: dark)" />
     <script>
       // Apply the stored theme before first paint to avoid a light-mode flash.
       (function () {
         try {
-          var t = localStorage.getItem("crowban.theme");
+          var t = localStorage.getItem("ravn_theme") || localStorage.getItem("ravn.theme") || localStorage.getItem("crowban.theme");
           if (t !== "light" && t !== "dark" && t !== "system") t = "system";
           var dark =
             t === "dark" ||

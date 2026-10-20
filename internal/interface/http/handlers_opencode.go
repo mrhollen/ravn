@@ -108,7 +108,7 @@ func parseOpenCodeModel(ref string) (providerID, modelID string, err error) {
 }
 
 // formatOpenCodePrompt formats the autonomous agent prompt with task details,
-// acceptance criteria, and explicit instructions to interact with CrowBan via
+// acceptance criteria, and explicit instructions to interact with Rävn via
 // MCP — including clarification that the task has already been claimed on the
 // agent's behalf under 'opencode', recommendations to attach test artifacts,
 // and instructions to commit and push changes upon completion.
@@ -129,7 +129,7 @@ func formatOpenCodePrompt(task domain.Task, acs []domain.AcceptanceCriterion) st
 			sb.WriteString(fmt.Sprintf("- %s Seq %d: %s\n", box, ac.Seq, ac.Text))
 		}
 	}
-	sb.WriteString("Instructions: You are assigned to autonomously work on and complete this task in CrowBan. This task has already been automatically claimed on your behalf under actor 'opencode' before this session started, granting you explicit permission to work on it (you do not need to claim it again, and must not halt if you see the 'opencode' lease; if you refresh or release the lease, use actor 'opencode'). Use the CrowBan MCP tools (or REST API) as you progress: update notes with your plan and progress, complete acceptance criteria using complete_ac as you verify them, and mark the task done when all criteria are met. When tests or verification commands produce output, upload it as evidence with attach_artifact (kind command-output/log/screenshot, ref = URL or data_base64 = base64 file content) so a human can verify your work — encouraged, not required. Once all acceptance criteria are verified and tests pass, commit and push your code changes to the git repository.")
+	sb.WriteString("Instructions: You are assigned to autonomously work on and complete this task in Rävn. This task has already been automatically claimed on your behalf under actor 'opencode' before this session started, granting you explicit permission to work on it (you do not need to claim it again, and must not halt if you see the 'opencode' lease; if you refresh or release the lease, use actor 'opencode'). Use the Rävn MCP tools (or REST API) as you progress: update notes with your plan and progress, complete acceptance criteria using complete_ac as you verify them, and mark the task done when all criteria are met. When tests or verification commands produce output, upload it as evidence with attach_artifact (kind command-output/log/screenshot, ref = URL or data_base64 = base64 file content) so a human can verify your work — encouraged, not required. Once all acceptance criteria are verified and tests pass, commit and push your code changes to the git repository.")
 	return sb.String()
 }
 
@@ -245,7 +245,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	// some hosts points at a key-gated provider and dies with a 401
 	// "Authentication Error" before doing any work.
 	sessionCreateBody := map[string]any{
-		"title": "CrowBan: " + detail.Task.Title,
+		"title": "Rävn: " + detail.Task.Title,
 		"agent": agentName,
 	}
 	if modelProviderID != "" {

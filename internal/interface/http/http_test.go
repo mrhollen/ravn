@@ -31,7 +31,7 @@ type stack struct {
 func newStack(t testing.TB) stack {
 	t.Helper()
 	ctx := context.Background()
-	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "crowban-http-test.db"))
+	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "ravn-http-test.db"))
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
@@ -64,7 +64,7 @@ func (c *fakeClock) Now() time.Time { return c.now }
 func newStackWithClock(t testing.TB, c *fakeClock) stack {
 	t.Helper()
 	ctx := context.Background()
-	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "crowban-http-test.db"))
+	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "ravn-http-test.db"))
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
@@ -1435,7 +1435,7 @@ func TestArtifactAttachAndErrors(t *testing.T) {
 
 	// summary is optional.
 	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/artifacts", map[string]any{
-		"actor": actor("human-x"), "kind": "log", "ref": "/var/log/crowban/build-42.log",
+		"actor": actor("human-x"), "kind": "log", "ref": "/var/log/ravn/build-42.log",
 	})
 	if code != http.StatusCreated {
 		t.Fatalf("POST /artifacts (no summary) = %d, want 201 (body %s)", code, string(body))
