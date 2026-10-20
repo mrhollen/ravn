@@ -2,11 +2,9 @@
 
 MCP-first, multi-project KanBan for humans and AI agents.
 
-<p align="center">
-  <img src="https://github.com/mrhollen/ravn/releases/download/screenshot/hero.png" alt="Rävn dark-themed KanBan board with To Do, Doing and Done columns showing seeded tasks, priority badges, AC progress, an assignee chip and a live SSE indicator" width="100%" style="max-width:960px;" />
-</p>
+![Rävn dark-themed KanBan board with To Do, Doing and Done columns](docs/assets/hero.png)
 
-<p align="center"><em>The live Rävn board — auto-refreshed by CI from the E2E suite on every green push to <code>main</code>.</em></p>
+*The live Rävn board.*
 
 ## What it is
 

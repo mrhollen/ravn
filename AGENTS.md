@@ -42,6 +42,17 @@ After a green run:
 
 Applies to QA agents (`frontend-qa`, `backend-qa`) and devs verifying their own work: leave visual evidence the UI looks right, not just that tests passed. If per-agent prompt files are added to this repo later, move this requirement there.
 
+### README hero screenshot (`docs/assets/hero.png`)
+
+The README shows a single committed screenshot at `docs/assets/hero.png`, linked with a host-agnostic relative path so it renders on both the Forgejo host and the GitHub mirror. It is **not** auto-refreshed by CI.
+
+To refresh it when you want a new shot:
+1. Run the deterministic spec (writes `web/test-results/hero.png`): `cd web && npx playwright test e2e/hero-screenshot.spec.ts` — or a full `npm run test:e2e`.
+2. Copy it into place: `cp web/test-results/hero.png docs/assets/hero.png`.
+
+> [!CAUTION]
+> **Do NOT commit a refreshed `docs/assets/hero.png` unless you have explicit instructions to update the README screenshot.** Refreshing the file locally is fine; committing binary churn on every run is not. Leave `docs/assets/hero.png` untouched and uncommitted unless a human explicitly asks for a new hero image.
+
 ## Local CI/CD, Container Registry & Infrastructure Runbook
 
 This repository runs workflows both on GitHub (`.github/workflows/`) and a local Forgejo instance (`.forgejo/workflows/`). The local pipeline tests and can build + publish the `server-runtime` image to a container registry. **No host-specific values are hardcoded in this repo** — all topology specifics come from repository variables/secrets and `.env` overrides, so the repo stays safe for public release.

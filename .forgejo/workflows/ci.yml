@@ -177,18 +177,3 @@ jobs:
           crane push /tmp/ravn.tar "${IMAGE_NAME}" --insecure
           rm -f /tmp/ravn.tar
           echo "Successfully pushed ${IMAGE_NAME} to the container registry!"
-
-  upload-hero-screenshot:
-    name: Publish Hero Screenshot (no-op on Forgejo - hosted on GitHub mirror)
-    needs: ci
-    if: >-
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      needs.ci.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Skip (hero asset lives on the GitHub mirror)
-        run: |
-          echo "Hero screenshot is published by the GitHub workflow at github.com/mrhollen/ravn (pinned release 'screenshot')."
-          echo "This Forgejo runner does not host the README image - nothing to upload. Skipping cleanly."
-          exit 0

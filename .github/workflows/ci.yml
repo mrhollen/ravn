@@ -93,14 +93,6 @@ jobs:
           cd web
           npm run test:e2e
 
-      - name: Upload hero screenshot artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
-        with:
-          name: hero-screenshot
-          path: web/test-results/hero.png
-          if-no-files-found: error
-
       - name: Validate Docker Compose configuration
         run: |
           if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -130,52 +122,3 @@ jobs:
           else
             echo "Docker is not available in runner environment; skipping image build."
           fi
-
-  upload-hero-screenshot:
-    name: Publish Hero Screenshot (GitHub mirror)
-    needs: ci
-    if: >-
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      needs.ci.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download hero screenshot artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: hero-screenshot
-          path: .
-
-      - name: Publish hero screenshot as a pinned release asset (overwrite)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set +e
-          TAG="screenshot"
-          ASSET="hero.png"
-          HERO="web/test-results/hero.png"
-          if [ ! -f "$HERO" ]; then
-            echo "Hero screenshot artifact missing; nothing to publish. Skipping cleanly."
-            exit 0
-          fi
-          # Create the pinned release once (idempotent).
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Creating pinned release '$TAG'..."
-            gh release create "$TAG" \
-              --title "Hero Screenshot (auto-updated)" \
-              --notes "Auto-refreshed from the E2E suite on every green push to main. Do not edit manually." \
-              >/dev/null 2>&1 || echo "::warning::Could not create release '$TAG' (insufficient token permission?)."
-          fi
-          # Overwrite the fixed-named asset so the public download URL never changes.
-          if gh release upload "$TAG" "$HERO" --clobber; then
-            echo "Published hero screenshot: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
-          else
-            echo "::warning::Hero upload failed (insufficient token permission?). Skipping cleanly - no side effects."
-          fi
-          exit 0
