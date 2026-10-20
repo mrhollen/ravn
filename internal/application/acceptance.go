@@ -64,14 +64,21 @@ func frozenACError(t domain.Task, clause string) error {
 }
 
 // ToggleAC flips the criterion at 1-based seq under taskID to done (or
-// un-flips it when done is false) and records who/when on the transition:
+// un-flips it when *done is false) and records who/when on the transition:
 // checking stamps CompletedBy/CompletedAt and stores note; unchecking clears
-// all three completion fields again. It appends ONE `ac-toggled` event whose
-// before→after payloads carry seq and the old/new done value. The parent
-// task's version is NOT bumped (child-row rule). Unknown task or unknown seq
-// → domain.ErrNotFound, and an incoming note over domain.MaxACNoteLen runes →
-// domain.ErrInvalid; nothing is written in either case.
-func (s *Acceptance) ToggleAC(ctx context.Context, actor domain.Actor, taskID domain.ID, seq int, done bool, note string) (domain.AcceptanceCriterion, error) {
+// all three completion fields again. When done is NIL — a PATCH that omits
+// "done" — the current done state AND its completion fields are PRESERVED:
+// only the note is rewritten via ACs.UpdateNote (SetDone(true) would re-stamp
+// CompletedBy/CompletedAt). A nil-done call whose trimmed note equals the
+// stored note is a no-op: the stored row is returned unchanged and NO event is
+// appended (same convention as identical text rewords). Each real write
+// appends ONE `ac-toggled` event whose before→after payloads carry seq and the
+// old/new done value — identical on the preserve path, matching note-carrying
+// toggles. The parent task's version is NOT bumped (child-row rule). Unknown
+// task or unknown seq → domain.ErrNotFound, and an incoming note over
+// domain.MaxACNoteLen runes → domain.ErrInvalid; nothing is written in either
+// case.
+func (s *Acceptance) ToggleAC(ctx context.Context, actor domain.Actor, taskID domain.ID, seq int, done *bool, note string) (domain.AcceptanceCriterion, error) {
 	a, err := normalizeActor(actor)
 	if err != nil {
 		return domain.AcceptanceCriterion{}, err
@@ -110,9 +117,18 @@ func (s *Acceptance) ToggleAC(ctx context.Context, actor domain.Actor, taskID do
 			return fmt.Errorf("%w: task %s has no acceptance criterion at seq %d", domain.ErrNotFound, taskID, seq)
 		}
 		oldDone := cur.Done
-		toggled, serr := r.ACs.SetDone(ctx, taskID, seq, done, note, a, now)
-		if serr != nil {
-			return serr // ErrNotFound if the row vanished between read and write (same tx — defensive)
+		var toggled domain.AcceptanceCriterion
+		var werr error
+		if done != nil { // explicit true/false: EXACTLY the legacy toggle (stamp/clear completion fields)
+			toggled, werr = r.ACs.SetDone(ctx, taskID, seq, *done, note, a, now)
+		} else if note == cur.Note { // omitted "done" + unchanged note: no-op by convention (no write, no event)
+			fresh = *cur
+			return nil
+		} else { // omitted "done" + new note: preserve done AND completion fields; rewrite the note only
+			toggled, werr = r.ACs.UpdateNote(ctx, taskID, seq, note)
+		}
+		if werr != nil {
+			return werr // ErrNotFound if the row vanished between read and write (same tx — defensive)
 		}
 		fresh = toggled                            // assign to the captured variable (`:=` here would shadow it)
 		if verr := fresh.Validate(); verr != nil { // fail closed: a desynchronized completion row never reaches an adapter

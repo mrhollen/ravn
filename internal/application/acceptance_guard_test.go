@@ -38,7 +38,7 @@ func mustSettleDone(t *testing.T, svc *Tasks, acs *Acceptance, task domain.Task)
 	t.Helper()
 	ctx := context.Background()
 	for seq := 1; seq <= 2; seq++ {
-		if _, err := acs.ToggleAC(ctx, testAgent, task.ID, seq, true, "done"); err != nil {
+		if _, err := acs.ToggleAC(ctx, testAgent, task.ID, seq, boolPtr(true), "done"); err != nil {
 			t.Fatalf("complete AC %d: %v", seq, err)
 		}
 	}
@@ -81,10 +81,10 @@ func TestACMutations_RejectedOnSettledTasks(t *testing.T) {
 			}{
 				{"AddAC", func() error { _, err := acs.AddAC(ctx, testAgent, task.ID, "Late criterion"); return err }},
 				{"EditACText", func() error { _, err := acs.EditACText(ctx, testAgent, task.ID, 1, "Rewritten"); return err }},
-				{"ToggleAC_uncheck", func() error { _, err := acs.ToggleAC(ctx, testAgent, task.ID, 1, false, ""); return err }},
+				{"ToggleAC_uncheck", func() error { _, err := acs.ToggleAC(ctx, testAgent, task.ID, 1, boolPtr(false), ""); return err }},
 				// Checking an ALREADY-DONE criterion on a completed task is blocked
 				// by design under the settled-parent rule (reopen first).
-				{"ToggleAC_check", func() error { _, err := acs.ToggleAC(ctx, testAgent, task.ID, 2, true, "late"); return err }},
+				{"ToggleAC_check", func() error { _, err := acs.ToggleAC(ctx, testAgent, task.ID, 2, boolPtr(true), "late"); return err }},
 				{"RemoveAC", func() error { return acs.RemoveAC(ctx, testAgent, task.ID, 1) }},
 			}
 			for _, m := range mutations {
@@ -145,7 +145,7 @@ func TestACMutations_AllowedAgainAfterReopenAndUnarchive(t *testing.T) {
 		if _, err := acs.EditACText(ctx, testAgent, task.ID, 2, "Criterion two (edited)"); err != nil {
 			t.Errorf("EditACText after reopen: %v", err)
 		}
-		got, err := acs.ToggleAC(ctx, testAgent, task.ID, 1, false, "")
+		got, err := acs.ToggleAC(ctx, testAgent, task.ID, 1, boolPtr(false), "")
 		if err != nil {
 			t.Fatalf("ToggleAC uncheck after reopen: %v", err)
 		}

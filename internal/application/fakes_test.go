@@ -14,6 +14,10 @@ import (
 // package's use cases. Nothing in production code depends on them; SQLite
 // integration tests prove the real adapters agree with these semantics.
 
+// boolPtr returns a pointer to b (test helper for *bool parameters, e.g.
+// ToggleAC's optional done — nil means "preserve").
+func boolPtr(b bool) *bool { return &b }
+
 // fakeClock is a controllable Clock: tests set "now" and advance it by hand.
 type fakeClock struct{ now time.Time }
 
@@ -498,6 +502,22 @@ func (f *fakeACs) UpdateText(_ context.Context, taskID domain.ID, seq int, text 
 		}
 		c := &rows[i]
 		c.Text = text
+		return *c, nil
+	}
+	return domain.AcceptanceCriterion{}, domain.ErrNotFound
+}
+
+// UpdateNote mirrors the SQLite adapter's guarded note update: only the note
+// field changes; done/text/completion fields are untouched. Unknown pair →
+// domain.ErrNotFound; the fresh row is returned.
+func (f *fakeACs) UpdateNote(_ context.Context, taskID domain.ID, seq int, note string) (domain.AcceptanceCriterion, error) {
+	rows := f.byTask[taskID]
+	for i := range rows {
+		if rows[i].Seq != seq {
+			continue
+		}
+		c := &rows[i]
+		c.Note = note
 		return *c, nil
 	}
 	return domain.AcceptanceCriterion{}, domain.ErrNotFound

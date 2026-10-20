@@ -1305,6 +1305,95 @@ func TestAcceptanceToggleAndErrors(t *testing.T) {
 	}
 }
 
+// TestToggleAC_PreserveDoneWhenOmitted pins the omitted-"done" contract on
+// PATCH /tasks/{id}/acceptance-criteria/{seq}: an absent "done" preserves the
+// criterion's current done state (and its completion fields), so a note-only
+// body updates just the note. Before this fix, the primitive bool decoded to
+// false and UNCHECKED already-completed criteria on note-only PATCHes.
+func TestToggleAC_PreserveDoneWhenOmitted(t *testing.T) {
+	t.Parallel()
+	stk := newStack(t)
+	p := createProject(t, stk, "Preserve done")
+	task := makeTask(t, stk, p.ID, "preserve checklist", map[string]any{
+		"acceptance_criteria": []string{"login works", "logout works"},
+	})
+
+	// Explicit check stamps who/when.
+	code, body := doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/1", map[string]any{
+		"actor": actor("ada"), "done": true, "note": "first pass",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("PATCH ac 1 done=true = %d, want 200 (body %s)", code, string(body))
+	}
+	ac := mustDecode[acDTO](t, body)
+	if !ac.Done || ac.CompletedBy == nil || ac.CompletedAt == nil {
+		t.Fatalf("checked AC = %+v, want done with completer", ac)
+	}
+	completedByName := ac.CompletedBy.Name
+	completedAt := *ac.CompletedAt
+
+	// REGRESSION: note-only PATCH (no "done", no "text") PRESERVES the
+	// completed state and must not re-stamp the completion fields.
+	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/1", map[string]any{
+		"actor": actor("ada"), "note": "re-verified later",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("note-only PATCH ac 1 = %d, want 200 (body %s)", code, string(body))
+	}
+	ac = mustDecode[acDTO](t, body)
+	if !ac.Done || ac.Note != "re-verified later" {
+		t.Fatalf("note-only AC = %+v, want done PRESERVED with the updated note", ac)
+	}
+	if ac.CompletedBy == nil || ac.CompletedBy.Name != completedByName {
+		t.Fatalf("note-only changed completed_by: %s → %v, want unchanged", completedByName, ac.CompletedBy)
+	}
+	if ac.CompletedAt == nil || *ac.CompletedAt != completedAt {
+		t.Fatalf("note-only changed completed_at: %s → %v, want unchanged", completedAt, ac.CompletedAt)
+	}
+
+	// Note-only on an UN-DONE criterion must not flip it to done either.
+	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/2", map[string]any{
+		"actor": actor("ada"), "note": "still pending",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("note-only PATCH ac 2 = %d, want 200 (body %s)", code, string(body))
+	}
+	ac = mustDecode[acDTO](t, body)
+	if ac.Seq != 2 || ac.Done || ac.Note != "still pending" {
+		t.Fatalf("note-only AC 2 = %+v, want seq 2 still not done with the updated note", ac)
+	}
+
+	// Explicit false clears Done and the completion fields.
+	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/1", map[string]any{
+		"actor": actor("ada"), "done": false,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("uncheck ac 1 = %d, want 200 (body %s)", code, string(body))
+	}
+	ac = mustDecode[acDTO](t, body)
+	if ac.Done || ac.CompletedBy != nil || ac.CompletedAt != nil {
+		t.Fatalf("unchecked AC = %+v, want done=false with cleared completion fields", ac)
+	}
+
+	// Edge: bare actor (no done/note/text) on a COMPLETED AC → 200, stays done.
+	code, _ = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/2", map[string]any{
+		"actor": actor("ada"), "done": true,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("check ac 2 = %d, want 200", code)
+	}
+	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/2", map[string]any{
+		"actor": actor("ada"),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("bare PATCH ac 2 = %d, want 200 (body %s)", code, string(body))
+	}
+	ac = mustDecode[acDTO](t, body)
+	if !ac.Done || ac.CompletedBy == nil || ac.CompletedAt == nil {
+		t.Fatalf("bare-PATCH AC = %+v, want done preserved on a completed criterion", ac)
+	}
+}
+
 func TestAcceptanceCriteriaEditingEndpoints(t *testing.T) {
 	t.Parallel()
 	stk := newStack(t)

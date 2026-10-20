@@ -165,6 +165,34 @@ func (r *acceptanceCriterionRepo) UpdateText(ctx context.Context, taskID domain.
 	return c, err
 }
 
+// UpdateNote rewrites exactly the criterion's note at (taskID, seq); done/text
+// and the completion fields are untouched. 0 rows affected means the pair does
+// not exist (keyed UNIQUE(task_id, seq)) → domain.ErrNotFound. Like UpdateText
+// it returns the fresh row read back after the guarded write; no parent task
+// row is touched (child-row rule).
+func (r *acceptanceCriterionRepo) UpdateNote(ctx context.Context, taskID domain.ID, seq int, note string) (domain.AcceptanceCriterion, error) {
+	res, err := r.q.ExecContext(ctx,
+		`UPDATE acceptance_criterion SET note = ? WHERE task_id = ? AND seq = ?`,
+		note, string(taskID), seq)
+	if err != nil {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("update note of acceptance criterion for task %s seq %d: %w", taskID, seq, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("rows affected after updating note of acceptance criterion for task %s seq %d: %w", taskID, seq, err)
+	}
+	if n == 0 {
+		return domain.AcceptanceCriterion{}, fmt.Errorf("%w: no acceptance criterion with seq %d on task %s", domain.ErrNotFound, seq, taskID)
+	}
+	row := r.q.QueryRowContext(ctx,
+		`SELECT `+acceptanceColumns+` FROM acceptance_criterion WHERE task_id = ? AND seq = ?`, string(taskID), seq)
+	c, err := scanAcceptanceCriterion(row) // re-read the stored result of the guarded write
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AcceptanceCriterion{}, domain.ErrNotFound // defensive: impossible inside one tx
+	}
+	return c, err
+}
+
 // Delete removes exactly the criterion at (taskID, seq) and returns the DELETED
 // row (its before-state rides on the caller's event payload). The read and the
 // delete run in the caller's transaction, so no row can vanish between them.

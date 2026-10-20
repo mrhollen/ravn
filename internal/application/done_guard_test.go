@@ -159,7 +159,7 @@ func TestUpdateDone_UnmetAcceptanceCriteria_RejectedWithPinnedErrInvalidMessage(
 
 	// Toggle AC 1 to done
 	acSvc := NewAcceptance(uow, fc, &fakeIDGen{})
-	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 1, true, "tested"); err != nil {
+	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 1, boolPtr(true), "tested"); err != nil {
 		t.Fatalf("ToggleAC 1: %v", err)
 	}
 
@@ -208,10 +208,10 @@ func TestUpdateDone_AllCriteriaCompleted_SucceedsNormally(t *testing.T) {
 
 	// Toggle all criteria to done
 	acSvc := NewAcceptance(uow, fc, &fakeIDGen{})
-	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 1, true, "done"); err != nil {
+	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 1, boolPtr(true), "done"); err != nil {
 		t.Fatalf("ToggleAC 1: %v", err)
 	}
-	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 2, true, "done"); err != nil {
+	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 2, boolPtr(true), "done"); err != nil {
 		t.Fatalf("ToggleAC 2: %v", err)
 	}
 
@@ -259,7 +259,7 @@ func TestUpdateDone_BlockedAndUnmetACs_BlockerCheckedFirst(t *testing.T) {
 
 	// 3. Complete the criterion; the blocker gate still refuses without its override
 	acSvc := NewAcceptance(uow, fc, &fakeIDGen{})
-	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 1, true, "done"); err != nil {
+	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 1, boolPtr(true), "done"); err != nil {
 		t.Fatalf("ToggleAC: %v", err)
 	}
 	_, err = svc.Update(ctx, testAgent, task.ID, TaskUpdateInput{Status: &done})
@@ -298,7 +298,7 @@ func TestUpdateDone_ReopenToTodo_SkipsDoneGates(t *testing.T) {
 	// Complete the criterion, then move to done (the sanctioned path now that
 	// the AC gate is unconditional — there is no override).
 	acSvc := NewAcceptance(uow, fc, &fakeIDGen{})
-	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 1, true, "done"); err != nil {
+	if _, err := acSvc.ToggleAC(ctx, testAgent, task.ID, 1, boolPtr(true), "done"); err != nil {
 		t.Fatalf("ToggleAC: %v", err)
 	}
 	done := domain.StatusDone

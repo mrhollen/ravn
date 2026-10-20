@@ -259,6 +259,11 @@ type AcceptanceCriterionRepository interface {
 	// domain.ErrNotFound.
 	UpdateText(ctx context.Context, taskID domain.ID, seq int, text string) (domain.AcceptanceCriterion, error)
 
+	// UpdateNote rewrites exactly the criterion's note at (taskID, seq);
+	// done/text/completion fields are untouched. Returns the fresh row; unknown
+	// pair → domain.ErrNotFound.
+	UpdateNote(ctx context.Context, taskID domain.ID, seq int, note string) (domain.AcceptanceCriterion, error)
+
 	// Delete removes exactly the criterion at (taskID, seq) and returns the
 	// DELETED row so the caller can carry it on an event payload. Surviving
 	// rows keep their seq values (gaps stay). Unknown pair → domain.ErrNotFound.

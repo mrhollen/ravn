@@ -349,14 +349,14 @@ func TestAcceptanceToggleAC_NoteOverCapRejectedAndAtCapAccepted(t *testing.T) {
 		t.Fatalf("AddAC: %v", err)
 	}
 
-	_, err := acs.ToggleAC(ctx, testAgent, seed.ID, 1, true, strings.Repeat("n", domain.MaxACNoteLen+1))
+	_, err := acs.ToggleAC(ctx, testAgent, seed.ID, 1, boolPtr(true), strings.Repeat("n", domain.MaxACNoteLen+1))
 	assertErrInvalid(t, err, "ToggleAC(over-cap note)")
 	gotACs, _ := uow.acs.ListByTask(ctx, seed.ID)
 	if len(gotACs) != 1 || gotACs[0].Done || gotACs[0].Note != "" {
 		t.Fatalf("row changed despite rejected toggle: %+v", gotACs)
 	}
 
-	got, err := acs.ToggleAC(ctx, testAgent, seed.ID, 1, true, strings.Repeat("n", domain.MaxACNoteLen))
+	got, err := acs.ToggleAC(ctx, testAgent, seed.ID, 1, boolPtr(true), strings.Repeat("n", domain.MaxACNoteLen))
 	if err != nil {
 		t.Fatalf("ToggleAC at note cap = %v, want success", err)
 	}

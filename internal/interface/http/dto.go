@@ -480,14 +480,18 @@ type notesReq struct {
 }
 
 // acToggleReq is PATCH /tasks/{id}/acceptance-criteria/{seq}. Two shapes share
-// the endpoint: Done (bool) sets/clears the checkbox, with Note optionally
-// recording why — the original complete_ac form; or Text (*string) rewords the
-// criterion, in which case it takes precedence and Done/Note are ignored.
-// "text" is a *string so its ABSENCE (pure toggle) is distinguishable from an
-// explicit empty string (400 — a criterion needs words).
+// the endpoint: Done (*bool) sets/clears the checkbox, with Note optionally
+// recording why — the original complete_ac form; an ABSENT "done" (nil)
+// PRESERVES the criterion's current done status and its completion fields, so
+// a note-only PATCH ({actor, note}) updates just the note without flipping or
+// re-stamping anything. Or Text (*string) rewords the criterion, in which case
+// it takes precedence over both Done and Note.
+// "done" is a *bool so its ABSENCE (nil = preserve) is distinguishable from an
+// explicit true/false toggle; "text" is a *string so its ABSENCE (pure toggle)
+// is distinguishable from an explicit empty string (400 — a criterion needs words).
 type acToggleReq struct {
 	Actor actorInput `json:"actor"`
-	Done  bool       `json:"done"`
+	Done  *bool      `json:"done"`
 	Note  string     `json:"note"`
 	Text  *string    `json:"text,omitempty"`
 }

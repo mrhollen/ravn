@@ -273,9 +273,10 @@ func parseACSeq(w http.ResponseWriter, r *http.Request) (int, bool) {
 // handleToggleAC → PATCH /api/v1/tasks/{id}/acceptance-criteria/{seq}. Two
 // shapes share the endpoint: the complete_ac toggle (done + optional note) and
 // a text reword — when "text" is present it takes precedence and done/note are
-// ignored. Child-row rule: no task version bump either way. 200 with the
-// updated criterion row; unknown task OR unknown seq → 404; empty/absent actor
-// or whitespace-only text → 400.
+// ignored. An ABSENT "done" preserves the criterion's current done state and
+// completion fields (note-only update). Child-row rule: no task version bump
+// either way. 200 with the updated criterion row; unknown task OR unknown seq
+// → 404; empty/absent actor or whitespace-only text → 400.
 func (a *App) handleToggleAC(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := pathID(w, r)

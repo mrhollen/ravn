@@ -230,7 +230,7 @@ func TestAcceptanceToggleAC_CheckStampsWhoWhenAndEmitsEventWithoutBumpingTaskVer
 
 	fc.SetNow(fc.now.Add(2 * time.Minute))
 	doneAt := fc.now
-	got, err := acs.ToggleAC(ctx, testAgent, task.ID, 1, true, "verified in CI")
+	got, err := acs.ToggleAC(ctx, testAgent, task.ID, 1, boolPtr(true), "verified in CI")
 	if err != nil {
 		t.Fatalf("ToggleAC check: %v", err)
 	}
@@ -276,11 +276,11 @@ func TestAcceptanceToggleAC_UncheckClearsCompletionFields(t *testing.T) {
 	task := seedTaskWithACs(t, svc)
 	acs := NewAcceptance(uow, fc, &fakeIDGen{})
 
-	if _, err := acs.ToggleAC(ctx, testAgent, task.ID, 2, true, "first pass"); err != nil {
+	if _, err := acs.ToggleAC(ctx, testAgent, task.ID, 2, boolPtr(true), "first pass"); err != nil {
 		t.Fatalf("check seq 2: %v", err)
 	}
 	fc.SetNow(fc.now.Add(5 * time.Minute))
-	got, err := acs.ToggleAC(ctx, testAgent, task.ID, 2, false, "should be ignored")
+	got, err := acs.ToggleAC(ctx, testAgent, task.ID, 2, boolPtr(false), "should be ignored")
 	if err != nil {
 		t.Fatalf("uncheck seq 2: %v", err)
 	}
@@ -302,16 +302,83 @@ func TestAcceptanceToggleAC_UncheckClearsCompletionFields(t *testing.T) {
 	}
 }
 
+// TestAcceptanceToggleAC_NoteOnlyPreservesDoneAndCompletionFields pins the
+// nil-done contract: a note-only toggle (done == nil) keeps the current done
+// state AND its completion fields, rewrites only the note, and emits one
+// `ac-toggled` event with identical before/after done. Repeating it with the
+// SAME note is a no-op (no second write, no second event).
+func TestAcceptanceToggleAC_NoteOnlyPreservesDoneAndCompletionFields(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := seedTaskWithACs(t, svc)
+	acs := NewAcceptance(uow, fc, &fakeIDGen{})
+
+	first, err := acs.ToggleAC(ctx, testAgent, task.ID, 1, boolPtr(true), "first pass")
+	if err != nil {
+		t.Fatalf("check seq 1: %v", err)
+	}
+	if first.CompletedBy == nil || !first.CompletedAt.Equal(fc.now) {
+		t.Fatalf("checked AC = %+v, want completer stamped at the clock instant", first)
+	}
+	completedAt := fc.now
+
+	fc.SetNow(fc.now.Add(7 * time.Minute)) // a re-stamp would move completed_at to this instant
+
+	got, err := acs.ToggleAC(ctx, testAgent, task.ID, 1, nil, "re-verified later")
+	if err != nil {
+		t.Fatalf("note-only ToggleAC: %v", err)
+	}
+	if !got.Done || got.Note != "re-verified later" {
+		t.Errorf("note-only AC = %+v, want done PRESERVED with the updated note", got)
+	}
+	if got.CompletedBy == nil || *got.CompletedBy != testAgent {
+		t.Errorf("completed_by = %v, want agent-a (unchanged)", got.CompletedBy)
+	}
+	if got.CompletedAt == nil || !got.CompletedAt.Equal(completedAt) {
+		t.Errorf("completed_at = %v, want %s (PRESERVED — not re-stamped to the later instant)", got.CompletedAt, completedAt)
+	}
+
+	evs := eventsOfKind(uow, domain.EventACToggled)
+	if len(evs) != 2 {
+		t.Fatalf("ac-toggled events = %d, want 2 (check + note-only)", len(evs))
+	}
+	last := evs[len(evs)-1]
+	if !strings.Contains(last.Before, `"done":true`) || !strings.Contains(last.After, `"done":true`) {
+		t.Errorf("note-only event = (%q → %q), want identical done before/after", last.Before, last.After)
+	}
+
+	// Identical note + nil done: no-op — row unchanged, NO additional event.
+	same, err := acs.ToggleAC(ctx, testAgent, task.ID, 1, nil, "re-verified later")
+	if err != nil {
+		t.Fatalf("repeat note-only ToggleAC: %v", err)
+	}
+	if same.Note != "re-verified later" || !same.Done {
+		t.Errorf("no-op AC = %+v, want the stored row returned unchanged", same)
+	}
+	if evs := eventsOfKind(uow, domain.EventACToggled); len(evs) != 2 {
+		t.Errorf("events grew to %d after an identical-note no-op, want still 2", len(evs))
+	}
+
+	// Note-only on an UN-DONE criterion keeps it open (nil preserves either way).
+	open, err := acs.ToggleAC(ctx, testAgent, task.ID, 2, nil, "still pending")
+	if err != nil {
+		t.Fatalf("note-only ToggleAC seq 2: %v", err)
+	}
+	if open.Done || open.Note != "still pending" {
+		t.Errorf("seq 2 = %+v, want still not done with the updated note", open)
+	}
+}
+
 func TestAcceptanceToggleAC_UnknownSeqOrTask(t *testing.T) {
 	ctx := context.Background()
 	svc, fc, uow := newTaskTestEnv(t)
 	task := seedTaskWithACs(t, svc)
 	acs := NewAcceptance(uow, fc, &fakeIDGen{})
 
-	if _, err := acs.ToggleAC(ctx, testAgent, task.ID, 99, true, ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := acs.ToggleAC(ctx, testAgent, task.ID, 99, boolPtr(true), ""); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("unknown seq → err = %v, want ErrNotFound", err)
 	}
-	if _, err := acs.ToggleAC(ctx, testAgent, domain.ID("no-such-task"), 1, true, ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := acs.ToggleAC(ctx, testAgent, domain.ID("no-such-task"), 1, boolPtr(true), ""); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("unknown task → err = %v, want ErrNotFound", err)
 	}
 	if evs := eventsOfKind(uow, domain.EventACToggled); len(evs) != 0 {

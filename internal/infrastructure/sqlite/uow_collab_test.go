@@ -22,6 +22,10 @@ import (
 	"github.com/mrhollen/ravn/internal/infrastructure/idgen"
 )
 
+// boolPtr returns a pointer to b (test helper for ToggleAC's optional done —
+// nil means "preserve").
+func boolPtr(b bool) *bool { return &b }
+
 func newCollabEnv(t *testing.T, db *sql.DB) (*application.Tasks, *application.Projects,
 	*application.Comments, *application.Acceptance, *application.Artifacts) {
 	t.Helper()
@@ -171,7 +175,7 @@ func TestCollab_AcToggleShownDoneInGetDetailWithEventAndNoVersionBump(t *testing
 	}
 	baseVersion, baseUpdated := task.Version, task.UpdatedAt
 
-	got, err := acs.ToggleAC(ctx, testActor, task.ID, 1, true, "wired and tested")
+	got, err := acs.ToggleAC(ctx, testActor, task.ID, 1, boolPtr(true), "wired and tested")
 	if err != nil {
 		t.Fatalf("ToggleAC: %v", err)
 	}
