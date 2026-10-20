@@ -10,7 +10,7 @@
 #      upstream server (503 until ready, then 200), so it self-heals as
 #      soon as the server comes up. The healthcheck blocks below are kept
 #      for observability (`docker ps` state + `make smoke`) only.
-#   2. Uses the prebuilt Forgejo package image (${RAVN_IMAGE:-forgejo.lan:80/mrhollen/ravn:latest})
+#   2. Uses the prebuilt Forgejo package image (${RAVN_IMAGE:-ravn:latest})
 #      directly without building from source.
 #   3. start_period is omitted from the compose healthcheck blocks (not in v3.3 schema).
 #      The image itself carries an equivalent HEALTHCHECK with --start-period baked in.
@@ -29,7 +29,7 @@ version: "3.3"
 
 services:
   ravn-server:
-    image: ${RAVN_IMAGE:-forgejo.lan:80/mrhollen/ravn:latest}
+    image: ${RAVN_IMAGE:-ravn:latest}
     ports:
       - "${RAVN_BIND_IP:-127.0.0.1}:${RAVN_SERVER_PORT:-3311}:8080"
     environment:
@@ -38,9 +38,11 @@ services:
       RAVN_STATIC_DIR: "/app/public" # UI is baked into the image (web-build stage)
       RAVN_ARTIFACTS_DIR: "/artifacts"
       RAVN_TOKEN: "${RAVN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
-      OPENCODE_MODEL: "${OPENCODE_MODEL:-llama.cpp/Qwen Medium Long Context}" # default model for autonomous sessions
+      OPENCODE_MODEL: "${OPENCODE_MODEL:-}" # optional; empty = use the OpenCode server's default model
       OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
       OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)
+      OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-}" # OpenCode server base URL; empty = built-in default
+      OPENCODE_DIRECTORY: "${OPENCODE_DIRECTORY:-}"   # session working directory; empty = built-in default
     volumes:
       - "${RAVN_DATA_DIR:-ravn-data}:/data"
       - "${RAVN_ARTIFACTS_DIR:-ravn-artifacts}:/artifacts"
@@ -51,7 +53,7 @@ services:
       retries: 3
 
   ravn-mcp:
-    image: ${RAVN_IMAGE:-forgejo.lan:80/mrhollen/ravn:latest}
+    image: ${RAVN_IMAGE:-ravn:latest}
     entrypoint: ["ravn-mcp"]
     ports:
       - "${RAVN_BIND_IP:-127.0.0.1}:${RAVN_MCP_PORT:-9311}:9080"

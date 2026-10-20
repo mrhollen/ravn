@@ -17,7 +17,7 @@
 
 services:
   ravn-server:
-    image: ${RAVN_IMAGE:-forgejo.lan:80/mrhollen/ravn:latest}
+    image: ${RAVN_IMAGE:-ravn:latest}
     build:
       context: .
       target: server-runtime
@@ -29,9 +29,11 @@ services:
       RAVN_STATIC_DIR: "/app/public" # UI is baked into the image (web-build stage)
       RAVN_ARTIFACTS_DIR: "/artifacts"
       RAVN_TOKEN: "${RAVN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
-      OPENCODE_MODEL: "${OPENCODE_MODEL:-llama.cpp/Qwen Medium Long Context}" # default model for autonomous sessions
+      OPENCODE_MODEL: "${OPENCODE_MODEL:-}" # optional; empty = use the OpenCode server's default model
       OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
       OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)
+      OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-}" # OpenCode server base URL; empty = built-in default
+      OPENCODE_DIRECTORY: "${OPENCODE_DIRECTORY:-}"   # session working directory; empty = built-in default
     volumes:
       - "${RAVN_DATA_DIR:-ravn-data}:/data"
       - "${RAVN_ARTIFACTS_DIR:-ravn-artifacts}:/artifacts"
@@ -43,7 +45,7 @@ services:
       retries: 3
 
   ravn-mcp:
-    image: ${RAVN_IMAGE:-forgejo.lan:80/mrhollen/ravn:latest}
+    image: ${RAVN_IMAGE:-ravn:latest}
     entrypoint: ["ravn-mcp"]
     build:
       context: .

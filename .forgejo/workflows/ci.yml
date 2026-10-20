@@ -128,7 +128,10 @@ jobs:
   publish:
     name: Build and Push Image
     needs: ci
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      vars.REGISTRY_HOST != ''
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -138,12 +141,25 @@ jobs:
         env:
           PUSH_TOKEN: ${{ secrets.PACKAGE_TOKEN || secrets.FORGEJO_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          REGISTRY="forgejo.lan:80"
-          IMAGE_NAME="${REGISTRY}/mrhollen/ravn:latest"
+          # Registry host + full image ref come from repository variables (set on the
+          # Forgejo repo). If REGISTRY_IMAGE is unset, derive it from the registry and
+          # the lowercased repository name.
+          REGISTRY="${{ vars.REGISTRY_HOST }}"
+          IMAGE_NAME="${{ vars.REGISTRY_IMAGE }}"
+          if [ -z "$IMAGE_NAME" ]; then
+            REPO="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+            IMAGE_NAME="${REGISTRY}/${REPO}:latest"
+          fi
           echo "Target image: ${IMAGE_NAME}"
 
-          # Ensure forgejo.lan resolves to 10.0.0.150 inside the runner container
-          grep -q "forgejo.lan" /etc/hosts || echo "10.0.0.150 forgejo.lan" >> /etc/hosts
+          # Optionally inject a DNS/hosts entry for the registry host. Provide it via the
+          # REGISTRY_HOSTS_ENTRY repository *secret* as "<ip> <hostname>", or configure
+          # extra_hosts / --add-host=<hostname>:<ip> on the runner instead.
+          if [ -n "${{ secrets.REGISTRY_HOSTS_ENTRY }}" ]; then
+            HOSTS_ENTRY="${{ secrets.REGISTRY_HOSTS_ENTRY }}"
+            REG_HOST="$(echo "$HOSTS_ENTRY" | awk '{print $NF}')"
+            grep -qF "$REG_HOST" /etc/hosts || echo "$HOSTS_ENTRY" >> /etc/hosts
+          fi
 
           echo "Installing crane for direct HTTP registry push..."
           curl -sL https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz | tar -xz -C /usr/local/bin crane
@@ -160,4 +176,4 @@ jobs:
           echo "Pushing ${IMAGE_NAME} via crane..."
           crane push /tmp/ravn.tar "${IMAGE_NAME}" --insecure
           rm -f /tmp/ravn.tar
-          echo "Successfully pushed ${IMAGE_NAME} to Forgejo container registry!"
+          echo "Successfully pushed ${IMAGE_NAME} to the container registry!"

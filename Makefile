@@ -36,7 +36,7 @@ ui: ## build the web UI into web/dist (served by ravn-server via RAVN_STATIC_DIR
 e2e: ## run browser E2E test suite (Playwright)
 	cd web && npm run test:e2e
 
-up: ## start ravn-server + ravn-mcp detached (uses forgejo package by default)
+up: ## start ravn-server + ravn-mcp detached (uses prebuilt image by default)
 	docker compose up -d
 
 build-up: ## build images from scratch and start ravn-server + ravn-mcp detached

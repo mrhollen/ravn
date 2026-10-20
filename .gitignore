@@ -47,3 +47,6 @@ go.work.sum
 
 # Local run directory
 .run-local/
+
+# one-off design mockups — do not commit
+/mockup.html
