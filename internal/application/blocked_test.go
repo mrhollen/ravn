@@ -10,7 +10,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 func newBlockedTestEnv(t *testing.T) (*Tasks, *Relations, *fakeClock, *fakeUoW) {

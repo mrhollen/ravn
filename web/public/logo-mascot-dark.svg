@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
-  <title>CrowBan — dark mascot: near-white crow perched on a branch beside two kanban columns, wing outstretched, carrying a coral task card in its beak mid-drag; coral badge ring, transparent background for dark surfaces</title>
+  <title>Rävn — dark mascot: near-white raven perched on a branch beside two kanban columns, wing outstretched, carrying a coral task card in its beak mid-drag; coral badge ring, transparent background for dark surfaces</title>
 
   <!-- Palette (2 colors + transparent background):
-       paper #F4F4F5 = zinc-100, the SAME token as dark-mode body text — crow, branch, cards /
+       paper #F4F4F5 = zinc-100, the SAME token as dark-mode body text — raven, branch, cards /
        coral #FF7A45 — badge ring, beak, talons, eye, card in flight /
        background transparent: sits directly on dark surfaces (target ≈ zinc-900 #18181b) -->
 
@@ -20,7 +20,7 @@
   <rect x="200" y="148" width="32" height="16" rx="4" fill="#F4F4F5"/>
   <rect x="200" y="174" width="32" height="16" rx="4" fill="#F4F4F5"/>
 
-  <!-- Branch the mascot perches on (branch = crow, baseline = board) -->
+  <!-- Branch the mascot perches on (branch = raven, baseline = board) -->
   <rect x="26" y="192" width="108" height="8" rx="4" fill="#F4F4F5"/>
 
   <!-- Tail, root buried under the body -->

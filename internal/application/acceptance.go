@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // Acceptance implements the acceptance-criterion use cases (ARCHITECTURE §5):

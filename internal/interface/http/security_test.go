@@ -19,7 +19,7 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 
 	handler := SecurityHeadersMiddleware()(dummy)
 
-	req := httptest.NewRequest("GET", "http://crowban.test/api/v1/tasks", nil)
+	req := httptest.NewRequest("GET", "http://ravn.test/api/v1/tasks", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -50,7 +50,7 @@ func TestCORSMiddleware_DefaultWildcardPreflight(t *testing.T) {
 	handler := CORSMiddleware(DefaultCORSOptions())(dummy)
 
 	// OPTIONS preflight request
-	req := httptest.NewRequest("OPTIONS", "http://crowban.test/api/v1/tasks", nil)
+	req := httptest.NewRequest("OPTIONS", "http://ravn.test/api/v1/tasks", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
 	req.Header.Set("Access-Control-Request-Method", "POST")
 	req.Header.Set("Access-Control-Request-Headers", "Authorization, Content-Type")
@@ -96,7 +96,7 @@ func TestCORSMiddleware_ConfiguredOrigins(t *testing.T) {
 	handler := CORSMiddleware(opts)(dummy)
 
 	// Allowed origin
-	req := httptest.NewRequest("OPTIONS", "http://crowban.test/api/v1/tasks", nil)
+	req := httptest.NewRequest("OPTIONS", "http://ravn.test/api/v1/tasks", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -112,7 +112,7 @@ func TestCORSMiddleware_ConfiguredOrigins(t *testing.T) {
 	}
 
 	// Disallowed origin
-	reqBad := httptest.NewRequest("OPTIONS", "http://crowban.test/api/v1/tasks", nil)
+	reqBad := httptest.NewRequest("OPTIONS", "http://ravn.test/api/v1/tasks", nil)
 	reqBad.Header.Set("Origin", "http://malicious.example.com")
 	recBad := httptest.NewRecorder()
 	handler.ServeHTTP(recBad, reqBad)
@@ -139,7 +139,7 @@ func TestCORSMiddleware_PreflightBypassesAuth(t *testing.T) {
 	handler := CORSMiddleware(DefaultCORSOptions())(authHandler)
 
 	// Preflight OPTIONS to /api/v1/tasks with NO auth header
-	req := httptest.NewRequest("OPTIONS", "http://crowban.test/api/v1/tasks", nil)
+	req := httptest.NewRequest("OPTIONS", "http://ravn.test/api/v1/tasks", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
 	rec := httptest.NewRecorder()
 
@@ -153,7 +153,7 @@ func TestCORSMiddleware_PreflightBypassesAuth(t *testing.T) {
 	}
 
 	// Direct OPTIONS to AuthMiddleware also bypasses auth
-	reqDirect := httptest.NewRequest("OPTIONS", "http://crowban.test/api/v1/tasks", nil)
+	reqDirect := httptest.NewRequest("OPTIONS", "http://ravn.test/api/v1/tasks", nil)
 	recDirect := httptest.NewRecorder()
 	authHandler.ServeHTTP(recDirect, reqDirect)
 
@@ -371,7 +371,7 @@ func TestCSRF_CrossSiteSimpleRequestsCannotTriggerMutations(t *testing.T) {
 	// 1. Attempt CSRF project creation via simple request (Content-Type: text/plain)
 	t.Run("POST /projects with text/plain rejected and no mutation", func(t *testing.T) {
 		body := `{"actor":{"name":"attacker","type":"human"},"name":"Pwned Project"}`
-		req := httptest.NewRequest("POST", "http://crowban.test/api/v1/projects", strings.NewReader(body))
+		req := httptest.NewRequest("POST", "http://ravn.test/api/v1/projects", strings.NewReader(body))
 		req.Header.Set("Origin", crossOrigin)
 		req.Header.Set("Content-Type", "text/plain")
 		rec := httptest.NewRecorder()
@@ -383,7 +383,7 @@ func TestCSRF_CrossSiteSimpleRequestsCannotTriggerMutations(t *testing.T) {
 		}
 
 		// Verify project was not created
-		listReq := httptest.NewRequest("GET", "http://crowban.test/api/v1/projects", nil)
+		listReq := httptest.NewRequest("GET", "http://ravn.test/api/v1/projects", nil)
 		listRec := httptest.NewRecorder()
 		corsHandler.ServeHTTP(listRec, listReq)
 
@@ -404,7 +404,7 @@ func TestCSRF_CrossSiteSimpleRequestsCannotTriggerMutations(t *testing.T) {
 		proj := createProject(t, stk, "Legit Project")
 
 		body := `{"actor":{"name":"attacker"},"project_id":"` + proj.ID + `","title":"Pwned Task"}`
-		req := httptest.NewRequest("POST", "http://crowban.test/api/v1/tasks", strings.NewReader(body))
+		req := httptest.NewRequest("POST", "http://ravn.test/api/v1/tasks", strings.NewReader(body))
 		req.Header.Set("Origin", crossOrigin)
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		rec := httptest.NewRecorder()
@@ -416,7 +416,7 @@ func TestCSRF_CrossSiteSimpleRequestsCannotTriggerMutations(t *testing.T) {
 		}
 
 		// Verify task was not created
-		listReq := httptest.NewRequest("GET", "http://crowban.test/api/v1/tasks?project_id="+proj.ID, nil)
+		listReq := httptest.NewRequest("GET", "http://ravn.test/api/v1/tasks?project_id="+proj.ID, nil)
 		listRec := httptest.NewRecorder()
 		corsHandler.ServeHTTP(listRec, listReq)
 
@@ -438,7 +438,7 @@ func TestCSRF_CrossSiteSimpleRequestsCannotTriggerMutations(t *testing.T) {
 		task := newTask(t, stk, proj.ID, "Original Title")
 
 		body := `{"actor":{"name":"attacker"},"title":"Hacked Title","version":1}`
-		req := httptest.NewRequest("PATCH", "http://crowban.test/api/v1/tasks/"+task.ID, strings.NewReader(body))
+		req := httptest.NewRequest("PATCH", "http://ravn.test/api/v1/tasks/"+task.ID, strings.NewReader(body))
 		req.Header.Set("Origin", crossOrigin)
 		req.Header.Set("Content-Type", "text/plain")
 		rec := httptest.NewRecorder()
@@ -460,7 +460,7 @@ func TestCSRF_CrossSiteSimpleRequestsCannotTriggerMutations(t *testing.T) {
 		proj := createProject(t, stk, "Legit UTF8 Project")
 
 		body := `{"actor":{"name":"alice"},"project_id":"` + proj.ID + `","title":"Legitimate Task"}`
-		req := httptest.NewRequest("POST", "http://crowban.test/api/v1/tasks", strings.NewReader(body))
+		req := httptest.NewRequest("POST", "http://ravn.test/api/v1/tasks", strings.NewReader(body))
 		req.Header.Set("Origin", "http://localhost:5173")
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 		rec := httptest.NewRecorder()

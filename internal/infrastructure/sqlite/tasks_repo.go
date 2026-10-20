@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // taskRepo implements application.TaskRepository over SQLite: the plain CRUD
@@ -220,7 +220,7 @@ func (r *taskRepo) Update(ctx context.Context, t domain.Task) (domain.Task, erro
 	return fresh, nil
 }
 
-// Claim acquires or renews actor's lease atomically — the core of crowban's
+// Claim acquires or renews actor's lease atomically — the core of ravn's
 // duplicate-work prevention (ARCHITECTURE §4–5, ADR 2026-09-26). One single
 // UPDATE whose WHERE covers ALL winning conditions at once:
 //

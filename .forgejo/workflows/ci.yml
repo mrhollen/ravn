@@ -40,8 +40,8 @@ jobs:
 
       - name: Build static binaries
         run: |
-          CGO_ENABLED=0 go build -trimpath -o bin/crowban-server ./cmd/crowban-server
-          CGO_ENABLED=0 go build -trimpath -o bin/crowban-mcp ./cmd/crowban-mcp
+          CGO_ENABLED=0 go build -trimpath -o bin/ravn-server ./cmd/ravn-server
+          CGO_ENABLED=0 go build -trimpath -o bin/ravn-mcp ./cmd/ravn-mcp
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -139,7 +139,7 @@ jobs:
           PUSH_TOKEN: ${{ secrets.PACKAGE_TOKEN || secrets.FORGEJO_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           REGISTRY="forgejo.lan:80"
-          IMAGE_NAME="${REGISTRY}/${{ github.repository }}:latest"
+          IMAGE_NAME="${REGISTRY}/mrhollen/ravn:latest"
           echo "Target image: ${IMAGE_NAME}"
 
           # Ensure forgejo.lan resolves to 10.0.0.150 inside the runner container
@@ -149,15 +149,15 @@ jobs:
           curl -sL https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz | tar -xz -C /usr/local/bin crane
 
           echo "Building image (target server-runtime)..."
-          docker build --target server-runtime -t crowban:latest .
+          docker build --target server-runtime -t ravn:latest .
 
           echo "Logging in to ${REGISTRY} via crane..."
           echo "${PUSH_TOKEN}" | crane auth login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin --insecure
 
           echo "Saving image to tarball for crane..."
-          docker save crowban:latest -o /tmp/crowban.tar
+          docker save ravn:latest -o /tmp/ravn.tar
 
           echo "Pushing ${IMAGE_NAME} via crane..."
-          crane push /tmp/crowban.tar "${IMAGE_NAME}" --insecure
-          rm -f /tmp/crowban.tar
+          crane push /tmp/ravn.tar "${IMAGE_NAME}" --insecure
+          rm -f /tmp/ravn.tar
           echo "Successfully pushed ${IMAGE_NAME} to Forgejo container registry!"

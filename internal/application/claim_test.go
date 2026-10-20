@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // claimAgent is a dedicated worker distinct from testAgent so tests can also

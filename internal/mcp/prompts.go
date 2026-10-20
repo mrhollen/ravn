@@ -1,4 +1,4 @@
-// Package mcp adapts crowban's REST API to MCP tools and prompts (docs/ARCHITECTURE.md §6).
+// Package mcp adapts ravn-server's REST API to MCP tools and prompts (docs/ARCHITECTURE.md §6).
 package mcp
 
 import (
@@ -10,11 +10,11 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
-	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
 )
 
-// RegisterPrompts registers CrowBan workflow prompts onto s.
-// defaultActor is the container-default identity (from CROWBAN_AGENT_NAME)
+// RegisterPrompts registers Rävn workflow prompts onto s.
+// defaultActor is the container-default identity (from RAVN_AGENT_NAME)
 // used for agent onboarding guidance when an explicit actor_name is omitted.
 func RegisterPrompts(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	registerTriageOpenTasks(s, c)
@@ -403,8 +403,8 @@ func registerNextTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Acto
 
 		// Step-by-step agent workflow playbook
 		sb.WriteString("---\n\n")
-		sb.WriteString("## CrowBan Agent Workflow Playbook\n")
-		sb.WriteString(fmt.Sprintf("Execute this task following the standard CrowBan workflow as agent **%q**:\n\n", actorName))
+		sb.WriteString("## Rävn Agent Workflow Playbook\n")
+		sb.WriteString(fmt.Sprintf("Execute this task following the standard Rävn workflow as agent **%q**:\n\n", actorName))
 
 		sb.WriteString(fmt.Sprintf("1. **Claim the Task** (acquire exclusive lease):\n   `claim_task(id=%q, actor={\"type\": \"agent\", \"name\": %q})`\n\n", detail.ID, actorName))
 

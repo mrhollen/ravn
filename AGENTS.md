@@ -2,7 +2,7 @@
 
 ## E2E test artifacts & QA evidence
 
-The browser E2E suite (`web/e2e/`, Playwright) is **self-contained**: each spec spins up its own ephemeral crowban-server on a random high port (never :8080) with a temp DB, and serves the pre-built `web/dist`. You do not need a running server or fixed port.
+The browser E2E suite (`web/e2e/`, Playwright) is **self-contained**: each spec spins up its own ephemeral ravn-server on a random high port (never :8080) with a temp DB, and serves the pre-built `web/dist`. You do not need a running server or fixed port.
 
 ### Run it
 
@@ -27,7 +27,7 @@ The Playwright config (`web/playwright.config.ts`) sets `use.screenshot: 'on'`, 
 After a green run:
 
 1. Review the generated screenshots in `web/test-results/`. Open only the ones relevant to what you verified — folder names map to spec + test case, so find them by name instead of opening every PNG.
-2. Attach task-relevant evidence (screenshot, video, PDF, audio, command output, or log) on the CrowBan task:
+2. Attach task-relevant evidence (screenshot, video, PDF, audio, command output, or log) on the Rävn task:
    - tool `attach_artifact`
    - `id`: task ID
    - `kind`: `screenshot` (or `other` for videos/PDFs/audio, `command-output`, `log`)
@@ -38,7 +38,7 @@ After a green run:
 
 > [!CAUTION]
 > **NEVER pass local filesystem paths (e.g. `/home/...`) in `ref`.**
-> The CrowBan server runs in a remote container environment (`10.0.0.150`). It cannot read files from your local machine. Passing a local filesystem path will cause the UI to render raw text rather than an inline image/video preview. You MUST read the file and pass `data_base64`.
+> The Rävn server runs in a remote container environment (`10.0.0.150`). It cannot read files from your local machine. Passing a local filesystem path will cause the UI to render raw text rather than an inline image/video preview. You MUST read the file and pass `data_base64`.
 
 Applies to QA agents (`frontend-qa`, `backend-qa`) and devs verifying their own work: leave visual evidence the UI looks right, not just that tests passed. If per-agent prompt files are added to this repo later, move this requirement there.
 
@@ -52,7 +52,7 @@ When working on CI workflows, testing, or container publishing, be aware of the 
 * **Host IP**: `10.0.0.150` (`forgejo.lan`).
 * **Port 80 (HTTP)**: Forgejo Web UI and OCI Container Registry (`http://forgejo.lan:80/v2/`).
 * **Port 443 (HTTPS)**: Runs Open WebUI (FastAPI / Uvicorn), **NOT** Forgejo! Connecting to `https://forgejo.lan:443/v2/` will fail with HTTP `405 Method Not Allowed`. Always use plain HTTP on Port 80 for Forgejo and its registry.
-* **Port 2222**: Forgejo Git SSH endpoint (`ssh://git@forgejo.lan:2222/mrhollen/crowban.git`).
+* **Port 2222**: Forgejo Git SSH endpoint (`ssh://git@forgejo.lan:2222/mrhollen/ravn.git`).
 * **Port 8081**: Nginx Proxy Manager Web UI.
 
 ### 2. DNS Resolution in Runner Containers
@@ -72,15 +72,15 @@ When working on CI workflows, testing, or container publishing, be aware of the 
   curl -sL https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz | tar -xz -C /usr/local/bin crane
 
   # 2. Build image
-  docker build --target server-runtime -t crowban:latest .
+  docker build --target server-runtime -t ravn:latest .
 
   # 3. Log in with crane
   echo "${PUSH_TOKEN}" | crane auth login "forgejo.lan:80" -u "${{ github.actor }}" --password-stdin --insecure
 
   # 4. Save to tarball and push (crane push requires a file path, not stdin)
-  docker save crowban:latest -o /tmp/crowban.tar
-  crane push /tmp/crowban.tar "forgejo.lan:80/mrhollen/crowban:latest" --insecure
-  rm -f /tmp/crowban.tar
+  docker save ravn:latest -o /tmp/ravn.tar
+  crane push /tmp/ravn.tar "forgejo.lan:80/mrhollen/ravn:latest" --insecure
+  rm -f /tmp/ravn.tar
   ```
 
 ### 4. Authentication & Package Scopes (`PACKAGE_TOKEN`)

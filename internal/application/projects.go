@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // ProjectUpdate carries the fields a caller wants to change on an existing

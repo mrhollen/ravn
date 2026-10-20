@@ -16,7 +16,7 @@ import { selectProjectViaDropdown } from './helpers';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'crowban-server');
+const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
 const staticDir = path.resolve(__dirname, '../dist');
 
 function crc32(buf: Buffer): number {
@@ -159,13 +159,13 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
       execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
     }
     if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/crowban-server ./cmd/crowban-server', {
+      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
         cwd: repoRoot,
         stdio: 'inherit',
       });
     }
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crowban-artifacts-e2e-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-artifacts-e2e-'));
     artifactsDir = path.join(tempDir, 'artifacts');
     fs.mkdirSync(artifactsDir, { recursive: true });
 
@@ -176,11 +176,11 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
     serverProcess = spawn(serverBin, [], {
       env: {
         ...process.env,
-        CROWBAN_ADDR: `127.0.0.1:${serverPort}`,
-        CROWBAN_DATA: path.join(tempDir, 'crowban.db'),
-        CROWBAN_ARTIFACTS_DIR: artifactsDir,
-        CROWBAN_STATIC_DIR: staticDir,
-        CROWBAN_TOKEN: '',
+        RAVN_ADDR: `127.0.0.1:${serverPort}`,
+        RAVN_DATA: path.join(tempDir, 'ravn.db'),
+        RAVN_ARTIFACTS_DIR: artifactsDir,
+        RAVN_STATIC_DIR: staticDir,
+        RAVN_TOKEN: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>crowban</title>
+    <title>Rävn</title>
     <!-- Favicons: OS color scheme is the baseline; the pre-paint script below
          overrides these media attributes when the user's stored theme choice
          (localStorage["crowban.theme"]) differs from the OS preference. -->
@@ -107,11 +107,11 @@
              ring) when .dark. Exactly one is visible in every state: the full alt rides
              on the visible-in-its-mode img, the hidden twin is aria-hidden. -->
         <div class="mr-1 hidden leading-tight sm:block">
-          <img src="/logo-mascot.svg" alt="CrowBan — MCP-first kanban · visibility UI"
+          <img src="/logo-mascot.svg" alt="Rävn — MCP-first kanban · visibility UI"
                class="h-9 w-auto dark:hidden" />
           <img src="/logo-mascot-dark.svg" aria-hidden="true"
                class="hidden h-9 w-auto dark:block" />
-          <h1 class="sr-only">crowban</h1>
+          <h1 class="sr-only">Rävn</h1>
         </div>
 
         <!-- Projects dropdown: custom trigger button + Alpine-managed menu
@@ -949,12 +949,12 @@ DOM-placed after the collapsible strip: on md+ it renders flush
           <form @submit.prevent="saveAuthToken()" class="mt-4 flex flex-col gap-4">
             <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
               Bearer Token
-              <input type="password" x-model="tokenInput" placeholder="Enter CROWBAN_TOKEN..."
+              <input type="password" x-model="tokenInput" placeholder="Enter RAVN_TOKEN..."
                      class="field font-mono text-xs w-full" autofocus />
             </label>
 
             <p class="text-[11px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
-              If the server was started with <code>CROWBAN_TOKEN</code>, enter it here. It is saved in your browser's <code>localStorage</code>.
+              If the server was started with <code>RAVN_TOKEN</code>, enter it here. It is saved in your browser's <code>localStorage</code>.
               You can also pass it in the URL as <code>?token=your_token</code> to authenticate automatically.
             </p>
 

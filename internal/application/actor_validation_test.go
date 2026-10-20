@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // invalidActorShapes is the canonical set of malformed actors every write path

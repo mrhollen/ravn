@@ -20,21 +20,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/infrastructure/pubsub"
-	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
+	"github.com/mrhollen/ravn/internal/infrastructure/pubsub"
+	"github.com/mrhollen/ravn/internal/infrastructure/sqlite"
 )
 
 // Vite-shaped dist fixtures (ARCHITECTURE §7: hashed assets/* + index.html).
 const (
-	indexHTML = "<!doctype html><html><head><title>crowban</title></head><body>crowban UI</body></html>\n"
-	appJS     = "console.log('crowban app');\n"
+	indexHTML = "<!doctype html><html><head><title>Rävn</title></head><body>Rävn UI</body></html>\n"
+	appJS     = "console.log('ravn app');\n"
 )
 
 // newTestDB opens a temp-file SQLite database (migrations included).
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
-	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "crowban-test.db"))
+	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "ravn-test.db"))
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
@@ -46,7 +46,7 @@ func newTestDB(t *testing.T) *sql.DB {
 func newTestDBPool(t *testing.T) *sqlite.DBPool {
 	t.Helper()
 	ctx := context.Background()
-	pool, closePool, err := sqlite.OpenPool(ctx, filepath.Join(t.TempDir(), "crowban-test.db"))
+	pool, closePool, err := sqlite.OpenPool(ctx, filepath.Join(t.TempDir(), "ravn-test.db"))
 	if err != nil {
 		t.Fatalf("open test db pool: %v", err)
 	}
@@ -117,8 +117,8 @@ func TestRootReturnsPlaceholder(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET / status = %d, want 200 (body %s)", code, body)
 	}
-	if !strings.Contains(body, "crowban server ok") {
-		t.Errorf("GET / body = %q, want it to contain %q", body, "crowban server ok")
+	if !strings.Contains(body, "ravn server ok") {
+		t.Errorf("GET / body = %q, want it to contain %q", body, "ravn server ok")
 	}
 }
 
@@ -216,7 +216,7 @@ func TestUnknownAPIPathIsNotFoundNotSPA(t *testing.T) {
 	if code != http.StatusNotFound {
 		t.Fatalf("GET /api/v1/definitely-not-a-route status = %d, want 404 (body %s)", code, body)
 	}
-	if strings.Contains(body, "crowban UI") {
+	if strings.Contains(body, "Rävn UI") {
 		t.Errorf("unknown API path returned the SPA index: %q", body)
 	}
 }
@@ -237,7 +237,7 @@ func TestNoStaticDirKeepsPlaceholderRoot(t *testing.T) {
 			if code != http.StatusOK {
 				t.Fatalf("GET / status = %d, want 200 (body %s)", code, body)
 			}
-			if !strings.Contains(body, "crowban server ok") {
+			if !strings.Contains(body, "ravn server ok") {
 				t.Errorf("GET / body = %q, want the placeholder text", body)
 			}
 
@@ -295,7 +295,7 @@ func TestAuthGatingWithToken(t *testing.T) {
 
 	// 2. Placeholder root "/" is not gated
 	code, body := reqWithAuth(t, "GET", srv.URL+"/", "", "")
-	if code != http.StatusOK || !strings.Contains(body, "crowban server ok") {
+	if code != http.StatusOK || !strings.Contains(body, "ravn server ok") {
 		t.Errorf("GET / status = %d, want 200", code)
 	}
 
@@ -657,7 +657,7 @@ func TestStaticServingDoesNotShadowMetrics(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET /metrics status = %d, want 200", code)
 	}
-	if strings.Contains(body, "crowban UI") {
+	if strings.Contains(body, "Rävn UI") {
 		t.Errorf("GET /metrics returned the SPA index: %q", body)
 	}
 	if !strings.Contains(body, "http_requests_total") {
@@ -669,7 +669,7 @@ func TestStaticServingDoesNotShadowMetrics(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET /api/v1/metrics status = %d, want 200", code)
 	}
-	if strings.Contains(body, "crowban UI") {
+	if strings.Contains(body, "Rävn UI") {
 		t.Errorf("GET /api/v1/metrics returned the SPA index: %q", body)
 	}
 	var snap struct {

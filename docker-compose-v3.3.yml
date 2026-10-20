@@ -1,21 +1,21 @@
-# crowban — LEGACY compose file for OLDER standalone docker-compose (v1.x,
+# ravn — LEGACY compose file for OLDER standalone docker-compose (v1.x,
 # Compose schema v3.3). Mirrors docker-compose.yml; modern tooling should use
 # that file — this one exists only because ancient docker-compose binaries
 # reject long-form `depends_on` with `condition: service_healthy`.
 #
 # Behavioral deltas vs docker-compose.yml (intentional, minimal):
 #   1. Startup ordering is BEST-EFFORT. v3.3 has no condition-based
-#      depends_on, so crowban-mcp may start before crowban-server is
+#      depends_on, so ravn-mcp may start before ravn-server is
 #      healthy. That is safe: the MCP service's /healthz proxies the
 #      upstream server (503 until ready, then 200), so it self-heals as
 #      soon as the server comes up. The healthcheck blocks below are kept
 #      for observability (`docker ps` state + `make smoke`) only.
-#   2. Uses the prebuilt Forgejo package image (${CROWBAN_IMAGE:-forgejo.lan:80/mrhollen/crowban:latest})
+#   2. Uses the prebuilt Forgejo package image (${RAVN_IMAGE:-forgejo.lan:80/mrhollen/ravn:latest})
 #      directly without building from source.
 #   3. start_period is omitted from the compose healthcheck blocks (not in v3.3 schema).
 #      The image itself carries an equivalent HEALTHCHECK with --start-period baked in.
 #
-# Everything else — service names, environment blocks, the crowban-data
+# Everything else — service names, environment blocks, the ravn-data
 # named volume and its /data mount — is equivalent to docker-compose.yml.
 # Host ports default to 127.0.0.1:3311 (server) and 127.0.0.1:9311 (mcp); containers ALWAYS
 # listen on 8080/9080 internally, so the MCP upstream URL stays stable.
@@ -26,40 +26,40 @@
 version: "3.3"
 
 services:
-  crowban-server:
-    image: ${CROWBAN_IMAGE:-forgejo.lan:80/mrhollen/crowban:latest}
+  ravn-server:
+    image: ${RAVN_IMAGE:-forgejo.lan:80/mrhollen/ravn:latest}
     ports:
-      - "${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_SERVER_PORT:-3311}:8080"
+      - "${RAVN_BIND_IP:-127.0.0.1}:${RAVN_SERVER_PORT:-3311}:8080"
     environment:
-      CROWBAN_ADDR: ":8080"
-      CROWBAN_DATA: "/data/crowban.db"
-      CROWBAN_STATIC_DIR: "/app/public" # UI is baked into the image (web-build stage)
-      CROWBAN_ARTIFACTS_DIR: "/artifacts"
-      CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
+      RAVN_ADDR: ":8080"
+      RAVN_DATA: "/data/ravn.db"
+      RAVN_STATIC_DIR: "/app/public" # UI is baked into the image (web-build stage)
+      RAVN_ARTIFACTS_DIR: "/artifacts"
+      RAVN_TOKEN: "${RAVN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
       OPENCODE_MODEL: "${OPENCODE_MODEL:-llama.cpp/Qwen Medium Long Context}" # default model for autonomous sessions
       OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
       OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)
     volumes:
-      - crowban-data:/data
-      - crowban-artifacts:/artifacts
+      - ravn-data:/data
+      - ravn-artifacts:/artifacts
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 15s
       timeout: 3s
       retries: 3
 
-  crowban-mcp:
-    image: ${CROWBAN_IMAGE:-forgejo.lan:80/mrhollen/crowban:latest}
-    entrypoint: ["crowban-mcp"]
+  ravn-mcp:
+    image: ${RAVN_IMAGE:-forgejo.lan:80/mrhollen/ravn:latest}
+    entrypoint: ["ravn-mcp"]
     ports:
-      - "${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_MCP_PORT:-9311}:9080"
+      - "${RAVN_BIND_IP:-127.0.0.1}:${RAVN_MCP_PORT:-9311}:9080"
     environment:
       MCP_ADDR: ":9080"
-      CROWBAN_API_URL: "http://crowban-server:8080" # compose service DNS — no IPs, no host assumptions
-      CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}" # forwarded as Bearer to the API when set
-      CROWBAN_AGENT_NAME: "${CROWBAN_AGENT_NAME:-agent}" # actor stamped when a tool call omits one
+      RAVN_API_URL: "http://ravn-server:8080" # compose service DNS — no IPs, no host assumptions
+      RAVN_TOKEN: "${RAVN_TOKEN:-}" # forwarded as Bearer to the API when set
+      RAVN_AGENT_NAME: "${RAVN_AGENT_NAME:-agent}" # actor stamped when a tool call omits one
     depends_on:
-      - crowban-server # short form: v3.3 cannot gate on service_healthy (best-effort ordering; mcp self-heals, see header)
+      - ravn-server # short form: v3.3 cannot gate on service_healthy (best-effort ordering; mcp self-heals, see header)
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9080/healthz"]
       interval: 15s
@@ -67,5 +67,5 @@ services:
       retries: 3
 
 volumes:
-  crowban-data:
-  crowban-artifacts:
+  ravn-data:
+  ravn-artifacts:

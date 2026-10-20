@@ -13,7 +13,7 @@
 //   AC4 — behavior parity: theme persists via setTheme, polling flips, actor
 //         saves on commit, token item opens the existing auth modal with a
 //         set/none label; keyboard contract matching the Projects dropdown
-// Self-contained: ephemeral crowban-server on a random high port + temp DB,
+// Self-contained: ephemeral ravn-server on a random high port + temp DB,
 // serving the pre-built web/dist (mirrors project-dropdown.spec.ts).
 import { test, expect } from '@playwright/test';
 import { spawn, execSync, type ChildProcess } from 'child_process';
@@ -26,7 +26,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'crowban-server');
+const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
 const staticDir = path.resolve(__dirname, '../dist');
 
 async function getFreePort(): Promise<number> {
@@ -69,11 +69,11 @@ function hasDarkClass(page: import('@playwright/test').Page) {
 }
 
 async function lsTheme(page: import('@playwright/test').Page): Promise<string | null> {
-  return page.evaluate(() => localStorage.getItem('crowban.theme'));
+  return page.evaluate(() => localStorage.getItem('ravn.theme') ?? localStorage.getItem('ravn_theme') ?? localStorage.getItem('crowban.theme'));
 }
 
 async function lsActor(page: import('@playwright/test').Page): Promise<string | null> {
-  return page.evaluate(() => localStorage.getItem('crowban.actor'));
+  return page.evaluate(() => localStorage.getItem('ravn.actor') ?? localStorage.getItem('crowban.actor'));
 }
 
 test.describe('Consolidated header settings menu', () => {
@@ -89,14 +89,17 @@ test.describe('Consolidated header settings menu', () => {
       execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
     }
     if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/crowban-server ./cmd/crowban-server', {
+      const serverPkg = fs.existsSync(path.join(repoRoot, 'cmd', 'ravn-server'))
+        ? './cmd/ravn-server'
+        : './cmd/crowban-server';
+      execSync(`go build -trimpath -o bin/ravn-server ${serverPkg}`, {
         cwd: repoRoot,
         stdio: 'inherit',
       });
     }
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crowban-e2e-header-menu-'));
-    const dbPath = path.join(tempDir, 'crowban.db');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-header-menu-'));
+    const dbPath = path.join(tempDir, 'ravn.db');
     serverPort = await getFreePort();
     expect(serverPort).not.toBe(8080);
     serverUrl = `http://127.0.0.1:${serverPort}`;
@@ -104,10 +107,10 @@ test.describe('Consolidated header settings menu', () => {
     serverProcess = spawn(serverBin, [], {
       env: {
         ...process.env,
-        CROWBAN_ADDR: `127.0.0.1:${serverPort}`,
-        CROWBAN_DATA: dbPath,
-        CROWBAN_STATIC_DIR: staticDir,
-        CROWBAN_TOKEN: '',
+        RAVN_ADDR: `127.0.0.1:${serverPort}`,
+        RAVN_DATA: dbPath,
+        RAVN_STATIC_DIR: staticDir,
+        RAVN_TOKEN: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -172,7 +175,7 @@ test.describe('Consolidated header settings menu', () => {
       uncaughtConsoleErrors.push(`[uncaught pageerror] ${err.message}`);
     });
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
     await expect(page.getByTestId('project-select')).toBeEnabled();
   }
 
@@ -328,7 +331,7 @@ test.describe('Consolidated header settings menu', () => {
     // (same neutral header chrome the old text wordmark occupied).
     await trigger.click();
     await expect(panel).toBeVisible();
-    await page.locator('header img[alt="CrowBan — MCP-first kanban · visibility UI"]').click();
+    await page.locator('header img[alt="Rävn — MCP-first kanban · visibility UI"]').click();
     await expect(panel).toBeHidden();
   });
 
@@ -356,7 +359,11 @@ test.describe('Consolidated header settings menu', () => {
   });
 
   test('AC3: menu renders in the dark theme (screenshot evidence)', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('crowban.theme', 'dark'));
+    await page.addInitScript(() => {
+      localStorage.setItem('ravn.theme', 'dark');
+      localStorage.setItem('ravn_theme', 'dark');
+      localStorage.setItem('crowban.theme', 'dark');
+    });
     await freshPage(page);
     expect(await hasDarkClass(page)).toBe(true); // stored explicit choice wins
 
@@ -476,7 +483,7 @@ test.describe('Consolidated header settings menu', () => {
       uncaughtConsoleErrors.push(`[uncaught pageerror] ${err.message}`);
     });
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
     await expect(page.getByTestId('project-select')).toBeEnabled();
 
     // Chosen mobile mapping: the trigger stays VISIBLE in the compact row-1

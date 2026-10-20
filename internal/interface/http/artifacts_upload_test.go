@@ -15,13 +15,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
-	"github.com/mrhollen/crowban/internal/infrastructure/clock"
-	"github.com/mrhollen/crowban/internal/infrastructure/idgen"
-	"github.com/mrhollen/crowban/internal/infrastructure/pubsub"
-	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
-	httpapi "github.com/mrhollen/crowban/internal/interface/http"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
+	"github.com/mrhollen/ravn/internal/infrastructure/clock"
+	"github.com/mrhollen/ravn/internal/infrastructure/idgen"
+	"github.com/mrhollen/ravn/internal/infrastructure/pubsub"
+	"github.com/mrhollen/ravn/internal/infrastructure/sqlite"
+	httpapi "github.com/mrhollen/ravn/internal/interface/http"
 )
 
 type testRig struct {

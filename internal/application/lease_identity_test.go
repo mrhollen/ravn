@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // TestLeaseIdentity_SameNameDifferentType_ShareTheLease is the positive case:

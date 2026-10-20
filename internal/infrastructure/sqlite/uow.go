@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // SQLiteUnitOfWork implements application.UnitOfWork over a single SQLite
@@ -15,7 +15,7 @@ import (
 // writes both go through it (MVP uniformity).
 //
 // The pool is pinned to one connection (SetMaxOpenConns(1), db.go), so a live
-// transaction serializes everything behind it — at crowban's QPS that is the
+// transaction serializes everything behind it — at ravn's QPS that is the
 // intended single-writer behavior, not a bug.
 type SQLiteUnitOfWork struct {
 	db        *sql.DB

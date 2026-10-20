@@ -1,6 +1,6 @@
-// Package mcp adapts crowban's REST API to MCP tools (docs/ARCHITECTURE.md
-// §6). It is imported only by cmd/crowban-mcp (and its tests) — never by
-// cmd/crowban-server, which must stay free of the MCP SDK.
+// Package mcp adapts ravn's REST API to MCP tools (docs/ARCHITECTURE.md
+// §6). It is imported only by cmd/ravn-mcp (and its tests) — never by
+// cmd/ravn-server, which must stay free of the MCP SDK.
 //
 // Every tool handler follows ONE pattern:
 //
@@ -26,10 +26,10 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
-	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
 )
 
-// Client is the REST surface the crowban MCP tools need. *apiclient.Client
+// Client is the REST surface the ravn MCP tools need. *apiclient.Client
 // implements it; unit tests substitute fakes.
 type Client interface {
 	BaseURL() string
@@ -54,7 +54,7 @@ type Client interface {
 	UnrelateTasks(ctx context.Context, id string, actor apiclient.Actor, otherID, kind string) error
 }
 
-// ServerOptions are the options every crowban MCPServer runs with:
+// ServerOptions are the options every ravn MCPServer runs with:
 //   - WithRecovery: a panic in a handler becomes a JSON-RPC error, not a
 //     container crash.
 //   - WithInputSchemaValidation: arguments that violate a tool's input schema
@@ -67,9 +67,9 @@ func ServerOptions() []mcpsrv.ServerOption {
 	}
 }
 
-// RegisterTools wires every crowban MCP tool onto s (the full 17-tool surface,
+// RegisterTools wires every ravn MCP tool onto s (the full 17-tool surface,
 // docs/API.md route table). defaultActor is the container-default identity
-// (from CROWBAN_AGENT_NAME) used whenever a mutating call arrives without a
+// (from RAVN_AGENT_NAME) used whenever a mutating call arrives without a
 // usable `actor` object.
 func RegisterTools(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	registerListProjects(s, c)
@@ -98,7 +98,7 @@ func RegisterTools(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) 
 func textResult(v any) (*mcpgo.CallToolResult, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		return mcpgo.NewToolResultError("internal: cannot encode crowban response: " + err.Error()), nil
+		return mcpgo.NewToolResultError("internal: cannot encode ravn response: " + err.Error()), nil
 	}
 	return mcpgo.NewToolResultText(string(data)), nil
 }
@@ -111,7 +111,7 @@ func fail(c Client, err error) *mcpgo.CallToolResult {
 		return mcpgo.NewToolResultError(string(e.Body))
 	}
 	return mcpgo.NewToolResultError(fmt.Sprintf(
-		"crowban-server unreachable at %s — is it running? (%v)", c.BaseURL(), err))
+		"ravn-server unreachable at %s — is it running? (%v)", c.BaseURL(), err))
 }
 
 // invalidInput builds the same local isError body shape a server-side 400
@@ -151,7 +151,7 @@ func assigneeProp() mcpgo.ToolOption {
 
 // actorHint is appended to every mutating tool's description: the actor
 // convention and its fallback rule, written for small models.
-const actorHint = " Actor: pass an optional object {name, type} — agents SHOULD pass a distinct name (type \"agent\") so claims and attribution are correct, because claims key on the actor NAME; when omitted (or empty), the container default agent name from CROWBAN_AGENT_NAME is used."
+const actorHint = " Actor: pass an optional object {name, type} — agents SHOULD pass a distinct name (type \"agent\") so claims and attribution are correct, because claims key on the actor NAME; when omitted (or empty), the container default agent name from RAVN_AGENT_NAME is used."
 
 // resolveActor applies the actor convention to decoded arguments: use the
 // caller's `actor` object when it carries a non-empty name (type passes
@@ -854,7 +854,7 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 				Summary: summary,
 			})
 		} else {
-			return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid input","message":"attach_artifact: local file %q not found on the MCP server filesystem. The CrowBan MCP server runs in a remote container environment and cannot access files on your machine. For screenshots and workspace evidence files, you MUST encode the file to base64 and pass 'data_base64' (along with 'filename') so the server can store and display it as an inline image/video."}`, ref)), nil
+			return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid input","message":"attach_artifact: local file %q not found on the MCP server filesystem. The Rävn MCP server runs in a remote container environment and cannot access files on your machine. For screenshots and workspace evidence files, you MUST encode the file to base64 and pass 'data_base64' (along with 'filename') so the server can store and display it as an inline image/video."}`, ref)), nil
 		}
 
 		if err != nil {
@@ -930,7 +930,7 @@ type UpstreamHealth interface {
 
 // HealthzHandler implements GET /healthz for the MCP container: it proxies the
 // main server's /healthz so docker `depends_on: service_healthy` chains through
-// crowban-mcp. 200 only when upstream is healthy; an upstream 503 (degraded DB)
+// ravn-mcp. 200 only when upstream is healthy; an upstream 503 (degraded DB)
 // is re-emitted verbatim with its status; an unreachable upstream maps to a
 // fresh 503 degraded body (never 200 — that would let compose start dependents
 // against a dead backend).
@@ -949,7 +949,7 @@ func HealthzHandler(up UpstreamHealth) http.HandlerFunc {
 			}
 			writeJSON(w, http.StatusServiceUnavailable, apiclient.Health{
 				Status: "degraded",
-				DB:     "error: crowban-server unreachable at " + up.BaseURL(),
+				DB:     "error: ravn-server unreachable at " + up.BaseURL(),
 			})
 		}
 	}

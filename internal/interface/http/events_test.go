@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
-	"github.com/mrhollen/crowban/internal/infrastructure/clock"
-	"github.com/mrhollen/crowban/internal/infrastructure/idgen"
-	"github.com/mrhollen/crowban/internal/infrastructure/pubsub"
-	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
+	"github.com/mrhollen/ravn/internal/infrastructure/clock"
+	"github.com/mrhollen/ravn/internal/infrastructure/idgen"
+	"github.com/mrhollen/ravn/internal/infrastructure/pubsub"
+	"github.com/mrhollen/ravn/internal/infrastructure/sqlite"
 )
 
 type sseEvent struct {
@@ -75,7 +75,7 @@ func readSSEEvent(reader *bufio.Reader, timeout time.Duration) (sseEvent, error)
 func newRealtimeStack(t *testing.T) (stack, *pubsub.Broker, *httptest.Server) {
 	t.Helper()
 	ctx := context.Background()
-	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "crowban-realtime-test.db"))
+	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "ravn-realtime-test.db"))
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}

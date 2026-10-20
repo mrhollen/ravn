@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // TestChallenger_R5_DomainTransitionPermutations tests all pairwise combinations

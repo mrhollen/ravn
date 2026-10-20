@@ -15,7 +15,7 @@ import {
 } from "../src/util.ts";
 import { escapeHtml, isAllowedHref, renderMarkdown } from "../src/md.ts";
 import { ApiError, api } from "../src/api.ts";
-import { crowbanApp, isMobileDetailViewport, MOBILE_DETAIL_MAX_WIDTH, sseTelemetry, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
+import { ravnApp, isMobileDetailViewport, MOBILE_DETAIL_MAX_WIDTH, sseTelemetry, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
 import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, shouldApplyBoard } from "../src/refresh.ts";
@@ -114,7 +114,7 @@ test("R8: safeStorage handles localStorage.setItem QuotaExceededError gracefully
   }
 });
 
-test("R8: crowbanApp initializes cleanly when window.localStorage is blocked by SecurityError", () => {
+test("R8: ravnApp initializes cleanly when window.localStorage is blocked by SecurityError", () => {
   const origWindow = (globalThis as any).window;
   try {
     (globalThis as any).window = {
@@ -129,10 +129,10 @@ test("R8: crowbanApp initializes cleanly when window.localStorage is blocked by 
       configurable: true,
     });
 
-    // Initializing crowbanApp() must not throw!
+    // Initializing ravnApp() must not throw!
     let appInstance: any;
     assert.doesNotThrow(() => {
-      appInstance = crowbanApp();
+      appInstance = ravnApp();
     });
     assert.ok(appInstance);
     assert.equal(typeof appInstance.actorName, "string");
@@ -291,7 +291,7 @@ function fakeDetail(id: string, notes: string): any {
 }
 
 test("Notes: closeDetail() resets the scratchpad so no draft leaks (AC1)", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   app.detailOpen = true;
   app.detailId = "A";
   app.notesDirty = true;
@@ -307,7 +307,7 @@ test("Notes: closeDetail() resets the scratchpad so no draft leaks (AC1)", () =>
 });
 
 test("Notes: opening another task with a dirty draft prompts and does NOT switch (AC2/AC3)", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   // Drawer open on A with an unsaved edit…
   app.detailOpen = true;
   app.detailId = "A";
@@ -324,7 +324,7 @@ test("Notes: opening another task with a dirty draft prompts and does NOT switch
 });
 
 test("Notes: keep-editing (cancel) preserves the draft and leaves drawer open (AC3)", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   app.detailOpen = true;
   app.detailId = "A";
   app.notesDirty = true;
@@ -343,7 +343,7 @@ test("Notes: keep-editing (cancel) preserves the draft and leaves drawer open (A
 });
 
 test("Notes: applyDetail never carries one task's draft into another (AC2 core)", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   // The leak condition: scratchpad still holds a dirty draft owned by A, and
   // the user has just opened B (open-drawer context — required since
   // 01M3MMY78F1TRP6MKDRT0SKQWB made applyDetail ownership-guarded).
@@ -367,7 +367,7 @@ test("Notes: applyDetail never carries one task's draft into another (AC2 core)"
 });
 
 test("Notes: clean close does not prompt and a fresh open loads server notes (regression)", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   // Open A, no edits, close — must be silent (no prompt).
   app.detailOpen = true;
   app.detailId = "A";
@@ -402,7 +402,7 @@ test("Drawer: canApplyDetail only admits an open drawer's own payload", () => {
 });
 
 test("Drawer: a stale foreign response must NOT reset a dirty draft of the open task", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   app.detailOpen = true;
   app.detailId = "B";
   // User is editing B's notes…
@@ -421,7 +421,7 @@ test("Drawer: a stale foreign response must NOT reset a dirty draft of the open 
 });
 
 test("Drawer: a response for a closed drawer is discarded (AC3 core)", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   app.detailOpen = true;
   app.detailId = "A";
   app.applyDetail(fakeDetail("A", "notes for A"));
@@ -504,7 +504,7 @@ test("Due: dateInputToIso round-trips through the picker without shifting the da
 });
 
 test("Due: 'Due today' filter matches exactly today and excludes older overdue tasks (AC3)", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   const todayTask = dueTask("TODAY", 0);
   const oldOverdue = dueTask("OLD", -9); // the leak: used to appear in "today"
   const tomorrow = dueTask("TOMORROW", 1);
@@ -529,7 +529,7 @@ test("Due: 'Due today' filter matches exactly today and excludes older overdue t
 });
 
 test("Due: editing round-trip preserves the calendar day shown on the card (duplicate task nuance)", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   // Canonical stored value (this app's own write format).
   app.detail = { id: "X", title: "t", description: "", priority: 3, due_at: `${localYmd(0)}T00:00:00Z`, assignee: undefined } as any;
   app.startEditing();
@@ -912,7 +912,7 @@ test("API: errMsg keeps the precedence of the existing mappings (ApiError, TypeE
   assert.equal(apiErrMsg(new ApiError(409, { error: "version_conflict", current_version: 7 })), "version_conflict");
   assert.equal(apiErrMsg(new ApiError(400, { error: "invalid input", message: 'cannot transition status from "todo" to "done"' })), 'cannot transition status from "todo" to "done"');
   // TypeError = fetch network failure → the "is it running?" message.
-  assert.equal(apiErrMsg(new TypeError("fetch failed")), "cannot reach the crowban server (/api/v1) — is it running?");
+  assert.equal(apiErrMsg(new TypeError("fetch failed")), "cannot reach the ravn server (/api/v1) — is it running?");
 });
 
 test("API: withRequestTimeout — no caller signal, our timer wins after ~ms", async () => {
@@ -961,7 +961,7 @@ test("API: setApiTimeoutMsForTests — override applies and ≤0 restores the de
 
 // ------------------------------------------------------------- full-page route
 // Task 01M47MWHWW0M1Q3WZYFGFHXTYZ: /tasks/<id> is the client-side deep link to
-// the full-page task view. crowban-server's SPA fallback serves index.html for
+// the full-page task view. ravn-server's SPA fallback serves index.html for
 // these paths, so this pure pathname mapping owns both directions of the route.
 
 test("FullPage: taskRouteIdFromPath parses only single-segment /tasks/<id> routes", () => {
@@ -989,7 +989,7 @@ test("FullPage: taskRoutePath round-trips through the parser", () => {
 });
 
 test("FullPage: the app boots in drawer mode and openFullPage is a safe no-op without detail", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   assert.equal(app.fullPageOpen, false);
   assert.equal(app.fullPagePushed, false);
   // No window (Node) and no loaded task — must not throw.
@@ -1012,7 +1012,7 @@ test("Modal: isMobileDetailViewport sits just below Tailwind's md (768px) breakp
 test("Modal: without a window (Node) openTask takes the desktop path, not the full page", async () => {
   // No window mock at all — isMobileDetailViewport() must report false so a
   // card click can never force the /tasks/<id> route in non-browser contexts.
-  const app = crowbanApp();
+  const app = ravnApp();
   assert.equal(isMobileDetailViewport(), false);
   await app.openTask("01M47MWSTTPS14M6XB1A8HFPV1"); // detail fetch fails (no server) — expected, non-fatal
   assert.equal(app.detailOpen, true);
@@ -1020,7 +1020,7 @@ test("Modal: without a window (Node) openTask takes the desktop path, not the fu
 });
 
 test("Modal: openTask below 768px enters the full-page route via a pushed /tasks/<id> entry", async () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   const origWindow = (globalThis as any).window;
   const pushed: string[] = [];
   try {
@@ -1050,7 +1050,7 @@ test("Modal: openTask below 768px enters the full-page route via a pushed /tasks
 });
 
 test("Modal: openTask at ≥768px keeps the modal (no URL change)", async () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   const origWindow = (globalThis as any).window;
   const pushed: string[] = [];
   try {
@@ -1083,7 +1083,7 @@ test("Modal: openTask at ≥768px keeps the modal (no URL change)", async () => 
 // drawer error state + retry path — never the bare "Loading task…" trap.
 
 test("DrawerError: openTask with an unreachable server sets detailLoadError (non-fatal)", async () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   // No server in Node: the relative /api/v1 URL fails at fetch() → TypeError.
   await app.openTask("01M3MMYFRMAW7XM6QDTXNQA6ED");
   assert.equal(app.detailOpen, true, "the drawer stays open — the user is not trapped");
@@ -1095,7 +1095,7 @@ test("DrawerError: openTask with an unreachable server sets detailLoadError (non
 });
 
 test("DrawerError: a 404 maps to the deleted-task message", async () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   const origFetch = (globalThis as any).fetch;
   try {
     (globalThis as any).fetch = async () =>
@@ -1112,7 +1112,7 @@ test("DrawerError: a 404 maps to the deleted-task message", async () => {
 });
 
 test("DrawerError: a failure for a task that is NOT open does not touch the drawer", async () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   const origFetch = (globalThis as any).fetch;
   try {
     (globalThis as any).fetch = async () =>
@@ -1133,7 +1133,7 @@ test("DrawerError: a failure for a task that is NOT open does not touch the draw
 });
 
 test("DrawerError: an applied payload clears detailLoadError and re-renders the detail", () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   app.detailOpen = true;
   app.detailId = "A";
   app.detail = null;
@@ -1144,7 +1144,7 @@ test("DrawerError: an applied payload clears detailLoadError and re-renders the 
 });
 
 test("DrawerError: openTask clears a previous task's error state before loading", async () => {
-  const app = crowbanApp();
+  const app = ravnApp();
   // Simulate the leftover error state from a previous failed open…
   app.detailOpen = true;
   app.detailId = "A";
@@ -1180,7 +1180,7 @@ test("Dropdown: index.html has no standalone New project button and wires the cu
 });
 
 test("Dropdown: pickProject switches + persists the project and closes the menu", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   assert.equal(app.appBooted, false, "trigger gated until init() completes");
   const a = { id: "pa", name: "Alpha", task_counts: { todo: 1, doing: 0, done: 2 } };
   const b = { id: "pb", name: "Beta", task_counts: { todo: 0, doing: 3, done: 0 } };
@@ -1199,7 +1199,7 @@ test("Dropdown: pickProject switches + persists the project and closes the menu"
   assert.equal(app.selectedProjectId, b.id);
   assert.equal(app.projectMenuOpen, false, "menu closes after a pick");
   assert.equal(app.board, null, "previous project's board is dropped for reload");
-  assert.equal(safeStorage.getItem("crowban.project"), b.id, "selection persists via safeStorage");
+  assert.equal(safeStorage.getItem("ravn.project"), b.id, "selection persists via safeStorage");
 
   // Re-picking the CURRENT project just collapses — no reload churn.
   app.board = { project_id: b.id, tasks: {} as any };
@@ -1209,7 +1209,7 @@ test("Dropdown: pickProject switches + persists the project and closes the menu"
 });
 
 test("Dropdown: openNewProject opens the existing bar WITHOUT resetting the typed draft", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.newProject = { name: "Keep Me", description: "draft" };
   app.projectMenuOpen = true;
 
@@ -1224,7 +1224,7 @@ test("Dropdown: openNewProject opens the existing bar WITHOUT resetting the type
 });
 
 test("Dropdown: Escape chain closes the dropdown BEFORE the new-project bar", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.showNewProject = true;
   app.projectMenuOpen = true;
 
@@ -1290,7 +1290,7 @@ test("HeaderMenu: index.html wires the consolidated trigger + panel at the dropd
 });
 
 test("HeaderMenu: actorGlyph maps the actor name to its initial (or You)", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.actorName = "";
   assert.equal(app.actorGlyph(), "You", "empty name → You");
   app.actorName = "   ";
@@ -1302,7 +1302,7 @@ test("HeaderMenu: actorGlyph maps the actor name to its initial (or You)", () =>
 });
 
 test("HeaderMenu: toggle opens/closes; Escape chain and mutual exclusion with the project menu", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
 
   // Plain toggle cycle (no document in Node — state machine only).
   assert.equal(app.headerMenuOpen, false);
@@ -1383,7 +1383,7 @@ test("ProjectSettingsGear: index.html wires the gear into the project-dropdown s
 });
 
 test("ProjectSettingsGear: openProjectSettings() no-ops without a selection; opens + populates with one", async () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
 
   // No project selected → the guard bails before touching the DOM (in the UI the
   // gear is disabled in this state, so the click can't even fire).
@@ -1427,7 +1427,7 @@ test("ArchiveProject: index.html wires archive button, confirmation box, input, 
 });
 
 test("ArchiveProject: isArchiveInputValid validates project name with whitespace trimming", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.selectedProjectId = "p1";
   app.projects = [{ id: "p1", name: "Alpha Project" }];
   app.projectSettingsForm = { name: "Alpha Project" };
@@ -1454,7 +1454,7 @@ test("ArchiveProject: isArchiveInputValid validates project name with whitespace
 });
 
 test("ArchiveProject: open/cancel confirmation and Escape handling", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.selectedProjectId = "p1";
   app.projects = [{ id: "p1", name: "Alpha Project" }];
   app.showProjectSettings = true;
@@ -1504,7 +1504,7 @@ function withConfirm(app: any, answer: boolean | ((msg: string) => boolean)) {
 }
 
 test("DiscardGuards: confirmDiscard delegates to window.confirm; unblocked where absent", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   const origWindow = (globalThis as any).window;
   try {
     // No window at all (node) → a non-UI caller is never blocked.
@@ -1525,7 +1525,7 @@ test("DiscardGuards: confirmDiscard delegates to window.confirm; unblocked where
 });
 
 test("DiscardGuards: newTaskDirty flags any real content, never a fresh/blank form", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   assert.equal(app.newTaskDirty(), false, "freshly opened dialog is clean");
 
   // Each field independently counts as a draft.
@@ -1561,7 +1561,7 @@ test("DiscardGuards: newTaskDirty flags any real content, never a fresh/blank fo
 });
 
 test("DiscardGuards: requestCloseNewTask asks when dirty — decline stays, accept closes", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.showNewTask = true;
   app.newTask.title = "WIP draft";
 
@@ -1584,7 +1584,7 @@ test("DiscardGuards: requestCloseNewTask asks when dirty — decline stays, acce
   }
 
   // A clean form closes WITHOUT asking: a hostile confirm must never be reached.
-  const fresh = crowbanApp() as any;
+  const fresh = ravnApp() as any;
   fresh.showNewTask = true;
   const strict = withConfirm(fresh, () => {
     assert.fail("clean close must not call window.confirm");
@@ -1599,7 +1599,7 @@ test("DiscardGuards: requestCloseNewTask asks when dirty — decline stays, acce
 });
 
 test("DiscardGuards: projectSettingsDirty is baseline-relative; guarded close honors it", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   const form = { name: "Alpha", description: "d", opencode_server_url: "", opencode_directory: "", opencode_model: "" };
   app.projectSettingsForm = { ...form };
   app.projectSettingsBaseline = { ...form };
@@ -1640,7 +1640,7 @@ test("DiscardGuards: projectSettingsDirty is baseline-relative; guarded close ho
 });
 
 test("DiscardGuards: editDraftDirty compares against the startEditing snapshot", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.detail = { id: "A", title: "Orig", description: "desc", priority: 2, due_at: null, assignee: undefined };
 
   assert.equal(app.editDraftDirty(), false, "not editing → never dirty");
@@ -1659,7 +1659,7 @@ test("DiscardGuards: editDraftDirty compares against the startEditing snapshot",
 });
 
 test("DiscardGuards: Escape on a dirty task edit confirms before exiting edit mode", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.detailOpen = true;
   app.detailId = "A";
   app.detail = { id: "A", title: "Orig", description: "", priority: 0, due_at: null, assignee: undefined };
@@ -1685,7 +1685,7 @@ test("DiscardGuards: Escape on a dirty task edit confirms before exiting edit mo
 });
 
 test("DiscardGuards: requestCloseDetail guards a dirty task edit (after the notes check)", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.detailOpen = true;
   app.detailId = "A";
   app.notesDirty = false; // notes branch must not fire — this test is about the edit draft
@@ -1713,7 +1713,7 @@ test("DiscardGuards: requestCloseDetail guards a dirty task edit (after the note
 });
 
 test("DiscardGuards: openTask with a dirty edit draft prompts; decline stays on the old task", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.detailOpen = true;
   app.detailId = "A";
   app.notesDirty = false;
@@ -1768,7 +1768,7 @@ test("Toasts: dismiss button, slide+fade enter/leave transitions, and kind icons
 });
 
 test("Toasts: dismissToast plays the leave phase, then drops only the targeted toast", async () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.toasts = [];
   app.toastSeq = 0;
   app.toast("first");
@@ -1812,7 +1812,7 @@ test("BootError: index.html wires the dedicated boot-error screen (role=alert + 
 });
 
 test("Boot: failed loadProjects keeps stored selection and offers retry, not New Project", async () => {
-  safeStorage.setItem("crowban.project", "proj-stored");
+  safeStorage.setItem("ravn.project", "proj-stored");
   const origListProjects = api.listProjects;
   const origGetBoard = api.getBoard;
   let boardFetches = 0;
@@ -1820,7 +1820,7 @@ test("Boot: failed loadProjects keeps stored selection and offers retry, not New
     (api as any).listProjects = async () => { throw new TypeError("fetch failed"); };
     (api as any).getBoard = async (pid: string) => { boardFetches++; return emptyBoard(pid); };
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     assert.equal(app.selectedProjectId, "proj-stored", "stored selection loaded at construction");
     app.polling = false; // unit env: never start the 15s interval timer
     await app.init();
@@ -1829,7 +1829,7 @@ test("Boot: failed loadProjects keeps stored selection and offers retry, not New
     assert.ok(typeof app.loadError === "string" && app.loadError.length > 0, "fetch error surfaces in loadError");
     assert.equal(app.selectedProjectId, "proj-stored", "AC1: stored selection survives the failed boot");
     assert.equal(app.projects.length, 0);
-    assert.equal(safeStorage.getItem("crowban.project"), "proj-stored", "AC1: localStorage is never overwritten on failure");
+    assert.equal(safeStorage.getItem("ravn.project"), "proj-stored", "AC1: localStorage is never overwritten on failure");
     // AC2 — a dedicated retry screen, NOT the New Project bar.
     assert.equal(app.bootError, true, "boot-error state for the dedicated retry screen");
     assert.equal(app.showNewProject, false, "AC2: New Project bar must not open on a failed fetch");
@@ -1839,7 +1839,7 @@ test("Boot: failed loadProjects keeps stored selection and offers retry, not New
     await app.retryBoot();
     assert.equal(app.bootError, true, "failed retry keeps the error screen up");
     assert.equal(app.selectedProjectId, "proj-stored", "AC3: selection survives a repeated failure");
-    assert.equal(safeStorage.getItem("crowban.project"), "proj-stored");
+    assert.equal(safeStorage.getItem("ravn.project"), "proj-stored");
 
     // Once the fetch recovers, Retry runs the SAME continuation as a normal boot.
     (api as any).listProjects = async () => ({
@@ -1850,11 +1850,11 @@ test("Boot: failed loadProjects keeps stored selection and offers retry, not New
     assert.equal(app.selectedProjectId, "proj-stored", "AC3: selection preserved across the glitch");
     assert.ok(app.board, "board loaded through the success continuation");
     assert.equal(boardFetches, 1);
-    assert.equal(safeStorage.getItem("crowban.project"), "proj-stored");
+    assert.equal(safeStorage.getItem("ravn.project"), "proj-stored");
   } finally {
     (api as any).listProjects = origListProjects;
     (api as any).getBoard = origGetBoard;
-    safeStorage.removeItem("crowban.project");
+    safeStorage.removeItem("ravn.project");
   }
 });
 
@@ -1864,8 +1864,8 @@ test("Boot: genuinely empty server on a successful load still opens New Project"
     (api as any).listProjects = async () => ({ projects: [] });
 
     // First visit (nothing stored) + zero projects.
-    safeStorage.removeItem("crowban.project");
-    const first = crowbanApp() as any;
+    safeStorage.removeItem("ravn.project");
+    const first = ravnApp() as any;
     first.polling = false;
     await first.init();
     assert.equal(first.bootError, false);
@@ -1873,21 +1873,21 @@ test("Boot: genuinely empty server on a successful load still opens New Project"
     assert.equal(first.showNewProject, true, "empty success keeps opening the New Project bar (behavior a)");
 
     // Stored id that no longer exists + empty list: falls back to "" and invites.
-    safeStorage.setItem("crowban.project", "proj-gone");
-    const stale = crowbanApp() as any;
+    safeStorage.setItem("ravn.project", "proj-gone");
+    const stale = ravnApp() as any;
     stale.polling = false;
     await stale.init();
     assert.equal(stale.selectedProjectId, "");
     assert.equal(stale.showNewProject, true);
-    assert.equal(safeStorage.getItem("crowban.project"), "proj-gone", "empty success writes nothing (unchanged)");
+    assert.equal(safeStorage.getItem("ravn.project"), "proj-gone", "empty success writes nothing (unchanged)");
   } finally {
     (api as any).listProjects = origListProjects;
-    safeStorage.removeItem("crowban.project");
+    safeStorage.removeItem("ravn.project");
   }
 });
 
 test("Boot: stale stored id on a successful load falls back to the first project and persists it", async () => {
-  safeStorage.setItem("crowban.project", "proj-deleted");
+  safeStorage.setItem("ravn.project", "proj-deleted");
   const origListProjects = api.listProjects;
   const origGetBoard = api.getBoard;
   try {
@@ -1899,25 +1899,25 @@ test("Boot: stale stored id on a successful load falls back to the first project
     });
     (api as any).getBoard = async (pid: string) => emptyBoard(pid);
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     assert.equal(app.selectedProjectId, "proj-deleted");
     app.polling = false;
     await app.init();
 
     assert.equal(app.bootError, false);
     assert.equal(app.selectedProjectId, "p-alpha", "stale selection falls back to the first project (behavior b)");
-    assert.equal(safeStorage.getItem("crowban.project"), "p-alpha", "the fallback is persisted (as before)");
+    assert.equal(safeStorage.getItem("ravn.project"), "p-alpha", "the fallback is persisted (as before)");
     assert.equal(app.showNewProject, false);
     assert.ok(app.board, "board of the fallback project loaded");
   } finally {
     (api as any).listProjects = origListProjects;
     (api as any).getBoard = origGetBoard;
-    safeStorage.removeItem("crowban.project");
+    safeStorage.removeItem("ravn.project");
   }
 });
 
 test("Boot: first visit (no stored id) on a successful load selects and persists the first project", async () => {
-  safeStorage.removeItem("crowban.project");
+  safeStorage.removeItem("ravn.project");
   const origListProjects = api.listProjects;
   const origGetBoard = api.getBoard;
   try {
@@ -1929,19 +1929,19 @@ test("Boot: first visit (no stored id) on a successful load selects and persists
     });
     (api as any).getBoard = async (pid: string) => emptyBoard(pid);
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     assert.equal(app.selectedProjectId, "");
     app.polling = false;
     await app.init();
 
     assert.equal(app.bootError, false);
     assert.equal(app.selectedProjectId, "p-alpha", "first visit selects the first project (behavior c)");
-    assert.equal(safeStorage.getItem("crowban.project"), "p-alpha", "plain first-visit persistence kept (01M3V6Z nuance out of scope)");
+    assert.equal(safeStorage.getItem("ravn.project"), "p-alpha", "plain first-visit persistence kept (01M3V6Z nuance out of scope)");
     assert.ok(app.board);
   } finally {
     (api as any).listProjects = origListProjects;
     (api as any).getBoard = origGetBoard;
-    safeStorage.removeItem("crowban.project");
+    safeStorage.removeItem("ravn.project");
   }
 });
 
@@ -2019,7 +2019,7 @@ function bootIdempotencyHarness() {
 }
 
 test("InitIdempotence: concurrent double init() shares ONE boot — fetch, ticker, listeners and EventSource each run exactly once", async () => {
-  safeStorage.removeItem("crowban.project");
+  safeStorage.removeItem("ravn.project");
   const origListProjects = api.listProjects;
   const origGetBoard = api.getBoard;
   let listCalls = 0;
@@ -2036,7 +2036,7 @@ test("InitIdempotence: concurrent double init() shares ONE boot — fetch, ticke
       return emptyBoard(pid);
     };
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.polling = false; // unit env: never start the 15s poll interval
 
     // The exact Alpine failure mode: two inits overlap at boot.
@@ -2068,12 +2068,12 @@ test("InitIdempotence: concurrent double init() shares ONE boot — fetch, ticke
     (api as any).listProjects = origListProjects;
     (api as any).getBoard = origGetBoard;
     h.restore();
-    safeStorage.removeItem("crowban.project");
+    safeStorage.removeItem("ravn.project");
   }
 });
 
 test("InitIdempotence: sequential double init() also shares ONE boot", async () => {
-  safeStorage.removeItem("crowban.project");
+  safeStorage.removeItem("ravn.project");
   const origListProjects = api.listProjects;
   const origGetBoard = api.getBoard;
   let listCalls = 0;
@@ -2086,7 +2086,7 @@ test("InitIdempotence: sequential double init() also shares ONE boot", async () 
     };
     (api as any).getBoard = async (pid: string) => emptyBoard(pid);
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.polling = false;
 
     const p1 = await app.init();
@@ -2104,12 +2104,12 @@ test("InitIdempotence: sequential double init() also shares ONE boot", async () 
     (api as any).listProjects = origListProjects;
     (api as any).getBoard = origGetBoard;
     h.restore();
-    safeStorage.removeItem("crowban.project");
+    safeStorage.removeItem("ravn.project");
   }
 });
 
 test("InitIdempotence: a failed boot keeps the memo — repeated init() no-ops and Retry stays the sole recovery path", async () => {
-  safeStorage.setItem("crowban.project", "proj-stored");
+  safeStorage.setItem("ravn.project", "proj-stored");
   const origListProjects = api.listProjects;
   const origGetBoard = api.getBoard;
   let listCalls = 0;
@@ -2122,7 +2122,7 @@ test("InitIdempotence: a failed boot keeps the memo — repeated init() no-ops a
     };
     (api as any).getBoard = async (pid: string) => emptyBoard(pid);
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.polling = false;
     const p1 = await app.init();
     assert.equal(app.bootError, true, "failed boot shows the dedicated retry screen");
@@ -2146,7 +2146,7 @@ test("InitIdempotence: a failed boot keeps the memo — repeated init() no-ops a
     (api as any).listProjects = origListProjects;
     (api as any).getBoard = origGetBoard;
     h.restore();
-    safeStorage.removeItem("crowban.project");
+    safeStorage.removeItem("ravn.project");
   }
 });
 
@@ -2173,7 +2173,7 @@ test("toggleAc: failed server toggle leaves the model untouched and reverts the 
       throw new ApiError(500, { error: "internal", message: "simulated server failure" });
     };
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.detail = acToggleDetailFixture();
     const ac = app.detail.acceptance_criteria[0]; // done: false
     // Simulate the browser: the user's click has already flipped .checked on.
@@ -2199,7 +2199,7 @@ test("toggleAc: a failing UNCHECK also reverts the DOM checkbox to the model", a
       throw new ApiError(409, { error: "version_conflict", current_version: 2, message: "stale" });
     };
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.detail = acToggleDetailFixture();
     const ac = app.detail.acceptance_criteria[1]; // done: true
     // The click visually UNchecked the box.
@@ -2231,7 +2231,7 @@ test("toggleAc: successful toggle merges the server's row back into detail state
       };
     };
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.detail = acToggleDetailFixture();
 
     await app.toggleAc(app.detail.acceptance_criteria[0]);
@@ -2258,7 +2258,7 @@ test("toggleAc: successful toggle merges the server's row back into detail state
 // ---------------------------------------------------------------------------
 
 test("BlockedCache: selectProject() clears both caches, re-scoped to the new project (AC1)", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   // Network-side collaborators are irrelevant here — stub them out.
   app.connectSse = () => {};
   app.loadBoard = async () => {};
@@ -2278,7 +2278,7 @@ test("BlockedCache: selectProject() clears both caches, re-scoped to the new pro
 });
 
 test("BlockedCache: isBlocked fails closed when the cache belongs to another project (AC3)", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   // The cache was derived while project "P" was selected…
   app.blockedIds = new Set(["x1"]);
   app.knownBlocked = { x2: true };
@@ -2302,7 +2302,7 @@ test("BlockedCache: a >100-task board never retains a previous project's set (AC
     // Both listTasks calls report the project is too big to diff cheaply.
     (api as any).listTasks = async () => ({ tasks: [], total: 150, limit: 100, offset: 0 });
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.selectedProjectId = "B";
     // Leftover from project A's load:
     app.blockedIds = new Set(["a1"]);
@@ -2344,7 +2344,7 @@ test("BlockedCache: a successful diff re-scopes the cache to the payload's proje
       offset: 0,
     });
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.selectedProjectId = "B";
     app.blockedCacheProjectId = ""; // fresh boot
     await app.refreshBlockedSet({
@@ -2368,7 +2368,7 @@ test("BlockedCache: a failed refresh keeps the current project's last good set (
       throw new Error("network down");
     };
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.selectedProjectId = "B";
     // Last good set for B, derived by an earlier successful load:
     app.blockedIds = new Set(["b1"]);
@@ -2386,7 +2386,7 @@ test("BlockedCache: a failed refresh keeps the current project's last good set (
 });
 
 test("BlockedCache: a detail payload for ANOTHER project never writes into the current cache", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   // The drawer is still open on A's task after a dropdown switch to B
   // (selectProject does not close it) — its refresh lands post-switch.
   app.detailOpen = true;
@@ -2405,7 +2405,7 @@ test("BlockedCache: a detail payload for ANOTHER project never writes into the c
 });
 
 test("BlockedCache: a detail payload for the CURRENT project still learns blocked state (feature intact)", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   app.detailOpen = true;
   app.detailId = "b9";
   app.selectedProjectId = "B";
@@ -2436,7 +2436,7 @@ test("OpenCode: startTaskInOpenCode captures session_id and session_url, records
       };
     };
 
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.detail = { id: "task-oc-1", title: "Test OpenCode", artifacts: [] };
     app.refreshDetail = async () => true;
     app.loadBoard = async () => {};
@@ -2466,7 +2466,7 @@ test("OpenCode: startTaskInOpenCode captures session_id and session_url, records
 });
 
 test("OpenCode: activeOpenCodeSession falls back to latest 'OpenCode autonomous session' artifact when cache is empty", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   assert.equal(app.activeOpenCodeSession(null), null);
 
   const detailWithArtifacts: any = {
@@ -2512,7 +2512,7 @@ test("OpenCode: index.html wires opencode-session-banner and toast-action-link",
 // ---------------------------------------------------------------------------
 
 test("OpenCode options: helpers filter models, agents, and variants gracefully", async () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   assert.deepEqual(app.availableOpenCodeAgents(), []);
   assert.deepEqual(app.availableOpenCodeModels(), []);
   assert.deepEqual(app.availableOpenCodeVariantsFor("any"), []);
@@ -2563,7 +2563,7 @@ test("OpenCode options: helpers filter models, agents, and variants gracefully",
 test("OpenCode options: fetchOpenCodeOptions catches errors silently without toast", async () => {
   const origGetOptions = api.getOpenCodeOptions;
   try {
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.selectedProjectId = "p-fail";
     app.projects = [{ id: "p-fail", name: "Fail Project", opencode_server_url: "http://mock-opencode:4444" }];
 
@@ -2605,7 +2605,7 @@ test("ProjectSettings: form loading, dirty tracking, and saving opencode_agent a
   const origGetProject = api.getProject;
   const origGetOptions = api.getOpenCodeOptions;
   try {
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.selectedProjectId = "proj-1";
     app.projects = [
       {
@@ -2688,7 +2688,7 @@ test("OpenCode dispatch: per-task override state and startTaskInOpenCode payload
   const origStartOpenCode = api.startOpenCode;
   const origGetOptions = api.getOpenCodeOptions;
   try {
-    const app = crowbanApp() as any;
+    const app = ravnApp() as any;
     app.selectedProjectId = "proj-1";
     app.projects = [
       {
@@ -2810,8 +2810,8 @@ test("Countdown: formatClaimCountdown formats durations and handles boundaries c
   assert.equal(formatClaimCountdown(new Date(baseNow + (75 * 60 + 3) * 1000).toISOString(), baseNow), "75:03");
 });
 
-test("Countdown: crowbanApp.claimCountdown references reactive nowTick", () => {
-  const app = crowbanApp() as any;
+test("Countdown: ravnApp.claimCountdown references reactive nowTick", () => {
+  const app = ravnApp() as any;
   const baseNow = 1700000000000;
   app.nowTick = baseNow;
 
@@ -2830,7 +2830,7 @@ test("Countdown: crowbanApp.claimCountdown references reactive nowTick", () => {
 });
 
 test("OperationalBar: status menu and owner popover toggle and mutual exclusion", () => {
-  const app = crowbanApp() as any;
+  const app = ravnApp() as any;
   assert.equal(app.statusMenuOpen, false);
   assert.equal(app.ownerPopoverOpen, false);
 

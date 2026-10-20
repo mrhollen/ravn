@@ -326,8 +326,8 @@ func TestOpenCodeStart_ResolutionDefaults(t *testing.T) {
 	if url := resolveOpenCodeServerURL(""); url != "http://localhost:4444" {
 		t.Errorf("default server URL = %q, want http://localhost:4444", url)
 	}
-	if dir := resolveOpenCodeDirectory(""); dir != "/home/hollen/Code/crowban" {
-		t.Errorf("default directory = %q, want /home/hollen/Code/crowban", dir)
+	if dir := resolveOpenCodeDirectory(""); dir != "/home/hollen/Code/ravn" {
+		t.Errorf("default directory = %q, want /home/hollen/Code/ravn", dir)
 	}
 	if model := resolveOpenCodeModel(""); model != "llama.cpp/Qwen Medium Long Context" {
 		t.Errorf("default model = %q, want llama.cpp/Qwen Medium Long Context", model)

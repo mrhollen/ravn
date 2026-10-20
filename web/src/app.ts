@@ -1,4 +1,4 @@
-// The single Alpine.js root component for the crowban board UI. One factory
+// The single Alpine.js root component for the Rävn board UI. One factory
 // returning a state + methods object; registered as `Alpine.data("app", …)` in
 // main.ts and used via x-data="app()" in index.html.
 //
@@ -6,7 +6,7 @@
 // move status, save notes, toggle ACs, comment, attach artifacts. Claims are
 // READ-ONLY here (agents manage leases via MCP).
 
-import { ApiError, api, errMsg, setApiTimeoutMsForTests } from "./api";
+import { ApiError, api, errMsg, LS_TOKEN, setApiTimeoutMsForTests } from "./api";
 import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { beginMove, canMove, endMove, friendlyTransitionError, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
@@ -57,10 +57,11 @@ import {
   statusLabel,
 } from "./util";
 
-const LS_ACTOR = "crowban.actor";
-const LS_PROJECT = "crowban.project";
-const LS_SORT = "crowban.sort";
-const LS_THEME = "crowban.theme";
+export const LS_ACTOR = "ravn.actor";
+export const LS_PROJECT = "ravn.project";
+export const LS_SORT = "ravn.sort";
+export const LS_THEME = "ravn_theme";
+export { LS_TOKEN };
 const POLL_MS = 15_000;
 const MD_CACHE_MAX = 500;
 
@@ -75,7 +76,7 @@ function isThemeMode(v: unknown): v is ThemeMode {
 /** Read the persisted theme choice; anything malformed falls back to system. */
 function readStoredTheme(): ThemeMode {
   try {
-    const raw = safeStorage.getItem(LS_THEME);
+    const raw = safeStorage.getItem(LS_THEME) ?? safeStorage.getItem("ravn.theme");
     return isThemeMode(raw) ? raw : "system";
   } catch {
     return "system";
@@ -128,7 +129,7 @@ function readStoredSort(): { key: SortKey; dir: SortDir } {
  *  Returns null for the board route ("") or anything that is not exactly one
  *  non-empty id segment (no nested slashes, no whitespace-only ids). The server
  *  already deep-links these paths to index.html (SPA fallback in
- *  cmd/crowban-server), so the pathname can be trusted as-is. */
+ *  cmd/ravn-server), so the pathname can be trusted as-is. */
 export function taskRouteIdFromPath(pathname: string): string | null {
   const m = /^\/tasks\/([^/]+)$/.exec(pathname);
   if (!m) return null;
@@ -278,7 +279,7 @@ interface RelationView {
   raw: RelationRow;
 }
 
-export function crowbanApp() {
+export function ravnApp() {
   return {
     // ------------------------------------------------------------------ actor
     /** Display name stored in localStorage; sent as `actor.name` on every mutation. */
@@ -314,10 +315,18 @@ export function crowbanApp() {
       this.theme = mode;
       try {
         safeStorage.setItem(LS_THEME, mode);
+        safeStorage.setItem("ravn.theme", mode);
       } catch {
         /* private mode — non-fatal */
       }
       this.applyTheme();
+    },
+
+    // -------------------------------------------------------- document title
+    /** Update document title with Rävn branding. */
+    setDocumentTitle(title?: string): void {
+      if (typeof document === "undefined") return;
+      document.title = title ? `${title} · Rävn` : "Rävn";
     },
 
     /** Re-sync the `.dark` class on <html> with the resolved theme. The OS-
@@ -3552,6 +3561,9 @@ export function crowbanApp() {
         window.addEventListener("popstate", () => this.onPopState());
       }
       this.applyTheme();
+      if (typeof document !== "undefined") {
+        this.setDocumentTitle();
+      }
       await this.loadProjects();
       // Deep link: the initial URL may already be a full-page task route.
       const deepLinkedTaskId =
@@ -3633,3 +3645,5 @@ export function crowbanApp() {
     },
   };
 }
+
+export const crowbanApp = ravnApp;

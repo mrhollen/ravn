@@ -10,13 +10,13 @@ import (
 
 // ======================================================================================
 // R4 EMPIRICAL TESTS: Dockerfile CA-Certificates Invariants
-// (CrowBan task 01M3MMZYHN503HZY11V1V1G2RF)
+// (Rävn task 01M3MMZYHN503HZY11V1V1G2RF)
 // ======================================================================================
 //
 // Go's crypto/x509 has no built-in root-certificate bundle, so an alpine
 // runtime image that lacks the ca-certificates package cannot validate any
-// outbound TLS handshake: crowban-server (OPENCODE_SERVER_URL=https://...) and
-// crowban-mcp (CROWBAN_API_URL=https://...) would fail with "x509:
+// outbound TLS handshake: ravn-server (OPENCODE_SERVER_URL=https://...) and
+// ravn-mcp (RAVN_API_URL=https://...) would fail with "x509:
 // certificate signed by unknown authority". Every alpine runtime stage must
 // therefore install ca-certificates via apk WHILE STILL ROOT (before any USER
 // directive drops privileges).

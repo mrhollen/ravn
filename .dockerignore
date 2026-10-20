@@ -1,4 +1,4 @@
-# crowban build context (slice 6).
+# ravn build context (slice 6).
 # Everything excluded here must NOT be needed by the Dockerfile stages.
 # Note: web/package-lock.json stays IN the context — npm ci requires it.
 
@@ -9,6 +9,7 @@
 
 # --- Go build & test artifacts -----------------------------------------------
 bin/
+bin/ravn-*
 *.test
 *.out
 coverage.*
@@ -17,6 +18,10 @@ profile.cov
 
 # --- SQLite data (local dev DBs; containers get a fresh named volume) --------
 data/
+ravn*.db
+ravn*.db-wal
+ravn*.db-shm
+ravn*.db-journal
 *.db
 *.db-wal
 *.db-shm

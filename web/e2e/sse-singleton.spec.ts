@@ -29,14 +29,14 @@ import { fileURLToPath } from 'url';
  *      console errors / uncaught page errors.
  *
  * Self-contained per the repo E2E convention: it spins up its own ephemeral
- * crowban-server on a random high port (never :8080) with a temp DB and serves
+ * ravn-server on a random high port (never :8080) with a temp DB and serves
  * the pre-built web/dist — it never reuses another spec's server.
  */
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'crowban-server');
+const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
 const staticDir = path.resolve(__dirname, '../dist');
 
 async function getFreePort(): Promise<number> {
@@ -77,14 +77,14 @@ test.describe('SSE singleton (boot init idempotence)', () => {
       execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
     }
     if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/crowban-server ./cmd/crowban-server', {
+      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
         cwd: repoRoot,
         stdio: 'inherit',
       });
     }
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crowban-e2e-sse-singleton-'));
-    const dbPath = path.join(tempDir, 'crowban.db');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-sse-singleton-'));
+    const dbPath = path.join(tempDir, 'ravn.db');
 
     serverPort = await getFreePort();
     expect(serverPort).not.toBe(8080);
@@ -94,10 +94,10 @@ test.describe('SSE singleton (boot init idempotence)', () => {
     serverProcess = spawn(serverBin, [], {
       env: {
         ...process.env,
-        CROWBAN_ADDR: `127.0.0.1:${serverPort}`,
-        CROWBAN_DATA: dbPath,
-        CROWBAN_STATIC_DIR: staticDir,
-        CROWBAN_TOKEN: '', // Zero-config local mode
+        RAVN_ADDR: `127.0.0.1:${serverPort}`,
+        RAVN_DATA: dbPath,
+        RAVN_STATIC_DIR: staticDir,
+        RAVN_TOKEN: '', // Zero-config local mode
         OPENCODE_ALLOW_PRIVATE_IPS: 'true',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -214,7 +214,7 @@ test.describe('SSE singleton (boot init idempotence)', () => {
     // Step 2: Boot the UI and wait until SSE reports connected.
     // -------------------------------------------------------------------------
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle(/^(crowban|Rävn)$/);
 
     const liveIndicator = page.locator('[data-testid="live-indicator"]');
     await expect(liveIndicator).toBeVisible();

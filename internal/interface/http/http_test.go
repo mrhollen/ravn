@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
-	"github.com/mrhollen/crowban/internal/infrastructure/clock"
-	"github.com/mrhollen/crowban/internal/infrastructure/idgen"
-	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
+	"github.com/mrhollen/ravn/internal/infrastructure/clock"
+	"github.com/mrhollen/ravn/internal/infrastructure/idgen"
+	"github.com/mrhollen/ravn/internal/infrastructure/sqlite"
 )
 
 // stack is the full production wiring against a real temp-file SQLite DB:
@@ -103,7 +103,7 @@ func doReq(t testing.TB, h http.Handler, method, path string, body any) (int, []
 		}
 		reader = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, "http://crowban.test"+path, reader)
+	req, err := http.NewRequest(method, "http://ravn.test"+path, reader)
 	if err != nil {
 		t.Fatalf("build request %s %s: %v", method, path, err)
 	}
@@ -118,7 +118,7 @@ func doReq(t testing.TB, h http.Handler, method, path string, body any) (int, []
 // doRaw sends a body verbatim (no JSON marshaling) — for malformed-JSON cases.
 func doRaw(t *testing.T, h http.Handler, method, path, raw string) (int, []byte) {
 	t.Helper()
-	req, err := http.NewRequest(method, "http://crowban.test"+path, bytes.NewReader([]byte(raw)))
+	req, err := http.NewRequest(method, "http://ravn.test"+path, bytes.NewReader([]byte(raw)))
 	if err != nil {
 		t.Fatalf("build request %s %s: %v", method, path, err)
 	}
@@ -1704,7 +1704,7 @@ func TestDeleteEndpoints_ActorHeadersAndQueryParams(t *testing.T) {
 	})
 
 	// 1. DELETE AC with headers (X-Actor-Name, X-Actor-Type), nil body → 204
-	req, err := http.NewRequest("DELETE", "http://crowban.test/api/v1/tasks/"+task.ID+"/acceptance-criteria/1", nil)
+	req, err := http.NewRequest("DELETE", "http://ravn.test/api/v1/tasks/"+task.ID+"/acceptance-criteria/1", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -1726,7 +1726,7 @@ func TestDeleteEndpoints_ActorHeadersAndQueryParams(t *testing.T) {
 	}
 
 	// 2. DELETE AC with query parameters (?actor_name=bob&actor_type=human), nil body → 204
-	req, err = http.NewRequest("DELETE", "http://crowban.test/api/v1/tasks/"+task.ID+"/acceptance-criteria/2?actor_name=bob&actor_type=human", nil)
+	req, err = http.NewRequest("DELETE", "http://ravn.test/api/v1/tasks/"+task.ID+"/acceptance-criteria/2?actor_name=bob&actor_type=human", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -1770,7 +1770,7 @@ func TestDeleteEndpoints_ActorHeadersAndQueryParams(t *testing.T) {
 	}
 
 	// 5. DELETE relation with headers, nil body → 204
-	req, err = http.NewRequest("DELETE", "http://crowban.test/api/v1/tasks/"+task.ID+"/relations/"+t2.ID+"/blocked-by", nil)
+	req, err = http.NewRequest("DELETE", "http://ravn.test/api/v1/tasks/"+task.ID+"/relations/"+t2.ID+"/blocked-by", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -1792,7 +1792,7 @@ func TestDeleteEndpoints_ActorHeadersAndQueryParams(t *testing.T) {
 	})
 
 	// 6. DELETE relation with query parameters, nil body → 204
-	req, err = http.NewRequest("DELETE", "http://crowban.test/api/v1/tasks/"+task.ID+"/relations/"+t2.ID+"/blocked-by?actor_name=bob&actor_type=human", nil)
+	req, err = http.NewRequest("DELETE", "http://ravn.test/api/v1/tasks/"+task.ID+"/relations/"+t2.ID+"/blocked-by?actor_name=bob&actor_type=human", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}

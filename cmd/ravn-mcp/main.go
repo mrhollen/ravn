@@ -1,4 +1,4 @@
-// crowban-mcp exposes the crowban REST API as MCP tools over stateless
+// ravn-mcp exposes the ravn REST API as MCP tools over stateless
 // Streamable HTTP plus legacy SSE for GET-only clients (docs/ARCHITECTURE.md §6).
 // It is a pure protocol adapter — no SQLite, no use cases: env config →
 // apiclient → MCP server → http.Server.
@@ -25,30 +25,33 @@ import (
 
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
-	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
-	"github.com/mrhollen/crowban/internal/mcp"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
+	"github.com/mrhollen/ravn/internal/mcp"
 )
 
 // version is set at build time: -ldflags "-X main.version=<tag>".
 var version = "dev"
 
 func main() {
-	addr := flag.String("addr", envOr("MCP_ADDR", ":9080"), "listen address for the MCP HTTP server, e.g. :9080")
+	var (
+		addr      = flag.String("addr", envOr("MCP_ADDR", ":9080"), "listen address for the MCP HTTP server, e.g. :9080")
+		apiURL    = flag.String("api-url", envOr("RAVN_API_URL", "http://ravn-server:8080"), "upstream ravn-server API URL")
+		token     = flag.String("token", os.Getenv("RAVN_TOKEN"), "bearer token forwarded to ravn-server; gates incoming MCP requests when set")
+		agentName = flag.String("agent-name", envOr("RAVN_AGENT_NAME", "agent"), "default actor name stamped on tool calls when omitted")
+	)
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
-	apiURL := envOr("CROWBAN_API_URL", "http://crowban-server:8080")
-	token := os.Getenv("CROWBAN_TOKEN") // optional; forwarded as Bearer when set
-	// The container default actor. CROWBAN_AGENT_NAME names THIS agent so its
+	// The container default actor. RAVN_AGENT_NAME names THIS agent so its
 	// claims/attribution survive even on calls where the model forgot to pass
 	// an explicit actor (claims key on the name).
-	defaultActor := apiclient.Actor{Type: "agent", Name: envOr("CROWBAN_AGENT_NAME", "agent")}
+	defaultActor := apiclient.Actor{Type: "agent", Name: *agentName}
 
-	client := apiclient.New(apiURL, token)
+	client := apiclient.New(*apiURL, *token)
 
-	mcs := mcpsrv.NewMCPServer("crowban", version, mcp.ServerOptions()...)
+	mcs := mcpsrv.NewMCPServer("ravn", version, mcp.ServerOptions()...)
 	mcp.RegisterTools(mcs, client, defaultActor)
 	mcp.RegisterPrompts(mcs, client, defaultActor)
 	mcp.RegisterResources(mcs, client)
@@ -56,7 +59,7 @@ func main() {
 	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
 		mcpsrv.WithStateLess(true), // no session state: every request is self-contained — restartable/scaleable
 		mcpsrv.WithEndpointPath("/mcp"),
-		// crowban is explicitly single-tenant and LAN-local (ARCHITECTURE §1).
+		// ravn is explicitly single-tenant and LAN-local (ARCHITECTURE §1).
 		// Agents commonly run on the same host as the server and dial it through
 		// a non-localhost Host (LAN IP or hostname) on a loopback listen; the
 		// SDK's DNS-rebinding guard would 403 exactly that traffic, so we take
@@ -84,7 +87,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           withLogging(logger, withAuth(token, withModernMCPCompat(mux))),
+		Handler:           withLogging(logger, withAuth(*token, withModernMCPCompat(mux))),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -93,7 +96,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("crowban-mcp listening", "addr", *addr, "upstream", apiURL, "default_actor", defaultActor.Name)
+		logger.Info("ravn-mcp listening", "addr", *addr, "upstream", *apiURL, "default_actor", defaultActor.Name)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

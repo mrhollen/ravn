@@ -11,7 +11,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
-	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
 )
 
 // mockClient implements Client for prompt unit testing.
@@ -119,7 +119,7 @@ func (m *mockClient) UnrelateTasks(ctx context.Context, id string, actor apiclie
 // TestPromptsList_Discoverability validates Acceptance Criterion 1:
 // "At least one prompt is discoverable via MCP prompts/list with a description and args schema."
 func TestPromptsList_Discoverability(t *testing.T) {
-	mcs := mcpsrv.NewMCPServer("crowban", "test-version")
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	mock := &mockClient{}
 	defaultActor := apiclient.Actor{Type: "agent", Name: "test-agent"}
 	RegisterPrompts(mcs, mock, defaultActor)
@@ -274,7 +274,7 @@ func TestNextTask_GuidancePlanFromLiveTool(t *testing.T) {
 		},
 	}
 
-	mcs := mcpsrv.NewMCPServer("crowban", "test-version")
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	defaultActor := apiclient.Actor{Type: "agent", Name: "agent-mcp"}
 	RegisterPrompts(mcs, mock, defaultActor)
 
@@ -324,6 +324,8 @@ func TestNextTask_GuidancePlanFromLiveTool(t *testing.T) {
 		"Seq 1**: Discoverable via prompts/list",
 		"Seq 2**: Returns live guidance plan",
 		"Starting prompt implementation",
+		"## Rävn Agent Workflow Playbook",
+		"standard Rävn workflow",
 		"claim_task(id=\"TASK-TOP-PRIORITY\", actor={\"type\": \"agent\", \"name\": \"agent-mcp\"})",
 		"Attach Testing Evidence",
 		"attach_artifact(id=\"TASK-TOP-PRIORITY\", kind=\"command-output\"",
@@ -352,7 +354,7 @@ func TestPrompts_GracefulEmptyDataFallback(t *testing.T) {
 		},
 	}
 
-	mcs := mcpsrv.NewMCPServer("crowban", "test-version")
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	defaultActor := apiclient.Actor{Type: "agent", Name: "agent-mcp"}
 	RegisterPrompts(mcs, mockEmpty, defaultActor)
 
@@ -485,7 +487,7 @@ func TestTriageOpenTasks_TriageSummary(t *testing.T) {
 		},
 	}
 
-	mcs := mcpsrv.NewMCPServer("crowban", "test-version")
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	defaultActor := apiclient.Actor{Type: "agent", Name: "test-agent"}
 	RegisterPrompts(mcs, mock, defaultActor)
 
@@ -546,7 +548,7 @@ func TestPrompts_UpstreamErrorDegradesGracefully(t *testing.T) {
 		},
 	}
 
-	mcs := mcpsrv.NewMCPServer("crowban", "test-version")
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	defaultActor := apiclient.Actor{Type: "agent", Name: "test-agent"}
 	RegisterPrompts(mcs, mockErr, defaultActor)
 

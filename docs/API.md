@@ -1,7 +1,7 @@
-# crowban REST API — stable contract
+# Rävn REST API — stable contract
 
-This document is the **durable contract** for the crowban HTTP API. Both the
-MCP container (`crowban-mcp`) and the web frontend implement against it: every
+This document is the **durable contract** for the Rävn HTTP API. Both the
+MCP container (`ravn-mcp`) and the web frontend implement against it: every
 endpoint below is real, tested code in `internal/interface/http`. If this doc
 and the code ever disagree, the tests win — but changes to either must update
 this file in the same commit.
@@ -10,8 +10,8 @@ this file in the same commit.
 - **Transport:** JSON over HTTP only (`Content-Type: application/json`) except
   the SSE event streams, which are `text/event-stream`. Timestamps are RFC3339
   UTC (`2026-09-26T15:48:00Z`). IDs are ULID strings.
-- **Auth:** off by default — crowban is a single-tenant, LAN-local service. When
-  the server starts with `CROWBAN_TOKEN` set (env or `-token` flag), every route
+- **Auth:** off by default — Rävn is a single-tenant, LAN-local service. When
+  the server starts with `RAVN_TOKEN` set (env or `-token` flag), every route
   under `/api/v1/*` (the SSE event streams included) requires the token, sent as
   `Authorization: Bearer <token>` **or** `?token=<token>` on the query string
   (the query form exists for EventSource/SSE clients that cannot set headers).
@@ -69,7 +69,7 @@ relation pairs, and any other use-case validation failure. No `resource`/`id`.
 
 ### 401 unauthorized
 
-Only when the server has `CROWBAN_TOKEN` configured (see Auth above); returned
+Only when the server has `RAVN_TOKEN` configured (see Auth above); returned
 by any `/api/v1/*` route on an absent or mismatched token:
 
 ```json
@@ -360,7 +360,7 @@ Query param:
       "name": "Website Redesign",
       "description": "MVP landing page work",
       "opencode_server_url": "http://localhost:4444",
-      "opencode_directory": "/home/hollen/Code/crowban",
+      "opencode_directory": "/home/hollen/Code/ravn",
       "opencode_model": "llama.cpp/Qwen Medium Long Context",
       "archived": false,
       "created_at": "2026-09-20T09:00:00Z",
@@ -460,7 +460,7 @@ empty. The canonical event kinds are: `created`, `updated`, `status-changed`,
 `events` tail, live).
 
 SSE clients cannot set headers, so when auth is enabled the token rides on the
-query string: `…/events?project_id=…&token=<CROWBAN_TOKEN>`.
+query string: `…/events?project_id=…&token=<RAVN_TOKEN>`.
 
 ### GET /tasks → `list_tasks`
 
@@ -758,16 +758,16 @@ endpoint itself stays neutral (no enforcement).
 ### POST /tasks/{id}/opencode/start (UI/ops)
 
 Dispatches an autonomous OpenCode session that works the task end-to-end and
-talks back to crowban over MCP. No request body. `200` with:
+talks back to Rävn over MCP. No request body. `200` with:
 
 ```json
 { "session_id": "ses_…", "session_url": "http://localhost:4444/session/ses_…" }
 ```
 
 Server-side the handler (1) creates an OpenCode session — agent `build`, title
-`CrowBan: <task title>`, model per the table below; (2) asynchronously dispatch
+`Rävn: <task title>`, model per the table below; (2) asynchronously dispatch
 a prompt carrying the task's title, description and acceptance-criteria
-checklist plus explicit instructions to use the CrowBan MCP tools and the
+checklist plus explicit instructions to use the Rävn MCP tools and the
 encouraged (not required) recommendation to attach testing artifacts as
 evidence for human verification; (3) attaches
 a `url` artifact on the task pointing at the session; (4) if the task is
@@ -780,7 +780,7 @@ Each setting resolves project row → env var → default:
 | Setting | Project field | Env var | Default |
 |---|---|---|---|
 | OpenCode server base URL | `opencode_server_url` | `OPENCODE_SERVER_URL` | `http://localhost:4444` |
-| Session working directory | `opencode_directory` | `OPENCODE_DIRECTORY` | `/home/hollen/Code/crowban` |
+| Session working directory | `opencode_directory` | `OPENCODE_DIRECTORY` | `/home/hollen/Code/ravn` |
 | Model ref (`providerID/modelID`) | `opencode_model` | `OPENCODE_MODEL` | `llama.cpp/Qwen Medium Long Context` |
 | Allowed host allowlist | - | `OPENCODE_ALLOWED_HOSTS` | (empty; default denies private/loopback/metadata) |
 | Allow private IP networks | - | `OPENCODE_ALLOW_PRIVATE_IPS` | `false` |
@@ -859,4 +859,4 @@ Heartbeats bump nothing at all.
   duplicate; read the tail before re-posting after an error.
 - Error propagation for MCP: REST errors are surfaced to the LLM **verbatim**
   (the `message` field is written to be the recovery instruction); connection
-  failure → “crowban-server unreachable at \<url\> — is it running?”.
+  failure → “ravn-server unreachable at \<url\> — is it running?”.

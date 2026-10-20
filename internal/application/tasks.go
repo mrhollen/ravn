@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // List pagination constants. They match the REST contract (ARCHITECTURE §5):
@@ -1033,7 +1033,7 @@ func (s *Tasks) Heartbeat(ctx context.Context, actor domain.Actor, id domain.ID)
 // SAME lease holder, so either may idempotently re-claim, heartbeat, or release
 // the other's lease.
 //
-// This is a deliberate choice for crowban's single-tenant MVP, not an
+// This is a deliberate choice for ravn's single-tenant MVP, not an
 // oversight:
 //   - Principals SELF-DECLARE identity through unauthenticated API calls
 //     (docs/API.md "Actor convention" — "the server trusts it"), so the type
@@ -1052,7 +1052,7 @@ func (s *Tasks) Heartbeat(ctx context.Context, actor domain.Actor, id domain.ID)
 // stay in lockstep with the SQL CAS's `claimed_by_name = ?` conditions in
 // internal/infrastructure/sqlite/tasks_repo.go (Claim / Release / Heartbeat) —
 // that is what keeps the fake adapter, the real adapter, and the event
-// classification agreeing on "who is home". If crowban ever gains
+// classification agreeing on "who is home". If ravn ever gains
 // authenticated identities, this helper AND both adapters must change together.
 func sameLeaseHolder(cur *domain.Task, actor domain.Actor) bool {
 	by := cur.Claim.By()

@@ -5,7 +5,7 @@ package clock
 import (
 	"time"
 
-	"github.com/mrhollen/crowban/internal/application"
+	"github.com/mrhollen/ravn/internal/application"
 )
 
 // RealClock is the production Clock: wall-clock time, UTC-normalized. It has no

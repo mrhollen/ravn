@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
-  <title>CrowBan — friendly flat mascot: a rounded crow perched on a branch beside two kanban columns, wing outstretched, carrying a task card in its beak mid-drag</title>
+  <title>Rävn — friendly flat mascot: a rounded raven perched on a branch beside two kanban columns, wing outstretched, carrying a task card in its beak mid-drag</title>
 
   <!-- Palette (3 colors, no gradients):
-       ink #1F2937 (crow, cards, branch) / white #FFFFFF (chip, belly, eye) / coral #FF7A45 (beak, card, talons) -->
+       ink #1F2937 (raven, cards, branch) / white #FFFFFF (chip, belly, eye) / coral #FF7A45 (beak, card, talons) -->
 
   <!-- App-icon chip -->
   <rect x="8" y="8" width="240" height="240" rx="52" fill="#FFFFFF"/>
@@ -15,7 +15,7 @@
   <rect x="206" y="148" width="32" height="16" rx="4" fill="#1F2937"/>
   <rect x="206" y="174" width="32" height="16" rx="4" fill="#1F2937"/>
 
-  <!-- Branch the mascot perches on (branch = crow, baseline = board) -->
+  <!-- Branch the mascot perches on (branch = raven, baseline = board) -->
   <rect x="26" y="192" width="108" height="8" rx="4" fill="#1F2937"/>
 
   <!-- Tail, root buried under the body -->

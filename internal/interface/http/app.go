@@ -1,6 +1,6 @@
-// Package httpapi is crowban's REST adapter (ARCHITECTURE §5). It sits at the
+// Package httpapi is ravn's REST adapter (ARCHITECTURE §5). It sits at the
 // onion edge: it imports application + domain + stdlib only and never touches
-// persistence — the concrete wiring lives in cmd/crowban-server.
+// persistence — the concrete wiring lives in cmd/ravn-server.
 //
 // Slice 3a registers the Projects, Task-core, and board-snapshot routes under
 // /api/v1. The App struct already holds every use case, so slice 3b (comments,
@@ -14,8 +14,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // Deps bundles the application use cases the HTTP adapter needs. The concrete

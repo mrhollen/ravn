@@ -1,14 +1,14 @@
-# crowban MCP — agent onboarding reference
+# Rävn MCP — agent onboarding reference
 
 This is the reference an **MCP client (or the agent behind one)** needs to work
-on a crowban board. The full wire contract lives in [API.md](API.md); this doc
+on a Rävn board. The full wire contract lives in [API.md](API.md); this doc
 covers how to connect, the actor convention, all 17 tools with their exact
 arguments, plus the workflow prompts and read-only resources.
 
 ## What it is
 
-`crowban-mcp` is a **stateless Streamable-HTTP MCP server** that adapts the
-crowban REST API into MCP tools. Primary endpoint:
+`ravn-mcp` is a **stateless Streamable-HTTP MCP server** that adapts the
+Rävn REST API into MCP tools. Primary endpoint:
 
 ```
 http://<host>:9311/mcp
@@ -41,9 +41,9 @@ The server container's configuration (env vars):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CROWBAN_API_URL` | `http://crowban-server:8080` | Base URL of the crowban-server instance to proxy. |
-| `CROWBAN_TOKEN` | *(unset)* | When set, the MCP server requires it from its own clients (`Authorization: Bearer <token>` or `?token=<token>`) on `/mcp`, `/sse`, and `/message`, and forwards it on every upstream request. Unset = no auth (the single-tenant LAN default). |
-| `CROWBAN_AGENT_NAME` | `agent` | The container-default actor NAME used when a call arrives without an `actor` argument (see below). Set it to this agent's own name. |
+| `RAVN_API_URL` | `http://ravn-server:8080` | Base URL of the ravn-server instance to proxy. |
+| `RAVN_TOKEN` | *(unset)* | When set, the MCP server requires it from its own clients (`Authorization: Bearer <token>` or `?token=<token>`) on `/mcp`, `/sse`, and `/message`, and forwards it on every upstream request. Unset = no auth (the single-tenant LAN default). |
+| `RAVN_AGENT_NAME` | `agent` | The container-default actor NAME used when a call arrives without an `actor` argument (see below). Set it to this agent's own name. |
 | `MCP_ADDR` | `:9080` | Listen address of the MCP HTTP server. |
 
 Example MCP client config (Streamable-HTTP transport):
@@ -51,7 +51,7 @@ Example MCP client config (Streamable-HTTP transport):
 ```json
 {
   "mcpServers": {
-    "crowban": {
+    "ravn": {
       "type": "http",
       "url": "http://192.168.1.50:9311/mcp"
     }
@@ -59,7 +59,7 @@ Example MCP client config (Streamable-HTTP transport):
 }
 ```
 
-(Include the `/mcp` path in the URL. Healthcheck: `curl http://192.168.1.50:9311/healthz`. Replace 9311 with your `CROWBAN_MCP_PORT` if you overrode it. When `CROWBAN_TOKEN` is set, add an `Authorization: Bearer <token>` header to the client config — legacy SSE clients can instead pass `?token=<token>` on `/sse`.)
+(Include the `/mcp` path in the URL. Healthcheck: `curl http://192.168.1.50:9311/healthz`. Replace 9311 with your `RAVN_MCP_PORT` if you overrode it. When `RAVN_TOKEN` is set, add an `Authorization: Bearer <token>` header to the client config — legacy SSE clients can instead pass `?token=<token>` on `/sse`.)
 
 ## The actor convention
 
@@ -76,7 +76,7 @@ Every mutating tool accepts an optional `actor` object:
 - Agents should send `"type": "agent"` explicitly; the server defaults omitted
   types to `"human"`.
 - When `actor` is omitted (or empty/malformed), the tool falls back to the
-  container default from `CROWBAN_AGENT_NAME`. A call that works with the
+  container default from `RAVN_AGENT_NAME`. A call that works with the
   fallback still attributes to that shared name — pass your own name whenever
   you can.
 
@@ -122,16 +122,16 @@ Beyond the 17 tools, the server registers two workflow **prompts** and read-only
 | Prompt | Purpose | Arguments |
 |---|---|---|
 | `triage_open_tasks` | Formats a triage / next-actions summary: in-flight (`doing`) work, unblocked `todo` candidates, and blocked `todo` tasks. | `project_id?` (ULID; omitted = across projects), `limit?` (max tasks inspected per status; default 50, capped at 100) |
-| `next_task` | Finds the highest-priority unblocked task for an assignee or project and generates a ready-to-send agent onboarding prompt — task detail plus the step-by-step workflow playbook, including the encouraged (not required) test-evidence step via `attach_artifact`. | `project_id?`, `assignee?` (durable assignee name), `actor_name?` (defaults to the `CROWBAN_AGENT_NAME` container default) |
+| `next_task` | Finds the highest-priority unblocked task for an assignee or project and generates a ready-to-send agent onboarding prompt — task detail plus the step-by-step workflow playbook, including the encouraged (not required) test-evidence step via `attach_artifact`. | `project_id?`, `assignee?` (durable assignee name), `actor_name?` (defaults to the `RAVN_AGENT_NAME` container default) |
 
 ### Resources
 
 | Resource URI | Contents |
 |---|---|
-| `crowban://task/{id}` | The full `get_task` resume payload — version, notes, ACs, comments tail, blockers/relations, artifacts, events — as a resource. |
-| `crowban://project/{id}` | Project summary row with per-status open task counts. |
+| `ravn://task/{id}` | The full `get_task` resume payload — version, notes, ACs, comments tail, blockers/relations, artifacts, events — as a resource. |
+| `ravn://project/{id}` | Project summary row with per-status open task counts. |
 
-Resources are addressed by URI (`crowban://task/<ULID>`); an unknown or missing
+Resources are addressed by URI (`ravn://task/<ULID>`); an unknown or missing
 task/project id returns an error naming what to fix. They are read-only and
 never mutate state.
 
@@ -266,6 +266,6 @@ existing relation edge. **Not idempotent** = `add_comment` / `attach_artifact`
 appends — after any timeout, read the tail via `get_task` before re-posting or
 you may duplicate.
 
-If crowban-server itself is down, every tool fails with:
-`crowban-server unreachable at <url> — is it running? (…)` — that's a transport
+If ravn-server itself is down, every tool fails with:
+`ravn-server unreachable at <url> — is it running? (…)` — that's a transport
 error, not a board error; check `GET /healthz`.

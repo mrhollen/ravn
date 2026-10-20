@@ -1,26 +1,26 @@
 #!/bin/sh
-# crowban smoke test (slice 6).
+# ravn smoke test (slice 6).
 #
 # Expected setup: the full stack is up — normally via `make up` (Docker
 # compose, which interpolates these same port variables). The script just
 # needs reachable HTTP endpoints, so it ALSO works against direct-binary
 # servers started by hand (see README "Direct binaries (development)"):
-# point CROWBAN_SERVER_PORT / CROWBAN_MCP_PORT at whatever ports you ran
-# crowban-server / crowban-mcp on.
+# point RAVN_SERVER_PORT / RAVN_MCP_PORT at whatever ports you ran
+# ravn-server / ravn-mcp on.
 #
 # Ports: the overridable HOST-side variables docker-compose.yml interpolates —
-#   CROWBAN_SERVER_PORT (default 3311), CROWBAN_MCP_PORT (default 9311).
-# When CROWBAN_TOKEN is set, requests carry it as a Bearer header.
+#   RAVN_SERVER_PORT (default 3311), RAVN_MCP_PORT (default 9311).
+# When RAVN_TOKEN is set, requests carry it as a Bearer header.
 # Exits non-zero on any failure so it can gate deploys/CI.
 #
 #   make up && make smoke                                        # Docker mode
-#   CROWBAN_SERVER_PORT=18432 CROWBAN_MCP_PORT=19432 make smoke  # direct binaries on custom ports
+#   RAVN_SERVER_PORT=18432 RAVN_MCP_PORT=19432 make smoke  # direct binaries on custom ports
 
 set -u
 
-SERVER_BASE="http://127.0.0.1:${CROWBAN_SERVER_PORT:-3311}"
-MCP_BASE="http://127.0.0.1:${CROWBAN_MCP_PORT:-9311}"
-TOKEN="${CROWBAN_TOKEN:-}"
+SERVER_BASE="http://127.0.0.1:${RAVN_SERVER_PORT:-3311}"
+MCP_BASE="http://127.0.0.1:${RAVN_MCP_PORT:-9311}"
+TOKEN="${RAVN_TOKEN:-}"
 
 BODY=$(mktemp) || exit 1
 trap 'rm -f "$BODY"' EXIT INT TERM
@@ -55,7 +55,7 @@ check() {
     fi
 }
 
-echo "crowban smoke test (server: $SERVER_BASE, mcp: $MCP_BASE)"
+echo "ravn smoke test (server: $SERVER_BASE, mcp: $MCP_BASE)"
 check "server /healthz"          200 "$SERVER_BASE/healthz"
 check "mcp /healthz (proxied)"   200 "$MCP_BASE/healthz"
 check "api GET /api/v1/projects" 200 "$SERVER_BASE/api/v1/projects"

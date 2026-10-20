@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // handleProjectEvents streams realtime SSE events for a project identified by {id} in path.
@@ -205,7 +205,7 @@ func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID dom
 }
 
 // isULID reports whether s is syntactically a 26-character Crockford-base32
-// ULID — the id scheme crowban mints (see infrastructure/idgen). Case-
+// ULID — the id scheme ravn mints (see infrastructure/idgen). Case-
 // insensitive so a client that lowercased its cursor still round-trips.
 // Deliberately stdlib-only: the http adapter must not import the idgen
 // package, and an invalid cursor degrades to live-only rather than failing.

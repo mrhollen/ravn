@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
+	"github.com/mrhollen/ravn/internal/infrastructure/sqlite"
 )
 
 func TestCollectTaskMetrics(t *testing.T) {

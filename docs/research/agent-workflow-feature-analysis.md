@@ -1,10 +1,10 @@
-# crowban — MCP-first Kanban: feature & architecture analysis (research notes)
+# Rävn — MCP-first Kanban: feature & architecture analysis (research notes)
 
 Researcher: opencode. Status: final v1 (2026-09-25). Repo was greenfield at time of writing (README/LICENSE only). Pre-implementation snapshot — where it diverges from what shipped, the ADR section of `docs/ARCHITECTURE.md` and `docs/ROADMAP.md` are current.
 
 ## Problem framing
 
-crowban's primary users are AI agents with **small context windows** that get reset often. The tool is therefore, in effect:
+Rävn's primary users are AI agents with **small context windows** that get reset often. The tool is therefore, in effect:
 1. An **external memory** (state must survive session death),
 2. A **coordination bus / mutex service** (multi-agent claims, handoffs, no duplicate work),
 3. An **evidence store** (proof of done), and only secondarily a human kanban board.
@@ -51,7 +51,7 @@ Every design decision below follows from those three jobs. Grounding sources: Wi
 - **Structured decision records** (ADR-lite): options considered, decision, rationale — searchable across tasks/projects; links from task to decision. Captures *why* as a first-class queryable object.
 - **Agent identity & auth**: registered agent table + API tokens (attribution integrity, per-agent audit/rate limits); optional outbound webhooks (e.g., `question` comment → Gotify/push so humans are pinged).
 - **Artifact file uploads** (server-side storage, size caps, UI preview) beyond URL references.
-- **MCP prompts/resources**: an onboarding prompt ("how agents should use crowban": claim → work → heartbeat → notes often → complete with evidence) and read-only task resources for richer context delivery.
+- **MCP prompts/resources**: an onboarding prompt ("how agents should use Rävn": claim → work → heartbeat → notes often → complete with evidence) and read-only task resources for richer context delivery.
 - **Stall/health surfacing**: `stale` filter on list_tasks (doing beyond N h without activity), per-agent workload summaries.
 
 ### TIER 3 — later (for ROADMAP, brief)

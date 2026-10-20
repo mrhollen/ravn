@@ -18,12 +18,12 @@ import (
 	"time"
 
 	mcpsrv "github.com/mark3labs/mcp-go/server"
-	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
-	"github.com/mrhollen/crowban/internal/mcp"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
+	"github.com/mrhollen/ravn/internal/mcp"
 )
 
 // TestAdversarial_AuthPermutations verifies the full matrix of endpoints and auth permutations
-// under both empty and configured CROWBAN_TOKEN environments.
+// under both empty and configured RAVN_TOKEN environments.
 func TestAdversarial_AuthPermutations(t *testing.T) {
 	const secret = "secret123"
 
@@ -42,7 +42,7 @@ func TestAdversarial_AuthPermutations(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	t.Run("CROWBAN_TOKEN_empty_allows_all", func(t *testing.T) {
+	t.Run("RAVN_TOKEN_empty_allows_all", func(t *testing.T) {
 		handler := withAuth("", mux)
 		endpoints := []string{"/mcp", "/sse", "/message", "/healthz", "/unmapped"}
 		authVariations := []struct {
@@ -93,7 +93,7 @@ func TestAdversarial_AuthPermutations(t *testing.T) {
 		}
 	})
 
-	t.Run("CROWBAN_TOKEN_configured_gating", func(t *testing.T) {
+	t.Run("RAVN_TOKEN_configured_gating", func(t *testing.T) {
 		handler := withAuth(secret, mux)
 
 		type testCase struct {
@@ -352,7 +352,7 @@ func TestAdversarial_SSEQueryPropagationRoundTrip(t *testing.T) {
 	client := apiclient.New("http://localhost:8080", secret)
 	defaultActor := apiclient.Actor{Type: "agent", Name: "sse-agent"}
 
-	mcs := mcpsrv.NewMCPServer("crowban-sse-test", "1.0", mcp.ServerOptions()...)
+	mcs := mcpsrv.NewMCPServer("ravn-sse-test", "1.0", mcp.ServerOptions()...)
 	mcp.RegisterTools(mcs, client, defaultActor)
 
 	sse := mcpsrv.NewSSEServer(mcs,

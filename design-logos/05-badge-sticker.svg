@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
-  <title>CrowBan — badge/sticker: an angular pixel-adjacent crow perched on a stack of three offset kanban cards inside a thick die-cut ring</title>
-  <desc>Concept #5 "Bold Badge / Sticker". A cream die-cut sticker disc with a chunky ink ring; inside, three kanban cards cascade diagonally and a blocky, right-angled crow with a stepped tail perches on the front card. Palette: ink #1F1833, paper #FFF4DC, orange #FF5A1F (3 colors). At 16px the cream disc + ink ring survive as the badge outline and the crow reads as a solid mass.</desc>
+  <title>Rävn — badge/sticker: an angular pixel-adjacent raven perched on a stack of three offset kanban cards inside a thick die-cut ring</title>
+  <desc>Concept #5 "Bold Badge / Sticker". A cream die-cut sticker disc with a chunky ink ring; inside, three kanban cards cascade diagonally and a blocky, right-angled raven with a stepped tail perches on the front card. Palette: ink #1F1833, paper #FFF4DC, orange #FF5A1F (3 colors). At 16px the cream disc + ink ring survive as the badge outline and the raven reads as a solid mass.</desc>
 
   <!-- Sticker paper die-cut base -->
   <circle cx="128" cy="128" r="120" fill="#FFF4DC"/>
@@ -19,7 +19,7 @@
   <rect x="126" y="147" width="42" height="5" rx="2.5" fill="#1F1833"/>
   <rect x="126" y="157" width="32" height="5" rx="2.5" fill="#1F1833"/>
 
-  <!-- Crow: all right-angles (pixel-art-adjacent), perched on the front card edge -->
+  <!-- Raven: all right-angles (pixel-art-adjacent), perched on the front card edge -->
   <!-- Tail: stepped staircase rising to a slanted tip, base fused into the body -->
   <polygon points="150,134 150,114 162,114 162,102 174,102 174,90 198,90 190,134" fill="#1F1833"/>
   <!-- Body block -->

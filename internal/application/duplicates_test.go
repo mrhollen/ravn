@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 func createTaskIn(t *testing.T, svc *Tasks, projectID domain.ID, title string) domain.Task {

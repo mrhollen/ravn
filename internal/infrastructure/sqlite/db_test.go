@@ -15,7 +15,7 @@ import (
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
-	db, closeDB, err := Open(ctx, filepath.Join(t.TempDir(), "crowban-test.db"))
+	db, closeDB, err := Open(ctx, filepath.Join(t.TempDir(), "ravn-test.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestOpenAppliesMigrationsAndSeedsStatuses(t *testing.T) {
 func TestMigrateIsIdempotent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "crowban-test.db")
+	path := filepath.Join(t.TempDir(), "ravn-test.db")
 	db, closeDB, err := Open(ctx, path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -203,7 +203,7 @@ func TestMigrateIsIdempotent(t *testing.T) {
 func TestHealthReportsErrorForClosedDB(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db, closeDB, err := Open(ctx, filepath.Join(t.TempDir(), "crowban-test.db"))
+	db, closeDB, err := Open(ctx, filepath.Join(t.TempDir(), "ravn-test.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

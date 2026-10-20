@@ -1,4 +1,4 @@
-# crowban — Technical Architecture (MVP)
+# Rävn — Technical Architecture (MVP)
 
 Status: final blueprint, 2026-09-25. Supersedes: nothing; complements `docs/research/agent-workflow-feature-analysis.md` (feature decisions are frozen there and this doc implements them). Primary users: AI agents via MCP. Secondary users: humans via a minimal web UI.
 
@@ -6,10 +6,10 @@ Status: final blueprint, 2026-09-25. Supersedes: nothing; complements `docs/rese
 
 ## 1. Final stack decision
 
-Go for **both** services, one language, one single Go module producing two small static binaries (`cmd/crowban-server`, `cmd/crowban-mcp`). Target **Go ≥ 1.22 features only** (we rely solely on the 1.22 `net/http` ServeMux method+wildcard routing); pin the Docker build to `golang:1.26-alpine` (any current 1.x stable works). SQLite via **`modernc.org/sqlite`** (pure Go, no CGO) → fully static binaries (`CGO_ENABLED=0`), trivial multi-arch builds, no libsqlite3 in the image. The MCP binary uses **`github.com/mark3labs/mcp-go` v1.x** over the **Streamable HTTP transport in stateless mode**, mounted on stdlib `net/http`. Routing uses **stdlib `net/http.ServeMux` only — no chi**: the surface is ~20 fixed routes on two binaries; 1.22 mux patterns (`GET /api/v1/tasks/{id}`) give method+wildcard routing, automatic 405s with `Allow`, and zero middleware machinery we actually need (logging, recover, and token auth are ≤ 60 lines of stdlib code). Frontend: **Vite + TypeScript + Tailwind CSS v4 + Alpine.js**, built at image-build time and served as static files by the Go server.
+Go for **both** services, one language, one single Go module producing two small static binaries (`cmd/ravn-server`, `cmd/ravn-mcp`). Target **Go ≥ 1.22 features only** (we rely solely on the 1.22 `net/http` ServeMux method+wildcard routing); pin the Docker build to `golang:1.26-alpine` (any current 1.x stable works). SQLite via **`modernc.org/sqlite`** (pure Go, no CGO) → fully static binaries (`CGO_ENABLED=0`), trivial multi-arch builds, no libsqlite3 in the image. The MCP binary uses **`github.com/mark3labs/mcp-go` v1.x** over the **Streamable HTTP transport in stateless mode**, mounted on stdlib `net/http`. Routing uses **stdlib `net/http.ServeMux` only — no chi**: the surface is ~20 fixed routes on two binaries; 1.22 mux patterns (`GET /api/v1/tasks/{id}`) give method+wildcard routing, automatic 405s with `Allow`, and zero middleware machinery we actually need (logging, recover, and token auth are ≤ 60 lines of stdlib code). Frontend: **Vite + TypeScript + Tailwind CSS v4 + Alpine.js**, built at image-build time and served as static files by the Go server.
 
 Accepted tradeoffs (deliberate):
-- Pure-Go SQLite runs ~1.3–2× slower than a C build on CPU-bound queries (vendor-measured). Irrelevant at crowban's scale (low QPS, single writer), provided we index every `ORDER BY` column and cap the DB pool (`SetMaxOpenConns(1)` — see §4).
+- Pure-Go SQLite runs ~1.3–2× slower than a C build on CPU-bound queries (vendor-measured). Irrelevant at Rävn's scale (low QPS, single writer), provided we index every `ORDER BY` column and cap the DB pool (`SetMaxOpenConns(1)` — see §4).
 - No router library means slightly more boilerplate in one `routes.go`. Accepted.
 - stdlib HTTP has no built-in request logging middleware; we write three small ones with `log/slog`. Accepted (slog is stdlib since 1.21).
 - One module for both binaries instead of two (see §2) — accepted because the dependency *enforcement* that matters to us lives in package layout, not module boundaries.
@@ -18,7 +18,7 @@ Accepted tradeoffs (deliberate):
 
 ## 2. Onion layout
 
-**Single Go module.** Repo root = module root; module path = your repo URL (shown below as `github.com/hollen/crowban` — rename if different). The MCP binary never touches SQLite or use-cases: it is a pure protocol adapter that translates MCP tool calls into REST calls to the main server. A single module lets both binaries share the domain vocabulary (status names, relation kinds, actor types) and one `go.sum`, with no release-cadence divergence; two modules would only add path ceremony for zero isolation benefit at this scale.
+**Single Go module.** Repo root = module root; module path = your repo URL (shown below as `github.com/mrhollen/ravn` — rename if different). The MCP binary never touches SQLite or use-cases: it is a pure protocol adapter that translates MCP tool calls into REST calls to the main server. A single module lets both binaries share the domain vocabulary (status names, relation kinds, actor types) and one `go.sum`, with no release-cadence divergence; two modules would only add path ceremony for zero isolation benefit at this scale.
 
 **Dependency rule (strict, enforceable by review/`depguard` later):**
 - `domain/` imports **Go stdlib only**. No third-party packages, no other project packages.
@@ -28,12 +28,12 @@ Accepted tradeoffs (deliberate):
 - `cmd/*` (composition roots) is the only place that imports everything and wires concrete implementations into ports.
 
 ```
-crowban/                              # go.mod: module github.com/hollen/crowban
+ravn/                                 # go.mod: module github.com/mrhollen/ravn
 ├── Makefile
 ├── Dockerfile                        # one multi-stage file, 3 build stages + 2 runtime targets (see §8)
 ├── docker-compose.yml
 ├── .dockerignore
-├── .env.example                      # CROWBAN_TOKEN=...
+├── .env.example                      # RAVN_TOKEN=...
 ├── docs/ARCHITECTURE.md
 │
 ├── domain/                           # CORE. stdlib only (time, errors, strings, sort). No I/O, no DB, no HTTP.
@@ -81,7 +81,7 @@ crowban/                              # go.mod: module github.com/hollen/crowban
 │   └── errors.go                     # domain error → HTTP: ErrNotFound→404, ConflictError→409 {error:"version_conflict",current:{version,updated_at}}, ClaimConflictError→409 {error:"already_claimed",holder,claim_expires_at}, validation→422; every body has an agent-readable "message" recovery hint
 │   └── handlers_test.go              # httptest end-to-end over real temp-file SQLite: happy path for each of the 14 mapped routes + 409/404/401 shapes
 │
-├── mcp/                              # MCP ADAPTER (crowban-mcp binary only). imports application? NO — it calls REST. Imports: apiclient + stdlib + mcp-go.
+├── mcp/                              # MCP ADAPTER (ravn-mcp binary only). imports application? NO — it calls REST. Imports: apiclient + stdlib + mcp-go.
 │   ├── client_iface.go               # tiny interface over the REST surface the tools need (implemented by apiclient.Client; lets mcp tests run against a stub)
 │   ├── tools.go                      # RegisterTools(s *mcpgo-server.MCPServer, c Client): all 14 tools. One file, mechanical. Descriptions are written for small LLMs: enumerate every enum value, state defaults, state the error contract ("on conflict you get holder + expiry; re-read or wait")
 │   └── tools_test.go                 # stub client → assert exact REST calls per tool; 409 body → isError result with verbatim JSON text (error-as-recovery-instruction channel)
@@ -90,8 +90,8 @@ crowban/                              # go.mod: module github.com/hollen/crowban
 │   └── client.go
 │
 ├── cmd/
-│   ├── crowban-server/main.go        # COMPOSITION ROOT 1: env config → idgen/clock → sqlite open+migrate → repos+event store → use cases → api.Deps → http.Server (:8080, graceful shutdown). Also serves /app/public (built web UI) and /healthz
-│   └── crowban-mcp/main.go           # COMPOSITION ROOT 2: env config → apiclient.Client → server.NewMCPServer("crowban", version, WithRecovery(), WithInputSchemaValidation()) → mcp.RegisterTools(...) → server.NewStreamableHTTPServer(mcs, WithStateLess(true), WithEndpointPath("/mcp")) → own ServeMux {"/mcp"→streamable handler, "GET /healthz"} → http.Server (:9080)
+│   ├── ravn-server/main.go           # COMPOSITION ROOT 1: env config → idgen/clock → sqlite open+migrate → repos+event store → use cases → api.Deps → http.Server (:8080, graceful shutdown). Also serves /app/public (built web UI) and /healthz
+│   └── ravn-mcp/main.go              # COMPOSITION ROOT 2: env config → apiclient.Client → server.NewMCPServer("ravn", version, WithRecovery(), WithInputSchemaValidation()) → mcp.RegisterTools(...) → server.NewStreamableHTTPServer(mcs, WithStateLess(true), WithEndpointPath("/mcp")) → own ServeMux {"/mcp"→streamable handler, "GET /healthz"} → http.Server (:9080)
 │
 └── web/                              # FRONTEND (not part of the Go module; own package.json — see §7)
     ├── package.json  vite.config.ts  tsconfig.json  index.html
@@ -124,7 +124,7 @@ Migrations decision: **plain versioned `.sql` files under `infrastructure/sqlite
 |---|---|
 | `github.com/mark3labs/mcp-go` (v1.x, pin v1.1.1) | The de-facto standard Go MCP SDK. Confirmed current API: `server.NewMCPServer(name, version, opts...)`, typed tool builders `mcp.NewTool(name, mcp.WithDescription(…), mcp.WithString("x", mcp.Required(), mcp.Enum(...)))`, `s.AddTool(tool, handler)`, and — what we run it with — `server.NewStreamableHTTPServer(mcs, server.WithStateLess(true), server.WithEndpointPath("/mcp"))` (implements `http.Handler`; mount it in our own mux). Extras we use: `WithRecovery()`, `WithInputSchemaValidation()` (server-side arg validation — valuable since clients are small local models that will occasionally send malformed args). Implements MCP spec 2025-11-25 with backward compatibility to 2024-11-05. |
 
-The official `github.com/modelcontextprotocol/go-sdk` exists and is a reasonable alternative; we pick mark3labs/mcp-go because (a) it is the most widely-used Go SDK (best model-training coverage, best examples online), (b) its API is a thin net/http wrapper that matches our boring style, and (c) if we ever hit friction, `mcp/tools.go` + `cmd/crowban-mcp/main.go` are the *only* files touched by an SDK swap.
+The official `github.com/modelcontextprotocol/go-sdk` exists and is a reasonable alternative; we pick mark3labs/mcp-go because (a) it is the most widely-used Go SDK (best model-training coverage, best examples online), (b) its API is a thin net/http wrapper that matches our boring style, and (c) if we ever hit friction, `mcp/tools.go` + `cmd/ravn-mcp/main.go` are the *only* files touched by an SDK swap.
 
 ---
 
@@ -250,7 +250,7 @@ CREATE TABLE schema_migrations (filename TEXT PRIMARY KEY, applied_at TEXT NOT N
 
 ## 5. REST API map
 
-Base `/api/v1`. Auth: off by default (single-tenant); when the server starts with `-token`/`CROWBAN_TOKEN` set, every `/api/v1/*` route requires `Authorization: Bearer <token>` or `?token=<token>` (SSE fallback) and answers `401 {"error":"unauthorized","message":"missing or invalid auth token"}` otherwise — `/healthz`, root `/metrics`, and the static UI stay open (implemented post-blueprint; see the 2026-09-27 ADR below). The full wire contract (row shapes, error bodies, pagination) lives in [API.md](API.md). Error envelope everywhere: `{"error":"<code>","message":"<recovery hint, agent-readable>", ...fields}`.
+Base `/api/v1`. Auth: off by default (single-tenant); when the server starts with `-token`/`RAVN_TOKEN` set, every `/api/v1/*` route requires `Authorization: Bearer <token>` or `?token=<token>` (SSE fallback) and answers `401 {"error":"unauthorized","message":"missing or invalid auth token"}` otherwise — `/healthz`, root `/metrics`, and the static UI stay open (implemented post-blueprint; see the 2026-09-27 ADR below). The full wire contract (row shapes, error bodies, pagination) lives in [API.md](API.md). Error envelope everywhere: `{"error":"<code>","message":"<recovery hint, agent-readable>", ...fields}`.
 
 | REST endpoint | MCP tool | Notes |
 |---|---|---|
@@ -288,10 +288,10 @@ Claim-CAS over HTTP: no locks held across the round-trip; the race resolves in a
 
 - **SDK:** `github.com/mark3labs/mcp-go` v1.x (verified current API, §3).
 - **Transports: stateless Streamable HTTP + legacy SSE.** Primary is the MCP spec's streamable-HTTP transport (replaced the older SSE transport): clients POST JSON-RPC to one endpoint; responses are `application/json` or an SSE stream. We run **stateless** (`server.WithStateLess(true)`): the SDK keeps no session map, every request is self-contained — which is exactly what makes the container stateless and trivially restartable/scaleable. The streamable server natively handles `POST /mcp` (calls and notifications) and `GET /mcp` (streaming notifications). Alongside it, a legacy **SSE server** (`server.NewSSEServer`) covers clients that only speak the pre-streamable protocol via `GET /sse` and `POST /message`. One caveat for wrappers: any middleware that wraps `http.ResponseWriter` must re-expose `Flush()` or the SDK's flusher assertion fails with 405/500 "Streaming unsupported".
-- **Wiring (`cmd/crowban-mcp/main.go`):**
+- **Wiring (`cmd/ravn-mcp/main.go`):**
 
 ```go
-mcpsrv := mcpserver.NewMCPServer("crowban", version,
+mcpsrv := mcpserver.NewMCPServer("ravn", version,
     mcpserver.WithRecovery(),               // panics → JSON-RPC error, not container crash
     mcpserver.WithInputSchemaValidation(),  // malformed agent args → clean protocol error
 )
@@ -313,10 +313,10 @@ http.ListenAndServe(addr, withLogging(logger, mux))
 ```
 
 - **Tool registration pattern (`mcp/tools.go`):** each tool = `mcp.NewTool(name, mcp.WithDescription(<written for small LLMs>), <typed property builders: WithString+Required, WithNumber, WithEnum(...), WithObject/WithArray where needed>)` + handler `func(ctx, mcp.CallToolRequest) (*mcp.CallToolResult, error)`. Handlers are one-liners around the client: parse args (`request.RequireString(...)`) → call REST → on success `mcp.NewToolResultText(compactJSON)`; on REST error return `mcp.NewToolResultError(text)` where text = **the REST error body verbatim** (its `message` already contains the recovery hint). Never fabricate success.
-- **Config (env, compose-injected):** `-addr`/`MCP_ADDR` (def `:9080`), `CROWBAN_API_URL` (def `http://crowban-server:8080`; the compose service DNS name), `CROWBAN_TOKEN` (optional; forwarded as `Authorization: Bearer <token>` on every upstream call when set), `CROWBAN_AGENT_NAME` (def `agent`; the fallback actor NAME when a call omits `actor`). No config file, no state, no other env.
-- **Docker exposure:** host 9311 → container :9080 (`CROWBAN_MCP_PORT`); clients point at `http://<host>:9311/mcp` (Streamable HTTP, or SSE on GET), and legacy-SSE-only clients at `http://<host>:9311/sse`. Note the SDK's DNS-rebinding guard: loopback-sourced requests with a non-localhost `Host` header get 403 — via Docker port forwarding this does not trigger (source isn't loopback in-container); escape hatch `WithDisableLocalhostProtection(true)` if host-side clients misbehave.
+- **Config (env, compose-injected):** `-addr`/`MCP_ADDR` (def `:9080`), `RAVN_API_URL` (def `http://ravn-server:8080`; the compose service DNS name), `RAVN_TOKEN` (optional; forwarded as `Authorization: Bearer <token>` on every upstream call when set), `RAVN_AGENT_NAME` (def `agent`; the fallback actor NAME when a call omits `actor`). No config file, no state, no other env.
+- **Docker exposure:** host 9311 → container :9080 (`RAVN_MCP_PORT`); clients point at `http://<host>:9311/mcp` (Streamable HTTP, or SSE on GET), and legacy-SSE-only clients at `http://<host>:9311/sse`. Note the SDK's DNS-rebinding guard: loopback-sourced requests with a non-localhost `Host` header get 403 — via Docker port forwarding this does not trigger (source isn't loopback in-container); escape hatch `WithDisableLocalhostProtection(true)` if host-side clients misbehave.
 - **Idempotency / error conventions:** no client-supplied idempotency keys in MVP (accepted risk, §10). Instead: semantics are retry-safe where it matters — re-claim by same actor refreshes (200), `relate_tasks` upserts (200), version-guarded updates fail loudly with 409 rather than double-applying. Appends (comments/artifacts) are NOT idempotent; a post-timeout retry may duplicate — documented in tool descriptions ("check the comment tail before re-posting after an error").
-- **Error propagation:** there is no special-case mapping — every non-2xx upstream answer (including `401` when a token is configured) arrives as `isError` with the REST body **verbatim** (`message` carries the recovery hint, e.g. `missing or invalid auth token` → set/forward `CROWBAN_TOKEN` on the MCP container); connection failure → "crowban-server unreachable at <url> — is it running?".
+- **Error propagation:** there is no special-case mapping — every non-2xx upstream answer (including `401` when a token is configured) arrives as `isError` with the REST body **verbatim** (`message` carries the recovery hint, e.g. `missing or invalid auth token` → set/forward `RAVN_TOKEN` on the MCP container); connection failure → "ravn-server unreachable at <url> — is it running?".
 
 ---
 
@@ -366,59 +366,59 @@ RUN go mod download
 COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-      -o /out/crowban-server ./cmd/crowban-server && \
+      -o /out/ravn-server ./cmd/ravn-server && \
     CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-      -o /out/crowban-mcp     ./cmd/crowban-mcp
+      -o /out/ravn-mcp     ./cmd/ravn-mcp
 
 FROM alpine:3.21 AS server-runtime   # alpine (not scratch): busybox wget for the healthcheck
 RUN adduser -D -u 10001 app
-COPY --from=go-build  /out/crowban-server /usr/local/bin/
+COPY --from=go-build  /out/ravn-server /usr/local/bin/
 COPY --from=web-build /web/dist /app/public
 USER app
-ENV CROWBAN_ADDR=:8080 CROWBAN_DATA=/data/crowban.db
+ENV RAVN_ADDR=:8080 RAVN_DATA=/data/ravn.db
 VOLUME ["/data"]
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s \
   CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
-ENTRYPOINT ["crowban-server"]
+ENTRYPOINT ["ravn-server"]
 
 FROM alpine:3.21 AS mcp-runtime
 RUN adduser -D -u 10001 app
-COPY --from=go-build /out/crowban-mcp /usr/local/bin/
+COPY --from=go-build /out/ravn-mcp /usr/local/bin/
 USER app
 ENV MCP_ADDR=:9080
 EXPOSE 9080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=5s \
   CMD wget -qO- http://127.0.0.1:9080/healthz || exit 1
-ENTRYPOINT ["crowban-mcp"]
+ENTRYPOINT ["ravn-mcp"]
 ```
 
 **`docker-compose.yml`:**
 
 ```yaml
 services:
-  crowban-server:
+  ravn-server:
     build: { context: ., target: server-runtime }
-    ports: ["${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_SERVER_PORT:-3311}:8080"]
+    ports: ["${RAVN_BIND_IP:-127.0.0.1}:${RAVN_SERVER_PORT:-3311}:8080"]
     environment:
-      CROWBAN_ADDR: ":8080"
-      CROWBAN_DATA: "/data/crowban.db"
-      CROWBAN_STATIC_DIR: "/app/public"   # UI baked in at image build (web-build stage)
-      CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}"  # optional; empty = auth off (single-tenant local default)
-    volumes: [ "crowban-data:/data" ]     # named volume holds crowban.db + -wal/-shm
+      RAVN_ADDR: ":8080"
+      RAVN_DATA: "/data/ravn.db"
+      RAVN_STATIC_DIR: "/app/public"   # UI baked in at image build (web-build stage)
+      RAVN_TOKEN: "${RAVN_TOKEN:-}"  # optional; empty = auth off (single-tenant local default)
+    volumes: [ "ravn-data:/data" ]     # named volume holds ravn.db + -wal/-shm
 
-  crowban-mcp:
+  ravn-mcp:
     build: { context: ., target: mcp-runtime }
-    ports: ["${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_MCP_PORT:-9311}:9080"]
+    ports: ["${RAVN_BIND_IP:-127.0.0.1}:${RAVN_MCP_PORT:-9311}:9080"]
     environment:
       MCP_ADDR: ":9080"
-      CROWBAN_API_URL: "http://crowban-server:8080"   # compose service DNS — no IPs, no host assumptions
-      CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}"   # optional; empty = auth off (supersedes the :? required-interpolation sketch, see ADR 2026-09-27)
+      RAVN_API_URL: "http://ravn-server:8080"   # compose service DNS — no IPs, no host assumptions
+      RAVN_TOKEN: "${RAVN_TOKEN:-}"   # optional; empty = auth off (supersedes the :? required-interpolation sketch, see ADR 2026-09-27)
     depends_on:
-      crowban-server: { condition: service_healthy }
+      ravn-server: { condition: service_healthy }
 
 volumes:
-  crowban-data:
+  ravn-data:
 ```
 
 - **Healthcheck endpoint (implement exactly this):** `GET /healthz` on the main server → `200 {"status":"ok","db":"ok"}` after a successful `SELECT 1` ping; `503 {"status":"degraded","db":"error: …"}` if the DB is unreachable. On the MCP server, `/healthz` proxies the upstream check: 200 only when main server's `/healthz` is healthy (so `depends_on: service_healthy` chains correctly).
@@ -451,12 +451,12 @@ docs
 | Layer | Tests | Why high value |
 |---|---|---|
 | `domain` | canonical ordering incl. nulls-last + ties; transition map validity; title normalization for dup detection | pure, instant, protects the invariant that "what's next" has one answer |
-| `application` (fakes + FakeClock) | **claim:** fresh win / double-claim 409-with-holder / expired-lease takeover / idempotent re-claim / heartbeat holder-check / release by non-holder rejected; **update:** version ok / version conflict / illegal transition; **create:** dup warning, parent+relations in one tx, cross-project relation rejected; **blocked:** computed flag flips when blocker completes | the concurrency + coordination logic lives here — this is where crowban's correctness is. Fakes make it fast and dependency-free |
+| `application` (fakes + FakeClock) | **claim:** fresh win / double-claim 409-with-holder / expired-lease takeover / idempotent re-claim / heartbeat holder-check / release by non-holder rejected; **update:** version ok / version conflict / illegal transition; **create:** dup warning, parent+relations in one tx, cross-project relation rejected; **blocked:** computed flag flips when blocker completes | the concurrency + coordination logic lives here — this is where Rävn's correctness is. Fakes make it fast and dependency-free |
 | `infrastructure/sqlite` (temp-file DB per test) | migrations apply twice safely; claim CAS with 2 racing goroutines → exactly one winner; canonical SQL order matches `domain.Less` on randomized fixtures; FK cascades (delete project wipes task tree + events); `EXPLAIN QUERY PLAN` for the list query has no TEMP B-TREE | proves the SQL actually encodes what the fakes assume — the classic fake/real divergence, caught cheaply here |
 | `api` (httptest over real temp SQLite) | happy path per each of the 14 mapped routes + UI extras; 401 without token; 404 shape; **409 version_conflict body carries `current.version`; claim 409 carries holder+expiry**; healthz with/without DB | one end-to-end slice covering REST contract + status-code semantics (the MCP layer's input contract) |
 | `mcp` (stub client) | each of the 14 tools → assert exact method/path/body emitted; REST 409 body arrives verbatim as `isError` text; success bodies are compact JSON | proves the 14-tool surface and error propagation without Docker |
 
-**Makefile targets:** `help`, `fmt` (`gofmt -w . && go run golang.org/x/tools/cmd/goimports@latest -w .` optional — keep plain gofmt), `vet` (`go vet ./...` + `gofmt -l .` must be empty), `build` (both binaries → `bin/`), `ui` (npm ci + vite build), `test` (`go test ./... -count=1`), `up` (`docker compose up --build -d`), `logs` (`docker compose logs -f`), `down` (`docker compose down`), `smoke` (curl script: healthz → create project → create task → claim as agent-a → duplicate claim expect 409 → comment → update with stale version expect 409; plus one MCP `initialize`+`tools/list` POST to the MCP host port /mcp, ${CROWBAN_MCP_PORT:-9311}).
+**Makefile targets:** `help`, `fmt` (`gofmt -w . && go run golang.org/x/tools/cmd/goimports@latest -w .` optional — keep plain gofmt), `vet` (`go vet ./...` + `gofmt -l .` must be empty), `build` (both binaries → `bin/`), `ui` (npm ci + vite build), `test` (`go test ./... -count=1`), `up` (`docker compose up --build -d`), `logs` (`docker compose logs -f`), `down` (`docker compose down`), `smoke` (curl script: healthz → create project → create task → claim as agent-a → duplicate claim expect 409 → comment → update with stale version expect 409; plus one MCP `initialize`+`tools/list` POST to the MCP host port /mcp, ${RAVN_MCP_PORT:-9311}).
 
 Ordering advice for devs: domain → application(+fakes) → sqlite → api → mcp, testing each layer before moving out — the onion makes this sequence natural.
 
@@ -465,14 +465,14 @@ Ordering advice for devs: domain → application(+fakes) → sqlite → api → 
 ## 10. Risks & open questions
 
 **Top risks (mitigations in parens):**
-1. **mcp-go API churn.** The SDK is explicitly "under active development" and the MCP spec itself moves (we're pinned to behavior of v1.1.1 / spec 2025-11-25). Mitigation: pin `v1.1.x` in go.sum; confine all SDK usage to `mcp/tools.go` + `cmd/crowban-mcp/main.go` so an upgrade (or swap to the official `modelcontextprotocol/go-sdk`) touches exactly two files.
+1. **mcp-go API churn.** The SDK is explicitly "under active development" and the MCP spec itself moves (we're pinned to behavior of v1.1.1 / spec 2025-11-25). Mitigation: pin `v1.1.x` in go.sum; confine all SDK usage to `mcp/tools.go` + `cmd/ravn-mcp/main.go` so an upgrade (or swap to the official `modelcontextprotocol/go-sdk`) touches exactly two files.
 2. **Pure-Go SQLite quirks:** (a) the `modernc.org/libc` pin must match what modernc.org/sqlite requires — never hand-edit that version in go.mod; (b) CPU-bound queries run ~1.3–2× slower than C builds, so under-indexed ORDER BYs hurt more — mitigated by the canonical-order index + the EXPLAIN QUERY PLAN test assertion; `SetMaxOpenConns(1)` removes BUSY handling entirely at our scale.
 3. **No idempotency keys on append operations.** Flaky local networks + agent retries can duplicate comments/artifacts (relations are upsert-safe; claim is CAS-safe). Mitigation: documented tool-description guidance ("after an error, read the tail before re-posting"); request-id idempotency keys are a cheap Tier-2 add.
-4. **SQLite on odd filesystems.** WAL misbehaves on some network/shared filesystems — keep `crowban-data` on a local named volume (compose default), never a bind mount from NFS/CIFS. Backup story: MVP = stop-and-copy the volume; an in-place `.backup` admin endpoint is Tier-2 (open question below).
+4. **SQLite on odd filesystems.** WAL misbehaves on some network/shared filesystems — keep `ravn-data` on a local named volume (compose default), never a bind mount from NFS/CIFS. Backup story: MVP = stop-and-copy the volume; an in-place `.backup` admin endpoint is Tier-2 (open question below).
 5. **Single-writer pool bottleneck resolved with dual pools:** Pinned globally to `SetMaxOpenConns(1)`, all queries (including `/healthz` pings and `/metrics` table scans) queued behind active write transactions, risking false degraded health reports (503s) and container restart loops during agent operations. This tradeoff was resolved by introducing a dual-pool architecture (`sqlite.OpenPool` / `sqlite.DBPool`): `Writer` retains `SetMaxOpenConns(1)` to eliminate writer `SQLITE_BUSY` contention, while `Reader` maintains a concurrent pool (`DefaultReaderMaxOpenConns=5`) taking full advantage of SQLite WAL mode's concurrent non-blocking reader throughput (see ADR 2026-10-15).
 
 **Decisions deliberately left to you:**
-- `CROWBAN_TOKEN` policy: blueprint assumes always-on bearer auth (required in compose). Loosening it to optional-for-dev is a 5-line middleware change if you want dev convenience without env.
+- `RAVN_TOKEN` policy: blueprint assumes always-on bearer auth (required in compose). Loosening it to optional-for-dev is a 5-line middleware change if you want dev convenience without env.
 - **`update_task` may move a task to `done` with unchecked ACs and no artifacts** (Definition-of-Done *enforcement* is Tier-2 per the feature doc; MVP records but doesn't block). Confirm that's acceptable for MVP.
 - Project deletion: **out of scope for MVP** (no DELETE on projects); cascade machinery exists in the schema anyway.
 - Exact image tags beyond what's written (`golang:1.26-alpine`, `node:22-alpine`, `alpine:3.21`) — bump to current equivalents at build time; nothing here depends on exact patch versions, only Go ≥ 1.22 features.
@@ -492,13 +492,13 @@ Decisions locked during implementation so later slices do not re-litigate them. 
 - **2026-09-25 — Transactional seam = UnitOfWork.** A lightweight port in `internal/application/uow.go`: `Repos` bundles the seven repository ports; `UnitOfWork.Run(ctx, r *Repos, fn func() error) error` executes `fn` inside ONE transaction (commit on nil, rollback on error). Run may be used for both reads and writes in MVP (uniformity). **RULE: every mutation's `EventStore.Append` happens inside the SAME transaction as the write it records** — data row and event row commit or roll back together.
 - **2026-09-25 — Naming.** `domain.Actor{Type,Name}` is the assignee/actor value; `Task.Assignee *Actor` is nullable (nil = unassigned). `Event.Kind` is a typed constant set — `domain.EventKind`, defined in `internal/domain/event.go` — whose canonical values are: `created, updated, status-changed, claimed, released, heartbeat, assigned, noted, commented, ac-toggled, artifact-added, relation-changed, ac-added, ac-updated, ac-removed` (the three AC-editing kinds were appended last so earlier kinds keep their stable indices; they cover post-create checklist management). Project-level events use the generic `created`/`updated` kinds with `TaskID` nil; a single `relation-changed` kind covers both edge additions and removals (the Before/After JSON carries the edge), superseding the fine-grained `relation-added`/`relation-removed` vocabulary in the §4 comment. `Task.LastActivity` has no schema column in MVP — adapters set it = UpdatedAt on task-row mutations.
 - **2026-09-26 — Claim lease lifecycle (slice 2C): atomic CAS + lazy expiry, no sweeper.** `Claim(id, actor, ttlSec?, now)` is ONE atomic CAS — `UPDATE task SET lease,status='doing',version+1 WHERE id=? AND (claimed_by_name IS NULL OR claim_expires_at < now OR claimed_by_name = actor) RETURNING *`: the winner takes a fresh lease period (claimed_at/claim_expires_at re-stamped to now, now+ttl even on renewal — full history lives in the event log), and the loser gets `*domain.ClaimConflictError{Holder, ExpiresAt}` with nothing mutated (the body IS the recovery instruction). Lease-holder key is the actor **NAME** (MVP single-tenant, self-declared; `claimed_by_type` is display-only and may differ across re-claims by the same named actor). One `claimed` event per successful claim, its After JSON tagged `"claim":"fresh" | "takeover" | "renewal"` — renewal = same named actor re-claiming an ACTIVE lease (logged on purpose: every task-row mutation emits an event; the tag makes the noise filterable, heartbeats stay the silent channel), takeover = a prior lease had EXPIRED (including a self-takeover of one's own zombie lease). **Lazy expiry, NO background sweeper in MVP:** nothing flips expired doing→todo in a goroutine; an expired lease stays on disk (status=doing, holder set) but is re-claimable by ANY actor via takeover and surfaces as "lease expired" to readers; auto-flipping deferred to Tier 2. `Release` is holder-only against an ACTIVE lease — non-holder OR expired self-release → `*domain.ClaimConflictError` (chosen over `ErrInvalid`: a coordination collision carrying holder+expiry, not malformed input); releasing a task with no lease at all is an idempotent no-op returning the fresh row (retry-safe). Success clears the lease, moves status→todo, bumps version, appends `released` (note in payload). `Heartbeat` extends claim_expires_at to now + the STORED ttl for the active self-holder only; it does NOT bump version, does NOT touch updated_at, and emits NO event (keep-alive ≠ state change — must never 409 a working agent's stale read); foreign/expired holder → `ClaimConflictError{Holder, ExpiresAt}` naming the live lease; **no lease at all** → `ErrNotClaimed` (never a zero-holder conflict — there is nobody to wait for; REST 409 "not claimed", MCP surfaces it verbatim as the "claim_task first" hint). **Claim/release/heartbeat NEVER touch the durable Assignee** (claimed_by is a separate ephemeral field; assignment stays in `Tasks.Update`, which emits `assigned`) — supersedes §5's "sets assignee if unassigned". TTL: `DefaultClaimTTL = 900s` (`application.DefaultClaimTTL`), per-call override clamped to max 3600s, negative rejected as `ErrInvalid`; the default is overridable via `Tasks.WithDefaultClaimTTL` for tests.
-- **2026-09-26 — Serving the built web UI (slice 5a): stdlib static + SPA fallback, graceful degradation.** `cmd/crowban-server` serves the Vite build with stdlib only (§7, no web container): directory from env `CROWBAN_STATIC_DIR` (flag `-static`, default `./web/dist`), mounted as `http.FileServerFS(os.DirFS(dir))` under the catch-all pattern `"GET /"`, wrapped in an SPA fallback — a GET/HEAD whose path maps to no existing file and is not under `/api` or `/healthz` is rewritten to `/` (dist root → `index.html`) so client-side deep links work. **Rewrite target is `/`, NOT `/index.html`:** FileServer's `serveFile` (net/http/fs.go) redirects any request whose path ends in `/index.html` with a relative 301 to `"./"`, which loops on deep links; serving the dist root delivers index.html with no redirect. **Mux precedence:** every API pattern (`… /api/v1/…`) and `GET /healthz` is an exact path — more specific than the `"GET /"` catch-all under Go 1.22 ServeMux resolution, independent of registration order — so static serving can never shadow them (proved by `TestStaticServingDoesNotShadowAPIAndHealthz`; unknown paths under `/api` that do reach the catch-all 404 rather than falling back to index.html). **Graceful degradation:** when the static dir is missing or has no `index.html` at startup, the server logs a warning and keeps the placeholder root — backend-only runs still boot, `/` still answers, and the `/healthz` contract is unchanged.
-- **2026-09-27 — Shipped layout supersedes §2's tree.** Module path is `github.com/mrhollen/crowban` (`go 1.25.5`). The REST adapter lives in `internal/interface/http/`, not `internal/api/`: `app.go` (App + Deps), `routes.go` (the single route table), `handlers_projects.go`, `handlers_tasks.go` (list/create/get/update), `handlers_collab.go` (claim/release/heartbeat/comments/notes/AC/artifacts/relations), `handlers_events.go` (SSE streams), `handlers_opencode.go` (session dispatch), `dto.go`, `errors.go`, `auth.go`, `helpers.go`, `responses.go`, `metrics.go`. The router is assembled in `cmd/crowban-server/main.go` (`newRouter`), not an api-package `server.go`; the http adapter itself imports only application+domain (+ stdlib) — sqlite-specific wiring (task-stats callback) happens in the cmd composition root. SQLite package: `db.go`, `runner.go` (embedded migration runner), `querier.go`, `convert.go` (RFC3339Nano timestamp boundary), `health.go`, `metrics.go`, one repo per aggregate, migrations `0001_init` … `0005_project_opencode_model`. MCP adapter files: `internal/mcp/{tools,prompts,resources}.go` + `cmd/crowban-mcp/main.go`. Web sources: `web/src/{main,app,api,types,util,md}.ts`, `style.css`, plus `alpinejs.d.ts`/`vite-env.d.ts`. Shipped Dockerfiles pin `golang:1.25-alpine`. The dependency rule itself is unchanged.
-- **2026-09-27 — Token auth shipped (supersedes §5's "unused until the token middleware lands").** `AuthMiddleware` in `internal/interface/http/auth.go`: when a non-empty token is configured, every path under `/api` requires `Authorization: Bearer <token>` or a `?token=` query param (the SSE/EventSource fallback), compared in constant time; absent/mismatched → `401 {"error":"unauthorized","message":"missing or invalid auth token"}`. Empty token = middleware is a pass-through. `/healthz`, root `/metrics`, and static UI are never gated. Wiring: `-token` flag / `CROWBAN_TOKEN` env in `cmd/crowban-server/main.go`; the web UI stores and sends it; the MCP container forwards it via apiclient; compose passes `${CROWBAN_TOKEN:-}` — empty means auth off (single-tenant LAN default), supersed §8's required-interpolation sketch.
+- **2026-09-26 — Serving the built web UI (slice 5a): stdlib static + SPA fallback, graceful degradation.** `cmd/ravn-server` serves the Vite build with stdlib only (§7, no web container): directory from env `RAVN_STATIC_DIR` (flag `-static`, default `./web/dist`), mounted as `http.FileServerFS(os.DirFS(dir))` under the catch-all pattern `"GET /"`, wrapped in an SPA fallback — a GET/HEAD whose path maps to no existing file and is not under `/api` or `/healthz` is rewritten to `/` (dist root → `index.html`) so client-side deep links work. **Rewrite target is `/`, NOT `/index.html`:** FileServer's `serveFile` (net/http/fs.go) redirects any request whose path ends in `/index.html` with a relative 301 to `"./"`, which loops on deep links; serving the dist root delivers index.html with no redirect. **Mux precedence:** every API pattern (`… /api/v1/…`) and `GET /healthz` is an exact path — more specific than the `"GET /"` catch-all under Go 1.22 ServeMux resolution, independent of registration order — so static serving can never shadow them (proved by `TestStaticServingDoesNotShadowAPIAndHealthz`; unknown paths under `/api` that do reach the catch-all 404 rather than falling back to index.html). **Graceful degradation:** when the static dir is missing or has no `index.html` at startup, the server logs a warning and keeps the placeholder root — backend-only runs still boot, `/` still answers, and the `/healthz` contract is unchanged.
+- **2026-09-27 — Shipped layout supersedes §2's tree.** Module path is `github.com/mrhollen/ravn` (`go 1.25.5`). The REST adapter lives in `internal/interface/http/`, not `internal/api/`: `app.go` (App + Deps), `routes.go` (the single route table), `handlers_projects.go`, `handlers_tasks.go` (list/create/get/update), `handlers_collab.go` (claim/release/heartbeat/comments/notes/AC/artifacts/relations), `handlers_events.go` (SSE streams), `handlers_opencode.go` (session dispatch), `dto.go`, `errors.go`, `auth.go`, `helpers.go`, `responses.go`, `metrics.go`. The router is assembled in `cmd/ravn-server/main.go` (`newRouter`), not an api-package `server.go`; the http adapter itself imports only application+domain (+ stdlib) — sqlite-specific wiring (task-stats callback) happens in the cmd composition root. SQLite package: `db.go`, `runner.go` (embedded migration runner), `querier.go`, `convert.go` (RFC3339Nano timestamp boundary), `health.go`, `metrics.go`, one repo per aggregate, migrations `0001_init` … `0005_project_opencode_model`. MCP adapter files: `internal/mcp/{tools,prompts,resources}.go` + `cmd/ravn-mcp/main.go`. Web sources: `web/src/{main,app,api,types,util,md}.ts`, `style.css`, plus `alpinejs.d.ts`/`vite-env.d.ts`. Shipped Dockerfiles pin `golang:1.25-alpine`. The dependency rule itself is unchanged.
+- **2026-09-27 — Token auth shipped (supersedes §5's "unused until the token middleware lands").** `AuthMiddleware` in `internal/interface/http/auth.go`: when a non-empty token is configured, every path under `/api` requires `Authorization: Bearer <token>` or a `?token=` query param (the SSE/EventSource fallback), compared in constant time; absent/mismatched → `401 {"error":"unauthorized","message":"missing or invalid auth token"}`. Empty token = middleware is a pass-through. `/healthz`, root `/metrics`, and static UI are never gated. Wiring: `-token` flag / `RAVN_TOKEN` env in `cmd/ravn-server/main.go`; the web UI stores and sends it; the MCP container forwards it via apiclient; compose passes `${RAVN_TOKEN:-}` — empty means auth off (single-tenant LAN default), supersed §8's required-interpolation sketch.
 - **2026-09-27 — Realtime SSE events shipped (post-MVP wave).** In-process pub/sub broker `internal/infrastructure/pubsub/broker.go`: per-project fan-out, per-subscriber buffered channels (default 64); a stalled subscriber is dropped rather than blocking mutating handlers; the http adapter carries a noop fallback when unwired. Endpoints: `GET /api/v1/projects/{id}/events` and `GET /api/v1/events?project_id=` (400 when missing) — `text/event-stream`, no-cache, `X-Accel-Buffering: no`, initial `: connected` comment, 15s `: ping` comments, `id:`/`event:`/`data:` framing with a compact payload (`event_id`, `project_id`?, `task_id`?, `kind`, `status`?, `actor`?, `timestamp`). Kinds are the 15 canonical `domain.EventKind` values (ADR "Naming" above). The UI consumes it via EventSource with a 15s poll fallback — supersedes the polling-only UI note in §7 and the ROADMAP's "no push channel" boundary line.
-- **2026-09-27 — Metrics + log level shipped.** `internal/interface/http/metrics.go`: lock-free atomic counters (total requests, in-flight, by-status 100–599, by-method, total duration) plus an optional DB callback (`sqlite.CollectTaskMetrics` → `tasks_by_status{status}` excluding archived and `active_claims`). Served at root `GET /metrics` (never auth-gated; defaults to Prometheus text exposition 0.0.4) and `GET /api/v1/metrics` (same 401 gate as the rest of `/api/v1`; defaults to JSON); `?format=json|prometheus|text` or `Accept` overrides either. The server also takes `-log-level` (`LOG_LEVEL`/`CROWBAN_LOG_LEVEL`). §5/§8 had no metrics surface — this bullet adds it.
-- **2026-09-27 — OpenCode dispatch shipped.** `POST /api/v1/tasks/{id}/opencode/start` (no body): each setting resolves project row → env var → default — server URL (`OPENCODE_SERVER_URL`, def `http://localhost:4444`), session directory (`OPENCODE_DIRECTORY`, def `/home/hollen/Code/crowban`), model ref `providerID/modelID` (`OPENCODE_MODEL`, def `llama.cpp/Qwen Medium Long Context`). The handler creates an OpenCode session (agent `build`, title `CrowBan: <task title>`, model set explicitly so key-gated fallbacks cannot 401 the session), dispatches a task prompt asynchronously, attaches a `url` artifact ("OpenCode autonomous session"), and claims the task under `{ "type": "agent", "name": "opencode" }` with TTL 3600 when unclaimed — then returns 200 `{session_id, session_url}`. Unreachable/invalid upstream → 502 `{"error":"opencode_error","message":…}`. Schema: migrations `0004_project_opencode` / `0005_project_opencode_model` add `project.opencode_server_url`, `opencode_directory`, `opencode_model` (supersedes §4's project table). UI: "Start Task in OpenCode" launcher + project-settings modal editing the three fields.
-- **2026-09-27 — MCP surface beyond tools.** `internal/mcp/prompts.go` registers prompts `triage_open_tasks(project_id?, limit? def 50 max 100)` and `next_task(project_id?, assignee?, actor_name?)`; `internal/mcp/resources.go` registers read-only resources `crowban://task/{id}` (the full `get_task` resume payload) and `crowban://project/{id}` (project row + counts). `mcp.HealthzHandler` proxies the upstream `/healthz` (503 while down), so compose `service_healthy` chains through it. `cmd/crowban-mcp/main.go` additionally installs `withModernMCPCompat` (backfills `_meta.protocolVersion` from the `Mcp-Protocol-Version` header for strict SDK notification validation) and the legacy-SSE session fallback (`/sse`, `/message`). Supersedes §2/§6's tools-only framing of the MCP adapter.
+- **2026-09-27 — Metrics + log level shipped.** `internal/interface/http/metrics.go`: lock-free atomic counters (total requests, in-flight, by-status 100–599, by-method, total duration) plus an optional DB callback (`sqlite.CollectTaskMetrics` → `tasks_by_status{status}` excluding archived and `active_claims`). Served at root `GET /metrics` (never auth-gated; defaults to Prometheus text exposition 0.0.4) and `GET /api/v1/metrics` (same 401 gate as the rest of `/api/v1`; defaults to JSON); `?format=json|prometheus|text` or `Accept` overrides either. The server also takes `-log-level` (`LOG_LEVEL`/`RAVN_LOG_LEVEL`). §5/§8 had no metrics surface — this bullet adds it.
+- **2026-09-27 — OpenCode dispatch shipped.** `POST /api/v1/tasks/{id}/opencode/start` (no body): each setting resolves project row → env var → default — server URL (`OPENCODE_SERVER_URL`, def `http://localhost:4444`), session directory (`OPENCODE_DIRECTORY`, def `/home/hollen/Code/ravn`), model ref `providerID/modelID` (`OPENCODE_MODEL`, def `llama.cpp/Qwen Medium Long Context`). The handler creates an OpenCode session (agent `build`, title `Rävn: <task title>`, model set explicitly so key-gated fallbacks cannot 401 the session), dispatches a task prompt asynchronously, attaches a `url` artifact ("OpenCode autonomous session"), and claims the task under `{ "type": "agent", "name": "opencode" }` with TTL 3600 when unclaimed — then returns 200 `{session_id, session_url}`. Unreachable/invalid upstream → 502 `{"error":"opencode_error","message":…}`. Schema: migrations `0004_project_opencode` / `0005_project_opencode_model` add `project.opencode_server_url`, `opencode_directory`, `opencode_model` (supersedes §4's project table). UI: "Start Task in OpenCode" launcher + project-settings modal editing the three fields.
+- **2026-09-27 — MCP surface beyond tools.** `internal/mcp/prompts.go` registers prompts `triage_open_tasks(project_id?, limit? def 50 max 100)` and `next_task(project_id?, assignee?, actor_name?)`; `internal/mcp/resources.go` registers read-only resources `ravn://task/{id}` (the full `get_task` resume payload) and `ravn://project/{id}` (project row + counts). `mcp.HealthzHandler` proxies the upstream `/healthz` (503 while down), so compose `service_healthy` chains through it. `cmd/ravn-mcp/main.go` additionally installs `withModernMCPCompat` (backfills `_meta.protocolVersion` from the `Mcp-Protocol-Version` header for strict SDK notification validation) and the legacy-SSE session fallback (`/sse`, `/message`). Supersedes §2/§6's tools-only framing of the MCP adapter.
 - **2026-09-27 — Web UI scope expanded post-MVP.** Supersedes §7's "UI scope (functional-but-simple)" paragraph, which describes the original MVP board: the shipped UI adds drag-and-drop status moves (optimistic move + 409 re-read/re-apply with rollback), SSE live refresh of board/detail/counts/comments, a project settings modal (name/description/opencode_* via `PUT /projects/{id}`), a relations editor (add/remove edges, 409 surfaced verbatim), AC add/reword/delete controls, client-side column sorting (persisted direction), an assignee selector and board filters, paginated comment threads with live updates, and the OpenCode launcher. Claims stay READ-ONLY in the UI by design — agents manage leases via MCP.
 - **2026-10-15 — Dual DB pool: single-writer serialization vs. concurrent reader throughput in WAL mode.** Resolves the risk of health checks (`/healthz`) and metrics scrapes (`/metrics`) blocking behind active write transactions. SQLite in WAL mode permits any number of concurrent readers alongside an active writer without lock contention, provided transactions do not share connection handles. In the original MVP architecture, a single global `SetMaxOpenConns(1)` pool serialized all operations, causing read-only endpoints (`SELECT 1` in `sqlite.Health`, table scans in `CollectTaskMetrics`, and SSE `Last-Event-ID` activity log replays) to queue behind long-running write transactions or bulk queries. When external orchestrators (Kubernetes/Docker) probed `/healthz` during an active transaction, the probe could time out or return 503 degraded, triggering restart loops. `sqlite.OpenPool` provides a dual connection pool abstraction (`sqlite.DBPool`):
   1. **Writer pool (`SetMaxOpenConns(1)`):** strictly serializes mutations (`UnitOfWork.Run`) and executes embedded DDL migrations, preventing `SQLITE_BUSY` write conflicts in-process without application-level mutexes.

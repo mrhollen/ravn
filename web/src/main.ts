@@ -1,7 +1,7 @@
 import "./style.css";
-import { crowbanApp } from "./app";
+import { ravnApp } from "./app";
 import Alpine from "alpinejs";
 
 (window as unknown as { Alpine: typeof Alpine }).Alpine = Alpine;
-Alpine.data("app", crowbanApp);
+Alpine.data("app", ravnApp);
 void Alpine.start();

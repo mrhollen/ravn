@@ -7,16 +7,16 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { expectProjectSelected } from './helpers';
 
-// Wide centered task-detail modal — CrowBan task 01M47MWSTTPS14M6XB1A8HFPV1.
+// Wide centered task-detail modal — Rävn task 01M47MWSTTPS14M6XB1A8HFPV1.
 // The default detail surface (>=md) is a WIDE CENTERED MODAL (80vw, max-w-5xl)
 // sitting ABOVE the toasts; below md (<768px) card clicks open the FULL-PAGE
 // /tasks/<id> route instead. Self-contained like the other specs: ephemeral
-// crowban-server on a random high port (never :8080), temp DB, pre-built dist.
+// ravn-server on a random high port (never :8080), temp DB, pre-built dist.
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'crowban-server');
+const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
 const staticDir = path.resolve(__dirname, '../dist');
 
 const MOBILE_VIEWPORT = { width: 375, height: 812 };
@@ -72,14 +72,14 @@ test.describe('Wide centered task-detail modal', () => {
       execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
     }
     if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/crowban-server ./cmd/crowban-server', {
+      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
         cwd: repoRoot,
         stdio: 'inherit',
       });
     }
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crowban-e2e-modal-'));
-    const dbPath = path.join(tempDir, 'crowban.db');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-modal-'));
+    const dbPath = path.join(tempDir, 'ravn.db');
     serverPort = await getFreePort();
     expect(serverPort).not.toBe(8080);
     expect(serverPort).toBeGreaterThan(1024);
@@ -88,10 +88,10 @@ test.describe('Wide centered task-detail modal', () => {
     serverProcess = spawn(serverBin, [], {
       env: {
         ...process.env,
-        CROWBAN_ADDR: `127.0.0.1:${serverPort}`,
-        CROWBAN_DATA: dbPath,
-        CROWBAN_STATIC_DIR: staticDir,
-        CROWBAN_TOKEN: '',
+        RAVN_ADDR: `127.0.0.1:${serverPort}`,
+        RAVN_DATA: dbPath,
+        RAVN_STATIC_DIR: staticDir,
+        RAVN_TOKEN: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -164,7 +164,7 @@ test.describe('Wide centered task-detail modal', () => {
   /** Load the board route and wait until the seeded project + fixture card render. */
   async function openBoard(page: import('@playwright/test').Page): Promise<void> {
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
     // The custom Projects dropdown trigger shows the auto-selected seeded project.
     await expectProjectSelected(page, 'Modal E2E project');
     await expect(page.locator('article', { hasText: 'Modal fixture' })).toBeVisible();

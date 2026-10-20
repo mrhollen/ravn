@@ -7,8 +7,8 @@ import (
 	"unicode/utf8"
 )
 
-// ActorType is the kind of principal that acts on crowban data: a human or an
-// AI agent. Both are stored as plain (type, name) pairs; crowban does no
+// ActorType is the kind of principal that acts on ravn data: a human or an
+// AI agent. Both are stored as plain (type, name) pairs; ravn does no
 // identity resolution in the MVP.
 type ActorType string
 

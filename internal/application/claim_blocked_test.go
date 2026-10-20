@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 func asTaskBlocked(t *testing.T, err error) *domain.TaskBlockedError {

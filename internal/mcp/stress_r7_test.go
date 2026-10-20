@@ -14,13 +14,13 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
-	"github.com/mrhollen/crowban/internal/infrastructure/clock"
-	"github.com/mrhollen/crowban/internal/infrastructure/idgen"
-	"github.com/mrhollen/crowban/internal/infrastructure/pubsub"
-	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
-	httpapi "github.com/mrhollen/crowban/internal/interface/http"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
+	"github.com/mrhollen/ravn/internal/infrastructure/clock"
+	"github.com/mrhollen/ravn/internal/infrastructure/idgen"
+	"github.com/mrhollen/ravn/internal/infrastructure/pubsub"
+	"github.com/mrhollen/ravn/internal/infrastructure/sqlite"
+	httpapi "github.com/mrhollen/ravn/internal/interface/http"
 )
 
 // ======================================================================================
@@ -357,7 +357,7 @@ func TestChallenger_R7_FullStack_LiveSQLiteRoundTrip(t *testing.T) {
 
 	// 2. Stand up real MCP server pointing to the live HTTP server
 	api := apiclient.New(httpServer.URL, "")
-	mcs := mcpsrv.NewMCPServer("crowban", "1.0.0", ServerOptions()...)
+	mcs := mcpsrv.NewMCPServer("ravn", "1.0.0", ServerOptions()...)
 	RegisterTools(mcs, api, apiclient.Actor{Type: "agent", Name: "challenger-agent"})
 	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
 		mcpsrv.WithStateLess(true),

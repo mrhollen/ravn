@@ -12,8 +12,8 @@ import (
 
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
-	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
-	"github.com/mrhollen/crowban/internal/mcp"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
+	"github.com/mrhollen/ravn/internal/mcp"
 )
 
 func TestStatusRecorder_Flush(t *testing.T) {
@@ -79,10 +79,10 @@ func TestMessageHandlerWithSessionFallback(t *testing.T) {
 }
 
 func TestMuxRouting_StreamableAndSSE(t *testing.T) {
-	client := apiclient.New("http://localhost:8080", "")
+	client := apiclient.New("http://ravn-server:8080", "")
 	defaultActor := apiclient.Actor{Type: "agent", Name: "test-agent"}
 
-	mcs := mcpsrv.NewMCPServer("crowban", "test", mcp.ServerOptions()...)
+	mcs := mcpsrv.NewMCPServer("ravn", "test", mcp.ServerOptions()...)
 	mcp.RegisterTools(mcs, client, defaultActor)
 	mcp.RegisterPrompts(mcs, client, defaultActor)
 	mcp.RegisterResources(mcs, client)
@@ -115,7 +115,20 @@ func TestMuxRouting_StreamableAndSSE(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected POST /mcp to return 200, got %d", resp.StatusCode)
 	}
+	var initResp struct {
+		Result struct {
+			ServerInfo struct {
+				Name string `json:"name"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&initResp); err != nil {
+		t.Fatalf("failed to decode initialize response: %v", err)
+	}
 	resp.Body.Close()
+	if initResp.Result.ServerInfo.Name != "ravn" {
+		t.Fatalf("expected serverInfo.name %q, got %q", "ravn", initResp.Result.ServerInfo.Name)
+	}
 
 	// 2. POST /mcp handles notifications/roots/list_changed without 400 Bad Request
 	notifPayload := `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`
@@ -416,10 +429,10 @@ func TestIsMCPRoute(t *testing.T) {
 
 func TestWithAuth_EndToEndStack(t *testing.T) {
 	const secret = "stack-secret-xyz"
-	client := apiclient.New("http://localhost:8080", secret)
+	client := apiclient.New("http://ravn-server:8080", secret)
 	defaultActor := apiclient.Actor{Type: "agent", Name: "test-agent"}
 
-	mcs := mcpsrv.NewMCPServer("crowban", "test", mcp.ServerOptions()...)
+	mcs := mcpsrv.NewMCPServer("ravn", "test", mcp.ServerOptions()...)
 	mcp.RegisterTools(mcs, client, defaultActor)
 
 	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
@@ -475,7 +488,20 @@ func TestWithAuth_EndToEndStack(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 OK for authenticated POST /mcp, got %d", resp.StatusCode)
 	}
+	var authInitResp struct {
+		Result struct {
+			ServerInfo struct {
+				Name string `json:"name"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&authInitResp); err != nil {
+		t.Fatalf("failed to decode authenticated initialize response: %v", err)
+	}
 	resp.Body.Close()
+	if authInitResp.Result.ServerInfo.Name != "ravn" {
+		t.Fatalf("expected serverInfo.name %q, got %q", "ravn", authInitResp.Result.ServerInfo.Name)
+	}
 
 	// 4. Authenticated GET /sse with ?token= query param -> 200
 	ctxSSE, cancelSSE := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -611,3 +637,18 @@ func TestWithModernMCPCompat_PayloadLimits(t *testing.T) {
 		}
 	})
 }
+
+func TestUpstreamAndAgentDefaults(t *testing.T) {
+	if got := envOr("RAVN_API_URL", "http://ravn-server:8080"); got != "http://ravn-server:8080" {
+		t.Fatalf("expected default RAVN_API_URL %q, got %q", "http://ravn-server:8080", got)
+	}
+	if got := envOr("RAVN_AGENT_NAME", "agent"); got != "agent" {
+		t.Fatalf("expected default RAVN_AGENT_NAME %q, got %q", "agent", got)
+	}
+
+	t.Setenv("RAVN_API_URL", "http://custom-ravn-server:8080")
+	if got := envOr("RAVN_API_URL", "http://ravn-server:8080"); got != "http://custom-ravn-server:8080" {
+		t.Fatalf("expected overridden RAVN_API_URL %q, got %q", "http://custom-ravn-server:8080", got)
+	}
+}
+

@@ -1,4 +1,4 @@
-// Command crowban-server is composition root 1 for crowban (ARCHITECTURE §2):
+// Command ravn-server is composition root 1 for ravn (ARCHITECTURE §2):
 // env/flag config → SQLite open + migrations → shared Clock/IDGenerator/
 // UnitOfWork → ALL use cases → the HTTP adapter (internal/interface/http) on
 // a stdlib net/http ServeMux.
@@ -6,9 +6,9 @@
 // This is the ONLY place that imports infrastructure; the http layer receives
 // ready-made use-case structs and never sees the database. Slice 3a routes
 // Projects + Task-core + the board snapshot; Comments/Artifacts/Acceptance/
-// Relations are already constructed so slice 3b only adds routes. CROWBAN_TOKEN
+// Relations are already constructed so slice 3b only adds routes. RAVN_TOKEN
 // gates the /api/v1 routes with bearer auth when set (auth is disabled when unset). Slice 5a
-// serves the built web UI from CROWBAN_STATIC_DIR (stdlib fs, SPA fallback);
+// serves the built web UI from RAVN_STATIC_DIR (stdlib fs, SPA fallback);
 // a missing dist degrades to the placeholder root instead of failing to boot.
 package main
 
@@ -29,12 +29,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/infrastructure/clock"
-	"github.com/mrhollen/crowban/internal/infrastructure/idgen"
-	"github.com/mrhollen/crowban/internal/infrastructure/pubsub"
-	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
-	httpapi "github.com/mrhollen/crowban/internal/interface/http"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/infrastructure/clock"
+	"github.com/mrhollen/ravn/internal/infrastructure/idgen"
+	"github.com/mrhollen/ravn/internal/infrastructure/pubsub"
+	"github.com/mrhollen/ravn/internal/infrastructure/sqlite"
+	httpapi "github.com/mrhollen/ravn/internal/interface/http"
 )
 
 // version is stamped at build time: -ldflags "-X main.version=..." (see the
@@ -43,16 +43,16 @@ var version = "dev"
 
 func main() {
 	var (
-		addr   = flag.String("addr", envOr("CROWBAN_ADDR", ":8080"), "listen address, e.g. :8080")
-		data   = flag.String("data", envOr("CROWBAN_DATA", "/data/crowban.db"), "path of the SQLite database file")
-		token  = flag.String("token", os.Getenv("CROWBAN_TOKEN"), "bearer token gating /api/v1 routes; empty disables auth (dev default)")
-		static = flag.String("static", envOr("CROWBAN_STATIC_DIR", "./web/dist"),
+		addr   = flag.String("addr", envOr("RAVN_ADDR", ":8080"), "listen address, e.g. :8080")
+		data   = flag.String("data", envOr("RAVN_DATA", "/data/ravn.db"), "path of the SQLite database file")
+		token  = flag.String("token", os.Getenv("RAVN_TOKEN"), "bearer token gating /api/v1 routes; empty disables auth (dev default)")
+		static = flag.String("static", envOr("RAVN_STATIC_DIR", "./web/dist"),
 			"directory holding the built web UI (Vite dist); placeholder root is served when it has no index.html")
-		artifacts = flag.String("artifacts-dir", envOr("CROWBAN_ARTIFACTS_DIR", defaultArtifactsDir()),
+		artifacts = flag.String("artifacts-dir", envOr("RAVN_ARTIFACTS_DIR", defaultArtifactsDir()),
 			"directory holding stored artifact uploads")
-		logLevel = flag.String("log-level", envOr("LOG_LEVEL", envOr("CROWBAN_LOG_LEVEL", "info")),
+		logLevel = flag.String("log-level", envOr("LOG_LEVEL", envOr("RAVN_LOG_LEVEL", "info")),
 			"log level: debug, info, warn, error")
-		corsOrigins = flag.String("cors-origins", envOr("CROWBAN_CORS_ORIGINS", "*"),
+		corsOrigins = flag.String("cors-origins", envOr("RAVN_CORS_ORIGINS", "*"),
 			"comma-separated list of allowed CORS origins or '*' for any origin")
 	)
 	flag.Parse()
@@ -62,7 +62,7 @@ func main() {
 		Level: lvl,
 	}))
 	slog.SetDefault(logger)
-	logger.Info("crowban-server starting",
+	logger.Info("ravn-server starting",
 		"version", version, "addr", *addr, "data", *data, "token_set", *token != "", "static_dir", *static, "artifacts_dir", *artifacts, "log_level", lvl.String(), "cors_origins", *corsOrigins)
 
 	if err := os.MkdirAll(*artifacts, 0o755); err != nil {
@@ -136,7 +136,7 @@ func newRouter(db *sql.DB, staticDir, token, artifactsDir string) http.Handler {
 }
 
 func newRouterWithBroker(db *sql.DB, staticDir, token, artifactsDir string, broker application.EventBroker) http.Handler {
-	corsOrigins := os.Getenv("CROWBAN_CORS_ORIGINS")
+	corsOrigins := os.Getenv("RAVN_CORS_ORIGINS")
 	if corsOrigins == "" {
 		corsOrigins = "*"
 	}
@@ -156,7 +156,7 @@ func newRouterWithPool(pool *sqlite.DBPool, staticDir, token, artifactsDir strin
 }
 
 func newRouterWithPoolAndBroker(pool *sqlite.DBPool, staticDir, token, artifactsDir string, broker application.EventBroker) http.Handler {
-	corsOrigins := os.Getenv("CROWBAN_CORS_ORIGINS")
+	corsOrigins := os.Getenv("RAVN_CORS_ORIGINS")
 	if corsOrigins == "" {
 		corsOrigins = "*"
 	}
@@ -244,7 +244,7 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 		slog.Warn("no index.html in static dir; serving placeholder root instead of the web UI", "static_dir", staticDir)
 		mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			fmt.Fprintln(w, "crowban server ok — API is up; no built web UI found (set CROWBAN_STATIC_DIR to a Vite dist)")
+			fmt.Fprintln(w, "ravn server ok — API is up; no built web UI found (set RAVN_STATIC_DIR to a Vite dist)")
 		})
 	}
 

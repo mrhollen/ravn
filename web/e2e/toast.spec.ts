@@ -14,7 +14,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'crowban-server');
+const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
 const staticDir = path.resolve(__dirname, '../dist');
 
 async function getFreePort(): Promise<number> {
@@ -63,13 +63,13 @@ test.describe('toast notifications', () => {
       execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
     }
     if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/crowban-server ./cmd/crowban-server', {
+      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
         cwd: repoRoot,
         stdio: 'inherit',
       });
     }
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crowban-toast-e2e-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-toast-e2e-'));
     const serverPort = await getFreePort();
     expect(serverPort).not.toBe(8080);
     serverUrl = `http://127.0.0.1:${serverPort}`;
@@ -77,10 +77,10 @@ test.describe('toast notifications', () => {
     serverProcess = spawn(serverBin, [], {
       env: {
         ...process.env,
-        CROWBAN_ADDR: `127.0.0.1:${serverPort}`,
-        CROWBAN_DATA: path.join(tempDir, 'crowban.db'),
-        CROWBAN_STATIC_DIR: staticDir,
-        CROWBAN_TOKEN: '',
+        RAVN_ADDR: `127.0.0.1:${serverPort}`,
+        RAVN_DATA: path.join(tempDir, 'ravn.db'),
+        RAVN_STATIC_DIR: staticDir,
+        RAVN_TOKEN: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

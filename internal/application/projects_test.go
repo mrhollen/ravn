@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // projects_test.go: unit tests for the Projects use case over fakeUoW + fakes

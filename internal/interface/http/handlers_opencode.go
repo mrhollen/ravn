@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // resolveOpenCodeServerURL resolves the OpenCode server URL from the project setting,
@@ -30,7 +30,7 @@ func resolveOpenCodeServerURL(projectServerURL string) string {
 }
 
 // resolveOpenCodeDirectory resolves the working directory for OpenCode from the project
-// setting, the OPENCODE_DIRECTORY environment variable, or defaults to "/home/hollen/Code/crowban".
+// setting, the OPENCODE_DIRECTORY environment variable, or defaults to "/home/hollen/Code/ravn".
 func resolveOpenCodeDirectory(projectDirectory string) string {
 	if s := strings.TrimSpace(projectDirectory); s != "" {
 		return s
@@ -38,7 +38,7 @@ func resolveOpenCodeDirectory(projectDirectory string) string {
 	if s := strings.TrimSpace(os.Getenv("OPENCODE_DIRECTORY")); s != "" {
 		return s
 	}
-	return "/home/hollen/Code/crowban"
+	return "/home/hollen/Code/ravn"
 }
 
 // resolveOpenCodeModel resolves the OpenCode model reference from the project

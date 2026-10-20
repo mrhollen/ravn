@@ -1,4 +1,4 @@
-// Package domain is the core of crowban's onion architecture: value types and
+// Package domain is the core of ravn's onion architecture: value types and
 // entities for projects, tasks, and their collaboration data. It depends on
 // the Go standard library only — no third-party modules, no other project
 // packages, and no interfaces (ports live in internal/application). Nothing

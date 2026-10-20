@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'crowban-server');
+const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
 const staticDir = path.resolve(__dirname, '../dist');
 
 async function getFreePort(): Promise<number> {
@@ -54,15 +54,15 @@ test.describe('Web E2E test suite', () => {
 
     // 2. Ensure server binary is built
     if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/crowban-server ./cmd/crowban-server', {
+      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
         cwd: repoRoot,
         stdio: 'inherit',
       });
     }
 
     // 3. Ephemeral temp DB directory (acceptance criterion 3)
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crowban-e2e-'));
-    const dbPath = path.join(tempDir, 'crowban.db');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-'));
+    const dbPath = path.join(tempDir, 'ravn.db');
 
     // 4. Free high-numbered port (never :8080) (acceptance criterion 3)
     serverPort = await getFreePort();
@@ -75,10 +75,10 @@ test.describe('Web E2E test suite', () => {
     serverProcess = spawn(serverBin, [], {
       env: {
         ...process.env,
-        CROWBAN_ADDR: `127.0.0.1:${serverPort}`,
-        CROWBAN_DATA: dbPath,
-        CROWBAN_STATIC_DIR: staticDir,
-        CROWBAN_TOKEN: '', // Zero-config local mode
+        RAVN_ADDR: `127.0.0.1:${serverPort}`,
+        RAVN_DATA: dbPath,
+        RAVN_STATIC_DIR: staticDir,
+        RAVN_TOKEN: '', // Zero-config local mode
         OPENCODE_ALLOW_PRIVATE_IPS: 'true',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -189,7 +189,7 @@ test.describe('Web E2E test suite', () => {
     // Step 2: Load real UI and assert board render
     // -------------------------------------------------------------------------
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
 
     // Header: the custom Projects dropdown reflects the auto-selected seeded project
     await expectProjectSelected(page, 'Browser E2E Project');
@@ -427,7 +427,7 @@ test.describe('Web E2E test suite', () => {
     // Step 2: Open UI and select new project
     // -------------------------------------------------------------------------
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
 
     await selectProjectViaDropdown(page, project.id);
 
@@ -790,7 +790,7 @@ test.describe('Web E2E test suite', () => {
 
     // Load UI and select the seeded project via the real dropdown.
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, project.id);
     await expectProjectSelected(page, 'Priority Label Consistency Project');
 
@@ -1735,7 +1735,7 @@ test.describe('Web E2E test suite', () => {
     await expect.poll(cardTitles).toEqual(['Gamma', 'Beta', 'Alpha']);
 
     await page.reload();
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
     // Project selection persists across reload (localStorage), shown on the trigger.
     await expect(page.getByTestId('project-select')).toContainText('Sorting Test Project');
     await expect(sortKeySelect).toHaveValue('created_at');
@@ -1783,12 +1783,12 @@ test.describe('Web E2E test suite', () => {
     // Step 2: Store the project id BEFORE page load (returning visitor) and make
     // the boot-time projects fetch fail hard — a transient network blip.
     // -------------------------------------------------------------------------
-    await page.addInitScript((id: string) => { localStorage.setItem('crowban.project', id); }, project.id);
+    await page.addInitScript((id: string) => { localStorage.setItem('ravn.project', id); }, project.id);
     const projectsUrl = `${serverUrl}/api/v1/projects`;
     await page.route(projectsUrl, (route) => route.abort());
 
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
 
     // -------------------------------------------------------------------------
     // Step 3: The boot-error screen with Retry appears — NOT the New Project bar.
@@ -1806,7 +1806,7 @@ test.describe('Web E2E test suite', () => {
 
     // AC1 + AC2: stored selection intact in state AND localStorage, no modal.
     await expect(page.locator('#cb-new-project-name-input')).toBeHidden();
-    expect(await page.evaluate(() => localStorage.getItem('crowban.project'))).toBe(project.id);
+    expect(await page.evaluate(() => localStorage.getItem('ravn.project'))).toBe(project.id);
 
     // -------------------------------------------------------------------------
     // Step 4: The connection recovers; Retry re-runs the load + continuation.
@@ -1817,7 +1817,7 @@ test.describe('Web E2E test suite', () => {
     // AC3: the stored project's board renders — the selection survived the glitch.
     await expectProjectSelected(page, 'Boot Failure Fixture');
     await expect(page.locator('article', { hasText: 'Survives the glitch' })).toBeVisible();
-    expect(await page.evaluate(() => localStorage.getItem('crowban.project'))).toBe(project.id);
+    expect(await page.evaluate(() => localStorage.getItem('ravn.project'))).toBe(project.id);
 
     // Both error screens are gone once the board is up.
     await expect(bootError).not.toBeVisible();
@@ -1878,7 +1878,7 @@ test.describe('Web E2E test suite', () => {
     expect(relRes.ok).toBe(true);
 
     // Step 2: Open project on board
-    await page.addInitScript((id: string) => { localStorage.setItem('crowban.project', id); }, project.id);
+    await page.addInitScript((id: string) => { localStorage.setItem('ravn.project', id); }, project.id);
     await page.goto(serverUrl);
     await expectProjectSelected(page, 'Done Gate Verification');
 

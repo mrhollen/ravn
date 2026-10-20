@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // TestAdversarial_SSE_MassiveAbruptDisconnects tests 50 concurrent SSE clients

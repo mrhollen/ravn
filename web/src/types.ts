@@ -1,4 +1,4 @@
-// Wire-contract types for the crowban REST API (docs/API.md is the source of
+// Wire-contract types for the ravn REST API (docs/API.md is the source of
 // truth; these mirror internal/interface/http/dto.go). Optional fields are
 // OMITTED on the wire when unset — never null.
 

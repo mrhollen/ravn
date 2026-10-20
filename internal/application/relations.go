@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // RelateAction selects which side of relate_tasks the use case performs. The

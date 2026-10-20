@@ -16,7 +16,7 @@ func validProject() Project {
 		Name:              "Demo Project",
 		Description:       "onboarding doc",
 		OpenCodeServerURL: "http://localhost:4444",
-		OpenCodeDirectory: "/home/hollen/Code/crowban",
+		OpenCodeDirectory: "/home/hollen/Code/ravn",
 		OpenCodeModel:     "llama.cpp/Qwen Nano",
 	}
 }
@@ -127,7 +127,7 @@ func TestProjectValidate_Directory(t *testing.T) {
 		in   string
 		ok   bool
 	}{
-		{"absolute path", "/home/hollen/Code/crowban", true},
+		{"absolute path", "/home/hollen/Code/ravn", true},
 		{"relative allowed at domain level", "some/relative/dir", true},
 		{"exactly at cap", strings.Repeat("d", MaxOpenCodeDirectoryLen), true},
 		{"empty means not configured", "", true},

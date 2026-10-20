@@ -1,8 +1,8 @@
-# crowban
+# Rävn
 
 ## Overview
 
-crowban is an MCP-first KanBan tool for AI agents and humans. Agents are the primary users, leveraging the tool as external memory, a coordination bus for multi-agent work, and an evidence store. The system is single-tenant and Docker-first, with a pure-Go backend using onion architecture and a minimal Vite+TS+Tailwind frontend.
+Rävn is an MCP-first KanBan tool for AI agents and humans. Agents are the primary users, leveraging the tool as external memory, a coordination bus for multi-agent work, and an evidence store. The system is single-tenant and Docker-first, with a pure-Go backend using onion architecture and a minimal Vite+TS+Tailwind frontend.
 
 ## MVP — Tier 1 ✅ COMPLETE
 
@@ -38,11 +38,11 @@ All Tier 1 items are built, tested, and verified end-to-end (live E2E smoke: bot
 - ✅ **REST API + MCP server**: Full HTTP contract ([API.md](API.md)) and all 14 MCP tools over stateless Streamable-HTTP ([MCP.md](MCP.md)). (`bd9ba62`, `d19799b`, `e0aca8b`)
 - ✅ **Docker-first deployment**: Multi-stage build, compose with DB volume + healthchecks, smoke script. (`74b9dc2`)
 
-**Explicitly ALLOWED in MVP**: Marking a task `done` without any artifact attached (artifact attachment is not enforced). NOT allowed: completing a task while any acceptance criterion is unchecked — the done transition is rejected with `400 invalid input` naming the unmet seqs, and there is **no override** (see [API.md](API.md)); likewise every AC mutation on a completed or archived task is refused until it is reopened / unarchived. Token auth (`CROWBAN_TOKEN`) is OPTIONAL for local dev: off by default, and when set the server enforces it on all `/api/v1/*` routes with `401`.
+**Explicitly ALLOWED in MVP**: Marking a task `done` without any artifact attached (artifact attachment is not enforced). NOT allowed: completing a task while any acceptance criterion is unchecked — the done transition is rejected with `400 invalid input` naming the unmet seqs, and there is **no override** (see [API.md](API.md)); likewise every AC mutation on a completed or archived task is refused until it is reopened / unarchived. Token auth (`RAVN_TOKEN`) is OPTIONAL for local dev: off by default, and when set the server enforces it on all `/api/v1/*` routes with `401`.
 
 ### Post-MVP waves — shipped after the initial MVP
 
-- ✅ **Auth token enforcement**: Shared `CROWBAN_TOKEN` gates every `/api/v1/*` route when set (`Authorization: Bearer …`, or `?token=…` for SSE clients that cannot set headers); the web UI sends it; off by default. (`05a8bed`, `0149cb4`)
+- ✅ **Auth token enforcement**: Shared `RAVN_TOKEN` gates every `/api/v1/*` route when set (`Authorization: Bearer …`, or `?token=…` for SSE clients that cannot set headers); the web UI sends it; off by default. (`05a8bed`, `0149cb4`)
 - ✅ **Drag-and-drop board**: Column drag-and-drop status moves with optimistic move + 409 re-read/re-apply and rollback. (`05a8bed`)
 - ✅ **Realtime SSE events**: Per-project event stream (15 canonical kinds); the UI updates board, detail, counts and comment threads live, with a 15s poll fallback. (`028a0d0`, `bce6dd5`, `7b4c792`)
 - ✅ **Task edit + project settings in UI**: Edit title/description/priority/due date/assignee; project settings modal (name, description, OpenCode server/directory/model); board filters. (`028a0d0`, `e3d2079`)
@@ -52,7 +52,7 @@ All Tier 1 items are built, tested, and verified end-to-end (live E2E smoke: bot
 - ✅ **Observability**: `/metrics` and `/api/v1/metrics` (Prometheus text or JSON) and a configurable server log level. (`ed7489d`)
 - ✅ **OpenCode dispatch**: `POST /tasks/{id}/opencode/start` creates an autonomous session, claims the task, attaches the session URL as an artifact; project-level server/directory/model settings plus a board launcher button. (`8dd1801`, `5dbd18a`, `cbef29e`, `c0a97e3`)
 - ✅ **MCP prompts**: Onboarding prompts (`triage_open_tasks`, `next_task`). (`05a8bed`)
-- ✅ **MCP resources**: Read-only `crowban://task/{id}` and `crowban://project/{id}` resources for resume payloads and project summaries. (`028a0d0`)
+- ✅ **MCP resources**: Read-only `ravn://task/{id}` and `ravn://project/{id}` resources for resume payloads and project summaries. (`028a0d0`)
 
 ### Shipped boundary — still deferred
 

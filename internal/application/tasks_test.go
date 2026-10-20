@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // tasks_test.go: unit tests for the Tasks use case over fakeUoW + fakes +

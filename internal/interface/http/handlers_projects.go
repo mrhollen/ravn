@@ -3,8 +3,8 @@ package httpapi
 import (
 	"net/http"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // handleListProjects → GET /api/v1/projects. Rows carry per-status open task

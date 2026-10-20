@@ -13,18 +13,18 @@ import (
 	"time"
 )
 
-// apiPrefix is the base path of every versioned crowban route (API.md).
+// apiPrefix is the base path of every versioned ravn route (API.md).
 const apiPrefix = "/api/v1"
 
 // maxResponseBytes caps how much of a response body we will ever buffer.
-// crowban payloads are small (a full resume payload is tens of KB at most);
+// ravn payloads are small (a full resume payload is tens of KB at most);
 // this guards against pathological responses, not against limits in general.
 const maxResponseBytes = 1 << 20
 
-// Client is a typed REST client for one crowban-server instance. It is safe
+// Client is a typed REST client for one ravn-server instance. It is safe
 // for concurrent use (http.Client is; the fields are immutable after New).
 type Client struct {
-	base  string // base URL without trailing slash, e.g. http://crowban-server:8080
+	base  string // base URL without trailing slash, e.g. http://ravn-server:8080
 	token string // optional; sent as Authorization: Bearer <token> when non-empty
 	http  *http.Client
 }
@@ -42,7 +42,7 @@ func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.http.Timeout = d }
 }
 
-// New builds a Client for baseURL. token may be empty: crowban is
+// New builds a Client for baseURL. token may be empty: ravn is
 // single-tenant/LAN-local and unauthenticated by default, but when a token IS
 // configured it is forwarded on every request (API.md "Auth").
 func New(baseURL, token string, opts ...Option) *Client {

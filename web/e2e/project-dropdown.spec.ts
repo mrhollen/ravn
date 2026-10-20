@@ -4,7 +4,7 @@
 //   AC3 — behavior parity: create auto-selects, cancel/dismiss keeps the draft,
 //         no phantom projects
 //   AC4 — keyboard operability (open/arrows/Enter/Escape/focus return) + 375px
-// Self-contained: ephemeral crowban-server on a random high port + temp DB,
+// Self-contained: ephemeral ravn-server on a random high port + temp DB,
 // serving the pre-built web/dist (mirrors m4.spec.ts / mobile.spec.ts).
 import { test, expect } from '@playwright/test';
 import { spawn, execSync, type ChildProcess } from 'child_process';
@@ -18,7 +18,7 @@ import { openNewProjectFromDropdown, selectProjectViaDropdown } from './helpers'
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'crowban-server');
+const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
 const staticDir = path.resolve(__dirname, '../dist');
 
 async function getFreePort(): Promise<number> {
@@ -76,14 +76,14 @@ test.describe('Projects dropdown (custom control)', () => {
       execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
     }
     if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/crowban-server ./cmd/crowban-server', {
+      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
         cwd: repoRoot,
         stdio: 'inherit',
       });
     }
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crowban-e2e-project-dropdown-'));
-    const dbPath = path.join(tempDir, 'crowban.db');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-project-dropdown-'));
+    const dbPath = path.join(tempDir, 'ravn.db');
     serverPort = await getFreePort();
     expect(serverPort).not.toBe(8080);
     serverUrl = `http://127.0.0.1:${serverPort}`;
@@ -91,10 +91,10 @@ test.describe('Projects dropdown (custom control)', () => {
     serverProcess = spawn(serverBin, [], {
       env: {
         ...process.env,
-        CROWBAN_ADDR: `127.0.0.1:${serverPort}`,
-        CROWBAN_DATA: dbPath,
-        CROWBAN_STATIC_DIR: staticDir,
-        CROWBAN_TOKEN: '',
+        RAVN_ADDR: `127.0.0.1:${serverPort}`,
+        RAVN_DATA: dbPath,
+        RAVN_STATIC_DIR: staticDir,
+        RAVN_TOKEN: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -161,7 +161,7 @@ test.describe('Projects dropdown (custom control)', () => {
       uncaughtConsoleErrors.push(`[uncaught pageerror] ${err.message}`);
     });
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
     // App booted — the dropdown trigger enables when init() completes.
     await expect(page.getByTestId('project-select')).toBeEnabled();
   }

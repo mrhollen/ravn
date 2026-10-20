@@ -1,4 +1,4 @@
-// Package mcp adapts crowban's REST API to MCP tools, prompts, and resources (docs/ARCHITECTURE.md §6).
+// Package mcp adapts ravn's REST API to MCP tools, prompts, and resources (docs/ARCHITECTURE.md §6).
 package mcp
 
 import (
@@ -10,16 +10,16 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
-	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
 )
 
 const (
-	taskResourceURIScheme    = "crowban://task/{id}"
-	projectResourceURIScheme = "crowban://project/{id}"
+	taskResourceURIScheme    = "ravn://task/{id}"
+	projectResourceURIScheme = "ravn://project/{id}"
 )
 
-// RegisterResources registers CrowBan read-only MCP resources and resource templates onto s.
-// It exposes tasks (crowban://task/{id}) and projects (crowban://project/{id}) so agent
+// RegisterResources registers Rävn read-only MCP resources and resource templates onto s.
+// It exposes tasks (ravn://task/{id}) and projects (ravn://project/{id}) so agent
 // harnesses can retrieve resume payloads and project summaries directly as resources.
 func RegisterResources(s *mcpsrv.MCPServer, c Client) {
 	registerTaskResource(s, c)
@@ -35,13 +35,13 @@ func registerTaskResource(s *mcpsrv.MCPServer, c Client) {
 			}
 		}
 		if id == "" {
-			if strings.HasPrefix(req.Params.URI, "crowban://task/") {
-				id = strings.TrimPrefix(req.Params.URI, "crowban://task/")
+			if strings.HasPrefix(req.Params.URI, "ravn://task/") {
+				id = strings.TrimPrefix(req.Params.URI, "ravn://task/")
 				id = strings.TrimSpace(id)
 			}
 		}
 		if id == "" || id == "{id}" {
-			return nil, fmt.Errorf("task ID required: specify a task ULID in URI (e.g. crowban://task/<id>)")
+			return nil, fmt.Errorf("task ID required: specify a task ULID in URI (e.g. ravn://task/<id>)")
 		}
 
 		detail, err := c.GetTask(ctx, id, 0, 0)
@@ -85,13 +85,13 @@ func registerProjectResource(s *mcpsrv.MCPServer, c Client) {
 			}
 		}
 		if id == "" {
-			if strings.HasPrefix(req.Params.URI, "crowban://project/") {
-				id = strings.TrimPrefix(req.Params.URI, "crowban://project/")
+			if strings.HasPrefix(req.Params.URI, "ravn://project/") {
+				id = strings.TrimPrefix(req.Params.URI, "ravn://project/")
 				id = strings.TrimSpace(id)
 			}
 		}
 		if id == "" || id == "{id}" {
-			return nil, fmt.Errorf("project ID required: specify a project ULID in URI (e.g. crowban://project/<id>)")
+			return nil, fmt.Errorf("project ID required: specify a project ULID in URI (e.g. ravn://project/<id>)")
 		}
 
 		projects, err := c.ListProjects(ctx)

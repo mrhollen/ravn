@@ -8,8 +8,8 @@ package idgen
 import (
 	"github.com/oklog/ulid/v2"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // ULIDGenerator implements application.IDGenerator. ulid.Make uses a shared,

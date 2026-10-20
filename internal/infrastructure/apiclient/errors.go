@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// APIError is a non-2xx response from crowban-server. It PRESERVES the status
+// APIError is a non-2xx response from ravn-server. It PRESERVES the status
 // code and the full upstream response body verbatim, because the body's
 // "message" field doubles as the agent-readable recovery instruction (API.md
 // "Error contract") — the MCP layer surfaces these bodies untouched so agents
@@ -24,7 +24,7 @@ func (e *APIError) Error() string {
 	if len(body) > 256 {
 		body = body[:256] + "…"
 	}
-	return fmt.Sprintf("%s: crowban-server answered HTTP %d for %s: %s", e.Op, e.StatusCode, e.URL, body)
+	return fmt.Sprintf("%s: ravn-server answered HTTP %d for %s: %s", e.Op, e.StatusCode, e.URL, body)
 }
 
 // AsAPIError extracts the *APIError from err if one is present in its chain.

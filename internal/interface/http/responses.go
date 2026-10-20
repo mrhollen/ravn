@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// rfc3339 renders a timestamp in the wire format crowban uses everywhere
+// rfc3339 renders a timestamp in the wire format ravn uses everywhere
 // (ARCHITECTURE §4): RFC3339 UTC, e.g. "2026-09-25T18:00:00Z".
 func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 

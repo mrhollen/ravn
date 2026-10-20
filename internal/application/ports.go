@@ -1,4 +1,4 @@
-// Package application holds crowban's use cases and the ports they depend on.
+// Package application holds ravn's use cases and the ports they depend on.
 // It imports domain (and stdlib) only — never infrastructure: this file is the
 // dependency-inversion seam of the onion. Concrete adapters live in
 // internal/infrastructure/** and are wired into these interfaces by the cmd/*
@@ -14,7 +14,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // Conventions shared by all ports below:

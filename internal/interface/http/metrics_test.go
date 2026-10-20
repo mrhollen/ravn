@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	httpapi "github.com/mrhollen/crowban/internal/interface/http"
+	httpapi "github.com/mrhollen/ravn/internal/interface/http"
 )
 
 func TestMetricsMiddleware_CountsRequestsAndStatuses(t *testing.T) {

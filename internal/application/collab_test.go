@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // seedTaskWithACs creates a task through the Tasks use case carrying two

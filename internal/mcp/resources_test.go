@@ -10,7 +10,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
-	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
 )
 
 // TestResourcesList_Discoverability validates:
@@ -18,7 +18,7 @@ import (
 // 2. Parameterized URIs are registered exclusively as ResourceTemplates in resources/templates/list.
 // 3. Any resources listed in resources/list are concrete and readable without errors.
 func TestResourcesList_Discoverability(t *testing.T) {
-	mcs := mcpsrv.NewMCPServer("crowban", "test-version")
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	mock := &mockClient{}
 	RegisterResources(mcs, mock)
 
@@ -65,19 +65,19 @@ func TestResourcesList_Discoverability(t *testing.T) {
 	var foundTaskTemplate, foundProjectTemplate bool
 	for _, tmpl := range tmplRes.ResourceTemplates {
 		if tmpl.URITemplate != nil {
-			if tmpl.URITemplate.Raw() == "crowban://task/{id}" {
+			if tmpl.URITemplate.Raw() == "ravn://task/{id}" {
 				foundTaskTemplate = true
 			}
-			if tmpl.URITemplate.Raw() == "crowban://project/{id}" {
+			if tmpl.URITemplate.Raw() == "ravn://project/{id}" {
 				foundProjectTemplate = true
 			}
 		}
 	}
 	if !foundTaskTemplate {
-		t.Errorf("expected crowban://task/{id} in resources/templates/list, got: %+v", tmplRes.ResourceTemplates)
+		t.Errorf("expected ravn://task/{id} in resources/templates/list, got: %+v", tmplRes.ResourceTemplates)
 	}
 	if !foundProjectTemplate {
-		t.Errorf("expected crowban://project/{id} in resources/templates/list, got: %+v", tmplRes.ResourceTemplates)
+		t.Errorf("expected ravn://project/{id} in resources/templates/list, got: %+v", tmplRes.ResourceTemplates)
 	}
 }
 
@@ -141,7 +141,7 @@ func TestResourcesRead_MatchesResumePayload(t *testing.T) {
 		},
 	}
 
-	mcs := mcpsrv.NewMCPServer("crowban", "test-version")
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	RegisterResources(mcs, mock)
 
 	// Read via resource URI
@@ -150,7 +150,7 @@ func TestResourcesRead_MatchesResumePayload(t *testing.T) {
 		"id": 10,
 		"method": "resources/read",
 		"params": {
-			"uri": "crowban://task/01M3JAA9HK7AD45RWP0XADE3KB"
+			"uri": "ravn://task/01M3JAA9HK7AD45RWP0XADE3KB"
 		}
 	}`
 
@@ -174,8 +174,8 @@ func TestResourcesRead_MatchesResumePayload(t *testing.T) {
 		t.Fatalf("expected TextResourceContents, got %T", readResult.Contents[0])
 	}
 
-	if txtContent.URI != "crowban://task/01M3JAA9HK7AD45RWP0XADE3KB" {
-		t.Errorf("expected URI crowban://task/01M3JAA9HK7AD45RWP0XADE3KB, got %q", txtContent.URI)
+	if txtContent.URI != "ravn://task/01M3JAA9HK7AD45RWP0XADE3KB" {
+		t.Errorf("expected URI ravn://task/01M3JAA9HK7AD45RWP0XADE3KB, got %q", txtContent.URI)
 	}
 	if txtContent.MIMEType != "application/json" {
 		t.Errorf("expected MIMEType application/json, got %q", txtContent.MIMEType)
@@ -222,7 +222,7 @@ func TestResourcesRead_UnknownIDSurfacesError(t *testing.T) {
 		},
 	}
 
-	mcs := mcpsrv.NewMCPServer("crowban", "test-version")
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	RegisterResources(mcs, mock)
 
 	// Read non-existent task
@@ -231,7 +231,7 @@ func TestResourcesRead_UnknownIDSurfacesError(t *testing.T) {
 		"id": 20,
 		"method": "resources/read",
 		"params": {
-			"uri": "crowban://task/UNKNOWN_TASK_ID"
+			"uri": "ravn://task/UNKNOWN_TASK_ID"
 		}
 	}`
 
@@ -254,13 +254,13 @@ func TestResourcesRead_UnknownIDSurfacesError(t *testing.T) {
 		t.Errorf("expected clear error message mentioning missing task, got: %s", errResp.Error.Message)
 	}
 
-	// Also verify reading literally crowban://task/{id} surfaces an error, not empty 200
+	// Also verify reading literally ravn://task/{id} surfaces an error, not empty 200
 	literalMsg := `{
 		"jsonrpc": "2.0",
 		"id": 21,
 		"method": "resources/read",
 		"params": {
-			"uri": "crowban://task/{id}"
+			"uri": "ravn://task/{id}"
 		}
 	}`
 	resp = mcs.HandleMessage(context.Background(), json.RawMessage(literalMsg))
@@ -276,7 +276,7 @@ func TestResourcesRead_UnknownIDSurfacesError(t *testing.T) {
 	}
 }
 
-// TestProjectResourceRead tests reading crowban://project/{id}.
+// TestProjectResourceRead tests reading ravn://project/{id}.
 func TestProjectResourceRead(t *testing.T) {
 	mock := &mockClient{
 		listProjectsFunc: func(ctx context.Context) (*apiclient.ProjectList, error) {
@@ -294,7 +294,7 @@ func TestProjectResourceRead(t *testing.T) {
 		},
 	}
 
-	mcs := mcpsrv.NewMCPServer("crowban", "test-version")
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	RegisterResources(mcs, mock)
 
 	// 1. Success read
@@ -303,7 +303,7 @@ func TestProjectResourceRead(t *testing.T) {
 		"id": 30,
 		"method": "resources/read",
 		"params": {
-			"uri": "crowban://project/PROJ-1"
+			"uri": "ravn://project/PROJ-1"
 		}
 	}`
 	resp := mcs.HandleMessage(context.Background(), json.RawMessage(readMsg))
@@ -326,7 +326,7 @@ func TestProjectResourceRead(t *testing.T) {
 		"id": 31,
 		"method": "resources/read",
 		"params": {
-			"uri": "crowban://project/UNKNOWN-PROJECT"
+			"uri": "ravn://project/UNKNOWN-PROJECT"
 		}
 	}`
 	resp = mcs.HandleMessage(context.Background(), json.RawMessage(unknownMsg))

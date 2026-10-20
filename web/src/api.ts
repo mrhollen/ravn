@@ -1,4 +1,4 @@
-// Minimal REST client for the crowban API (docs/API.md). No auth in the MVP
+// Minimal REST client for the ravn API (docs/API.md). No auth in the MVP
 // tier; every mutation carries a self-declared actor. Errors are surfaced as
 // ApiError carrying the exact JSON error body so callers can branch on the
 // `error` field (e.g. "version_conflict" → rebase + retry once).
@@ -113,7 +113,7 @@ function isAbortLike(e: unknown): boolean {
   return e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError");
 }
 
-/** An HTTP error with the parsed crowban error body. */
+/** An HTTP error with the parsed ravn error body. */
 export class ApiError extends Error {
   readonly status: number;
   readonly body: ApiErrorBody;
@@ -157,7 +157,7 @@ export class ApiError extends Error {
   }
 }
 
-export const LS_TOKEN = "crowban_token";
+export const LS_TOKEN = "ravn_token";
 
 /** Retrieves the auth token from URL ?token= or localStorage. */
 export function getAuthToken(): string {
@@ -216,7 +216,7 @@ export function errMsg(e: unknown): string {
   }
   if (e instanceof TypeError) {
     // fetch network failure
-    return `cannot reach the crowban server (${BASE}) — is it running?`;
+    return `cannot reach the ravn server (${BASE}) — is it running?`;
   }
   if (e instanceof Error) return e.message;
   return String(e);

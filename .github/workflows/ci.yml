@@ -39,8 +39,8 @@ jobs:
 
       - name: Build static binaries
         run: |
-          CGO_ENABLED=0 go build -trimpath -o bin/crowban-server ./cmd/crowban-server
-          CGO_ENABLED=0 go build -trimpath -o bin/crowban-mcp ./cmd/crowban-mcp
+          CGO_ENABLED=0 go build -trimpath -o bin/ravn-server ./cmd/ravn-server
+          CGO_ENABLED=0 go build -trimpath -o bin/ravn-mcp ./cmd/ravn-mcp
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

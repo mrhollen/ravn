@@ -3,7 +3,7 @@ package sqlite
 import (
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // TimestampLayout formats timestamps as fixed-width, zero-padded 9-digit UTC

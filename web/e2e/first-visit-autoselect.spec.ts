@@ -5,13 +5,13 @@
 //         and its board loads WITHOUT any manual interaction;
 //   AC2 — manual selection via the Projects dropdown still works afterwards;
 //   AC2 — a zero-project server keeps the empty state (no phantom selection).
-// Self-contained: each test spins up its OWN ephemeral crowban-server on a
+// Self-contained: each test spins up its OWN ephemeral ravn-server on a
 // random high port (never :8080) with a fresh temp DB in TOKEN-REQUIRED mode
-// (mirrors board.spec.ts's spawn pattern — plus CROWBAN_TOKEN set to a real
+// (mirrors board.spec.ts's spawn pattern — plus RAVN_TOKEN set to a real
 // value, and every REST seed call carries the Bearer header). Per-test server
 // restart is required because the three cases need mutually exclusive server
 // state (1 project / 2 projects / none); browser-side isolation comes for free
-// from Playwright's default per-test context (no stored crowban_token).
+// from Playwright's default per-test context (no stored ravn_token).
 import { test, expect } from '@playwright/test';
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import fs from 'fs';
@@ -24,7 +24,7 @@ import { expectProjectSelected, selectProjectViaDropdown } from './helpers';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'crowban-server');
+const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
 const staticDir = path.resolve(__dirname, '../dist');
 
 // A real non-empty token: the server runs in TOKEN-REQUIRED mode, so a fresh
@@ -70,7 +70,7 @@ test.describe('First-visit auth token auto-select', () => {
     }
     // Ensure server binary is built
     if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/crowban-server ./cmd/crowban-server', {
+      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
         cwd: repoRoot,
         stdio: 'inherit',
       });
@@ -80,8 +80,8 @@ test.describe('First-visit auth token auto-select', () => {
   // One fresh ephemeral server + temp DB per test (see file header for why the
   // cases cannot share a single DB).
   test.beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crowban-e2e-first-visit-'));
-    const dbPath = path.join(tempDir, 'crowban.db');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-first-visit-'));
+    const dbPath = path.join(tempDir, 'ravn.db');
 
     serverPort = await getFreePort();
     expect(serverPort).not.toBe(8080);
@@ -92,10 +92,10 @@ test.describe('First-visit auth token auto-select', () => {
     serverProcess = spawn(serverBin, [], {
       env: {
         ...process.env,
-        CROWBAN_ADDR: `127.0.0.1:${serverPort}`,
-        CROWBAN_DATA: dbPath,
-        CROWBAN_STATIC_DIR: staticDir,
-        CROWBAN_TOKEN: TOKEN,
+        RAVN_ADDR: `127.0.0.1:${serverPort}`,
+        RAVN_DATA: dbPath,
+        RAVN_STATIC_DIR: staticDir,
+        RAVN_TOKEN: TOKEN,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -199,10 +199,10 @@ test.describe('First-visit auth token auto-select', () => {
 
   /** Fresh visitor → boot 401 opens the auth modal → save TOKEN. Playwright's
    *  default `page` fixture is a brand-new browser context per test, so
-   *  localStorage (crowban_token) starts unset in every case below. */
+   *  localStorage (ravn_token) starts unset in every case below. */
   async function firstVisitSaveToken(page: import('@playwright/test').Page): Promise<void> {
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
 
     const authModal = page.locator('#cb-auth-modal');
     await expect(authModal).toBeVisible(); // auto-opened by the 401 during boot

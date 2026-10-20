@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // This file carries the slice-3b routes: the claim lease lifecycle

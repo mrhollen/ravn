@@ -7,8 +7,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { expectProjectSelected } from './helpers';
 
-// Full-page task view (/tasks/<id>) — CrowBan task 01M47MWHWW0M1Q3WZYFGFHXTYZ.
-// Self-contained like the other specs: ephemeral crowban-server on a random high
+// Full-page task view (/tasks/<id>) — Rävn task 01M47MWHWW0M1Q3WZYFGFHXTYZ.
+// Self-contained like the other specs: ephemeral ravn-server on a random high
 // port (never :8080) with a temp DB, serving the pre-built web/dist. The server
 // serves index.html for /tasks/<id> via its SPA fallback, so these are REAL
 // deep links end to end.
@@ -16,7 +16,7 @@ import { expectProjectSelected } from './helpers';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'crowban-server');
+const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
 const staticDir = path.resolve(__dirname, '../dist');
 
 const MOBILE_VIEWPORT = { width: 375, height: 812 };
@@ -89,14 +89,14 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
       execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
     }
     if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/crowban-server ./cmd/crowban-server', {
+      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
         cwd: repoRoot,
         stdio: 'inherit',
       });
     }
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crowban-e2e-fullpage-'));
-    const dbPath = path.join(tempDir, 'crowban.db');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-fullpage-'));
+    const dbPath = path.join(tempDir, 'ravn.db');
     serverPort = await getFreePort();
     expect(serverPort).not.toBe(8080);
     expect(serverPort).toBeGreaterThan(1024);
@@ -105,10 +105,10 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     serverProcess = spawn(serverBin, [], {
       env: {
         ...process.env,
-        CROWBAN_ADDR: `127.0.0.1:${serverPort}`,
-        CROWBAN_DATA: dbPath,
-        CROWBAN_STATIC_DIR: staticDir,
-        CROWBAN_TOKEN: '',
+        RAVN_ADDR: `127.0.0.1:${serverPort}`,
+        RAVN_DATA: dbPath,
+        RAVN_STATIC_DIR: staticDir,
+        RAVN_TOKEN: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -220,7 +220,7 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
   /** Load the board route and wait until the seeded project + cards render. */
   async function openBoard(page: import('@playwright/test').Page): Promise<void> {
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
     // The custom Projects dropdown trigger shows the auto-selected seeded project.
     await expectProjectSelected(page, 'Full page E2E project');
     await expect(page.locator('article', { hasText: 'Full page fixture A' })).toBeVisible();

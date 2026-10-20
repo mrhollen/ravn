@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // assertIncompleteACsError pins the unconditional done-gate rejection: a

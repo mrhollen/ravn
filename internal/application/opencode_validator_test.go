@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 func TestValidateOpenCodeServerURL(t *testing.T) {
@@ -165,7 +165,7 @@ func TestValidateOpenCodeDirectory(t *testing.T) {
 		},
 		{
 			name:    "absolute path allowed",
-			dir:     "/home/hollen/Code/crowban",
+			dir:     "/home/hollen/Code/ravn",
 			wantErr: false,
 		},
 		{
@@ -190,7 +190,7 @@ func TestValidateOpenCodeDirectory(t *testing.T) {
 		},
 		{
 			name:        "allowed directory constraint satisfied",
-			dir:         "/home/hollen/Code/crowban",
+			dir:         "/home/hollen/Code/ravn",
 			allowedDirs: "/home/hollen/Code,/tmp",
 			wantErr:     false,
 		},

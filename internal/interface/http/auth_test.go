@@ -9,16 +9,16 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/infrastructure/clock"
-	"github.com/mrhollen/crowban/internal/infrastructure/idgen"
-	"github.com/mrhollen/crowban/internal/infrastructure/sqlite"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/infrastructure/clock"
+	"github.com/mrhollen/ravn/internal/infrastructure/idgen"
+	"github.com/mrhollen/ravn/internal/infrastructure/sqlite"
 )
 
 func newAuthTestStack(t *testing.T, token string) stack {
 	t.Helper()
 	ctx := context.Background()
-	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "crowban-auth-test.db"))
+	db, closeDB, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "ravn-auth-test.db"))
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestAuthMiddleware_RejectsMissingOrInvalidToken(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// GET /api/v1/projects
-			req := httptest.NewRequest("GET", "http://crowban.test/api/v1/projects", nil)
+			req := httptest.NewRequest("GET", "http://ravn.test/api/v1/projects", nil)
 			if tc.authHeader != "" {
 				req.Header.Set("Authorization", tc.authHeader)
 			}
@@ -124,7 +124,7 @@ func TestAuthMiddleware_RejectsMissingOrInvalidToken(t *testing.T) {
 			}
 
 			// POST /api/v1/projects (mutation attempt)
-			postReq := httptest.NewRequest("POST", "http://crowban.test/api/v1/projects",
+			postReq := httptest.NewRequest("POST", "http://ravn.test/api/v1/projects",
 				jsonBytesReader(t, map[string]any{
 					"actor": actor("ada"), "name": "Should Not Exist",
 				}))
@@ -142,7 +142,7 @@ func TestAuthMiddleware_RejectsMissingOrInvalidToken(t *testing.T) {
 	}
 
 	// Verify the project was NOT created (mutation did not occur)
-	validReq := httptest.NewRequest("GET", "http://crowban.test/api/v1/projects", nil)
+	validReq := httptest.NewRequest("GET", "http://ravn.test/api/v1/projects", nil)
 	validReq.Header.Set("Authorization", "Bearer "+secret)
 	validRes := httptest.NewRecorder()
 	stk.Handler.ServeHTTP(validRes, validReq)
@@ -176,7 +176,7 @@ func TestAuthMiddleware_AcceptsValidBearerToken(t *testing.T) {
 
 	for i, h := range validHeaders {
 		t.Run("header: "+h, func(t *testing.T) {
-			req := httptest.NewRequest("POST", "http://crowban.test/api/v1/projects",
+			req := httptest.NewRequest("POST", "http://ravn.test/api/v1/projects",
 				jsonBytesReader(t, map[string]any{
 					"actor": actor("ada"), "name": "Valid Auth Project " + string(rune('A'+i)),
 				}))
@@ -209,7 +209,7 @@ func TestAuthMiddleware_HealthzAndNonAPINeverGated(t *testing.T) {
 		{"non-api invalid auth", "/non-api", "Bearer invalid-token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://crowban.test"+tc.path, nil)
+			req := httptest.NewRequest("GET", "http://ravn.test"+tc.path, nil)
 			if tc.authHeader != "" {
 				req.Header.Set("Authorization", tc.authHeader)
 			}
@@ -301,7 +301,7 @@ func TestIsSSEEventRoute(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		req := httptest.NewRequest(tt.method, "http://crowban.test"+tt.path, nil)
+		req := httptest.NewRequest(tt.method, "http://ravn.test"+tt.path, nil)
 		got := isSSEEventRoute(req)
 		if got != tt.want {
 			t.Errorf("isSSEEventRoute(%s %q) = %v, want %v", tt.method, tt.path, got, tt.want)
@@ -322,9 +322,9 @@ func TestAuthMiddleware_QueryParamToken(t *testing.T) {
 
 	// Valid token in query param succeeds without Authorization header for GET SSE event stream routes
 	sseRoutes := []string{
-		"http://crowban.test/api/v1/events?token=" + secret,
-		"http://crowban.test/api/v1/projects/123/events?token=" + secret,
-		"http://crowban.test/api/events?token=" + secret,
+		"http://ravn.test/api/v1/events?token=" + secret,
+		"http://ravn.test/api/v1/projects/123/events?token=" + secret,
+		"http://ravn.test/api/events?token=" + secret,
 	}
 	for _, u := range sseRoutes {
 		called = false
@@ -338,8 +338,8 @@ func TestAuthMiddleware_QueryParamToken(t *testing.T) {
 
 	// Invalid token in query param fails with 401 on SSE routes
 	for _, u := range []string{
-		"http://crowban.test/api/v1/events?token=wrong",
-		"http://crowban.test/api/v1/projects/123/events?token=wrong",
+		"http://ravn.test/api/v1/events?token=wrong",
+		"http://ravn.test/api/v1/projects/123/events?token=wrong",
 	} {
 		called = false
 		req := httptest.NewRequest("GET", u, nil)
@@ -355,15 +355,15 @@ func TestAuthMiddleware_QueryParamToken(t *testing.T) {
 		method string
 		url    string
 	}{
-		{"GET", "http://crowban.test/api/v1/projects?token=" + secret},
-		{"GET", "http://crowban.test/api/v1/tasks/123?token=" + secret},
-		{"POST", "http://crowban.test/api/v1/projects?token=" + secret},
-		{"POST", "http://crowban.test/api/v1/events?token=" + secret},
-		{"POST", "http://crowban.test/api/v1/projects/123/events?token=" + secret},
-		{"POST", "http://crowban.test/api/v1/tasks?token=" + secret},
-		{"PUT", "http://crowban.test/api/v1/projects/123?token=" + secret},
-		{"PATCH", "http://crowban.test/api/v1/tasks/123?token=" + secret},
-		{"DELETE", "http://crowban.test/api/v1/tasks/123?token=" + secret},
+		{"GET", "http://ravn.test/api/v1/projects?token=" + secret},
+		{"GET", "http://ravn.test/api/v1/tasks/123?token=" + secret},
+		{"POST", "http://ravn.test/api/v1/projects?token=" + secret},
+		{"POST", "http://ravn.test/api/v1/events?token=" + secret},
+		{"POST", "http://ravn.test/api/v1/projects/123/events?token=" + secret},
+		{"POST", "http://ravn.test/api/v1/tasks?token=" + secret},
+		{"PUT", "http://ravn.test/api/v1/projects/123?token=" + secret},
+		{"PATCH", "http://ravn.test/api/v1/tasks/123?token=" + secret},
+		{"DELETE", "http://ravn.test/api/v1/tasks/123?token=" + secret},
 	}
 	for _, tc := range nonSSERoutes {
 		called = false

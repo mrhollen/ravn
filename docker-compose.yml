@@ -1,38 +1,38 @@
-# crowban — compose stack (slice 6, ARCHITECTURE §8).
+# ravn — compose stack (slice 6, ARCHITECTURE §8).
 #
 # One Dockerfile, two build targets (see Dockerfile stage comments). The
-# SQLite database lives in the named volume `crowban-data` so it survives
+# SQLite database lives in the named volume `ravn-data` so it survives
 # container rebuilds/restarts; keep that volume on a local disk — never bind
 # mount it from NFS/CIFS (WAL misbehaves there).
 #
 # Host-side ports are overridable via .env (copied from .env.example) or the
 # environment — compose interpolates ${VAR:-default} automatically:
-#   CROWBAN_BIND_IP      default 127.0.0.1 (loopback; set to 0.0.0.0 only with CROWBAN_TOKEN set!)
-#   CROWBAN_SERVER_PORT  default 3311   (crowban-server publishes :8080 inside)
-#   CROWBAN_MCP_PORT     default 9311   (crowban-mcp    publishes :9080 inside)
+#   RAVN_BIND_IP      default 127.0.0.1 (loopback; set to 0.0.0.0 only with RAVN_TOKEN set!)
+#   RAVN_SERVER_PORT  default 3311   (ravn-server publishes :8080 inside)
+#   RAVN_MCP_PORT     default 9311   (ravn-mcp    publishes :9080 inside)
 # Containers ALWAYS listen on 8080/9080 internally; only the host mapping
 # changes, which keeps the MCP container's upstream URL stable.
 
 services:
-  crowban-server:
-    image: ${CROWBAN_IMAGE:-forgejo.lan:80/mrhollen/crowban:latest}
+  ravn-server:
+    image: ${RAVN_IMAGE:-forgejo.lan:80/mrhollen/ravn:latest}
     build:
       context: .
       target: server-runtime
     ports:
-      - "${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_SERVER_PORT:-3311}:8080"
+      - "${RAVN_BIND_IP:-127.0.0.1}:${RAVN_SERVER_PORT:-3311}:8080"
     environment:
-      CROWBAN_ADDR: ":8080"
-      CROWBAN_DATA: "/data/crowban.db"
-      CROWBAN_STATIC_DIR: "/app/public" # UI is baked into the image (web-build stage)
-      CROWBAN_ARTIFACTS_DIR: "/artifacts"
-      CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
+      RAVN_ADDR: ":8080"
+      RAVN_DATA: "/data/ravn.db"
+      RAVN_STATIC_DIR: "/app/public" # UI is baked into the image (web-build stage)
+      RAVN_ARTIFACTS_DIR: "/artifacts"
+      RAVN_TOKEN: "${RAVN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
       OPENCODE_MODEL: "${OPENCODE_MODEL:-llama.cpp/Qwen Medium Long Context}" # default model for autonomous sessions
       OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
       OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)
     volumes:
-      - crowban-data:/data
-      - crowban-artifacts:/artifacts
+      - ravn-data:/data
+      - ravn-artifacts:/artifacts
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 15s
@@ -40,21 +40,21 @@ services:
       start_period: 10s # first boot runs SQL migrations
       retries: 3
 
-  crowban-mcp:
-    image: ${CROWBAN_IMAGE:-forgejo.lan:80/mrhollen/crowban:latest}
-    entrypoint: ["crowban-mcp"]
+  ravn-mcp:
+    image: ${RAVN_IMAGE:-forgejo.lan:80/mrhollen/ravn:latest}
+    entrypoint: ["ravn-mcp"]
     build:
       context: .
       target: server-runtime
     ports:
-      - "${CROWBAN_BIND_IP:-127.0.0.1}:${CROWBAN_MCP_PORT:-9311}:9080"
+      - "${RAVN_BIND_IP:-127.0.0.1}:${RAVN_MCP_PORT:-9311}:9080"
     environment:
       MCP_ADDR: ":9080"
-      CROWBAN_API_URL: "http://crowban-server:8080" # compose service DNS — no IPs, no host assumptions
-      CROWBAN_TOKEN: "${CROWBAN_TOKEN:-}" # forwarded as Bearer to the API when set
-      CROWBAN_AGENT_NAME: "${CROWBAN_AGENT_NAME:-agent}" # actor stamped when a tool call omits one
+      RAVN_API_URL: "http://ravn-server:8080" # compose service DNS — no IPs, no host assumptions
+      RAVN_TOKEN: "${RAVN_TOKEN:-}" # forwarded as Bearer to the API when set
+      RAVN_AGENT_NAME: "${RAVN_AGENT_NAME:-agent}" # actor stamped when a tool call omits one
     depends_on:
-      crowban-server:
+      ravn-server:
         condition: service_healthy # mcp /healthz proxies upstream, so it only turns healthy once the server (and its DB) do
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9080/healthz"]
@@ -64,5 +64,5 @@ services:
       retries: 3
 
 volumes:
-  crowban-data:
-  crowban-artifacts:
+  ravn-data:
+  ravn-artifacts:

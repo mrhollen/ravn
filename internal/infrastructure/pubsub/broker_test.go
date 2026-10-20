@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 func TestBroker_ProjectScopingAndFanOut(t *testing.T) {

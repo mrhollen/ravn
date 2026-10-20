@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // acceptanceCriterionRepo implements application.AcceptanceCriterionRepository

@@ -1,6 +1,6 @@
-// Package apiclient is a typed, stdlib-only HTTP client for the crowban REST
+// Package apiclient is a typed, stdlib-only HTTP client for the ravn REST
 // API documented in docs/API.md (base path /api/v1). It is consumed only by
-// the crowban-mcp binary and is never imported by cmd/crowban-server.
+// the ravn-mcp binary and is never imported by cmd/ravn-server.
 //
 // The DTO types below mirror the API.md wire contract field-for-field, so a
 // value decoded here and re-encoded is byte-compatible with what the server
@@ -10,7 +10,7 @@ package apiclient
 
 import "time"
 
-// DefaultTimeout bounds every request made through Client. crowban is a
+// DefaultTimeout bounds every request made through Client. ravn is a
 // LAN-local service; 10s is generous for any of its round-trips.
 const DefaultTimeout = 10 * time.Second
 

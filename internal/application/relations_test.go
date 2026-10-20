@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/domain"
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // Unit tests for the Relations use case (slice 2D2a): parent/child

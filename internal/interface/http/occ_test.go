@@ -36,7 +36,7 @@ func patchRace(stk stack, taskID string, version int, title string) (raceOutcome
 	if err != nil {
 		return raceOutcome{}, err
 	}
-	req, err := http.NewRequest(http.MethodPatch, "http://crowban.test/api/v1/tasks/"+taskID, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPatch, "http://ravn.test/api/v1/tasks/"+taskID, bytes.NewReader(body))
 	if err != nil {
 		return raceOutcome{}, err
 	}

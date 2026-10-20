@@ -21,10 +21,10 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
-	"github.com/mrhollen/crowban/internal/infrastructure/apiclient"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
 )
 
-// --- deterministic mock upstream (simulates crowban-server; fixed data, no sleeps) ---
+// --- deterministic mock upstream (simulates ravn-server; fixed data, no sleeps) ---
 
 const mockProjectsBody = `{"projects":[{"id":"P1","name":"Website Redesign","description":"MVP landing page work","created_at":"2026-09-20T09:00:00Z","updated_at":"2026-09-20T09:00:00Z","task_counts":{"todo":3,"doing":1,"done":5}},{"id":"P2","name":"Agent Ops","created_at":"2026-09-19T09:00:00Z","updated_at":"2026-09-19T09:00:00Z","task_counts":{"todo":0,"doing":0,"done":0}}],"total":2}`
 
@@ -62,7 +62,7 @@ type capturedCall struct {
 	auth   string
 }
 
-// newMockUpstream stands up a fake crowban-server. Every route answers with
+// newMockUpstream stands up a fake ravn-server. Every route answers with
 // fixed data:
 //   - POST /tasks/{id}/claim returns the conflict body verbatim for id "HOLDING"
 //     and echoes the requesting actor as claimed_by otherwise (and records every
@@ -394,9 +394,13 @@ func startMCPStack(t *testing.T, upstreamURL string) *httptest.Server {
 
 func startMCPStackWithToken(t *testing.T, upstreamURL, token string) *httptest.Server {
 	t.Helper()
+	agentName := os.Getenv("RAVN_AGENT_NAME")
+	if agentName == "" {
+		agentName = "default-agent"
+	}
 	api := apiclient.New(upstreamURL, token)
-	mcs := mcpsrv.NewMCPServer("crowban", "test-version", ServerOptions()...)
-	RegisterTools(mcs, api, apiclient.Actor{Type: "agent", Name: "default-agent"})
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version", ServerOptions()...)
+	RegisterTools(mcs, api, apiclient.Actor{Type: "agent", Name: agentName})
 	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
 		mcpsrv.WithStateLess(true),
 		mcpsrv.WithEndpointPath("/mcp"),
@@ -416,11 +420,15 @@ func dial(t *testing.T, mcpURL string, ctx context.Context) *mcpclient.Client {
 		t.Fatalf("NewStreamableHTTP: %v", err)
 	}
 	c := mcpclient.NewClient(tr)
-	if _, err := c.Initialize(ctx, mcpgo.InitializeRequest{Params: mcpgo.InitializeParams{
+	initRes, err := c.Initialize(ctx, mcpgo.InitializeRequest{Params: mcpgo.InitializeParams{
 		ProtocolVersion: mcpgo.LATEST_PROTOCOL_VERSION,
-		ClientInfo:      mcpgo.Implementation{Name: "crowban-mcp-test", Version: "0"},
-	}}); err != nil {
+		ClientInfo:      mcpgo.Implementation{Name: "ravn-mcp-test", Version: "0"},
+	}})
+	if err != nil {
 		t.Fatalf("mcp initialize: %v", err)
+	}
+	if initRes.ServerInfo.Name != "ravn" {
+		t.Fatalf("MCP server name = %q, want %q", initRes.ServerInfo.Name, "ravn")
 	}
 	return c
 }
@@ -489,7 +497,7 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 	c := dial(t, mcpSrv.URL, ctx)
 	defer func() { _ = c.Close() }()
 
-	// tools/list shows exactly the 14 crowban tools.
+	// tools/list shows exactly the 17 ravn tools.
 	list, err := c.ListTools(ctx, mcpgo.ListToolsRequest{})
 	if err != nil {
 		t.Fatalf("tools/list: %v", err)
@@ -604,7 +612,7 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 		t.Fatalf("fallback claim body not JSON: %v (%s)", err, fallback.body)
 	}
 	if fb.Actor.Name != "default-agent" || fb.Actor.Type != "agent" {
-		t.Errorf("fallback actor = %+v, want agent default-agent (CROWBAN_AGENT_NAME semantics)", fb.Actor)
+		t.Errorf("fallback actor = %+v, want agent default-agent (RAVN_AGENT_NAME semantics)", fb.Actor)
 	}
 
 	// list_projects returns the projects+counts envelope.
@@ -1430,3 +1438,54 @@ func TestMCPTokenForwardingEndToEnd(t *testing.T) {
 		t.Errorf("expected unauthorized in error response, got %q", emptyText)
 	}
 }
+
+func TestMCPServerNameAndActorFallback(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const customAgent = "custom-ravn-agent"
+	t.Setenv("RAVN_AGENT_NAME", customAgent)
+
+	upstream, claims, _ := newMockUpstream(t)
+	mcpSrv := startMCPStack(t, upstream.URL)
+
+	tr, err := mcptransport.NewStreamableHTTP(mcpSrv.URL + "/mcp")
+	if err != nil {
+		t.Fatalf("NewStreamableHTTP: %v", err)
+	}
+	c := mcpclient.NewClient(tr)
+	initRes, err := c.Initialize(ctx, mcpgo.InitializeRequest{Params: mcpgo.InitializeParams{
+		ProtocolVersion: mcpgo.LATEST_PROTOCOL_VERSION,
+		ClientInfo:      mcpgo.Implementation{Name: "ravn-mcp-test", Version: "0"},
+	}})
+	if err != nil {
+		t.Fatalf("mcp initialize: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	// Assert MCP server name is ravn
+	if initRes.ServerInfo.Name != "ravn" {
+		t.Errorf("ServerInfo.Name = %q, want %q", initRes.ServerInfo.Name, "ravn")
+	}
+
+	// Assert actor fallback uses RAVN_AGENT_NAME
+	res := callTool(t, c, ctx, "claim_task", map[string]any{
+		"id": "T1",
+	})
+	if res.IsError {
+		t.Fatalf("claim_task returned error: %s", firstText(t, res))
+	}
+	if len(*claims) != 1 {
+		t.Fatalf("upstream saw %d claims, want 1: %+v", len(*claims), *claims)
+	}
+	var fb struct {
+		Actor apiclient.Actor `json:"actor"`
+	}
+	if err := json.Unmarshal([]byte((*claims)[0].body), &fb); err != nil {
+		t.Fatalf("claim body not JSON: %v (%s)", err, (*claims)[0].body)
+	}
+	if fb.Actor.Name != customAgent || fb.Actor.Type != "agent" {
+		t.Errorf("fallback actor = %+v, want agent %q from RAVN_AGENT_NAME", fb.Actor, customAgent)
+	}
+}
+

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'crowban-server');
+const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
 const staticDir = path.resolve(__dirname, '../dist');
 
 // iPhone-class viewport: 375px wide (the AC reference width), touch enabled.
@@ -63,14 +63,14 @@ test.describe('Mobile experience (375px, touch)', () => {
       execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
     }
     if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/crowban-server ./cmd/crowban-server', {
+      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
         cwd: repoRoot,
         stdio: 'inherit',
       });
     }
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crowban-e2e-mobile-'));
-    const dbPath = path.join(tempDir, 'crowban.db');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-mobile-'));
+    const dbPath = path.join(tempDir, 'ravn.db');
     serverPort = await getFreePort();
     expect(serverPort).not.toBe(8080);
     expect(serverPort).toBeGreaterThan(1024);
@@ -79,10 +79,10 @@ test.describe('Mobile experience (375px, touch)', () => {
     serverProcess = spawn(serverBin, [], {
       env: {
         ...process.env,
-        CROWBAN_ADDR: `127.0.0.1:${serverPort}`,
-        CROWBAN_DATA: dbPath,
-        CROWBAN_STATIC_DIR: staticDir,
-        CROWBAN_TOKEN: '',
+        RAVN_ADDR: `127.0.0.1:${serverPort}`,
+        RAVN_DATA: dbPath,
+        RAVN_STATIC_DIR: staticDir,
+        RAVN_TOKEN: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -167,7 +167,7 @@ test.describe('Mobile experience (375px, touch)', () => {
       uncaughtConsoleErrors.push(`[uncaught pageerror] ${err.message}`);
     });
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
     // The seeded project is auto-selected by the app on load — the custom
     // Projects dropdown trigger shows it.
     const trigger = page.getByTestId('project-select');
@@ -529,7 +529,7 @@ test.describe('Mobile experience (375px, touch)', () => {
     page.on('pageerror', (err) => errors.push(`[uncaught pageerror] ${err.message}`));
 
     await page.goto(serverUrl);
-    await expect(page).toHaveTitle('crowban');
+    await expect(page).toHaveTitle('Rävn');
 
     // Below md a card click opens the full-page view — the mobile fallback skin.
     const card = page.locator('article', { hasText: 'Long title that used to wrap every word' });

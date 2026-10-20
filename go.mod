@@ -1,4 +1,4 @@
-module github.com/mrhollen/crowban
+module github.com/mrhollen/ravn
 
 go 1.25.5
 

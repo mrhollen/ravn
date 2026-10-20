@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhollen/crowban/internal/application"
-	"github.com/mrhollen/crowban/internal/domain"
-	"github.com/mrhollen/crowban/internal/infrastructure/idgen"
+	"github.com/mrhollen/ravn/internal/application"
+	"github.com/mrhollen/ravn/internal/domain"
+	"github.com/mrhollen/ravn/internal/infrastructure/idgen"
 )
 
 // seqID returns a fixed 26-character Crockford-base32 id (ULID-shaped, all
@@ -23,7 +23,7 @@ func seqID(n int) domain.ID {
 // TestEventStore_ListAfterProject proves the SSE replay read: only events of
 // the given project strictly after the cursor, in ascending (chronological)
 // id order — other projects and NULL-project rows never match. It also covers
-// the exported pool-bound constructor used by cmd/crowban-server for replay.
+// the exported pool-bound constructor used by cmd/ravn-server for replay.
 func TestEventStore_ListAfterProject(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
