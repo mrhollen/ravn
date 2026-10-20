@@ -116,6 +116,9 @@ export interface TaskSummary {
   ac_total?: number; // acceptance-criteria count, omitted when none
   ac_done?: number; // how many of them are done
   comment_count?: number; // comment-thread length, omitted when zero
+  subtask_total?: number; // subtask count, omitted when none
+  subtask_done?: number; // how many of them are done
+  blockers?: BlockerRef[]; // open blockers for this task (omitted when empty)
 }
 
 export interface BlockerRef {

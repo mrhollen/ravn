@@ -150,6 +150,15 @@ type TaskACProgress struct {
 	Done  int64
 }
 
+// TaskSubtaskProgress is one (task, total, done) aggregate produced by
+// RelationRepository.SubtaskProgressByParents. It is a port-level result
+// shape, not a domain entity: board snapshots fold it into summary-row
+// subtask_total/subtask_done fields so parent cards can render subtask progress.
+type TaskSubtaskProgress struct {
+	Total int64
+	Done  int64
+}
+
 // TaskRepository persists tasks and their ephemeral claim leases. Concurrency
 // notes:
 //
@@ -199,6 +208,11 @@ type TaskRepository interface {
 	// Title and Status are populated; every other field of domain.Task is
 	// zero.
 	BlockersOf(ctx context.Context, taskID domain.ID) ([]domain.Task, error)
+
+	// OpenBlockersByTasks returns the list of open blockers for each task ID
+	// in taskIDs: targets of outgoing 'blocked-by' edges that are not done and
+	// not archived, in edge-creation order.
+	OpenBlockersByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID][]domain.Task, error)
 
 	// Update performs the version-guarded write above and returns the fresh
 	// row. It returns *domain.ConflictError (carrying the fresh row) when the
@@ -321,6 +335,11 @@ type RelationRepository interface {
 	// ListByTask returns every edge touching taskID in either direction, so
 	// get_task can render the relations section and compute "blocked".
 	ListByTask(ctx context.Context, taskID domain.ID) ([]domain.Relation, error)
+
+	// SubtaskProgressByParents returns (total, done) child task aggregates for
+	// each given parent task ID in parentIDs: a child task counts if it has a
+	// stored (child_id, parent_id, 'child') edge and is not archived.
+	SubtaskProgressByParents(ctx context.Context, parentIDs []domain.ID) (map[domain.ID]TaskSubtaskProgress, error)
 }
 
 // EventStore is the append-only activity log (the `event` table). Use cases

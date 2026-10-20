@@ -1782,6 +1782,90 @@ func TestBoardSnapshot(t *testing.T) {
 	}
 }
 
+func TestBoard_BlockersAndSubtasks(t *testing.T) {
+	t.Parallel()
+	stk := newStack(t)
+	p := createProject(t, stk, "Board Relations Test")
+
+	parent := makeTask(t, stk, p.ID, "Parent Epic", nil)
+	child1 := makeTask(t, stk, p.ID, "Child One", nil)
+	child2 := makeTask(t, stk, p.ID, "Child Two", nil)
+	blocked := makeTask(t, stk, p.ID, "Blocked Task", nil)
+
+	// Relate child1 and child2 to parent
+	doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child1.ID+"/relations", map[string]any{
+		"actor": map[string]any{"name": "test"}, "other_id": parent.ID, "kind": "child",
+	})
+	doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child2.ID+"/relations", map[string]any{
+		"actor": map[string]any{"name": "test"}, "other_id": parent.ID, "kind": "child",
+	})
+
+	// Relate blocked to child1 as blocked-by
+	doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+blocked.ID+"/relations", map[string]any{
+		"actor": map[string]any{"name": "test"}, "other_id": child1.ID, "kind": "blocked-by",
+	})
+
+	// Mark child1 as done
+	patchTask(t, stk, child1.ID, 1, map[string]any{"status": "doing"})
+	patchTask(t, stk, child1.ID, 2, map[string]any{"status": "done"})
+
+	// Fetch board
+	code, body := doReq(t, stk.Handler, "GET", "/api/v1/projects/"+p.ID+"/board", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET board = %d, want 200", code)
+	}
+	b := mustDecode[boardResponse](t, body)
+
+	findRow := func(id string) *taskSummaryDTO {
+		for _, col := range [][]taskSummaryDTO{b.Tasks.Todo, b.Tasks.Doing, b.Tasks.Done} {
+			for i := range col {
+				if col[i].ID == id {
+					return &col[i]
+				}
+			}
+		}
+		return nil
+	}
+
+	pRow := findRow(parent.ID)
+	if pRow == nil {
+		t.Fatalf("parent row missing from board")
+	}
+	if pRow.SubtaskTotal != 2 || pRow.SubtaskDone != 1 {
+		t.Fatalf("parent subtask progress = %d/%d, want 1/2", pRow.SubtaskDone, pRow.SubtaskTotal)
+	}
+
+	// Blocked task is blocked by child1, but child1 is done! So blocked task has 0 open blockers!
+	blkRow := findRow(blocked.ID)
+	if blkRow == nil {
+		t.Fatalf("blocked row missing from board")
+	}
+	if len(blkRow.Blockers) != 0 {
+		t.Fatalf("blocked task has blockers %+v, want none (blocker is done)", blkRow.Blockers)
+	}
+
+	// Now add an OPEN blocker: blocked is blocked-by child2 (which is in todo)
+	doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+blocked.ID+"/relations", map[string]any{
+		"actor": map[string]any{"name": "test"}, "other_id": child2.ID, "kind": "blocked-by",
+	})
+
+	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects/"+p.ID+"/board", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET board = %d, want 200", code)
+	}
+	b = mustDecode[boardResponse](t, body)
+	blkRow = findRow(blocked.ID)
+	if blkRow == nil {
+		t.Fatalf("blocked row missing")
+	}
+	if len(blkRow.Blockers) != 1 {
+		t.Fatalf("blocked task blockers count = %d, want 1", len(blkRow.Blockers))
+	}
+	if blkRow.Blockers[0].ID != child2.ID || blkRow.Blockers[0].Title != "Child Two" {
+		t.Fatalf("blocker = %+v, want child2", blkRow.Blockers[0])
+	}
+}
+
 func TestDeleteEndpoints_ActorHeadersAndQueryParams(t *testing.T) {
 	t.Parallel()
 	stk := newStack(t)

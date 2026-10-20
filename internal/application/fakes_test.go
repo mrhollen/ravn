@@ -160,6 +160,20 @@ func (f *fakeTasks) BlockersOf(ctx context.Context, taskID domain.ID) ([]domain.
 	return out, nil
 }
 
+func (f *fakeTasks) OpenBlockersByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID][]domain.Task, error) {
+	out := make(map[domain.ID][]domain.Task, len(taskIDs))
+	for _, id := range taskIDs {
+		blks, err := f.BlockersOf(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if len(blks) > 0 {
+			out[id] = blks
+		}
+	}
+	return out, nil
+}
+
 // hasOpenBlocker reports whether t carries an outgoing blocked-by edge whose
 // target is not done and not archived — the in-memory twin of SQLite's
 // UnblockedOnly NOT EXISTS guard (slice 2D2b). Note a task that IS somebody's
@@ -646,6 +660,7 @@ func (f *fakeArtifacts) ListByTask(_ context.Context, taskID domain.ID) ([]domai
 // are returned by ListByTask; Add/Remove keep minimal upsert/delete semantics.
 type fakeRelations struct {
 	edges []domain.Relation
+	tasks *fakeTasks
 }
 
 func newFakeRelations() *fakeRelations { return &fakeRelations{} }
@@ -684,6 +699,38 @@ func (f *fakeRelations) ListByTask(_ context.Context, taskID domain.ID) ([]domai
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (f *fakeRelations) SubtaskProgressByParents(_ context.Context, parentIDs []domain.ID) (map[domain.ID]TaskSubtaskProgress, error) {
+	out := make(map[domain.ID]TaskSubtaskProgress, len(parentIDs))
+	parentSet := make(map[domain.ID]struct{}, len(parentIDs))
+	for _, pid := range parentIDs {
+		parentSet[pid] = struct{}{}
+	}
+	for _, e := range f.edges {
+		if e.Kind != domain.RelationChild {
+			continue
+		}
+		if _, ok := parentSet[e.OtherTaskID]; !ok {
+			continue
+		}
+		var childTask *domain.Task
+		if f.tasks != nil {
+			if t, ok := f.tasks.byID[e.TaskID]; ok {
+				childTask = &t
+			}
+		}
+		if childTask != nil && childTask.Archived {
+			continue
+		}
+		prog := out[e.OtherTaskID]
+		prog.Total++
+		if childTask != nil && childTask.Status == domain.StatusDone {
+			prog.Done++
+		}
+		out[e.OtherTaskID] = prog
+	}
 	return out, nil
 }
 
@@ -778,6 +825,7 @@ func newFakeUoW(projects *fakeProjects, events *fakeEvents) *fakeUoW {
 		events:    events,
 	}
 	u.tasks.rel = u.relations // relation-aware List (UnblockedOnly) + BlockersOf (slice 2D2b)
+	u.relations.tasks = u.tasks
 	return u
 }
 

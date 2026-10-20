@@ -766,16 +766,90 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                           <span class="truncate font-medium text-indigo-700 dark:text-indigo-300" x-text="claimHint(task)"></span>
                         </div>
 
+                        <!-- Parent task subtask completion counter and mini progress bar (AC2) -->
+                        <div x-show="(task.subtask_total ?? 0) > 0" x-cloak
+                             data-testid="card-subtask-progress"
+                             :title="(task.subtask_done ?? 0) + ' of ' + task.subtask_total + ' subtasks done'"
+                             class="mt-2 flex flex-col gap-1 rounded border border-zinc-200/90 bg-zinc-50/80 p-1.5 dark:border-zinc-700/70 dark:bg-zinc-800/60">
+                          <div class="flex items-center justify-between text-[11px] font-medium leading-none">
+                            <span class="inline-flex items-center gap-1"
+                                  :class="(task.subtask_done ?? 0) >= task.subtask_total
+                                    ? 'text-emerald-700 dark:text-emerald-400 font-semibold'
+                                    : 'text-zinc-700 dark:text-zinc-300'">
+                              <svg class="h-3 w-3 shrink-0 text-zinc-400 dark:text-zinc-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h6a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+                              </svg>
+                              <span x-text="(task.subtask_done ?? 0) + '/' + task.subtask_total + ' subtasks done'"></span>
+                            </span>
+                            <span class="text-[10px] text-zinc-500 dark:text-zinc-400"
+                                  x-text="Math.round(((task.subtask_done ?? 0) / (task.subtask_total || 1)) * 100) + '%'"></span>
+                          </div>
+                          <!-- Mini progress bar -->
+                          <div class="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700" data-testid="card-subtask-bar">
+                            <div class="h-full rounded-full transition-all duration-300"
+                                 :class="(task.subtask_done ?? 0) >= task.subtask_total ? 'bg-emerald-500' : 'bg-indigo-500'"
+                                 :style="'width: ' + Math.min(100, Math.round(((task.subtask_done ?? 0) / (task.subtask_total || 1)) * 100)) + '%'">
+                            </div>
+                          </div>
+                        </div>
+
                         <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
                           <!-- Task short ID: the card's identity chip — muted monospace,
                                full ULID in the title for copy/lookup. -->
                           <span data-testid="card-short-id" :title="'Task ' + task.id"
                                 class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] leading-none text-zinc-500 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
                                 x-text="shortId(task.id)"></span>
-                          <span x-show="isBlocked(task.id)" x-cloak title="Has an open blocker"
-                                class="inline-flex items-center gap-1 font-semibold text-red-600 dark:text-red-400">
-                            <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span> blocked
-                          </span>
+                          <!-- Prominent blocker badge with tooltip/popover (AC1) -->
+                          <div x-show="isBlocked(task.id)" x-cloak
+                               class="relative inline-flex items-center"
+                               @click.outside="blockerPopoverTaskId === task.id ? blockerPopoverTaskId = null : null">
+                            <button type="button"
+                                    @click.stop="toggleBlockerPopover(task.id)"
+                                    data-testid="card-blocker-badge"
+                                    :title="blockerTooltipText(task)"
+                                    :aria-expanded="blockerPopoverTaskId === task.id ? 'true' : 'false'"
+                                    class="tap-target-exempt inline-flex items-center gap-1 rounded bg-red-50 px-1.5 py-0.5 text-[11px] font-semibold text-red-700 ring-1 ring-red-200 transition hover:bg-red-100 hover:text-red-800 dark:bg-red-950/80 dark:text-red-300 dark:ring-red-800 dark:hover:bg-red-900/80">
+                              <svg class="h-3 w-3 shrink-0 text-red-600 dark:text-red-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                <path fill-rule="evenodd" d="M10 2a4 4 0 00-4 4v2H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-1V6a4 4 0 00-4-4zm2 6V6a2 2 0 10-4 0v2h4zm-3 5a1 1 0 112 0v2a1 1 0 11-2 0v-2z" clip-rule="evenodd"/>
+                              </svg>
+                              <span>blocked</span>
+                              <template x-if="taskBlockers(task).length > 0">
+                                <span class="font-bold" x-text="'(' + taskBlockers(task).length + ')'"></span>
+                              </template>
+                            </button>
+
+                            <!-- Tooltip/popover showing which tasks are blocking it -->
+                            <template x-if="blockerPopoverTaskId === task.id">
+                              <div data-testid="card-blocker-popover"
+                                   @click.stop
+                                   class="absolute bottom-full left-0 z-30 mb-1.5 w-64 rounded-lg border border-red-200 bg-white p-2.5 shadow-xl dark:border-red-900/70 dark:bg-zinc-800">
+                                <div class="flex items-center justify-between pb-1.5 border-b border-zinc-100 dark:border-zinc-700">
+                                  <span class="text-xs font-semibold text-red-700 dark:text-red-400 flex items-center gap-1">
+                                    <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2a4 4 0 00-4 4v2H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-1V6a4 4 0 00-4-4zm2 6V6a2 2 0 10-4 0v2h4z" clip-rule="evenodd"/></svg>
+                                    <span>Blocked by</span>
+                                  </span>
+                                  <button type="button" @click.stop="blockerPopoverTaskId = null" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 text-xs font-bold leading-none" aria-label="Close popover">✕</button>
+                                </div>
+                                <div class="mt-2 flex flex-col gap-1.5 max-h-48 overflow-y-auto">
+                                  <template x-if="taskBlockers(task).length === 0">
+                                    <p class="text-xs text-zinc-500 italic">Open blocker detected. Click task card to inspect details.</p>
+                                  </template>
+                                  <template x-for="b in taskBlockers(task)" :key="b.id">
+                                    <button type="button" @click.stop="openTask(b.id); blockerPopoverTaskId = null"
+                                            class="flex items-center justify-between gap-1.5 rounded p-1 text-left text-xs hover:bg-zinc-50 dark:hover:bg-zinc-700/60 transition group">
+                                      <div class="min-w-0 flex-1 truncate">
+                                        <span class="font-mono text-[10px] text-zinc-400 mr-1" x-text="shortId(b.id)"></span>
+                                        <span class="font-medium text-zinc-800 group-hover:underline dark:text-zinc-200" x-text="b.title"></span>
+                                      </div>
+                                      <span class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                                            :class="b.status === 'done' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : (b.status === 'doing' ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300')"
+                                            x-text="statusLabel(b.status)"></span>
+                                    </button>
+                                  </template>
+                                </div>
+                              </div>
+                            </template>
+                          </div>
                           <span x-show="task.due_at" x-cloak :title="'Due ' + task.due_at"
                                 class="inline-flex items-center gap-1"
                                 :class="isOverdue(task) ? 'font-semibold text-red-600 dark:text-red-400' : ''">
@@ -1653,16 +1727,30 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     </div>
                   </template>
 
-                  <!-- Row 3: Blocked Strip -->
+                  <!-- Row 3: Blocked Strip (AC3) -->
                   <div x-show="detail.blocked" x-cloak
-                       class="flex flex-wrap items-center gap-2 px-3 py-2 text-red-600 dark:text-red-400">
-                    <span class="h-2 w-2 shrink-0 rounded-full bg-red-500"></span>
-                    <span class="font-semibold">Blocked by:</span>
-                    <template x-for="b in detail.blockers" :key="b.id">
-                      <button type="button" @click="openTask(b.id)"
-                              class="underline decoration-red-400/60 hover:text-red-800 dark:hover:text-red-200"
-                              x-text="b.title + ' (' + b.status + ')'"></button>
-                    </template>
+                       data-testid="detail-blocked-banner"
+                       class="flex flex-col gap-2 rounded-lg border border-red-200 bg-red-50/90 p-3 text-xs dark:border-red-900/70 dark:bg-red-950/50">
+                    <div class="flex items-center gap-2 font-semibold text-red-700 dark:text-red-300">
+                      <svg class="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 2a4 4 0 00-4 4v2H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-1V6a4 4 0 00-4-4zm2 6V6a2 2 0 10-4 0v2h4zm-3 5a1 1 0 112 0v2a1 1 0 11-2 0v-2z" clip-rule="evenodd"/>
+                      </svg>
+                      <span class="font-semibold">Blocked by:</span>
+                      <span class="text-xs font-normal text-red-600 dark:text-red-400"
+                            x-text="(detail.blockers ? detail.blockers.length : 0) + ' open ' + ((detail.blockers ? detail.blockers.length : 0) === 1 ? 'blocker' : 'blockers') + ' must be resolved before this task can be completed'"></span>
+                    </div>
+                    <div class="flex flex-wrap gap-2 pt-1">
+                      <template x-for="b in detail.blockers" :key="b.id">
+                        <button type="button" @click="openTask(b.id)"
+                                class="inline-flex items-center gap-1.5 rounded-md border border-red-300 bg-white px-2.5 py-1 text-xs font-medium text-red-800 shadow-sm transition hover:bg-red-50 hover:border-red-400 dark:border-red-800 dark:bg-zinc-900 dark:text-red-200 dark:hover:bg-zinc-800">
+                          <span class="font-mono text-[10px] text-red-500" x-text="shortId(b.id)"></span>
+                          <span class="underline decoration-red-400/60" x-text="b.title"></span>
+                          <span class="rounded px-1.5 py-0.2 text-[10px] font-semibold"
+                                :class="b.status === 'doing' ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' : 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'"
+                                x-text="statusLabel(b.status)"></span>
+                        </button>
+                      </template>
+                    </div>
                   </div>
                 </div>
 
@@ -1937,18 +2025,54 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </section>
 
                 <!-- relations -->
-                <section :class="fullPageOpen ? 'border-t border-zinc-200 pt-3 dark:border-zinc-800' : ''">
-                  <h3 class="section-title mb-2">Relations</h3>
+                <section :class="fullPageOpen ? 'border-t border-zinc-200 pt-3 dark:border-zinc-800' : ''" data-testid="detail-relations-section">
+                  <div class="flex items-center justify-between mb-2">
+                    <h3 class="section-title mb-0">Relations</h3>
+                    <template x-if="relationRows().length > 0">
+                      <span class="text-xs text-zinc-500 dark:text-zinc-400" x-text="'(' + relationRows().length + ')'"></span>
+                    </template>
+                  </div>
+
+                  <!-- Subtasks progress in detail if this task has children (AC2/AC3) -->
+                  <div x-show="detailSubtaskTotal() > 0" x-cloak
+                       data-testid="detail-subtask-progress"
+                       class="mb-3 flex flex-col gap-1.5 rounded-lg border border-indigo-200/80 bg-indigo-50/60 p-2.5 text-xs dark:border-indigo-900/60 dark:bg-indigo-950/40">
+                    <div class="flex items-center justify-between text-indigo-900 dark:text-indigo-200">
+                      <span class="font-medium flex items-center gap-1.5">
+                        <svg class="h-3.5 w-3.5 text-indigo-500" viewBox="0 0 20 20" fill="currentColor">
+                          <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h6a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+                        </svg>
+                        <span>Subtasks:</span>
+                        <b x-text="detailSubtaskDone() + '/' + detailSubtaskTotal() + ' done'"></b>
+                      </span>
+                      <span class="text-[11px] font-semibold" x-text="detailSubtaskPercent() + '%'"></span>
+                    </div>
+                    <div class="h-1.5 w-full overflow-hidden rounded-full bg-indigo-200 dark:bg-indigo-900">
+                      <div class="h-full rounded-full bg-indigo-600 transition-all duration-300 dark:bg-indigo-400"
+                           :style="'width: ' + detailSubtaskPercent() + '%'"></div>
+                    </div>
+                  </div>
+
                   <template x-if="relationRows().length > 0">
-                    <ul class="flex flex-col gap-1.5 mb-3">
+                    <ul class="flex flex-col gap-1.5 mb-3" data-testid="detail-relations-list">
                       <template x-for="r in relationRows()" :key="r.key">
-                        <li class="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm dark:border-zinc-700 dark:bg-zinc-800">
+                        <li class="flex items-center justify-between gap-2 rounded-lg border p-2 text-sm shadow-sm transition"
+                            :class="r.isBlocker
+                              ? 'border-red-200 bg-red-50/40 dark:border-red-900/50 dark:bg-red-950/20'
+                              : 'border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800'">
                           <div class="flex items-center gap-2 min-w-0 truncate">
-                            <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600 shrink-0 dark:bg-zinc-700 dark:text-zinc-300"
+                            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold shrink-0"
+                                  :class="r.badgeClass"
                                   x-text="r.label"></span>
+                            <span class="font-mono text-[10px] text-zinc-400 shrink-0" x-text="shortId(r.otherId)"></span>
                             <button type="button" @click="openTask(r.otherId)"
-                                    class="min-w-0 truncate underline decoration-zinc-300 hover:decoration-zinc-500 text-left"
+                                    class="min-w-0 truncate underline decoration-zinc-300 hover:decoration-zinc-500 text-left font-medium text-zinc-800 dark:text-zinc-200"
                                     :title="r.title" x-text="r.title"></button>
+                            <template x-if="r.status">
+                              <span class="rounded px-1.5 py-0.2 text-[10px] font-medium shrink-0"
+                                    :class="colCountPillClass(r.status)"
+                                    x-text="statusLabel(r.status)"></span>
+                            </template>
                           </div>
                           <button type="button" @click="removeRelation(r.raw)"
                                   class="tap-target-exempt text-zinc-600 hover:text-red-600 text-xs px-1.5 py-0.5 rounded hover:bg-zinc-100 shrink-0 font-medium dark:text-zinc-400 dark:hover:text-red-400 dark:hover:bg-zinc-700"
