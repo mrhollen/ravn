@@ -1186,6 +1186,21 @@ export function ravnApp() {
       return p;
     },
 
+    /** Per-status OPEN counts for the header's project count pill
+     *  (todo·doing·done). Derived from board.tasks — the same arrays the
+     *  columns render — so the pill can never disagree with the board.
+     *  Pre-filter counts by design: it summarizes the whole project, not
+     *  the current filtered view. All three keys are always present in
+     *  board.tasks ([] when empty), so no undefined guards needed beyond
+     *  a missing board. */
+    statusCounts(): Record<Status, number> {
+      const b = this.board;
+      if (!b) return { todo: 0, doing: 0, done: 0 };
+      const counts = {} as Record<Status, number>;
+      for (const s of STATUSES) counts[s] = b.tasks[s]?.length ?? 0;
+      return counts;
+    },
+
     columns(): { status: Status; label: string; tasks: TaskSummary[] }[] {
       const b = this.board;
       return STATUSES.map((s) => {

@@ -119,8 +119,21 @@
                       @click="toggleProjectMenu()"
                       @keydown.down.prevent="openProjectMenu('first')"
                       @keydown.up.prevent="openProjectMenu('last')"
-                      class="field flex min-w-0 flex-1 items-center justify-between gap-2 rounded-r-none border-r-0 text-left disabled:cursor-not-allowed disabled:opacity-50">
+                       class="field flex min-w-0 flex-1 items-center justify-between gap-2 rounded-r-none border-r-0 text-left disabled:cursor-not-allowed disabled:opacity-50">
                 <span class="min-w-0 truncate" x-text="projectSelectLabel()"></span>
+                <!-- todo·doing·done count pill: board-state summary inside the
+                     trigger (pre-filter counts — it summarizes the whole
+                     project, not the filtered view). Hidden until a board is
+                     loaded; the truncate title absorbs the width on mobile. -->
+                <span x-show="board" x-cloak data-testid="project-counts"
+                      class="hidden shrink-0 items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 sm:inline-flex dark:bg-zinc-800 dark:text-zinc-300"
+                      :aria-label="'Board counts: ' + statusCounts().todo + ' to do, ' + statusCounts().doing + ' doing, ' + statusCounts().done + ' done'">
+                  <span x-text="statusCounts().todo"></span>
+                  <span class="text-zinc-400" aria-hidden="true">·</span>
+                  <span class="text-amber-700 dark:text-amber-400" x-text="statusCounts().doing"></span>
+                  <span class="text-zinc-400" aria-hidden="true">·</span>
+                  <span class="text-emerald-700 dark:text-emerald-400" x-text="statusCounts().done"></span>
+                </span>
                 <svg class="h-4 w-4 shrink-0 text-zinc-500 dark:text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                 </svg>
@@ -183,7 +196,10 @@
           </div>
         </div>
 
-        <button type="button" @click="openNewTask('todo')" :disabled="!selectedProjectId" class="btn-primary disabled:opacity-40">
+        <!-- md:ml-auto right-aligns the whole right cluster (this CTA, the live
+             segment and the avatar trigger) on desktop; below md the project
+             capsule's flex-1 does the pushing instead. -->
+        <button type="button" @click="openNewTask('todo')" :disabled="!selectedProjectId" class="btn-primary disabled:opacity-40 md:ml-auto">
           + New task
         </button>
 
@@ -197,21 +213,28 @@
         </button>
 
         <!-- secondary controls: inline on md+, collapsible full-width strip on mobile -->
-        <!-- On md+ this is the right-aligned inline cluster (ml-auto) that ends
-             with the settings-menu trigger after it — one header row. Below md
-             it becomes the full-width collapsible strip below row 1. Project
-             settings moved out of the strip into the gear attached to the
-             Projects dropdown — this strip now carries only the live indicator. -->
+        <!-- On md+ this sits immediately left of the settings-menu trigger in
+             the right-aligned cluster (the "+ New task" button's md:ml-auto
+             does the pushing) and reads as the LEFT segment of a joined
+             split-capsule with that trigger (its own rounded-l border meets
+             the trigger's border-l divider). Below md it becomes the full-width
+             collapsible strip below row 1. Project settings moved out of the
+             strip into the gear attached to the Projects dropdown — this strip
+             carries only the live indicator. -->
         <div class="flex flex-wrap items-center gap-x-5 gap-y-2"
-             :class="showMobileMenu ? 'w-full' : 'hidden md:flex md:ml-auto'">
+             :class="showMobileMenu ? 'w-full' : 'hidden md:flex'">
             <!-- realtime SSE live status indicator — deliberately OUTSIDE the
                 consolidated menu; on md+ it sits immediately left of the menu
                 trigger. Click still triggers a manual reconnect. -->
-           <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none"
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-                @click="connectSse()"
+            <!-- md+: LEFT segment of the joined Live|Avatar split-capsule —
+                 rounded left corners + full border minus the right edge, so its
+                 border meets the avatar trigger's own (which adds a border-l
+                 divider). Below md it stays the plain unbordered strip row. -->
+            <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none md:rounded-l-md md:border md:border-r-0 md:border-zinc-200 md:bg-white dark:md:border-zinc-700 dark:md:bg-zinc-900"
+                 role="status"
+                 aria-live="polite"
+                 aria-atomic="true"
+                 @click="connectSse()"
                 :class="{
                   'text-emerald-700 dark:text-emerald-400': sseStatus === 'connected',
                   'text-amber-700 dark:text-amber-400': sseStatus === 'connecting',
@@ -255,21 +278,34 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              pulls the trigger back into row 1 in that state (and only then —
              showMobileMenu is desktop-inert), keeping it permanently reachable;
              the panel below clamps to the left edge for the same reason. -->
-        <div class="relative" data-testid="header-menu-anchor"
+        <!-- md:-ml-4 cancels the header's gap-x-4 at desktop widths so this
+             anchor sits FLUSH against the live-indicator segment (gap 0px — the
+             joined capsule has no seam). Inert below md, where row 1 packing is
+             driven by the project capsule's flex-1. -->
+        <div class="relative md:-ml-4" data-testid="header-menu-anchor"
              :class="showMobileMenu ? 'order-first' : ''">
-          <button type="button" data-testid="header-menu-trigger" aria-controls="header-menu-panel"
-                  aria-haspopup="true" :aria-expanded="headerMenuOpen ? 'true' : 'false'"
-                  :aria-label="'Preferences — theme, identity and token. Acting as ' + (actorName.trim() || 'You')"
-                  :title="'Preferences (acting as ' + (actorName.trim() || 'You') + ')'"
-                  @click="toggleHeaderMenu()"
-                  @keydown.down.prevent="openHeaderMenu('first')"
-                  @keydown.up.prevent="openHeaderMenu('last')"
-                  class="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border text-xs font-semibold shadow-sm transition-colors"
-                  :class="headerMenuOpen
-                    ? 'border-indigo-400 bg-indigo-600 text-white ring-2 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-700'
-                    : 'border-zinc-300 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'">
-            <span x-text="actorGlyph()" aria-hidden="true"></span>
-          </button>
+           <!-- Below md: the compact avatar circle (initial only) — unchanged
+                footprint, no svg inside. On md+ it widens into the RIGHT segment
+                of the joined Live|Avatar split-capsule: rounded right corners,
+                a border-l divider against the live segment, and the actor's name
+                + chevron revealed next to the glyph (text node, NOT an svg — the
+                no-gear-glyph contract is preserved). -->
+           <button type="button" data-testid="header-menu-trigger" aria-controls="header-menu-panel"
+                   aria-haspopup="true" :aria-expanded="headerMenuOpen ? 'true' : 'false'"
+                   :aria-label="'Preferences — theme, identity and token. Acting as ' + (actorName.trim() || 'You')"
+                   :title="'Preferences (acting as ' + (actorName.trim() || 'You') + ')'"
+                   @click="toggleHeaderMenu()"
+                   @keydown.down.prevent="openHeaderMenu('first')"
+                   @keydown.up.prevent="openHeaderMenu('last')"
+                   class="relative flex h-9 w-9 shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border text-xs font-semibold shadow-sm transition-colors md:w-auto md:gap-1.5 md:rounded-r-md md:border-l md:pl-2.5 md:pr-3"
+                   :class="headerMenuOpen
+                     ? 'border-indigo-400 bg-indigo-600 text-white ring-2 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-700'
+                     : 'border-zinc-300 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'">
+             <span x-text="actorGlyph()" aria-hidden="true"></span>
+             <span class="hidden max-w-[8rem] truncate md:inline" :title="actorName.trim() || 'You'"
+                   x-text="actorName.trim() || 'You'"></span>
+             <span class="hidden select-none text-zinc-400 md:inline dark:text-zinc-500" aria-hidden="true">&#9662;</span>
+           </button>
 
           <div id="header-menu-panel" data-testid="header-menu" aria-label="Preferences"
                x-show="headerMenuOpen" x-cloak
@@ -363,6 +399,111 @@ DOM-placed after the collapsible strip: on md+ it renders flush
             </section>
           </div>
         </div>
+
+        <!-- ===================================================== Tier 2: filters & sort -->
+        <!-- Docked inside <header> as a full-width second row (the header's
+             flex-wrap makes w-full start its own line). Shown on md+ whenever a
+             board is loaded and the full-page task view isn't owning the region;
+             below md it rides the hamburger's collapsible area — visible only
+             while that strip is expanded, so the ≤96px collapsed header budget
+             at 375px still holds. SAME controls as the old in-main filter card:
+             identical x-models, testids and button text, rendered exactly once. -->
+        <div class="w-full flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-zinc-100 bg-zinc-50/70 pt-1 text-xs dark:border-zinc-800 dark:bg-zinc-950"
+             x-cloak
+             :class="board && !fullPageOpen ? (showMobileMenu ? 'flex' : 'hidden md:flex') : 'hidden'">
+          <div class="flex min-w-0 flex-wrap items-center gap-2.5">
+            <!-- Compact search input (magnifier icon; same x-model as before).
+                 The visible "Search" label is deliberate: theme.spec.ts samples
+                 its secondary-text contrast (WCAG 1.4.3) on board, so the
+                 token stays the classic text-zinc-600 / dark:text-zinc-400. -->
+            <label class="flex min-w-0 items-center gap-1.5">
+              <span class="shrink-0 font-medium text-zinc-600 dark:text-zinc-400">Search</span>
+              <span class="relative flex items-center">
+                <svg class="pointer-events-none absolute left-2 h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+                </svg>
+                <input type="text" x-model="filterSearch" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
+                       class="field w-40 py-1 pl-7 pr-2 text-xs sm:w-52 md:w-60" />
+              </span>
+            </label>
+
+            <!-- Joined Filter split-capsule: Priority | Owner | Due | Unblocked only (+ conditional Reset) -->
+            <div class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+              <label class="flex items-center gap-1.5 px-2 py-1 text-zinc-700 dark:text-zinc-200" title="Filter cards by priority">
+                <span class="text-zinc-600 dark:text-zinc-400">Priority</span>
+                <select x-model="filterPriority" aria-label="Filter by priority"
+                        class="max-w-[7rem] cursor-pointer rounded bg-transparent py-1 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                  <option value="">All</option>
+                  <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
+                    <option :value="p" x-text="'P' + p + ' — ' + priorityName(p)"></option>
+                  </template>
+                </select>
+              </label>
+
+              <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2 py-1 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by assignee">
+                <span class="text-zinc-600 dark:text-zinc-400">Owner</span>
+                <select x-model="filterAssignee" aria-label="Filter by assignee"
+                        class="max-w-[8rem] cursor-pointer rounded bg-transparent py-1 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                  <option value="">All</option>
+                  <option value="unassigned">Unassigned</option>
+                  <template x-for="name in availableAssignees()" :key="name">
+                    <option :value="name" x-text="name"></option>
+                  </template>
+                </select>
+              </label>
+
+              <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2 py-1 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by due date">
+                <span class="text-zinc-600 dark:text-zinc-400">Due</span>
+                <select x-model="filterDue" aria-label="Filter by due date"
+                        class="max-w-[7rem] cursor-pointer rounded bg-transparent py-1 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                  <option value="">All</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="today">Due today</option>
+                  <option value="week">Due this week</option>
+                </select>
+              </label>
+
+              <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                <input type="checkbox" x-model="filterUnblocked"
+                       class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
+                <span>Unblocked only</span>
+              </label>
+
+              <!-- Conditional Reset — same text/behavior as before -->
+              <button type="button" @click="clearFilters()" x-show="hasActiveFilters()" x-cloak
+                      class="flex items-center border-l border-zinc-200 px-2 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
+                Reset filters
+              </button>
+            </div>
+          </div>
+
+          <!-- Joined Sort split-capsule: Sort by | direction (+ conditional Clear) -->
+          <div class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+            <label class="flex items-center gap-1.5 px-2 py-1 text-zinc-700 dark:text-zinc-200" title="Sort cards">
+              <span class="text-zinc-600 dark:text-zinc-400">Sort by</span>
+              <select x-model="sortKey" @change="setSort()"
+                      data-testid="sort-key" aria-label="Sort cards by"
+                      class="max-w-[8rem] cursor-pointer rounded bg-transparent py-1 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                <template x-for="o in SORT_OPTIONS" :key="o.value">
+                  <option :value="o.value" x-text="o.label"></option>
+                </template>
+              </select>
+            </label>
+
+            <button type="button" @click="toggleSortDir()" :disabled="sortKey === ''"
+                    data-testid="sort-dir"
+                    class="flex items-center border-l border-zinc-200 px-2 py-1 font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    :title="'Toggle direction (' + (sortDir === 'asc' ? 'ascending → descending' : 'descending → ascending') + ')'">
+              <span x-text="sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'"></span>
+            </button>
+
+            <button type="button" @click="clearSort()" x-show="sortKey !== ''" x-cloak
+                    data-testid="sort-clear"
+                    class="flex items-center border-l border-zinc-200 px-2 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
+              Clear sort
+            </button>
+          </div>
+        </div>
       </header>
 
       <!-- ======================================================== new project -->
@@ -448,82 +589,9 @@ DOM-placed after the collapsible strip: on md+ it renders flush
         <!-- columns & filters -->
         <template x-if="board">
           <div class="flex flex-col gap-4">
-            <!-- board filter bar -->
-            <div class="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-sm text-xs dark:border-zinc-700 dark:bg-zinc-900">
-              <label class="flex flex-1 min-w-[180px] items-center gap-1.5">
-                <span class="font-medium text-zinc-600 dark:text-zinc-400">Search</span>
-                <input type="text" x-model="filterSearch" placeholder="Filter title or ID…"
-                       class="field flex-1 py-1 text-xs" />
-              </label>
-
-              <label class="flex items-center gap-1.5">
-                <span class="font-medium text-zinc-600 dark:text-zinc-400">Priority</span>
-                <select x-model="filterPriority" class="field py-1 text-xs">
-                  <option value="">All</option>
-                  <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
-                    <option :value="p" x-text="'P' + p + ' — ' + priorityName(p)"></option>
-                  </template>
-                </select>
-              </label>
-
-              <label class="flex items-center gap-1.5">
-                <span class="font-medium text-zinc-600 dark:text-zinc-400">Assignee</span>
-                <select x-model="filterAssignee" class="field py-1 text-xs">
-                  <option value="">All</option>
-                  <option value="unassigned">Unassigned</option>
-                  <template x-for="name in availableAssignees()" :key="name">
-                    <option :value="name" x-text="name"></option>
-                  </template>
-                </select>
-              </label>
-
-              <label class="flex items-center gap-1.5">
-                <span class="font-medium text-zinc-600 dark:text-zinc-400">Due</span>
-                <select x-model="filterDue" class="field py-1 text-xs">
-                  <option value="">All</option>
-                  <option value="overdue">Overdue</option>
-                  <option value="today">Due today</option>
-                  <option value="week">Due this week</option>
-                </select>
-              </label>
-
-              <label class="tap-target flex cursor-pointer items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
-                <input type="checkbox" x-model="filterUnblocked"
-                       class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
-                <span>Unblocked only</span>
-              </label>
-
-              <button type="button" @click="clearFilters()" x-show="hasActiveFilters()" x-cloak
-                      class="btn-ghost py-1 px-2 text-xs text-zinc-600 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200">
-                Reset filters
-              </button>
-
-              <span class="h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
-
-              <label class="flex items-center gap-1.5">
-                <span class="font-medium text-zinc-600 dark:text-zinc-400">Sort by</span>
-                <select x-model="sortKey" @change="setSort()"
-                        data-testid="sort-key" aria-label="Sort cards by"
-                        class="field py-1 text-xs">
-                  <template x-for="o in SORT_OPTIONS" :key="o.value">
-                    <option :value="o.value" x-text="o.label"></option>
-                  </template>
-                </select>
-              </label>
-
-              <button type="button" @click="toggleSortDir()" :disabled="sortKey === ''"
-                      data-testid="sort-dir"
-                      class="btn-ghost py-1 px-2 text-xs disabled:opacity-40"
-                      :title="'Toggle direction (' + (sortDir === 'asc' ? 'ascending → descending' : 'descending → ascending') + ')'">
-                <span x-text="sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'"></span>
-              </button>
-
-              <button type="button" @click="clearSort()" x-show="sortKey !== ''" x-cloak
-                      data-testid="sort-clear"
-                      class="btn-ghost py-1 px-2 text-xs text-zinc-600 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200">
-                Clear sort
-              </button>
-            </div>
+            <!-- The board filter/sort bar now lives in the header as a docked
+                 Tier-2 strip (see <header>) — it was removed from here so the
+                 controls are rendered exactly once. -->
 
             <!-- columns: 1-up on phones, 3-up from md (tablet) up — the board is a
                  fixed 3-status kanban, so md must never drop to 2-up (it orphaned
