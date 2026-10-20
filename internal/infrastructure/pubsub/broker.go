@@ -1,7 +1,9 @@
 package pubsub
 
 import (
+	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/mrhollen/ravn/internal/application"
 	"github.com/mrhollen/ravn/internal/domain"
@@ -13,6 +15,7 @@ import (
 const DefaultClientBufferSize = 64
 
 type subscriber struct {
+	id        uint64
 	ch        chan domain.Event
 	projectID domain.ID // empty string matches all projects
 	closed    bool
@@ -20,10 +23,13 @@ type subscriber struct {
 
 // Broker implements application.EventBroker using an in-memory pub-sub model.
 type Broker struct {
-	mu          sync.RWMutex
-	subscribers map[*subscriber]struct{}
-	bufferSize  int
-	closed      bool
+	mu                 sync.RWMutex
+	subscribers        map[*subscriber]struct{}
+	bufferSize         int
+	closed             bool
+	nextSubID          atomic.Uint64
+	droppedSubscribers atomic.Uint64
+	logger             *slog.Logger
 }
 
 // Option configures a Broker instance.
@@ -34,6 +40,15 @@ func WithBufferSize(size int) Option {
 	return func(b *Broker) {
 		if size > 0 {
 			b.bufferSize = size
+		}
+	}
+}
+
+// WithLogger configures a custom logger for the Broker.
+func WithLogger(logger *slog.Logger) Option {
+	return func(b *Broker) {
+		if logger != nil {
+			b.logger = logger
 		}
 	}
 }
@@ -52,11 +67,30 @@ func NewBroker(opts ...Option) *Broker {
 
 var _ application.EventBroker = (*Broker)(nil)
 
+func (b *Broker) log() *slog.Logger {
+	if b.logger != nil {
+		return b.logger
+	}
+	return slog.Default()
+}
+
+// DroppedCount returns the cumulative count of slow subscribers dropped due to buffer overflow.
+func (b *Broker) DroppedCount() uint64 {
+	return b.droppedSubscribers.Load()
+}
+
+// DroppedSubscribers is an alias for DroppedCount.
+func (b *Broker) DroppedSubscribers() uint64 {
+	return b.droppedSubscribers.Load()
+}
+
 // Subscribe registers a listener for events belonging to projectID.
 // An empty projectID subscribes to events across all projects.
+// If the broker is closed, it returns an already-closed channel and a no-op cancel function.
 // The returned cancel function unregisters the subscriber and closes its channel.
 func (b *Broker) Subscribe(projectID domain.ID) (<-chan domain.Event, func()) {
 	sub := &subscriber{
+		id:        b.nextSubID.Add(1),
 		ch:        make(chan domain.Event, b.bufferSize),
 		projectID: projectID,
 	}
@@ -91,6 +125,7 @@ func (b *Broker) Subscribe(projectID domain.ID) (<-chan domain.Event, func()) {
 // Fan-out is strictly non-blocking: if a subscriber's channel buffer is full,
 // the subscriber is considered stalled/slow and is dropped immediately
 // so that a burst of writes never blocks the caller.
+// Dropping a slow subscriber emits a structured warning log and increments the drop metric.
 func (b *Broker) Publish(e domain.Event) {
 	b.mu.RLock()
 	if b.closed {
@@ -117,6 +152,7 @@ func (b *Broker) Publish(e domain.Event) {
 
 	// Clean up slow subscribers if any were detected
 	if len(slowSubs) > 0 {
+		var dropped []*subscriber
 		b.mu.Lock()
 		for _, sub := range slowSubs {
 			if _, exists := b.subscribers[sub]; exists {
@@ -125,14 +161,43 @@ func (b *Broker) Publish(e domain.Event) {
 					sub.closed = true
 					close(sub.ch)
 				}
+				dropped = append(dropped, sub)
 			}
 		}
 		b.mu.Unlock()
+
+		if len(dropped) > 0 {
+			b.droppedSubscribers.Add(uint64(len(dropped)))
+			for _, sub := range dropped {
+				subProj := "*"
+				if sub.projectID != "" {
+					subProj = sub.projectID.String()
+				}
+				var evProj string
+				if e.ProjectID != nil {
+					evProj = e.ProjectID.String()
+				}
+				var taskID string
+				if e.TaskID != nil {
+					taskID = e.TaskID.String()
+				}
+				b.log().Warn("pubsub: slow subscriber buffer overflow, dropping subscriber",
+					"subscriber_id", sub.id,
+					"subscriber_project", subProj,
+					"buffer_capacity", cap(sub.ch),
+					"event_id", e.ID.String(),
+					"event_kind", string(e.Kind),
+					"event_project", evProj,
+					"task_id", taskID,
+				)
+			}
+		}
 	}
 }
 
 // Close shuts down the broker and closes all active subscriber channels,
 // unblocking any listening SSE goroutines immediately.
+// Subsequent Subscribe calls return an already-closed channel.
 func (b *Broker) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -145,8 +210,8 @@ func (b *Broker) Close() error {
 			sub.closed = true
 			close(sub.ch)
 		}
-		delete(b.subscribers, sub)
 	}
+	b.subscribers = make(map[*subscriber]struct{})
 	return nil
 }
 
