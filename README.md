@@ -2,6 +2,12 @@
 
 MCP-first, multi-project KanBan for humans and AI agents.
 
+<p align="center">
+  <img src="https://github.com/mrhollen/ravn/releases/download/screenshot/hero.png" alt="Rävn dark-themed KanBan board with To Do, Doing and Done columns showing seeded tasks, priority badges, AC progress, an assignee chip and a live SSE indicator" width="100%" style="max-width:960px;" />
+</p>
+
+<p align="center"><em>The live Rävn board — auto-refreshed by CI from the E2E suite on every green push to <code>main</code>.</em></p>
+
 ## What it is
 
 Rävn is an MCP-first KanBan tool where AI coding agents are the primary users. It serves as external memory (state survives session death), a coordination bus for multi-agent work (claims, handoffs, no duplicate work), and an evidence store (proof of done). The human web board is secondary. The system is single-tenant with a dependency-minimal Go backend in onion architecture, Docker-first deployment (main server + stateless MCP server containers), and pure-Go SQLite (no CGO).
