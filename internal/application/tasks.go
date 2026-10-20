@@ -1167,3 +1167,25 @@ func claimExpiryPtr(t domain.Task) *time.Time {
 	e := t.Claim.Expiry() // Present ⇒ set (all-or-nothing)
 	return &e
 }
+
+// OpenBlockers returns the open blockers for each given task ID in taskIDs:
+// targets of outgoing 'blocked-by' edges that are not done and not archived.
+func (s *Tasks) OpenBlockers(ctx context.Context, taskIDs []domain.ID) (map[domain.ID][]domain.Task, error) {
+	if len(taskIDs) == 0 {
+		return map[domain.ID][]domain.Task{}, nil
+	}
+	var out map[domain.ID][]domain.Task
+	var r Repos
+	err := s.uow.Run(ctx, &r, func() error {
+		blks, berr := r.Tasks.OpenBlockersByTasks(ctx, taskIDs)
+		if berr != nil {
+			return berr
+		}
+		out = blks
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}

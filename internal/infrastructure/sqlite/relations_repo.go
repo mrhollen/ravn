@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mrhollen/ravn/internal/application"
 	"github.com/mrhollen/ravn/internal/domain"
@@ -130,4 +131,43 @@ func scanRelation(s scanner) (domain.Relation, error) {
 	}
 	rel.CreatedAt = at
 	return rel, nil
+}
+
+// SubtaskProgressByParents returns (total, done) child task aggregates for each
+// parent task ID in parentIDs: a child task counts if it has a stored
+// (child_id, parent_id, 'child') edge and is not archived.
+func (r *relationRepo) SubtaskProgressByParents(ctx context.Context, parentIDs []domain.ID) (map[domain.ID]application.TaskSubtaskProgress, error) {
+	out := make(map[domain.ID]application.TaskSubtaskProgress, len(parentIDs))
+	if len(parentIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(parentIDs))
+	args := make([]any, len(parentIDs))
+	for i, id := range parentIDs {
+		placeholders[i] = "?"
+		args[i] = string(id)
+	}
+	rows, err := r.q.QueryContext(ctx,
+		`SELECT r.other_task_id, COUNT(*), COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) `+
+			`FROM relation r `+
+			`JOIN task t ON t.id = r.task_id `+
+			`WHERE r.kind = 'child' AND r.other_task_id IN (`+strings.Join(placeholders, ", ")+`) AND t.archived = 0 `+
+			`GROUP BY r.other_task_id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("count subtasks for %d parents: %w", len(parentIDs), err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			parentID string
+			total    int64
+			done     int64
+		)
+		if err := rows.Scan(&parentID, &total, &done); err != nil {
+			return nil, fmt.Errorf("scan subtask progress row: %w", err)
+		}
+		out[domain.ID(parentID)] = application.TaskSubtaskProgress{Total: total, Done: done}
+	}
+	return out, rows.Err()
 }

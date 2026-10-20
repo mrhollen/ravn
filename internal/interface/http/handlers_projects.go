@@ -129,6 +129,16 @@ func (a *App) handleBoard(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", pid)
 		return
 	}
+	subtaskProgress, err := a.Relations.SubtaskProgress(ctx, ids)
+	if err != nil {
+		writeAppError(w, err, "task", pid)
+		return
+	}
+	blockersByTask, err := a.Tasks.OpenBlockers(ctx, ids)
+	if err != nil {
+		writeAppError(w, err, "task", pid)
+		return
+	}
 
 	resp := boardResponse{
 		ProjectID: string(pid),
@@ -146,6 +156,19 @@ func (a *App) handleBoard(w http.ResponseWriter, r *http.Request) {
 		}
 		if n, ok := commentCounts[t.ID]; ok {
 			s.CommentCount = int(n)
+		}
+		if sp, ok := subtaskProgress[t.ID]; ok && sp.Total > 0 {
+			s.SubtaskTotal = int(sp.Total)
+			s.SubtaskDone = int(sp.Done)
+		}
+		if blks, ok := blockersByTask[t.ID]; ok && len(blks) > 0 {
+			dtos := make([]blockerDTO, 0, len(blks))
+			for _, b := range blks {
+				dtos = append(dtos, blockerDTO{
+					ID: b.ID.String(), Title: b.Title, Status: string(b.Status),
+				})
+			}
+			s.Blockers = dtos
 		}
 		switch t.Status {
 		case domain.StatusTodo:

@@ -16,6 +16,7 @@ import type {
   ActorInput,
   ArtifactKind,
   ArtifactRow,
+  BlockerRef,
   Board,
   CommentKind,
   CommentRow,
@@ -276,6 +277,9 @@ interface RelationView {
   label: string;
   otherId: string;
   title: string;
+  status?: Status;
+  isBlocker?: boolean;
+  badgeClass?: string;
   raw: RelationRow;
 }
 
@@ -1064,13 +1068,23 @@ export function ravnApp() {
      *  archive fallback, boot). */
     blockedIds: new Set<string>(),
     knownBlocked: {} as Record<string, boolean>,
+    knownBlockers: {} as Record<string, BlockerRef[]>,
+    blockerPopoverTaskId: null as string | null,
     /** Project the blocked-state cache belongs to; "" = nothing derived yet. */
     blockedCacheProjectId: "" as string,
 
     isBlocked(id: string): boolean {
       // Fail closed: a cache owned by another project counts as empty.
       if (this.blockedCacheProjectId !== this.selectedProjectId) return false;
-      return this.blockedIds.has(id) || !!this.knownBlocked[id];
+      if (this.blockedIds.has(id) || !!this.knownBlocked[id]) return true;
+      const b = this.board;
+      if (b && b.project_id === this.selectedProjectId) {
+        for (const s of STATUSES) {
+          const t = b.tasks[s]?.find((task) => task.id === id);
+          if (t?.blockers && t.blockers.length > 0) return true;
+        }
+      }
+      return false;
     },
 
     /** Drop every derived/learned blocked entry and re-scope the cache to
@@ -1079,7 +1093,45 @@ export function ravnApp() {
     resetBlockedCache(projectId: string): void {
       this.blockedIds = new Set();
       this.knownBlocked = {};
+      this.knownBlockers = {};
+      this.blockerPopoverTaskId = null;
       this.blockedCacheProjectId = projectId;
+    },
+
+    taskBlockers(task: TaskSummary): BlockerRef[] {
+      if (this.blockedCacheProjectId !== this.selectedProjectId) return [];
+      if (task.blockers && task.blockers.length > 0) return task.blockers;
+      if (this.knownBlockers[task.id] && this.knownBlockers[task.id].length > 0) {
+        return this.knownBlockers[task.id];
+      }
+      return [];
+    },
+
+    blockerTooltipText(task: TaskSummary): string {
+      const blks = this.taskBlockers(task);
+      if (blks.length > 0) {
+        return "Blocked by: " + blks.map((b) => b.title + " (" + b.status + ")").join(", ");
+      }
+      return "Has an open blocker";
+    },
+
+    toggleBlockerPopover(taskId: string): void {
+      this.blockerPopoverTaskId = this.blockerPopoverTaskId === taskId ? null : taskId;
+    },
+
+    subtaskTotal(task: TaskSummary): number {
+      return task.subtask_total ?? 0;
+    },
+
+    subtaskDone(task: TaskSummary): number {
+      return task.subtask_done ?? 0;
+    },
+
+    subtaskProgressPercent(task: TaskSummary): number {
+      const total = task.subtask_total ?? 0;
+      if (total <= 0) return 0;
+      const done = task.subtask_done ?? 0;
+      return Math.min(100, Math.max(0, Math.round((done / total) * 100)));
     },
 
     // ------------------------------------------------------ client-side sorting
@@ -2193,9 +2245,16 @@ export function ravnApp() {
       // scope (see blockedCacheProjectId / selectProject).
       if (t.project_id === this.selectedProjectId) {
         const kb = { ...this.knownBlocked };
-        if (t.blocked) kb[t.id] = true;
-        else delete kb[t.id];
+        const kblks = { ...this.knownBlockers };
+        if (t.blocked) {
+          kb[t.id] = true;
+          kblks[t.id] = t.blockers || [];
+        } else {
+          delete kb[t.id];
+          delete kblks[t.id];
+        }
         this.knownBlocked = kb;
+        this.knownBlockers = kblks;
       }
       // Never clobber an in-progress edit of THIS task; a scratchpad that
       // belongs to a DIFFERENT task is discarded so drafts cannot leak across
@@ -3356,25 +3415,33 @@ export function ravnApp() {
       const d = this.detail;
       if (!d) return [];
       const me = d.id;
+      const b = this.board;
       return d.relations.map((r) => {
         let label: string;
         let otherId: string;
+        let isBlocker = false;
+        let badgeClass = "bg-zinc-100 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300";
         if (r.kind === "child") {
           // Stored edge: task_id is the child, other_task_id the parent.
           if (r.task_id === me) {
             label = "Parent";
             otherId = r.other_task_id;
+            badgeClass = "bg-purple-100 text-purple-800 ring-1 ring-purple-300 dark:bg-purple-950 dark:text-purple-300 dark:ring-purple-800";
           } else {
             label = "Child";
             otherId = r.task_id;
+            badgeClass = "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:ring-indigo-800";
           }
         } else if (r.kind === "blocked-by") {
           if (r.task_id === me) {
             label = "Blocked by";
             otherId = r.other_task_id;
+            isBlocker = true;
+            badgeClass = "bg-red-100 text-red-800 ring-1 ring-red-300 dark:bg-red-950 dark:text-red-300 dark:ring-red-800 font-bold";
           } else {
             label = "Blocking";
             otherId = r.task_id;
+            badgeClass = "bg-amber-100 text-amber-800 ring-1 ring-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800";
           }
         } else if (r.kind === "duplicate-of") {
           if (r.task_id === me) {
@@ -3384,18 +3451,74 @@ export function ravnApp() {
             label = "Duplicated by";
             otherId = r.task_id;
           }
+          badgeClass = "bg-zinc-100 text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700";
         } else {
           label = "Related to";
           otherId = r.task_id === me ? r.other_task_id : r.task_id;
+          badgeClass = "bg-sky-100 text-sky-800 ring-1 ring-sky-300 dark:bg-sky-950 dark:text-sky-300 dark:ring-sky-800";
         }
+
+        let status: Status | undefined;
+        if (b) {
+          for (const s of STATUSES) {
+            const found = b.tasks[s]?.find((t) => t.id === otherId);
+            if (found) {
+              status = found.status;
+              break;
+            }
+          }
+        }
+
         return {
           key: `${r.task_id}:${r.other_task_id}:${r.kind}`,
           label,
           otherId,
           title: this.taskTitle(otherId),
+          status,
+          isBlocker,
+          badgeClass,
           raw: r,
         };
       });
+    },
+
+    detailSubtaskTotal(): number {
+      const d = this.detail;
+      if (!d) return 0;
+      let total = 0;
+      for (const r of d.relations) {
+        if (r.kind === "child" && r.other_task_id === d.id) {
+          total++;
+        }
+      }
+      return total;
+    },
+
+    detailSubtaskDone(): number {
+      const d = this.detail;
+      if (!d) return 0;
+      let done = 0;
+      const b = this.board;
+      for (const r of d.relations) {
+        if (r.kind === "child" && r.other_task_id === d.id) {
+          if (b) {
+            for (const s of STATUSES) {
+              const row = b.tasks[s]?.find((t) => t.id === r.task_id);
+              if (row && row.status === "done") {
+                done++;
+                break;
+              }
+            }
+          }
+        }
+      }
+      return done;
+    },
+
+    detailSubtaskPercent(): number {
+      const total = this.detailSubtaskTotal();
+      if (total <= 0) return 0;
+      return Math.min(100, Math.round((this.detailSubtaskDone() / total) * 100));
     },
 
     async addRelation(): Promise<void> {

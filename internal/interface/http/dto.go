@@ -48,9 +48,12 @@ type taskSummaryDTO struct {
 	// shape. AcTotal = acceptance-criteria count, AcDone = how many are done,
 	// CommentCount = comment-thread length. The board fills them via one
 	// grouped query per child table — no N+1.
-	AcTotal      int `json:"ac_total,omitempty"`
-	AcDone       int `json:"ac_done,omitempty"`
-	CommentCount int `json:"comment_count,omitempty"`
+	AcTotal      int          `json:"ac_total,omitempty"`
+	AcDone       int          `json:"ac_done,omitempty"`
+	CommentCount int          `json:"comment_count,omitempty"`
+	SubtaskTotal int          `json:"subtask_total,omitempty"`
+	SubtaskDone  int          `json:"subtask_done,omitempty"`
+	Blockers     []blockerDTO `json:"blockers,omitempty"`
 }
 
 func toSummary(t domain.Task) taskSummaryDTO {

@@ -285,3 +285,26 @@ func (s *Relations) isReachable(ctx context.Context, r *Repos, start, target dom
 	}
 	return false, nil
 }
+
+// SubtaskProgress returns (total, done) child task aggregates for each given
+// parent task ID in parentIDs: a child task counts if it has a stored
+// (child_id, parent_id, 'child') edge and is not archived.
+func (s *Relations) SubtaskProgress(ctx context.Context, parentIDs []domain.ID) (map[domain.ID]TaskSubtaskProgress, error) {
+	if len(parentIDs) == 0 {
+		return map[domain.ID]TaskSubtaskProgress{}, nil
+	}
+	var out map[domain.ID]TaskSubtaskProgress
+	var r Repos
+	err := s.uow.Run(ctx, &r, func() error {
+		progress, perr := r.Relations.SubtaskProgressByParents(ctx, parentIDs)
+		if perr != nil {
+			return perr
+		}
+		out = progress
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}

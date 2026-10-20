@@ -180,6 +180,44 @@ func (r *taskRepo) BlockersOf(ctx context.Context, taskID domain.ID) ([]domain.T
 	return out, rows.Err()
 }
 
+// OpenBlockersByTasks returns open blockers for the given taskIDs in edge creation order.
+func (r *taskRepo) OpenBlockersByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID][]domain.Task, error) {
+	out := make(map[domain.ID][]domain.Task, len(taskIDs))
+	if len(taskIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(taskIDs))
+	args := make([]any, len(taskIDs))
+	for i, id := range taskIDs {
+		placeholders[i] = "?"
+		args[i] = string(id)
+	}
+	rows, err := r.q.QueryContext(ctx,
+		`SELECT r.task_id, b.id, b.title, b.status FROM relation r `+
+			`JOIN task b ON b.id = r.other_task_id `+
+			`WHERE r.task_id IN (`+strings.Join(placeholders, ", ")+`) AND r.kind = 'blocked-by' AND b.status <> 'done' AND b.archived = 0 `+
+			`ORDER BY r.created_at ASC, b.id ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list open blockers for %d tasks: %w", len(taskIDs), err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			taskID string
+			t      domain.Task
+			status string
+		)
+		if err := rows.Scan(&taskID, &t.ID, &t.Title, &status); err != nil {
+			return nil, fmt.Errorf("scan blocker row: %w", err)
+		}
+		t.Status = domain.Status(status)
+		tid := domain.ID(taskID)
+		out[tid] = append(out[tid], t)
+	}
+	return out, rows.Err()
+}
+
 // Update performs the optimistic version-guarded write (ADR): it applies only
 // when the stored row's Version equals t.Version, stores t's fields with
 // Version = t.Version + 1, and returns the fresh row. Zero affected rows means
