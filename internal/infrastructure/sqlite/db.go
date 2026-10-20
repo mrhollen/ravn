@@ -9,6 +9,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite" // driver registered under the name "sqlite"
 )
@@ -109,6 +111,19 @@ func OpenPool(ctx context.Context, path string) (*DBPool, func() error, error) {
 // the ready handle plus a Close func; on any failure the handle is closed
 // before returning nil.
 func Open(ctx context.Context, path string) (*sql.DB, func() error, error) {
+	// Creating the parent directory is ravn's responsibility: SQLite cannot
+	// open a file whose containing directory does not exist. Running the
+	// server binary directly with a custom data path in a fresh environment
+	// (e.g. ./data/ravn.db in an empty dir) must work; MkdirAll is a no-op
+	// when the directory already exists, and ":memory:" has no filesystem
+	// parent to create.
+	if path != "" && path != ":memory:" {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, nil, fmt.Errorf("create parent directory for sqlite %q: %w", dir, err)
+		}
+	}
+
 	db, err := sql.Open("sqlite", dsnFor(path))
 	if err != nil {
 		return nil, nil, fmt.Errorf("open sqlite %q: %w", path, err)

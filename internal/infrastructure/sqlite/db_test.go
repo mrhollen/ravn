@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -312,5 +313,63 @@ func TestOpenPool_HealthAndMetricsConcurrentlyDuringActiveWriteTx(t *testing.T) 
 	}
 	if stats["doing"] != 1 {
 		t.Errorf("expected 1 doing task after commit, got %d", stats["doing"])
+	}
+}
+
+func TestOpenCreatesParentDirectories(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "nested", "deeper", "test.db")
+	db, closeDB, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { closeDB() })
+
+	if got := Health(ctx, db); got != "ok" {
+		t.Errorf("Health on freshly created nested db = %q, want ok", got)
+	}
+
+	parent := filepath.Dir(path)
+	info, err := os.Stat(parent)
+	if err != nil {
+		t.Fatalf("parent directory not created by Open: %v", err)
+	}
+	if !info.IsDir() {
+		t.Errorf("%q exists but is not a directory", parent)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("db file missing after Open: %v", err)
+	}
+
+	// Production starts via OpenPool; the single MkdirAll in Open must cover
+	// both pools.
+	poolPath := filepath.Join(t.TempDir(), "pool", "sub", "pool.db")
+	pool, closePool, err := OpenPool(ctx, poolPath)
+	if err != nil {
+		t.Fatalf("OpenPool: %v", err)
+	}
+	t.Cleanup(func() { closePool() })
+
+	if got := HealthPool(ctx, pool); got != "ok" {
+		t.Errorf("HealthPool on freshly created nested db = %q, want ok", got)
+	}
+	if _, err := os.Stat(poolPath); err != nil {
+		t.Errorf("pool db file missing after OpenPool: %v", err)
+	}
+}
+
+func TestOpenMemory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, closeDB, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open :memory:: %v", err)
+	}
+	defer closeDB()
+
+	if got := Health(ctx, db); got != "ok" {
+		t.Errorf("Health on :memory: db = %q, want ok", got)
 	}
 }
