@@ -333,10 +333,10 @@ test.describe('Mobile experience (375px, touch)', () => {
 
     // `.tap-target-exempt` (style.css mobile media query) marks intentionally
     // compact controls — segmented theme toggle, per-card 3-dot move trigger,
-    // inline AC/relation action buttons — that are EXCLUDED from the mobile
-    // 44px min-size rule by design so they keep their tight sizing at narrow
-    // widths. They are skipped here; every other visible control is still
-    // asserted to meet the minimum below.
+    // column quick-add trigger, inline AC/relation action buttons — that are
+    // EXCLUDED from the mobile 44px min-size rule by design so they keep their
+    // tight sizing at narrow widths. They are skipped here; every other visible
+    // control is still asserted to meet the minimum below.
     const targets = page.locator(
       'button:visible:not(.tap-target-exempt), select:visible:not(.tap-target-exempt), input:visible:not([type="checkbox"]):not([type="radio"]):not(.tap-target-exempt), textarea:visible:not(.tap-target-exempt)',
     );

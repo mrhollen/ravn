@@ -1201,6 +1201,24 @@ export function ravnApp() {
       return counts;
     },
 
+    /** Column-header status dot color (To Do zinc, Doing amber, Done emerald). */
+    colDotClass(status: Status): string {
+      return status === "todo"
+        ? "bg-zinc-400"
+        : status === "doing"
+          ? "bg-amber-500"
+          : "bg-emerald-500";
+    },
+
+    /** Column-header count pill tint, matching the column's status. */
+    colCountPillClass(status: Status): string {
+      if (status === "doing")
+        return "bg-amber-100 text-amber-800 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800";
+      if (status === "done")
+        return "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-800";
+      return "bg-zinc-100 text-zinc-600 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700";
+    },
+
     columns(): { status: Status; label: string; tasks: TaskSummary[] }[] {
       const b = this.board;
       return STATUSES.map((s) => {

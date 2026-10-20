@@ -597,13 +597,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                  fixed 3-status kanban, so md must never drop to 2-up (it orphaned
                  'Done' on a second row with half the screen dead). Card content
                  wraps at 768px (break-words titles, flex-wrap meta row). -->
-            <div class="grid grid-cols-1 items-start gap-4 md:grid-cols-3">
+            <div class="bg-dots grid grid-cols-1 items-start gap-4 md:grid-cols-3">
               <template x-for="col in columns()" :key="col.status">
                 <section
                   @dragover="onDragOver($event, col.status)"
                   @dragleave="onDragLeave($event, col.status)"
                   @drop.prevent="onDrop($event, col.status)"
-                  class="flex flex-col rounded-xl border transition-colors shadow-sm"
+                  class="col-lane flex flex-col rounded-xl border transition-colors shadow-sm"
                    :class="[
                       isDragging && draggedFromStatus && !canMove(draggedFromStatus, col.status)
                         ? 'border-zinc-200 bg-zinc-100/80 opacity-50 saturate-50 cursor-not-allowed dark:border-zinc-800 dark:bg-zinc-900/40'
@@ -615,22 +615,36 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       ? 'Not an allowed step from ' + statusLabel(draggedFromStatus)
                       : ''"
                   >
-                  <header class="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 px-3 py-2">
-                    <div class="flex min-w-0 items-center gap-2">
-                      <h2 class="text-sm font-semibold" x-text="col.label"></h2>
+                   <header class="flex items-center justify-between gap-2 border-b border-zinc-100 dark:border-zinc-800 px-3 py-2">
+                     <div class="flex min-w-0 items-center gap-2">
+                       <span class="status-dot" :class="colDotClass(col.status)" aria-hidden="true"></span>
+                       <h2 class="truncate text-xs font-bold uppercase tracking-wider text-zinc-800 dark:text-zinc-100" x-text="col.label"></h2>
+                       <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1" :class="colCountPillClass(col.status)"
+                             x-text="col.tasks.length"></span>
                        <span x-show="sortKey !== ''" x-cloak data-testid="sort-indicator"
-                             class="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:ring-indigo-800"
-                            :title="'Cards sorted by ' + activeSortLabel() + (sortDir === 'asc' ? ' (ascending)' : ' (descending)') + '. Pick “Server order” in the toolbar to reset.'"
-                            x-text="activeSortLabel() + (sortDir === 'asc' ? ' ↑' : ' ↓')"></span>
-                    </div>
-                      <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700"
-                            x-text="col.tasks.length"></span>
-                      <span x-show="isDragging && draggedFromStatus && !canMove(draggedFromStatus, col.status)" x-cloak
-                            data-testid="col-not-allowed"
-                            class="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                        not allowed
-                      </span>
-                  </header>
+                             class="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:ring-indigo-800"
+                             :title="'Cards sorted by ' + activeSortLabel() + (sortDir === 'asc' ? ' (ascending)' : ' (descending)') + '. Pick “Server order” in the toolbar to reset.'"
+                             x-text="activeSortLabel() + (sortDir === 'asc' ? ' ↑' : ' ↓')"></span>
+                     </div>
+                     <div class="flex shrink-0 items-center gap-1.5">
+                       <span x-show="isDragging && draggedFromStatus && !canMove(draggedFromStatus, col.status)" x-cloak
+                             data-testid="col-not-allowed"
+                             class="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                         not allowed
+                       </span>
+                       <!-- Quick-add: opens the new-task modal pre-targeted at this column.
+                            Complements (does not replace) the "+ Add task to …" button at
+                            the column's foot. tap-target-exempt keeps it a compact icon
+                            button instead of a forced 44px block in the tight header row. -->
+                       <button type="button" @click.stop="openNewTask(col.status)"
+                               :aria-label="'Add task to ' + col.label" :title="'Add task to ' + col.label"
+                               class="tap-target-exempt rounded-md p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-200">
+                         <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                         </svg>
+                       </button>
+                     </div>
+                   </header>
                   <div class="flex flex-col gap-2 p-2.5">
                     <template x-for="task in col.tasks" :key="task.id">
                       <!-- Card accessible name = the title text only (labelledby points at the h3 below).
@@ -650,25 +664,49 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         @click="handleCardClick(task.id)"
                         @keydown.enter.self="openTask(task.id)"
                         @keydown.space.self.prevent="openTask(task.id)"
-                        class="relative w-full rounded-lg border p-3 text-left shadow-sm transition select-none focus:outline-none focus:ring-2 focus:ring-zinc-400"
-                         :class="[
-                           draggedTaskId === task.id
-                             ? 'opacity-40 border-dashed border-zinc-400 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900'
-                             : 'border-zinc-200 bg-white hover:border-zinc-300 hover:shadow dark:border-zinc-700 dark:bg-zinc-800 dark:hover:border-zinc-600',
-                          isTaskBusy(task.id)
-                            ? 'pointer-events-none opacity-60'
-                            : 'cursor-grab active:cursor-grabbing'
-                        ]"
+                         class="relative w-full rounded-lg border p-3 text-left shadow-sm transition select-none focus:outline-none focus:ring-2 focus:ring-zinc-400"
+                          :class="[
+                            draggedTaskId === task.id
+                              ? 'opacity-40 border-dashed border-zinc-400 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900'
+                              : [
+                                  // Uniform 1px FULL-PERIMETER border tinted by state
+                                  // (no thick side accents): claimed → indigo,
+                                  // blocked → red, else the standard neutral.
+                                  task.claimed_by
+                                    ? 'border-indigo-200/80 hover:border-indigo-300 dark:border-indigo-800 dark:hover:border-indigo-700'
+                                    : isBlocked(task.id)
+                                      ? 'border-red-200 hover:border-red-300 dark:border-red-800 dark:hover:border-red-700'
+                                      : 'border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600',
+                                  'bg-white hover:shadow dark:bg-zinc-800'
+                                ],
+                            // Done cards recede slightly (only when not also dragged/busy,
+                            // so those stronger opacity states still win).
+                            col.status === 'done' && draggedTaskId !== task.id && !isTaskBusy(task.id)
+                              ? 'card-accent-done'
+                              : '',
+                           isTaskBusy(task.id)
+                             ? 'pointer-events-none opacity-60'
+                             : 'cursor-grab active:cursor-grabbing'
+                         ]"
                       >
                         <div class="flex items-start justify-between gap-2">
                           <h3 :id="'card-title-' + task.id"
-                              class="min-w-0 break-words text-sm font-medium leading-snug" x-text="task.title"></h3>
-                          <!-- explicit touch alternative to drag-and-drop: pick a target status.
-                               The ⋮ trigger and its dropdown share ONE relative wrapper: any click that
-                               misses both dismisses the menu (@click.outside → AC1), and the dropdown is
-                               absolutely positioned OUT of the card's flow, so opening it never reflows
-                               the card or pushes the cards below it down (AC2/AC3). -->
-                          <div class="relative shrink-0" data-testid="card-menu-anchor" @click.outside="cardMenuTaskId = null">
+                              class="min-w-0 break-words text-sm font-medium leading-snug"
+                              :class="col.status === 'done' ? 'line-through' : ''"
+                              x-text="task.title"></h3>
+                           <!-- Right-aligned control group: priority badge FIRST, then the ⋮ move-menu
+                                anchor. Grouping them in one flex unit keeps justify-between pinning both
+                                to the card's right edge (previously the ⋮ sat alone mid-card between the
+                                title and the badge). -->
+                           <div class="flex shrink-0 items-center gap-1">
+                           <!-- explicit touch alternative to drag-and-drop: pick a target status.
+                                The ⋮ trigger and its dropdown share ONE relative wrapper: any click that
+                                misses both dismisses the menu (@click.outside → AC1), and the dropdown is
+                                absolutely positioned OUT of the card's flow, so opening it never reflows
+                                the card or pushes the cards below it down (AC2/AC3). -->
+                           <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1"
+                                 :class="priorityClass(task.priority)" x-text="'P' + task.priority"></span>
+                           <div class="relative shrink-0" data-testid="card-menu-anchor" @click.outside="cardMenuTaskId = null">
                             <button type="button" @click.stop="toggleCardMenu(task.id)"
                                     data-testid="card-menu-toggle" aria-label="Move task to another status"
                                     :aria-expanded="cardMenuTaskId === task.id ? 'true' : 'false'"
@@ -701,14 +739,30 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                                 </button>
                               </template>
                             </div>
-                          </div>
-                          <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1"
-                                :class="priorityClass(task.priority)" x-text="'P' + task.priority"></span>
-                        </div>
+                           </div>
+                           </div>
+                         </div>
                         <!-- swipe-to-status hint: shown while the card is being swiped on touch -->
                         <div x-show="swiping(task.id)" x-cloak class="pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-md bg-zinc-900/85 px-2 py-1 text-xs font-medium text-white shadow"
                              :class="swipeDirection(task.id) === 'right' ? 'right-1.5' : 'left-1.5'"
                              x-text="(swipeDirection(task.id) === 'right' ? '→ ' : '← ') + swipeTargetLabel(task.id)">
+                        </div>
+
+                        <!-- Claim capsule: compact indigo pill directly on claimed cards —
+                             activity icon + claimant + live lease hint. claimHint() text is kept
+                             verbatim ("until 15:53 (5m)") because the theme contrast suite
+                             samples it via getByText(/until \d{2}:\d{2}/). -->
+                        <div x-show="task.claimed_by" x-cloak
+                             class="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-md border border-indigo-200/80 bg-indigo-50/80 px-2 py-0.5 text-[11px] dark:border-indigo-800/70 dark:bg-indigo-950/60">
+                          <svg class="h-3 w-3 shrink-0 text-indigo-500 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12h4l3-9 4 18 3-9h4"/>
+                          </svg>
+                          <span class="truncate font-semibold text-zinc-900 dark:text-zinc-100"
+                                x-text="task.claimed_by ? task.claimed_by.name : ''"></span>
+                          <template x-if="claimHint(task)">
+                            <span class="shrink-0 text-zinc-400 dark:text-zinc-500">·</span>
+                          </template>
+                          <span class="truncate font-medium text-indigo-700 dark:text-indigo-300" x-text="claimHint(task)"></span>
                         </div>
 
                         <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
@@ -734,11 +788,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                             <span class="font-semibold text-amber-700 dark:text-amber-400">Owner:</span>
                             <span x-text="task.assignee ? task.assignee.name : ''"></span>
                           </span>
-                          <span x-show="task.claimed_by" x-cloak class="inline-flex items-center gap-1 font-medium text-indigo-600 dark:text-indigo-400">
-                            <span class="h-1.5 w-1.5 rounded-full bg-indigo-500"></span>
-                            <span x-text="task.claimed_by ? task.claimed_by.name : ''"></span>
-                            <span class="font-normal text-indigo-700 dark:text-indigo-300" x-text="claimHint(task)"></span>
-                          </span>
+
                           <!-- AC progress badge: only when the task has criteria; emerald once all are done. -->
                           <span x-show="task.ac_total > 0" x-cloak data-testid="card-ac-progress"
                                 :title="(task.ac_done ?? 0) + ' of ' + task.ac_total + ' acceptance criteria complete'"

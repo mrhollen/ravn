@@ -87,13 +87,46 @@ html.dark {
   }
 }
 
+/* --- board canvas: kanban lanes & cards ------------------------------------
+   Faint radial dot-grid behind the columns (light + dark), a grounded lane
+   height so sparse boards don't collapse to content height, and a subtle dim
+   for completed cards in the Done column. */
+.bg-dots {
+  background-image: radial-gradient(rgba(161, 161, 170, 0.22) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.dark .bg-dots {
+  background-image: radial-gradient(rgba(63, 63, 70, 0.35) 1px, transparent 1px);
+}
+
+.col-lane {
+  min-height: calc(100vh - 8.5rem);
+}
+
+/* Column-header status dot. Deliberately a named class (NOT Tailwind's
+   rounded-full utility): board.spec locates the header count pill via
+   `header span.rounded-full`, so the dot must not carry that class or it
+   would match two spans and break the strict-mode assertion. */
+.status-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.card-accent-done {
+  opacity: 0.82;
+}
+
 /* --- mobile tap targets ------------------------------------------------------
    44x44px minimum touch-target guideline (WCAG 2.5.8 / Apple HIG) applied on
    small screens only, so the desktop UI keeps its denser layout. Checkboxes are
    excluded — their wrapping <label> is the tappable area (see .tap-target).
-   `.tap-target-exempt` carves out intentionally compact controls (segmented
-   theme toggle, per-card 3-dot move trigger, inline AC/relation action buttons)
-   that a forced 44px size would distort at small widths. */
+    `.tap-target-exempt` carves out intentionally compact controls (segmented
+    theme toggle, per-card 3-dot move trigger, column quick-add trigger, inline
+    AC/relation action buttons) that a forced 44px size would distort at small
+    widths. */
 @media (max-width: 767px) {
   button:not(.tap-target-exempt),
   select:not(.tap-target-exempt),
