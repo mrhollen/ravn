@@ -30,7 +30,7 @@ func resolveOpenCodeServerURL(projectServerURL string) string {
 }
 
 // resolveOpenCodeDirectory resolves the working directory for OpenCode from the project
-// setting, the OPENCODE_DIRECTORY environment variable, or defaults to "/home/hollen/Code/ravn".
+// setting, the OPENCODE_DIRECTORY environment variable, or defaults to "/workspace".
 func resolveOpenCodeDirectory(projectDirectory string) string {
 	if s := strings.TrimSpace(projectDirectory); s != "" {
 		return s
@@ -38,14 +38,13 @@ func resolveOpenCodeDirectory(projectDirectory string) string {
 	if s := strings.TrimSpace(os.Getenv("OPENCODE_DIRECTORY")); s != "" {
 		return s
 	}
-	return "/home/hollen/Code/ravn"
+	return "/workspace"
 }
 
 // resolveOpenCodeModel resolves the OpenCode model reference from the project
-// setting, the OPENCODE_MODEL environment variable, or defaults to
-// "llama.cpp/Qwen Medium Long Context". When a server's fallback model requires
-// an API key the dispatched session dies with an Authentication Error immediately,
-// so a local working model is used as default.
+// setting, the OPENCODE_MODEL environment variable, or returns "" when neither
+// is set. An empty result means no model is sent in the session-create request,
+// letting the OpenCode server fall back to its own default model.
 func resolveOpenCodeModel(projectModel string) string {
 	if s := strings.TrimSpace(projectModel); s != "" {
 		return s
@@ -53,7 +52,7 @@ func resolveOpenCodeModel(projectModel string) string {
 	if s := strings.TrimSpace(os.Getenv("OPENCODE_MODEL")); s != "" {
 		return s
 	}
-	return "llama.cpp/Qwen Medium Long Context"
+	return ""
 }
 
 // resolveOpenCodeModelWithOverride resolves the OpenCode model reference from an optional override,
@@ -240,10 +239,10 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	q.Set("directory", dir)
 	sessionURLParsed.RawQuery = q.Encode()
 
-	// The model is set on the session (not just the prompt): sessions created
-	// without one fall back to the OpenCode server's default model, which on
-	// some hosts points at a key-gated provider and dies with a 401
-	// "Authentication Error" before doing any work.
+	// When a model resolves (non-empty), it is set on the session so all messages
+	// use that provider/model, with an optional variant attached to the model map.
+	// When empty, the "model" field is omitted entirely and the OpenCode server
+	// falls back to its own default model.
 	sessionCreateBody := map[string]any{
 		"title": "Rävn: " + detail.Task.Title,
 		"agent": agentName,

@@ -326,11 +326,11 @@ func TestOpenCodeStart_ResolutionDefaults(t *testing.T) {
 	if url := resolveOpenCodeServerURL(""); url != "http://localhost:4444" {
 		t.Errorf("default server URL = %q, want http://localhost:4444", url)
 	}
-	if dir := resolveOpenCodeDirectory(""); dir != "/home/hollen/Code/ravn" {
-		t.Errorf("default directory = %q, want /home/hollen/Code/ravn", dir)
+	if dir := resolveOpenCodeDirectory(""); dir != "/workspace" {
+		t.Errorf("default directory = %q, want /workspace", dir)
 	}
-	if model := resolveOpenCodeModel(""); model != "llama.cpp/Qwen Medium Long Context" {
-		t.Errorf("default model = %q, want llama.cpp/Qwen Medium Long Context", model)
+	if model := resolveOpenCodeModel(""); model != "" {
+		t.Errorf("default model = %q, want empty", model)
 	}
 
 	// 2. Env vars when project settings are empty
@@ -639,8 +639,8 @@ func TestOpenCodeStart_ResolutionOrder(t *testing.T) {
 		if resp.Agent != "build" {
 			t.Errorf("resp.Agent = %q, want build", resp.Agent)
 		}
-		if resp.Model != "llama.cpp/Qwen Medium Long Context" {
-			t.Errorf("resp.Model = %q, want llama.cpp/Qwen Medium Long Context", resp.Model)
+		if resp.Model != "" {
+			t.Errorf("resp.Model = %q, want empty", resp.Model)
 		}
 		if resp.Variant != "" {
 			t.Errorf("resp.Variant = %q, want empty", resp.Variant)
@@ -649,12 +649,11 @@ func TestOpenCodeStart_ResolutionOrder(t *testing.T) {
 		if lastSessionBody["agent"] != "build" {
 			t.Errorf("session agent = %v, want build", lastSessionBody["agent"])
 		}
-		modelMap, ok := lastSessionBody["model"].(map[string]any)
-		if !ok || modelMap["providerID"] != "llama.cpp" || modelMap["id"] != "Qwen Medium Long Context" {
-			t.Errorf("session model = %+v", lastSessionBody["model"])
-		}
-		if _, hasVariant := modelMap["variant"]; hasVariant {
-			t.Errorf("session model should not have variant: %+v", modelMap)
+		// No project model and no OPENCODE_MODEL env var: the request body must
+		// omit the "model" key entirely (so no provider id is sent). Absence of
+		// the model map also means no variant can ride on it.
+		if _, hasModel := lastSessionBody["model"]; hasModel {
+			t.Errorf("session model should be omitted, got: %+v", lastSessionBody["model"])
 		}
 
 		if lastPromptBody["agent"] != "build" {

@@ -165,7 +165,7 @@ func TestValidateOpenCodeDirectory(t *testing.T) {
 		},
 		{
 			name:    "absolute path allowed",
-			dir:     "/home/hollen/Code/ravn",
+			dir:     "/workspace/project",
 			wantErr: false,
 		},
 		{
@@ -190,14 +190,14 @@ func TestValidateOpenCodeDirectory(t *testing.T) {
 		},
 		{
 			name:        "allowed directory constraint satisfied",
-			dir:         "/home/hollen/Code/ravn",
-			allowedDirs: "/home/hollen/Code,/tmp",
+			dir:         "/workspace/project",
+			allowedDirs: "/workspace,/tmp",
 			wantErr:     false,
 		},
 		{
 			name:        "allowed directory constraint violated",
 			dir:         "/etc/shadow",
-			allowedDirs: "/home/hollen/Code,/tmp",
+			allowedDirs: "/workspace,/tmp",
 			wantErr:     true,
 		},
 	}
