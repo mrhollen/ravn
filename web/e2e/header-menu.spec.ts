@@ -208,7 +208,11 @@ test.describe('Consolidated header settings menu', () => {
     const lbox = (await live.boundingBox())!;
     const tbox = (await trigger.boundingBox())!;
     expect(lbox.x + lbox.width, 'live indicator ends at or left of the trigger').toBeLessThanOrEqual(tbox.x);
-    expect(tbox.x - (lbox.x + lbox.width), '…and is immediately adjacent to it').toBeLessThanOrEqual(16);
+    // …now two STANDALONE controls separated by the header's natural flex gap
+    // (the old joined-pill negative margin is gone): a real gap > 0px…
+    expect(tbox.x - (lbox.x + lbox.width), 'gap between live indicator and trigger').toBeGreaterThan(0);
+    // …but they remain immediately adjacent in the right-aligned cluster.
+    expect(tbox.x - (lbox.x + lbox.width), '…and is immediately adjacent to it').toBeLessThan(24);
     // …on the same header row (vertically centered with the trigger).
     expect(Math.abs(lbox.y + lbox.height / 2 - (tbox.y + tbox.height / 2))).toBeLessThanOrEqual(12);
 
@@ -217,6 +221,52 @@ test.describe('Consolidated header settings menu', () => {
     const clipX = Math.max(0, lbox.x - 12);
     await page.screenshot({
       path: path.join(testInfo.outputDir, 'live-indicator-left-of-trigger.png'),
+      clip: { x: clipX, y: hbox.y + 2, width: tbox.x + tbox.width + 10 - clipX, height: hbox.height - 4 },
+    });
+  });
+
+  test('AC2: desktop (1024px) — trigger is a standalone rounded button; no intersection with the live indicator', async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await freshPage(page);
+
+    const trigger = page.getByTestId('header-menu-trigger');
+    const live = page.locator('[data-testid="live-indicator"]');
+    await expect(trigger).toBeVisible();
+    await expect(live).toBeVisible();
+
+    // Separated controls: the trigger bounding box does NOT intersect the
+    // live-indicator bounding box (the old joined pill let their borders meet/
+    // overlap via a negative margin; now they are distinct elements in the
+    // header's flex gap). Side-by-side boxes share a Y band by design — no
+    // rectangle intersection means they are disjoint on AT LEAST one axis, and
+    // here specifically they must be disjoint on X.
+    const lbox = (await live.boundingBox())!;
+    const tbox = (await trigger.boundingBox())!;
+    expect(lbox.x + lbox.width, 'live indicator ends strictly left of the trigger').toBeLessThan(tbox.x);
+    const overlapX = Math.min(tbox.x + tbox.width, lbox.x + lbox.width) - Math.max(tbox.x, lbox.x);
+    const overlapY = Math.min(tbox.y + tbox.height, lbox.y + lbox.height) - Math.max(tbox.y, lbox.y);
+    expect(overlapX > 0 && overlapY > 0, 'no bounding-box intersection').toBe(false);
+
+    // Shape parity with the sibling top-bar controls (.field / .btn-primary /
+    // .btn-ghost all use rounded-md): the trigger's COMPUTED border-radius must
+    // match a visible sibling (the header CTA uses .btn-primary).
+    const radii = await page.evaluate(() => {
+      const r = (sel: string) => getComputedStyle(document.querySelector(sel)!).borderRadius;
+      return {
+        trigger: r('[data-testid="header-menu-trigger"]'),
+        cta: r('header button.btn-primary'),
+      };
+    });
+    expect(Number.parseFloat(radii.trigger), 'trigger has a non-zero radius (not square)').toBeGreaterThan(0);
+    expect(radii.trigger, 'trigger radius matches the sibling .btn-* rounded-md treatment').toBe(radii.cta);
+
+    // Evidence: close-up of the two separated desktop controls.
+    const hbox = (await page.locator('header').first().boundingBox())!;
+    const clipX = Math.max(0, lbox.x - 12);
+    await page.screenshot({
+      path: path.join(testInfo.outputDir, 'desktop-separated-controls.png'),
       clip: { x: clipX, y: hbox.y + 2, width: tbox.x + tbox.width + 10 - clipX, height: hbox.height - 4 },
     });
   });

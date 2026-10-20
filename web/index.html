@@ -212,25 +212,25 @@
           </svg>
         </button>
 
-        <!-- secondary controls: inline on md+, collapsible full-width strip on mobile -->
-        <!-- On md+ this sits immediately left of the settings-menu trigger in
-             the right-aligned cluster (the "+ New task" button's md:ml-auto
-             does the pushing) and reads as the LEFT segment of a joined
-             split-capsule with that trigger (its own rounded-l border meets
-             the trigger's border-l divider). Below md it becomes the full-width
-             collapsible strip below row 1. Project settings moved out of the
-             strip into the gear attached to the Projects dropdown — this strip
-             carries only the live indicator. -->
+         <!-- secondary controls: inline on md+, collapsible full-width strip on mobile -->
+         <!-- On md+ this sits immediately left of the settings-menu trigger in
+              the right-aligned cluster (the "+ New task" button's md:ml-auto
+              does the pushing), separated from it by the header's natural
+              flex gap — no negative margins anywhere. Below md it becomes the
+              full-width collapsible strip below row 1. Project settings moved
+              out of the strip into the gear attached to the Projects dropdown
+              — this strip carries only the live indicator. -->
         <div class="flex flex-wrap items-center gap-x-5 gap-y-2"
              :class="showMobileMenu ? 'w-full' : 'hidden md:flex'">
             <!-- realtime SSE live status indicator — deliberately OUTSIDE the
                 consolidated menu; on md+ it sits immediately left of the menu
                 trigger. Click still triggers a manual reconnect. -->
-            <!-- md+: LEFT segment of the joined Live|Avatar split-capsule —
-                 rounded left corners + full border minus the right edge, so its
-                 border meets the avatar trigger's own (which adds a border-l
-                 divider). Below md it stays the plain unbordered strip row. -->
-            <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none md:rounded-l-md md:border md:border-r-0 md:border-zinc-200 md:bg-white dark:md:border-zinc-700 dark:md:bg-zinc-900"
+             <!-- md+: self-contained status pill — full rounded corners and a
+                  complete border, matching the other top-bar controls
+                  (.field / .btn-* radius + border treatment), so it reads as its
+                  own element beside the separated settings trigger. Below md it
+                  stays the plain unbordered strip row. -->
+             <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none md:rounded-md md:border md:border-zinc-200 md:bg-white dark:md:border-zinc-700 dark:md:bg-zinc-900"
                  role="status"
                  aria-live="polite"
                  aria-atomic="true"
@@ -278,29 +278,30 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              pulls the trigger back into row 1 in that state (and only then —
              showMobileMenu is desktop-inert), keeping it permanently reachable;
              the panel below clamps to the left edge for the same reason. -->
-        <!-- md:-ml-4 cancels the header's gap-x-4 at desktop widths so this
-             anchor sits FLUSH against the live-indicator segment (gap 0px — the
-             joined capsule has no seam). Inert below md, where row 1 packing is
-             driven by the project capsule's flex-1. -->
-        <div class="relative md:-ml-4" data-testid="header-menu-anchor"
-             :class="showMobileMenu ? 'order-first' : ''">
-           <!-- Below md: the compact avatar circle (initial only) — unchanged
-                footprint, no svg inside. On md+ it widens into the RIGHT segment
-                of the joined Live|Avatar split-capsule: rounded right corners,
-                a border-l divider against the live segment, and the actor's name
-                + chevron revealed next to the glyph (text node, NOT an svg — the
-                no-gear-glyph contract is preserved). -->
-           <button type="button" data-testid="header-menu-trigger" aria-controls="header-menu-panel"
-                   aria-haspopup="true" :aria-expanded="headerMenuOpen ? 'true' : 'false'"
-                   :aria-label="'Preferences — theme, identity and token. Acting as ' + (actorName.trim() || 'You')"
-                   :title="'Preferences (acting as ' + (actorName.trim() || 'You') + ')'"
-                   @click="toggleHeaderMenu()"
-                   @keydown.down.prevent="openHeaderMenu('first')"
-                   @keydown.up.prevent="openHeaderMenu('last')"
-                   class="relative flex h-9 w-9 shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border text-xs font-semibold shadow-sm transition-colors md:w-auto md:gap-1.5 md:rounded-r-md md:border-l md:pl-2.5 md:pr-3"
-                   :class="headerMenuOpen
-                     ? 'border-indigo-400 bg-indigo-600 text-white ring-2 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-700'
-                     : 'border-zinc-300 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'">
+         <!-- On md+ this anchor sits in the header's natural flex gap (gap-x-4)
+              to the RIGHT of the live-indicator pill — no negative margins, so
+              the two controls can never overlap. Inert below md, where row 1
+              packing is driven by the project capsule's flex-1. -->
+         <div class="relative" data-testid="header-menu-anchor"
+              :class="showMobileMenu ? 'order-first' : ''">
+            <!-- Below md: the compact avatar circle (initial only) — unchanged
+                 footprint, no svg inside. On md+ it widens into a STANDALONE
+                 rounded button matching the other top-bar controls (.field /
+                 .btn-* radius + border treatment): full corners, complete
+                 border, glyph + actor name + chevron revealed next to the glyph
+                 (text node, NOT an svg — the no-gear-glyph contract is
+                 preserved). -->
+            <button type="button" data-testid="header-menu-trigger" aria-controls="header-menu-panel"
+                    aria-haspopup="true" :aria-expanded="headerMenuOpen ? 'true' : 'false'"
+                    :aria-label="'Preferences — theme, identity and token. Acting as ' + (actorName.trim() || 'You')"
+                    :title="'Preferences (acting as ' + (actorName.trim() || 'You') + ')'"
+                    @click="toggleHeaderMenu()"
+                    @keydown.down.prevent="openHeaderMenu('first')"
+                    @keydown.up.prevent="openHeaderMenu('last')"
+                    class="relative flex h-9 w-9 shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border text-xs font-semibold shadow-sm transition-colors md:w-auto md:gap-1.5 md:rounded-md md:pl-2.5 md:pr-3"
+                    :class="headerMenuOpen
+                      ? 'border-indigo-400 bg-indigo-600 text-white ring-2 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-700'
+                      : 'border-zinc-200 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'">
              <span x-text="actorGlyph()" aria-hidden="true"></span>
              <span class="hidden max-w-[8rem] truncate md:inline" :title="actorName.trim() || 'You'"
                    x-text="actorName.trim() || 'You'"></span>
