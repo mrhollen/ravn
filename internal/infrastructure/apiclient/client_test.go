@@ -180,7 +180,10 @@ func TestListTasks_QueryBuildingAndEnvelope(t *testing.T) {
 		want := map[string]string{
 			"project_id": "P1", "status": "todo", "assignee_name": "ada", "assignee_type": "human",
 			"archived": "true", "unblocked": "true", "search": "login", "priority": "3",
-			"due_after": "2026-10-01T00:00:00Z", "limit": "5", "offset": "10",
+			"due_before": "2026-09-15T00:00:00Z", "due_after": "2026-10-01T00:00:00Z",
+			"created_after": "2026-08-01T00:00:00Z", "created_before": "2026-09-25T00:00:00Z",
+			"completed_after": "2026-09-15T00:00:00Z", "completed_before": "2026-10-05T00:00:00Z",
+			"limit": "5", "offset": "10",
 		}
 		for k, v := range want {
 			if cap.query[k] != v {
@@ -193,7 +196,10 @@ func TestListTasks_QueryBuildingAndEnvelope(t *testing.T) {
 	list, err := c.ListTasks(context.Background(), TaskFilter{
 		ProjectID: "P1", Status: "todo", AssigneeName: "ada", AssigneeType: "human",
 		Archived: true, Unblocked: true, Search: "login", Priority: &prio,
-		DueAfter: "2026-10-01T00:00:00Z", Limit: 5, Offset: 10,
+		DueBefore: "2026-09-15T00:00:00Z", DueAfter: "2026-10-01T00:00:00Z",
+		CreatedAfter: "2026-08-01T00:00:00Z", CreatedBefore: "2026-09-25T00:00:00Z",
+		CompletedAfter: "2026-09-15T00:00:00Z", CompletedBefore: "2026-10-05T00:00:00Z",
+		Limit: 5, Offset: 10,
 	})
 	if err != nil {
 		t.Fatalf("ListTasks: %v", err)

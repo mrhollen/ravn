@@ -531,6 +531,29 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 		}
 	}
 
+	// list_tasks exposes the full GET /tasks filter surface as declared input-
+	// schema properties (functional parity with the REST query params).
+	for _, tool := range list.Tools {
+		if tool.Name != "list_tasks" {
+			continue
+		}
+		props := tool.InputSchema.Properties
+		for _, key := range []string{"archived", "assignee_type", "created_after", "created_before", "completed_before"} {
+			if _, ok := props[key]; !ok {
+				t.Errorf("list_tasks input schema missing property %q", key)
+			}
+		}
+		archived, _ := props["archived"].(map[string]any)
+		if archived == nil || archived["type"] != "boolean" {
+			t.Errorf("list_tasks \"archived\" property = %v, want type boolean", archived)
+		}
+		atType, _ := props["assignee_type"].(map[string]any)
+		enums, _ := atType["enum"].([]any)
+		if atType == nil || len(enums) != 2 {
+			t.Errorf("list_tasks \"assignee_type\" property = %v, want enum [human agent]", atType)
+		}
+	}
+
 	// get_task returns the mock's resume payload (JSON-equivalent).
 	res, err := c.CallTool(ctx, mcpgo.CallToolRequest{Params: mcpgo.CallToolParams{
 		Name:      "get_task",
@@ -687,17 +710,22 @@ func TestListTasksFilterPassthrough(t *testing.T) {
 
 	// Every optional filter at once: the mock must see exactly these params.
 	res := callTool(t, c, ctx, "list_tasks", map[string]any{
-		"project_id":      "P1",
-		"status":          "todo",
-		"assignee_name":   "ada",
-		"unblocked":       true,
-		"search":          "login",
-		"priority":        3,
-		"due_before":      "2026-10-02T00:00:00Z",
-		"due_after":       "2026-09-01T00:00:00Z",
-		"completed_since": "2026-09-15T00:00:00Z",
-		"limit":           5,
-		"offset":          10,
+		"project_id":       "P1",
+		"status":           "todo",
+		"assignee_name":    "ada",
+		"assignee_type":    "agent",
+		"archived":         true,
+		"unblocked":        true,
+		"search":           "login",
+		"priority":         3,
+		"due_before":       "2026-10-02T00:00:00Z",
+		"due_after":        "2026-09-01T00:00:00Z",
+		"created_after":    "2026-08-01T00:00:00Z",
+		"created_before":   "2026-09-25T00:00:00Z",
+		"completed_since":  "2026-09-15T00:00:00Z",
+		"completed_before": "2026-10-05T00:00:00Z",
+		"limit":            5,
+		"offset":           10,
 	})
 	if res.IsError {
 		t.Fatalf("list_tasks returned isError: %s", firstText(t, res))
@@ -713,19 +741,24 @@ func TestListTasksFilterPassthrough(t *testing.T) {
 
 	cc := findCall(t, *calls, http.MethodGet, "/api/v1/tasks")
 	wantQ := url.Values{
-		"project_id":    {"P1"},
-		"status":        {"todo"},
-		"assignee_name": {"ada"},
-		"unblocked":     {"true"},
-		"search":        {"login"},
-		"priority":      {"3"},
-		"due_before":    {"2026-10-02T00:00:00Z"},
-		"due_after":     {"2026-09-01T00:00:00Z"},
+		"project_id":     {"P1"},
+		"status":         {"todo"},
+		"assignee_name":  {"ada"},
+		"assignee_type":  {"agent"},
+		"archived":       {"true"},
+		"unblocked":      {"true"},
+		"search":         {"login"},
+		"priority":       {"3"},
+		"due_before":     {"2026-10-02T00:00:00Z"},
+		"due_after":      {"2026-09-01T00:00:00Z"},
+		"created_after":  {"2026-08-01T00:00:00Z"},
+		"created_before": {"2026-09-25T00:00:00Z"},
 		// The tool arg completed_since is transmitted as the documented alias
 		// param completed_after (API.md: "aliases of each other").
-		"completed_after": {"2026-09-15T00:00:00Z"},
-		"limit":           {"5"},
-		"offset":          {"10"},
+		"completed_after":  {"2026-09-15T00:00:00Z"},
+		"completed_before": {"2026-10-05T00:00:00Z"},
+		"limit":            {"5"},
+		"offset":           {"10"},
 	}
 	if !reflect.DeepEqual(cc.query, wantQ) {
 		t.Errorf("filter query mismatch:\n got  %s\n want %s", cc.query.Encode(), wantQ.Encode())

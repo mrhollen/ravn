@@ -266,6 +266,10 @@ func registerListTasks(s *mcpsrv.MCPServer, c Client) {
 			mcpgo.Description("Exact status match.")),
 		mcpgo.WithString("assignee_name",
 			mcpgo.Description("Durable assignee NAME to filter by (not the ephemeral claim holder).")),
+		mcpgo.WithString("assignee_type", mcpgo.Enum("human", "agent"),
+			mcpgo.Description("Filter by durable assignee type: \"human\" or \"agent\".")),
+		mcpgo.WithBoolean("archived",
+			mcpgo.Description("true = list archived tasks; default false lists open (non-archived) tasks only.")),
 		mcpgo.WithBoolean("unblocked",
 			mcpgo.Description("true = keep only tasks with no open blocker — the ready-to-work set.")),
 		mcpgo.WithString("search",
@@ -276,8 +280,14 @@ func registerListTasks(s *mcpsrv.MCPServer, c Client) {
 			mcpgo.Description("RFC3339; due_at strictly before this (undated tasks never match).")),
 		mcpgo.WithString("due_after",
 			mcpgo.Description("RFC3339; due_at at or after this (inclusive).")),
+		mcpgo.WithString("created_after",
+			mcpgo.Description("RFC3339; only tasks created at/after this time (inclusive).")),
+		mcpgo.WithString("created_before",
+			mcpgo.Description("RFC3339; only tasks created strictly before this time.")),
 		mcpgo.WithString("completed_since",
 			mcpgo.Description("RFC3339; only tasks completed at/after this time.")),
+		mcpgo.WithString("completed_before",
+			mcpgo.Description("RFC3339; only tasks completed strictly before this time (complements completed_since).")),
 		mcpgo.WithNumber("limit",
 			mcpgo.Description("Page size: server default 20, max 100 (clamped).")),
 		mcpgo.WithNumber("offset",
@@ -289,6 +299,8 @@ func registerListTasks(s *mcpsrv.MCPServer, c Client) {
 		f.ProjectID = strings.TrimSpace(req.GetString("project_id", ""))
 		f.Status = strings.TrimSpace(req.GetString("status", ""))
 		f.AssigneeName = strings.TrimSpace(req.GetString("assignee_name", ""))
+		f.AssigneeType = strings.TrimSpace(req.GetString("assignee_type", ""))
+		f.Archived = req.GetBool("archived", false)
 		f.Unblocked = req.GetBool("unblocked", false)
 		f.Search = strings.TrimSpace(req.GetString("search", ""))
 		if v, ok := args["priority"]; ok {
@@ -297,7 +309,10 @@ func registerListTasks(s *mcpsrv.MCPServer, c Client) {
 		}
 		f.DueBefore = strings.TrimSpace(req.GetString("due_before", ""))
 		f.DueAfter = strings.TrimSpace(req.GetString("due_after", ""))
+		f.CreatedAfter = strings.TrimSpace(req.GetString("created_after", ""))
+		f.CreatedBefore = strings.TrimSpace(req.GetString("created_before", ""))
 		f.CompletedAfter = strings.TrimSpace(req.GetString("completed_since", ""))
+		f.CompletedBefore = strings.TrimSpace(req.GetString("completed_before", ""))
 		f.Limit = req.GetInt("limit", 0)
 		f.Offset = req.GetInt("offset", 0)
 		list, err := c.ListTasks(ctx, f)
