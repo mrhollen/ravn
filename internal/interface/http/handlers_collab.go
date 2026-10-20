@@ -78,24 +78,8 @@ func (a *App) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req releaseReq
-	if r.Body != nil {
-		rawBody, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, map[string]any{
-				"error":   "invalid input",
-				"message": "unreadable request body: " + err.Error(),
-			})
-			return
-		}
-		if len(strings.TrimSpace(string(rawBody))) > 0 {
-			if err := json.Unmarshal(rawBody, &req); err != nil {
-				writeJSONError(w, http.StatusBadRequest, map[string]any{
-					"error":   "invalid input",
-					"message": "malformed JSON body: " + err.Error(),
-				})
-				return
-			}
-		}
+	if _, ok := decodeOptionalJSON(w, r, &req); !ok {
+		return
 	}
 	actorIn, hasActor := extractActor(r, req.Actor)
 	var actor domain.Actor
@@ -353,27 +337,9 @@ func (a *App) handleRemoveAC(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var rawBody []byte
-	if r.Body != nil {
-		var err error
-		rawBody, err = io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, map[string]any{
-				"error":   "invalid input",
-				"message": "unreadable request body: " + err.Error(),
-			})
-			return
-		}
-	}
 	var req acRemoveReq
-	if len(strings.TrimSpace(string(rawBody))) > 0 {
-		if err := json.Unmarshal(rawBody, &req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, map[string]any{
-				"error":   "invalid input",
-				"message": "malformed JSON body: " + err.Error(),
-			})
-			return
-		}
+	if _, ok := decodeOptionalJSON(w, r, &req); !ok {
+		return
 	}
 	actorIn, hasActor := extractActor(r, req.Actor)
 	if !hasActor {
@@ -860,30 +826,9 @@ func (a *App) handleRemoveRelation(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := domain.RelationKind(r.PathValue("kind"))
 
-	// A client sending no body at all can present a nil r.Body (that is what
-	// http.NewRequest does for a nil body) — treat it as "no body", not as a
-	// read error.
-	var rawBody []byte
-	if r.Body != nil {
-		var err error
-		rawBody, err = io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, map[string]any{
-				"error":   "invalid input",
-				"message": "unreadable request body: " + err.Error(),
-			})
-			return
-		}
-	}
 	var req removeRelationReq
-	if len(strings.TrimSpace(string(rawBody))) > 0 {
-		if err := json.Unmarshal(rawBody, &req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, map[string]any{
-				"error":   "invalid input",
-				"message": "malformed JSON body: " + err.Error(),
-			})
-			return
-		}
+	if _, ok := decodeOptionalJSON(w, r, &req); !ok {
+		return
 	}
 	actorIn, hasActor := extractActor(r, req.Actor)
 	if !hasActor {

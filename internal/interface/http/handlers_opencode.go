@@ -142,24 +142,8 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req openCodeStartReq
-	if r.Body != nil && r.Body != http.NoBody {
-		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, map[string]any{
-				"error":   "invalid input",
-				"message": "failed to read request body",
-			})
-			return
-		}
-		if len(bytes.TrimSpace(bodyBytes)) > 0 {
-			if err := json.Unmarshal(bodyBytes, &req); err != nil {
-				writeJSONError(w, http.StatusBadRequest, map[string]any{
-					"error":   "invalid input",
-					"message": fmt.Sprintf("invalid json body: %v", err),
-				})
-				return
-			}
-		}
+	if _, ok := decodeOptionalJSON(w, r, &req); !ok {
+		return
 	}
 
 	detail, err := a.Tasks.GetDetail(ctx, id, 0, 0)

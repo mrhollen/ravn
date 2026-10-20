@@ -619,7 +619,7 @@ func TestMetricsTaskCountsAndActiveClaims(t *testing.T) {
 	}
 
 	code, _ = reqWithAuth(t, "POST", srv.URL+"/api/v1/tasks/"+taskRes.Task.ID+"/claim", "",
-		`{"actor":{"type":"agent","name":"bot"},"ttl_seconds":3600}`)
+		`{"actor":{"type":"agent","name":"bot"},"ttl_sec":3600}`)
 	if code != http.StatusOK {
 		t.Fatalf("claim task: %d", code)
 	}
