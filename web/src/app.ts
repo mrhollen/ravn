@@ -3520,8 +3520,8 @@ export function ravnApp() {
     initials,
     shortId,
     relTime,
-    /** Sanitized-markdown renderer (escaped source → marked → DOM post-pass),
-     *  memoized so poll re-renders don't re-parse unchanged bodies. */
+    /** Sanitized-markdown renderer (raw source → marked.parse → DOM-based
+     *  sanitize in ./md), memoized so poll re-renders don't re-parse unchanged bodies. */
     _mdCache: new Map<string, string>(),
     md(src: string | null | undefined): string {
       if (!src || !src.trim()) return "";
