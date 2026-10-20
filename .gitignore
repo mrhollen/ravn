@@ -31,6 +31,11 @@ go.work.sum
 # Local binaries
 /bin/
 
+# SQLite databases
+*.db
+*.db-wal
+*.db-shm
+
 # Persistent data directory (local development / host bind mount)
 /data/
 
