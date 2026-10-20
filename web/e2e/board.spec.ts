@@ -1494,7 +1494,7 @@ test.describe('Web E2E test suite', () => {
       await settingsBtn.click();
 
       const serverUrlInput = page.getByPlaceholder('http://localhost:4444');
-      const dirInput = page.getByPlaceholder('/home/hollen/Code/...');
+      const dirInput = page.getByPlaceholder('/workspace/...');
       const agentInput = page.getByTestId('project-opencode-agent-input');
       const modelInput = page.getByTestId('project-opencode-model-input');
       const variantInput = page.getByTestId('project-opencode-variant-input');

@@ -891,7 +891,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
               <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
                 OpenCode Project Directory
-                <input type="text" x-model="projectSettingsForm.opencode_directory" placeholder="/home/hollen/Code/..."
+                <input type="text" x-model="projectSettingsForm.opencode_directory" placeholder="/workspace/..."
                        class="field font-mono text-xs w-full" />
                 <span class="text-[11px] font-normal text-zinc-600 dark:text-zinc-400">Target codebase root directory for OpenCode agent build sessions</span>
               </label>
@@ -928,7 +928,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <input type="text"
                        list="project-opencode-models-datalist"
                        x-model="projectSettingsForm.opencode_model"
-                       placeholder="llama.cpp/Qwen Medium Long Context"
+                       placeholder="providerID/modelID"
                        data-testid="project-opencode-model-input"
                        class="field font-mono text-xs w-full" />
                 <datalist id="project-opencode-models-datalist">

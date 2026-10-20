@@ -360,8 +360,8 @@ Query param:
       "name": "Website Redesign",
       "description": "MVP landing page work",
       "opencode_server_url": "http://localhost:4444",
-      "opencode_directory": "/home/hollen/Code/ravn",
-      "opencode_model": "llama.cpp/Qwen Medium Long Context",
+      "opencode_directory": "/workspace",
+      "opencode_model": "",
       "archived": false,
       "created_at": "2026-09-20T09:00:00Z",
       "updated_at": "2026-09-20T09:00:00Z",
@@ -780,8 +780,8 @@ Each setting resolves project row → env var → default:
 | Setting | Project field | Env var | Default |
 |---|---|---|---|
 | OpenCode server base URL | `opencode_server_url` | `OPENCODE_SERVER_URL` | `http://localhost:4444` |
-| Session working directory | `opencode_directory` | `OPENCODE_DIRECTORY` | `/home/hollen/Code/ravn` |
-| Model ref (`providerID/modelID`) | `opencode_model` | `OPENCODE_MODEL` | `llama.cpp/Qwen Medium Long Context` |
+| Session working directory | `opencode_directory` | `OPENCODE_DIRECTORY` | `/workspace` |
+| Model ref (`providerID/modelID`) | `opencode_model` | `OPENCODE_MODEL` | (empty — no model sent; server default) |
 | Allowed host allowlist | - | `OPENCODE_ALLOWED_HOSTS` | (empty; default denies private/loopback/metadata) |
 | Allow private IP networks | - | `OPENCODE_ALLOW_PRIVATE_IPS` | `false` |
 | Allowed directories | - | `OPENCODE_ALLOWED_DIRECTORIES` | (empty; any clean absolute path allowed) |
