@@ -44,12 +44,49 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
+	handler, streamable, sse := buildHandlerStack(logger, *apiURL, *token, *agentName)
+
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		logger.Info("ravn-mcp listening", "addr", *addr, "upstream", *apiURL, "default_actor", *agentName)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		logger.Info("shutdown signal received")
+	case err := <-errCh:
+		logger.Error("server error", "err", err)
+	}
+
+	shutdownServer(logger, srv, streamable, sse, 10*time.Second)
+	logger.Info("stopped")
+}
+
+// buildHandlerStack wires the MCP protocol adapter exactly as production does:
+// tool/prompt/resource registration on a shared MCPServer behind both the
+// streamable-HTTP and legacy SSE transports, plus the auth/logging/compat
+// middleware. It returns the composed http.Handler and the two streaming
+// transports so callers can close their sessions on shutdown (see
+// shutdownServer).
+func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (http.Handler, *mcpsrv.StreamableHTTPServer, *mcpsrv.SSEServer) {
 	// The container default actor. RAVN_AGENT_NAME names THIS agent so its
 	// claims/attribution survive even on calls where the model forgot to pass
 	// an explicit actor (claims key on the name).
-	defaultActor := apiclient.Actor{Type: "agent", Name: *agentName}
+	defaultActor := apiclient.Actor{Type: "agent", Name: agentName}
 
-	client := apiclient.New(*apiURL, *token)
+	client := apiclient.New(apiURL, token)
 
 	mcs := mcpsrv.NewMCPServer("ravn", version, mcp.ServerOptions()...)
 	mcp.RegisterTools(mcs, client, defaultActor)
@@ -85,37 +122,27 @@ func main() {
 	mux.Handle("/message", messageHandlerWithSessionFallback(sse.MessageHandler()))
 	mux.HandleFunc("GET /healthz", mcp.HealthzHandler(client))
 
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           withLogging(logger, withAuth(*token, withModernMCPCompat(mux))),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	return withLogging(logger, withAuth(token, withModernMCPCompat(mux))), streamable, sse
+}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+// shutdownServer stops the MCP server in two stages. First, active streaming
+// sessions (legacy SSE event streams and streamable-HTTP GET notification
+// streams) are closed — these handlers run indefinitely and would otherwise
+// block srv.Shutdown for the entire drain window. Both CloseSessions calls
+// only signal termination; their in-flight handlers exit asynchronously. Then
+// any remaining in-flight handlers drain within timeout, force-closing as a
+// last resort.
+func shutdownServer(logger *slog.Logger, srv *http.Server, streamable *mcpsrv.StreamableHTTPServer, sse *mcpsrv.SSEServer, timeout time.Duration) {
+	logger.Info("closing active SSE/streaming sessions")
+	sse.CloseSessions()
+	streamable.CloseSessions(context.Background())
 
-	errCh := make(chan error, 1)
-	go func() {
-		logger.Info("ravn-mcp listening", "addr", *addr, "upstream", *apiURL, "default_actor", defaultActor.Name)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		logger.Info("shutdown signal received")
-	case err := <-errCh:
-		logger.Error("server error", "err", err)
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed; forcing close", "err", err)
 		srv.Close()
 	}
-	logger.Info("stopped")
 }
 
 func envOr(key, def string) string {
