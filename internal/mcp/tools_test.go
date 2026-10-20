@@ -1488,4 +1488,3 @@ func TestMCPServerNameAndActorFallback(t *testing.T) {
 		t.Errorf("fallback actor = %+v, want agent %q from RAVN_AGENT_NAME", fb.Actor, customAgent)
 	}
 }
-

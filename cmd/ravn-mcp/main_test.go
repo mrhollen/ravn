@@ -651,4 +651,3 @@ func TestUpstreamAndAgentDefaults(t *testing.T) {
 		t.Fatalf("expected overridden RAVN_API_URL %q, got %q", "http://custom-ravn-server:8080", got)
 	}
 }
-
