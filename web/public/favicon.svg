@@ -1,0 +1,162 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Rävn">
+  <title>Rävn — Faceted Obsidian &amp; Indigo Raven</title>
+  <defs>
+    <!-- Deep Midnight Slate Squircle Background -->
+    <linearGradient id="bg1" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E1B4B"/>
+      <stop offset="50%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#060911"/>
+    </linearGradient>
+
+    <radialGradient id="halo1" cx="256" cy="248" r="224" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1" stop-opacity="0.35"/>
+      <stop offset="55%" stop-color="#38BDF8" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#0F172A" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="rim1" x1="12" y1="12" x2="500" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#818CF8" stop-opacity="0.7"/>
+      <stop offset="50%" stop-color="#38BDF8" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#F59E0B" stop-opacity="0.5"/>
+    </linearGradient>
+
+    <!-- Iridescent Raven Plumage Gradients -->
+    <linearGradient id="crownFacet" x1="156" y1="108" x2="328" y2="168" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#A5B4FC"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </linearGradient>
+
+    <linearGradient id="browFacet" x1="230" y1="132" x2="348" y2="196" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#312E81"/>
+    </linearGradient>
+
+    <linearGradient id="napeFacet" x1="118" y1="148" x2="238" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+
+    <linearGradient id="cheekFacet" x1="196" y1="168" x2="318" y2="254" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3730A3"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+
+    <linearGradient id="mantleUpper" x1="92" y1="236" x2="216" y2="348" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#1E293B"/>
+    </linearGradient>
+
+    <linearGradient id="mantleLower" x1="96" y1="316" x2="220" y2="436" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#312E81"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+
+    <linearGradient id="breastFacet" x1="184" y1="246" x2="282" y2="350" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4338CA"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+
+    <linearGradient id="hackle1" x1="248" y1="234" x2="348" y2="282" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+
+    <linearGradient id="hackle2" x1="224" y1="282" x2="334" y2="332" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#818CF8"/>
+      <stop offset="100%" stop-color="#312E81"/>
+    </linearGradient>
+
+    <linearGradient id="hackle3" x1="204" y1="332" x2="308" y2="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+
+    <!-- Brushed Gunmetal & Cyan-Edge Corvid Beak -->
+    <linearGradient id="beakTop" x1="324" y1="136" x2="456" y2="212" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F1F5F9"/>
+      <stop offset="50%" stop-color="#94A3B8"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+
+    <linearGradient id="beakMid" x1="312" y1="172" x2="456" y2="212" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#64748B"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+
+    <linearGradient id="beakBot" x1="296" y1="198" x2="424" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#334155"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+
+    <!-- Nordic Amber Accent (Umlaut + Eye + Breast Feather Spark) -->
+    <linearGradient id="amberGlow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FDE047"/>
+      <stop offset="50%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#EA580C"/>
+    </linearGradient>
+
+    <filter id="shadow1" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#020617" flood-opacity="0.7"/>
+    </filter>
+  </defs>
+
+  <!-- Squircle Container -->
+  <rect x="12" y="12" width="488" height="488" rx="112" fill="url(#bg1)"/>
+  <circle cx="256" cy="256" r="224" fill="url(#halo1)"/>
+  <rect x="14" y="14" width="484" height="484" rx="110" fill="none" stroke="url(#rim1)" stroke-width="4"/>
+
+  <!-- Subtle Geometric Compass Ring -->
+  <circle cx="256" cy="256" r="200" fill="none" stroke="#312E81" stroke-width="1.5" stroke-dasharray="4 8" opacity="0.55"/>
+
+  <g transform="translate(256, 256) scale(1.05) translate(-256, -256)">
+    <!-- Nordic Umlaut (ä) — Twin Golden Diamond Shards Above the Crown -->
+    <g fill="url(#amberGlow)">
+      <polygon points="198,58 210,78 198,98 186,78"/>
+      <polygon points="244,50 256,70 244,90 232,70"/>
+    </g>
+
+    <!-- Watertight Triangulated Origami Raven Bust (All shared vertices locked) -->
+    <g filter="url(#shadow1)" stroke="#090D16" stroke-width="2.5" stroke-linejoin="round">
+      <!-- Crown Facet -->
+      <polygon points="146,152 230,108 326,134 240,166" fill="url(#crownFacet)"/>
+
+      <!-- Forehead / Brow Facet -->
+      <polygon points="240,166 326,134 348,170 294,198" fill="url(#browFacet)"/>
+
+      <!-- Upper Beak (Arched Corvid Culmen) -->
+      <path d="M 326,134 C 382,140 430,164 456,210 L 348,170 Z" fill="url(#beakTop)"/>
+      <!-- Upper Beak Tomium / Ridge -->
+      <polygon points="348,170 456,210 318,204 294,198" fill="url(#beakMid)"/>
+      <!-- Lower Beak Mandible -->
+      <polygon points="294,198 424,216 310,234" fill="url(#beakBot)"/>
+
+      <!-- Nape / Back of Neck -->
+      <polygon points="146,152 240,166 196,246 106,240" fill="url(#napeFacet)"/>
+
+      <!-- Cheek / Lore Facet -->
+      <polygon points="240,166 294,198 310,234 248,256 196,246" fill="url(#cheekFacet)"/>
+
+      <!-- Upper Mantle / Back Shoulder -->
+      <polygon points="106,240 196,246 168,336 86,332" fill="url(#mantleUpper)"/>
+
+      <!-- Central Chest Core (Shares exact vertices with Cheek, Mantle, and Hackles) -->
+      <polygon points="196,246 248,256 224,296 204,338 168,336" fill="url(#breastFacet)"/>
+
+      <!-- Three Layered Throat Hackles (Watertight shared spine: 248,256 -> 224,296 -> 204,338 -> 234,376) -->
+      <polygon points="248,256 310,234 348,266 282,284 224,296" fill="url(#hackle1)"/>
+      <polygon points="224,296 282,284 334,316 258,330 204,338" fill="url(#hackle2)"/>
+      <polygon points="204,338 258,330 308,364 234,376" fill="url(#hackle3)"/>
+
+      <!-- Lower Wing Shoulder / Base -->
+      <polygon points="86,332 168,336 184,436 112,418" fill="url(#mantleLower)"/>
+
+      <!-- Golden Accent Facet on Wing Edge (Echoing the Eye & Umlaut) -->
+      <polygon points="168,336 204,338 234,376 184,436" fill="url(#amberGlow)"/>
+    </g>
+
+    <!-- Fierce Glowing Amber Corvid Eye -->
+    <polygon points="266,160 304,166 286,182 256,174" fill="#090D16"/>
+    <polygon points="271,163 298,167 285,178 262,172" fill="url(#amberGlow)"/>
+    <circle cx="286" cy="168.5" r="3" fill="#FFFBEB"/>
+  </g>
+</svg>

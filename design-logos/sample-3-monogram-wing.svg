@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Rävn Sample 3 — Minimalist 'R' Raven &amp; Workflow Mark">
+  <defs>
+    <!-- Ultra-Clean Linear/Vercel-Style Dark Obsidian Surface -->
+    <linearGradient id="bg3" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#18181B"/>
+      <stop offset="100%" stop-color="#09090B"/>
+    </linearGradient>
+
+    <!-- Warm Coral-Orange to Amber Gradient (Rävn Signature Accent) -->
+    <linearGradient id="coralGrad" x1="96" y1="80" x2="380" y2="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FF8A4C"/>
+      <stop offset="50%" stop-color="#F97316"/>
+      <stop offset="100%" stop-color="#EA580C"/>
+    </linearGradient>
+
+    <!-- Crisp Pure White to Cool Zinc Gradient -->
+    <linearGradient id="ivoryGrad" x1="140" y1="100" x2="410" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#D4D4D8"/>
+    </linearGradient>
+
+    <filter id="softShadow3" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- App Icon Squircle -->
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#bg3)"/>
+  <rect x="26" y="26" width="460" height="460" rx="106" fill="none" stroke="#27272A" stroke-width="4"/>
+
+  <g filter="url(#softShadow3)">
+    <!-- LEFT STEM OF THE 'R': Three Stacked Workflow / Kanban Cards -->
+    <!-- Card 1 (Active Coral Card) -->
+    <rect x="100" y="116" width="68" height="90" rx="18" fill="url(#coralGrad)"/>
+    <!-- Card 2 -->
+    <rect x="100" y="224" width="68" height="90" rx="18" fill="url(#ivoryGrad)"/>
+    <!-- Card 3 -->
+    <rect x="100" y="332" width="68" height="88" rx="18" fill="url(#ivoryGrad)" opacity="0.65"/>
+
+    <!-- RIGHT SIDE OF THE 'R': Sleek Aerodynamic Raven Profile (Upper Loop = Head & Hooked Beak, Diagonal Leg = Swept Wing) -->
+    <path d="
+      M 192,116
+      L 276,116
+      C 352,116 410,148 434,210
+      C 392,204 352,216 320,238
+      C 298,252 272,260 242,260
+      L 292,260
+      C 320,260 344,274 358,298
+      L 416,396
+      C 424,408 415,420 400,420
+      L 332,420
+      C 312,420 294,410 284,392
+      L 204,264
+      C 196,250 192,234 192,216
+      Z
+    " fill="url(#ivoryGrad)"/>
+
+    <!-- Crisp Negative-Space Counter inside the 'R' (Doubles as Raven Neck & Wing Shoulder Crease) -->
+    <path d="
+      M 234,172
+      L 264,172
+      C 286,172 302,184 302,202
+      C 302,220 286,232 264,232
+      L 234,232
+      C 225,232 218,225 218,216
+      L 218,188
+      C 218,179 225,172 234,172 Z
+    " fill="#121215"/>
+
+    <!-- Fierce Angular Raven Eye -->
+    <polygon points="324,154 364,162 346,178 316,168" fill="#09090B"/>
+    <circle cx="342" cy="164" r="5.5" fill="#FF7A45"/>
+
+    <!-- Wing Primary Feather Split on the Diagonal Leg -->
+    <path d="M 326,314 L 386,420" stroke="#121215" stroke-width="10" stroke-linecap="round"/>
+
+    <!-- THE 'ä' UMLAUT: Two Crisp Coral Capsules Perched Above the Crown -->
+    <rect x="216" y="68" width="28" height="24" rx="12" fill="url(#coralGrad)"/>
+    <rect x="264" y="68" width="28" height="24" rx="12" fill="url(#coralGrad)"/>
+  </g>
+</svg>

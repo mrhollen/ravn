@@ -4,11 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Rävn</title>
-    <!-- Favicons: OS color scheme is the baseline; the pre-paint script below
-         overrides these media attributes when the user's stored theme choice
-         (localStorage["ravn_theme"]) differs from the OS preference. -->
-    <link id="favicon-light" rel="icon" type="image/svg+xml" href="/logo-mascot.svg" media="(prefers-color-scheme: light)" />
-    <link id="favicon-dark" rel="icon" type="image/svg+xml" href="/logo-mascot-dark.svg" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <script>
       // Apply the stored theme before first paint to avoid a light-mode flash.
       (function () {
@@ -19,12 +15,6 @@
             t === "dark" ||
             (t === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
           document.documentElement.classList.toggle("dark", dark);
-          // Favicon follows the user's theme choice, not the OS preference.
-          if (t === "light" || t === "dark") {
-            var off = "(max-width: 0)";
-            document.getElementById("favicon-light").setAttribute("media", t === "light" ? "all" : off);
-            document.getElementById("favicon-dark").setAttribute("media", t === "dark" ? "all" : off);
-          }
         } catch (e) {
           /* private mode — leave the default light theme */
         }
@@ -98,19 +88,12 @@
             toggle button is hidden). Project settings live in the gear attached
             to the Projects dropdown, not in the strip. -->
       <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-white px-4 py-3 shadow-sm md:gap-x-4 dark:border-zinc-800 dark:bg-zinc-900">
-        <!-- Wordmark (EXPERIMENT): the mascot logo replaces BOTH the name and the
-             tagline. The sr-only h1 preserves the page's main heading for screen
-             readers. Visibility behavior unchanged: hidden below sm.
-             THEME SIBLINGS: one img per mode — class-driven dark mode (@custom-variant
-             dark on html.dark, toggled pre-paint by the head script) shows
-             logo-mascot.svg in light and logo-mascot-dark.svg (transparent bg + coral
-             ring) when .dark. Exactly one is visible in every state: the full alt rides
-             on the visible-in-its-mode img, the hidden twin is aria-hidden. -->
+        <!-- Brand icon: the faceted Rävn mark in the header, paired with an
+             sr-only h1 to preserve the page's main heading for screen readers.
+             Hidden below sm. -->
         <div class="mr-1 hidden leading-tight sm:block">
-          <img src="/logo-mascot.svg" alt="Rävn — MCP-first kanban · visibility UI"
-               class="h-9 w-auto dark:hidden" />
-          <img src="/logo-mascot-dark.svg" aria-hidden="true"
-               class="hidden h-9 w-auto dark:block" />
+          <img src="/logo.svg" alt="Rävn — MCP-first kanban · visibility UI"
+               class="h-9 w-auto" />
           <h1 class="sr-only">Rävn</h1>
         </div>
 
