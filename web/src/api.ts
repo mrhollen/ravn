@@ -158,8 +158,6 @@ export class ApiError extends Error {
 }
 
 export const LS_TOKEN = "ravn_token";
-/** Pre-rebrand (CrowBan) localStorage key for the auth token. */
-const LS_TOKEN_LEGACY = "crowban_token";
 
 /** Retrieves the auth token from URL ?token= or localStorage. */
 export function getAuthToken(): string {
@@ -182,16 +180,7 @@ export function getAuthToken(): string {
       /* ignore */
     }
     try {
-      const fresh = localStorage.getItem(LS_TOKEN);
-      if (fresh) return fresh;
-      // Pre-rebrand (CrowBan) profiles stored the token under the legacy key.
-      // Migrate it to the new key once so existing sessions keep authenticating.
-      const legacy = localStorage.getItem(LS_TOKEN_LEGACY);
-      if (legacy) {
-        setAuthToken(legacy);
-        return legacy.trim();
-      }
-      return "";
+      return localStorage.getItem(LS_TOKEN) || "";
     } catch {
       /* private mode */
     }

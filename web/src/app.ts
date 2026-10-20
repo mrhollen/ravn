@@ -61,12 +61,6 @@ export const LS_ACTOR = "ravn.actor";
 export const LS_PROJECT = "ravn.project";
 export const LS_SORT = "ravn.sort";
 export const LS_THEME = "ravn_theme";
-// Pre-rebrand (CrowBan) localStorage keys, read as one-time fallbacks so
-// existing browser profiles keep their saved state after the rename.
-const LS_ACTOR_LEGACY = "crowban.actor";
-const LS_PROJECT_LEGACY = "crowban.project";
-const LS_SORT_LEGACY = "crowban.sort";
-const LS_THEME_LEGACY = "crowban.theme";
 export { LS_TOKEN };
 const POLL_MS = 15_000;
 const MD_CACHE_MAX = 500;
@@ -82,10 +76,7 @@ function isThemeMode(v: unknown): v is ThemeMode {
 /** Read the persisted theme choice; anything malformed falls back to system. */
 function readStoredTheme(): ThemeMode {
   try {
-    const raw =
-      safeStorage.getItem(LS_THEME) ??
-      safeStorage.getItem("ravn.theme") ??
-      safeStorage.getItem(LS_THEME_LEGACY);
+    const raw = safeStorage.getItem(LS_THEME) ?? safeStorage.getItem("ravn.theme");
     return isThemeMode(raw) ? raw : "system";
   } catch {
     return "system";
@@ -122,7 +113,7 @@ function isSortKey(v: unknown): v is SortKey {
 /** Read the persisted sort choice; anything malformed falls back to no sort. */
 function readStoredSort(): { key: SortKey; dir: SortDir } {
   try {
-    const raw = safeStorage.getItem(LS_SORT) ?? safeStorage.getItem(LS_SORT_LEGACY);
+    const raw = safeStorage.getItem(LS_SORT);
     if (!raw) return { key: "", dir: "desc" };
     const parsed = JSON.parse(raw) as { key?: unknown; dir?: unknown };
     const key: SortKey = isSortKey(parsed.key) ? parsed.key : "";
@@ -292,7 +283,7 @@ export function ravnApp() {
   return {
     // ------------------------------------------------------------------ actor
     /** Display name stored in localStorage; sent as `actor.name` on every mutation. */
-    actorName: safeStorage.getItem(LS_ACTOR) ?? safeStorage.getItem(LS_ACTOR_LEGACY) ?? "",
+    actorName: safeStorage.getItem(LS_ACTOR) ?? "",
 
     saveActor(): void {
       try {
@@ -1058,7 +1049,7 @@ export function ravnApp() {
     },
 
     // ------------------------------------------------------------------- board
-    selectedProjectId: safeStorage.getItem(LS_PROJECT) ?? safeStorage.getItem(LS_PROJECT_LEGACY) ?? "",
+    selectedProjectId: safeStorage.getItem(LS_PROJECT) ?? "",
     board: null as Board | null,
 
     /** IDs of tasks known to be blocked right now — summary rows don't carry
