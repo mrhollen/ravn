@@ -1,6 +1,10 @@
 package pubsub
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -309,5 +313,287 @@ func TestBroker_CloseClosesAllSubscribersAndPreventsNew(t *testing.T) {
 	// Idempotent close
 	if err := b.Close(); err != nil {
 		t.Errorf("second Close error: %v", err)
+	}
+}
+
+func TestBroker_GracefulShutdownUnblocksActiveReaders(t *testing.T) {
+	b := NewBroker()
+	p := domain.ID("P_SHUTDOWN")
+
+	const numReaders = 10
+	var startedWg sync.WaitGroup
+	var doneWg sync.WaitGroup
+
+	startedWg.Add(numReaders)
+	doneWg.Add(numReaders)
+
+	readCounts := make([]int, numReaders)
+	for i := 0; i < numReaders; i++ {
+		idx := i
+		ch, _ := b.Subscribe(p)
+		go func() {
+			defer doneWg.Done()
+			startedWg.Done()
+			for range ch {
+				readCounts[idx]++
+			}
+		}()
+	}
+
+	// Wait for all reader goroutines to start listening
+	startedWg.Wait()
+
+	if count := b.SubscriberCount(); count != numReaders {
+		t.Fatalf("SubscriberCount = %d, want %d", count, numReaders)
+	}
+
+	// Publish one event to ensure readers are active
+	b.Publish(domain.Event{
+		ID:        domain.ID("EV1"),
+		ProjectID: &p,
+		Kind:      domain.EventCreated,
+		At:        time.Now().UTC(),
+	})
+
+	// Wait briefly for delivery
+	time.Sleep(20 * time.Millisecond)
+
+	// Close broker - must unblock all readers immediately
+	closeStart := time.Now()
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		doneWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		if elapsed := time.Since(closeStart); elapsed > 500*time.Millisecond {
+			t.Errorf("Shutdown took too long to unblock readers: %v", elapsed)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for active readers to be unblocked by Close()")
+	}
+
+	if !b.IsClosed() {
+		t.Error("expected IsClosed to be true")
+	}
+	if count := b.SubscriberCount(); count != 0 {
+		t.Errorf("SubscriberCount after close = %d, want 0", count)
+	}
+}
+
+func TestBroker_ConcurrentCloseWithPublishAndSubscribe(t *testing.T) {
+	b := NewBroker(WithBufferSize(8))
+	p := domain.ID("P_CONCURRENT_CLOSE")
+
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// 5 Publishers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; ; j++ {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					b.Publish(domain.Event{
+						ID:        domain.ID(fmt.Sprintf("EV-%d-%d", id, j)),
+						ProjectID: &p,
+						Kind:      domain.EventUpdated,
+						At:        time.Now().UTC(),
+					})
+					time.Sleep(1 * time.Millisecond)
+				}
+			}
+		}(i)
+	}
+
+	// 5 Subscribers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					ch, cancelSub := b.Subscribe(p)
+					timer := time.NewTimer(5 * time.Millisecond)
+					select {
+					case <-ch:
+					case <-timer.C:
+					}
+					timer.Stop()
+					cancelSub()
+				}
+			}
+		}()
+	}
+
+	// Let them run for 30ms
+	time.Sleep(30 * time.Millisecond)
+
+	// Concurrently call Close from multiple goroutines
+	var closeWg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		closeWg.Add(1)
+		go func() {
+			defer closeWg.Done()
+			if err := b.Close(); err != nil {
+				t.Errorf("Close returned error: %v", err)
+			}
+		}()
+	}
+	closeWg.Wait()
+
+	// Stop workers
+	cancel()
+	wg.Wait()
+
+	if !b.IsClosed() {
+		t.Error("expected broker to be closed")
+	}
+	if count := b.SubscriberCount(); count != 0 {
+		t.Errorf("SubscriberCount after close = %d, want 0", count)
+	}
+}
+
+func TestBroker_SlowSubscriberDropLoggingAndMetrics(t *testing.T) {
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	b := NewBroker(WithBufferSize(2), WithLogger(logger))
+	p1 := domain.ID("P_SLOW_LOG")
+
+	// Slow client: never reads
+	slowSub, cancelSlow := b.Subscribe(p1)
+	defer cancelSlow()
+
+	// Fast client: actively reads
+	fastSub, cancelFast := b.Subscribe(p1)
+	defer cancelFast()
+
+	receivedFast := 0
+	fastDone := make(chan struct{})
+	go func() {
+		defer close(fastDone)
+		for range fastSub {
+			receivedFast++
+			if receivedFast == 5 {
+				return
+			}
+		}
+	}()
+
+	taskID := domain.ID("T_TASK_1")
+	for i := 1; i <= 5; i++ {
+		ev := domain.Event{
+			ID:        domain.ID(fmt.Sprintf("EV-%d", i)),
+			ProjectID: &p1,
+			TaskID:    &taskID,
+			Kind:      domain.EventStatusChanged,
+			At:        time.Now().UTC(),
+		}
+		b.Publish(ev)
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	select {
+	case <-fastDone:
+		if receivedFast != 5 {
+			t.Fatalf("fastSub received %d events, want 5", receivedFast)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatalf("fastSub timed out; received %d events", receivedFast)
+	}
+
+	// Verify slowSub channel is closed
+	select {
+	case _, ok := <-slowSub:
+		if ok {
+			for range slowSub {
+			}
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for slow subscriber channel to close")
+	}
+
+	// Verify metric
+	if drops := b.DroppedCount(); drops != 1 {
+		t.Errorf("DroppedCount = %d, want 1", drops)
+	}
+	if drops := b.DroppedSubscribers(); drops != 1 {
+		t.Errorf("DroppedSubscribers = %d, want 1", drops)
+	}
+
+	// Verify structured warning log
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "level=WARN") {
+		t.Errorf("expected level=WARN in log output, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "pubsub: slow subscriber buffer overflow, dropping subscriber") {
+		t.Errorf("expected drop message in log output, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "buffer_capacity=2") {
+		t.Errorf("expected buffer_capacity=2 in log output, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "subscriber_project=P_SLOW_LOG") {
+		t.Errorf("expected subscriber_project in log output, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "task_id=T_TASK_1") {
+		t.Errorf("expected task_id in log output, got: %s", logOutput)
+	}
+}
+
+func TestBroker_SlowSubscriberDropDefaultLogger(t *testing.T) {
+	var logBuf strings.Builder
+	testLogger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	origDefault := slog.Default()
+	slog.SetDefault(testLogger)
+	defer slog.SetDefault(origDefault)
+
+	// Broker constructed without WithLogger uses slog.Default()
+	b := NewBroker(WithBufferSize(2))
+	p := domain.ID("P_DEFAULT_LOG")
+
+	slowSub, cancel := b.Subscribe(p)
+	defer cancel()
+
+	for i := 1; i <= 5; i++ {
+		b.Publish(domain.Event{
+			ID:        domain.ID(fmt.Sprintf("EV-%d", i)),
+			ProjectID: &p,
+			Kind:      domain.EventCreated,
+			At:        time.Now().UTC(),
+		})
+	}
+
+	// Verify channel closed
+	select {
+	case _, ok := <-slowSub:
+		if ok {
+			for range slowSub {
+			}
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("slow subscriber channel not closed")
+	}
+
+	if drops := b.DroppedCount(); drops != 1 {
+		t.Errorf("DroppedCount = %d, want 1", drops)
+	}
+
+	if !strings.Contains(logBuf.String(), "pubsub: slow subscriber buffer overflow, dropping subscriber") {
+		t.Errorf("expected default logger to record drop warning, got: %s", logBuf.String())
 	}
 }
