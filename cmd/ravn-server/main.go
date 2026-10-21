@@ -265,11 +265,21 @@ func hasIndexHTML(dir string) bool {
 }
 
 // spaFallback serves the built web UI from static via stdlib (FileServerFS).
-// A GET/HEAD whose path maps to a real file or directory is served as-is; any
-// other request that is NOT under /api or /healthz falls back to index.html
-// so client-side routing deep links work. Paths under /api, /healthz, or /metrics
-// that still reach this handler are unknown routes — 404, never index.html (the
-// real patterns for them are more specific than "GET /" and win first).
+// A GET/HEAD whose path maps to a real file is served as-is with its content
+// type; any other request that is NOT under /api or /healthz falls back to
+// index.html so client-side routing deep links work. Paths under /api,
+// /healthz, or /metrics that still reach this handler are unknown routes — 404,
+// never index.html (the real patterns for them are more specific than "GET /"
+// and win first).
+//
+// Only real files are delegated to FileServer. Directories are deliberately NOT
+// served as-is: for any subdirectory without an index.html the stdlib emits an
+// auto-generated HTML listing — information disclosure of the asset tree.
+// Directory requests therefore fall through like any other unmatched route:
+// /api, /healthz, /metrics, or /artifacts prefixes 404; everything else gets
+// the SPA root index (client-side routing). This is intentional even if a
+// future subdirectory contains its own index.html — this handler never surfaces
+// subdirectory content via the file server.
 //
 // The fallback rewrites the path to "/" rather than "/index.html": FileServer
 // itself redirects any request whose path ends in "/index.html" to "./" (see
@@ -278,8 +288,11 @@ func hasIndexHTML(dir string) bool {
 func spaFallback(static fs.FS) http.Handler {
 	fileServer := http.FileServerFS(static)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, err := fs.Stat(static, strings.TrimPrefix(r.URL.Path, "/")); err == nil {
-			fileServer.ServeHTTP(w, r) // real file or directory: served as-is
+		// Real files only — never directories: delegating a directory to
+		// FileServer would let the stdlib emit an auto-generated HTML listing
+		// for any subdirectory lacking index.html (information disclosure).
+		if info, err := fs.Stat(static, strings.TrimPrefix(r.URL.Path, "/")); err == nil && !info.IsDir() {
+			fileServer.ServeHTTP(w, r) // real file: served as-is with its content type
 			return
 		}
 		p := r.URL.Path

@@ -28,6 +28,7 @@ import (
 const (
 	indexHTML = "<!doctype html><html><head><title>Rävn</title></head><body>Rävn UI</body></html>\n"
 	appJS     = "console.log('ravn app');\n"
+	styleCSS  = "body { margin: 0; }\n"
 )
 
 // newTestDB opens a temp-file SQLite database (migrations included).
@@ -83,6 +84,31 @@ func startStaticTestServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
+// startStaticTestServerWithCSS is like startStaticTestServer but adds a hashed
+// .css bundle as well, so Content-Type detection can be asserted for both MIME
+// families. It deliberately does not touch the shared fixture above.
+func startStaticTestServerWithCSS(t *testing.T) *httptest.Server {
+	t.Helper()
+	staticDir := t.TempDir()
+	files := map[string]string{
+		"index.html":                         indexHTML,
+		filepath.Join("assets", "app.js"):    appJS,
+		filepath.Join("assets", "style.css"): styleCSS,
+	}
+	for name, content := range files {
+		p := filepath.Join(staticDir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir for %s: %v", p, err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	srv := httptest.NewServer(newRouter(newTestDB(t), staticDir, "", t.TempDir()))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func get(t *testing.T, url string) (int, string) {
 	t.Helper()
 	res, err := http.Get(url)
@@ -127,11 +153,22 @@ func TestRootReturnsPlaceholder(t *testing.T) {
 func TestStaticRootServesIndexHTML(t *testing.T) {
 	srv := startStaticTestServer(t)
 
-	code, body := get(t, srv.URL+"/")
-	if code != http.StatusOK {
-		t.Fatalf("GET / status = %d, want 200 (body %s)", code, body)
+	res, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
 	}
-	if body != indexHTML {
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body from /: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET / status = %d, want 200 (body %s)", res.StatusCode, body)
+	}
+	if loc := res.Header.Get("Location"); loc != "" {
+		t.Errorf("GET / Location = %q, want no redirect", loc)
+	}
+	if string(body) != indexHTML {
 		t.Errorf("GET / body = %q, want the dist index.html content", body)
 	}
 }
@@ -170,6 +207,88 @@ func TestStaticSPAFallbackServesIndexForDeepLinks(t *testing.T) {
 		if body != indexHTML {
 			t.Errorf("GET %s body = %q, want the index.html fallback", p, body)
 		}
+	}
+}
+
+// TestStaticDirectoryRequestIsNeverListed pins down a security property: a
+// directory request must never be delegated to http.FileServer, which would
+// emit an auto-generated HTML listing for any subdirectory lacking index.html
+// (leaking internal asset structure/filenames to arbitrary visitors). Such
+// requests fall through to the SPA fallback — 200 with the dist root
+// index.html, byte-for-byte.
+func TestStaticDirectoryRequestIsNeverListed(t *testing.T) {
+	srv := startStaticTestServer(t)
+
+	for _, p := range []string{"/assets/", "/assets"} {
+		t.Run(p, func(t *testing.T) {
+			res, err := http.Get(srv.URL + p)
+			if err != nil {
+				t.Fatalf("GET %s: %v", p, err)
+			}
+			defer res.Body.Close()
+			body, err := io.ReadAll(res.Body)
+			if err != nil {
+				t.Fatalf("read body from %s: %v", p, err)
+			}
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s status = %d, want 200 SPA root index (body %s)", p, res.StatusCode, body)
+			}
+			if loc := res.Header.Get("Location"); loc != "" {
+				t.Errorf("GET %s Location = %q, want no redirect to a listing", p, loc)
+			}
+			if string(body) != indexHTML {
+				t.Errorf("GET %s body = %q, want the dist index.html content byte-for-byte", p, body)
+			}
+			// Would fail against the pre-fix dirList page: it names every file.
+			if strings.Contains(string(body), "app.js") {
+				t.Errorf("GET %s body leaks an assets/ filename (auto-generated directory listing?): %q", p, body)
+			}
+			// stdlib net/http/dirIndex marker — a generated listing, not the SPA index.
+			if strings.Contains(string(body), "Directory listing") {
+				t.Errorf("GET %s looks like a stdlib auto-generated directory index: %q", p, body)
+			}
+		})
+	}
+}
+
+// TestStaticRealAssetContentTypes asserts real static files keep being served
+// byte-for-byte with an appropriate Content-Type. It uses a dedicated fixture
+// (style.css added) instead of mutating the shared startStaticTestServer.
+func TestStaticRealAssetContentTypes(t *testing.T) {
+	srv := startStaticTestServerWithCSS(t)
+
+	for _, tc := range []struct {
+		path string // static path to fetch
+		body string // expected byte-for-byte body
+		mime string // required substring of the lowercased Content-Type
+	}{
+		{"/assets/app.js", appJS, "javascript"},
+		{"/assets/style.css", styleCSS, "text/css"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			res, err := http.Get(srv.URL + tc.path)
+			if err != nil {
+				t.Fatalf("GET %s: %v", tc.path, err)
+			}
+			defer res.Body.Close()
+			body, err := io.ReadAll(res.Body)
+			if err != nil {
+				t.Fatalf("read body from %s: %v", tc.path, err)
+			}
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s status = %d, want 200 (body %s)", tc.path, res.StatusCode, body)
+			}
+			ct := strings.ToLower(res.Header.Get("Content-Type"))
+			if ct == "" {
+				t.Errorf("GET %s Content-Type is empty", tc.path)
+			}
+			if !strings.Contains(ct, tc.mime) {
+				t.Errorf("GET %s Content-Type = %q, want it to contain %q", tc.path, ct, tc.mime)
+			}
+			if string(body) != tc.body {
+				t.Errorf("GET %s body = %q, want byte-for-byte %q", tc.path, body, tc.body)
+			}
+		})
 	}
 }
 
