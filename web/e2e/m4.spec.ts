@@ -214,13 +214,16 @@ test.describe('Milestone 4: R8, R9, R10 Frontend Verification', () => {
     await xssCard.click();
 
     await expect(drawer).toBeVisible();
-    const mdBody = drawer.locator('.md-body');
+    // Scope to the DISPLAYED description: the edit-form draft preview is also a
+    // .md-body in this drawer (hidden until Edit+Preview), so bare class matching
+    // can resolve it first. The testid targets exactly the rendered server value.
+    const mdBody = drawer.getByTestId('task-description');
     await expect(mdBody).toContainText('Safe text here');
-    // Forbidden tags must not exist in DOM
-    await expect(drawer.locator('.md-body script')).toHaveCount(0);
-    await expect(drawer.locator('.md-body svg')).toHaveCount(0);
-    await expect(drawer.locator('.md-body input')).toHaveCount(0);
-    await expect(drawer.locator('.md-body form')).toHaveCount(0);
+    // Forbidden tags must not exist in the rendered description DOM
+    await expect(mdBody.locator('script')).toHaveCount(0);
+    await expect(mdBody.locator('svg')).toHaveCount(0);
+    await expect(mdBody.locator('input')).toHaveCount(0);
+    await expect(mdBody.locator('form')).toHaveCount(0);
   });
 
   test('R9b: protocol-relative markdown links render as non-clickable text (security)', async ({ page }) => {
@@ -258,7 +261,9 @@ test.describe('Milestone 4: R8, R9, R10 Frontend Verification', () => {
 
     const drawer = page.locator('aside');
     await expect(drawer).toBeVisible();
-    const mdBody = drawer.locator('.md-body').first();
+    // The displayed description — NOT .md-body:first, which now resolves to the
+    // hidden edit-form draft preview (same class, earlier in DOM order).
+    const mdBody = drawer.getByTestId('task-description');
 
     // AC1 — no protocol-relative href survives (neither markdown nor raw-HTML anchors).
     await expect(mdBody.locator('a[href^="//"]')).toHaveCount(0);

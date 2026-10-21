@@ -1549,11 +1549,36 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       </select>
                     </label>
                   </div>
-                  <label class="flex flex-col text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                    Description (markdown)
-                    <textarea x-model="editDraft.description" rows="5" class="field mt-1 font-mono text-xs"
-                              placeholder="Markdown description…"></textarea>
-                  </label>
+                   <!-- Description: Write/Preview segmented control (AC 1). The
+                        group is plain <button>s (keyboard-accessible, aria-pressed
+                        carries the active state) above the field; default = Write. -->
+                   <div class="flex flex-col text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                     Description (markdown)
+                     <div role="group" aria-label="Description input mode"
+                          class="mt-1 inline-flex items-stretch rounded-md border border-zinc-300 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+                       <button type="button" @click="descShowPreview = false" data-testid="desc-write-btn"
+                               :aria-pressed="String(!descShowPreview)"
+                               class="rounded-l-md px-2.5 py-1 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:focus-visible:ring-zinc-300"
+                               :class="!descShowPreview ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-800'">Write</button>
+                       <span class="w-px self-stretch bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
+                       <button type="button" @click="descShowPreview = true" data-testid="desc-preview-btn"
+                               :aria-pressed="String(descShowPreview)"
+                               class="rounded-r-md px-2.5 py-1 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:focus-visible:ring-zinc-300"
+                               :class="descShowPreview ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-800'">Preview</button>
+                     </div>
+                     <textarea x-model="editDraft.description" rows="5" aria-label="Description markdown"
+                               data-testid="desc-textarea"
+                               x-show="!descShowPreview" @input.debounce.400ms="saveDescriptionDraft()"
+                               class="field mt-1 font-mono text-xs"
+                               placeholder="Markdown description…"></textarea>
+                     <!-- Read-only preview reuses the SAME .md-body class and md()
+                          pipeline as on-screen descriptions — sanitized, identical. -->
+                     <div data-testid="desc-preview" x-show="descShowPreview && editDraft.description.trim()" x-cloak
+                          class="md-body mt-1 rounded-md border border-zinc-200 bg-white px-3 py-2 shadow-sm dark:border-zinc-700 dark:bg-zinc-950"
+                          x-html="md(editDraft.description)"></div>
+                     <p data-testid="desc-preview-empty" x-show="descShowPreview && !editDraft.description.trim()" x-cloak
+                        class="mt-1 text-sm italic text-zinc-600 dark:text-zinc-400">Nothing to preview yet.</p>
+                   </div>
                 </div>
               </form>
 
@@ -1773,7 +1798,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     <h3 class="section-title mb-0">Description</h3>
                     <button type="button" @click="startEditing()" class="text-xs font-medium text-zinc-600 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200">Edit</button>
                   </div>
-                  <div class="md-body mt-1" x-show="detail.description" x-html="md(detail.description)"></div>
+                  <div data-testid="task-description" class="md-body mt-1" x-show="detail.description" x-html="md(detail.description)"></div>
                   <p x-show="!detail.description" x-cloak class="mt-1 text-sm italic text-zinc-600 dark:text-zinc-400">No description.</p>
                 </section>
 
@@ -1900,8 +1925,30 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       </select>
                       <span class="text-[11px] text-zinc-600 dark:text-zinc-400">as <span x-text="actorName.trim() || 'human'"></span></span>
                     </div>
-                    <textarea x-model="commentForm.body" rows="3" aria-label="Comment body" class="field mt-2 w-full"
+                    <!-- Write/Preview segmented control for the comment field (AC 1),
+                         same keyboard-accessible pattern as the description toggle. -->
+                    <div role="group" aria-label="Comment input mode" class="mt-2 inline-flex items-stretch rounded-md border border-zinc-300 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+                      <button type="button" @click="commentShowPreview = false" data-testid="comment-write-btn"
+                              :aria-pressed="String(!commentShowPreview)"
+                              class="rounded-l-md px-2.5 py-1 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:focus-visible:ring-zinc-300"
+                              :class="!commentShowPreview ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-800'">Write</button>
+                      <span class="w-px self-stretch bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
+                      <button type="button" @click="commentShowPreview = true" data-testid="comment-preview-btn"
+                              :aria-pressed="String(commentShowPreview)"
+                              class="rounded-r-md px-2.5 py-1 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:focus-visible:ring-zinc-300"
+                              :class="commentShowPreview ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-800'">Preview</button>
+                    </div>
+                    <textarea x-model="commentForm.body" rows="3" aria-label="Comment body" data-testid="comment-textarea"
+                              x-show="!commentShowPreview" @input.debounce.400ms="saveCommentDraft()"
+                              class="field mt-2 w-full"
                               placeholder="Markdown… posted as a typed comment"></textarea>
+                    <!-- Read-only preview reuses the SAME .md-body + md() pipeline as
+                         posted comments — sanitized, identical (AC 1). -->
+                    <div data-testid="comment-preview" x-show="commentShowPreview && commentForm.body.trim()" x-cloak
+                         class="md-body mt-2 rounded-md border border-zinc-200 bg-white px-3 py-2 shadow-sm dark:border-zinc-700 dark:bg-zinc-950"
+                         x-html="md(commentForm.body)"></div>
+                    <p data-testid="comment-preview-empty" x-show="commentShowPreview && !commentForm.body.trim()" x-cloak
+                       class="mt-2 text-sm italic text-zinc-600 dark:text-zinc-400">Nothing to preview yet.</p>
                     <div class="mt-1.5 flex justify-end">
                       <button type="submit" :disabled="postingComment || !commentForm.body.trim()" class="btn-primary"
                               x-text="postingComment ? 'Posting…' : 'Post comment'"></button>

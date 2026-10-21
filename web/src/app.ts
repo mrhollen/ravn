@@ -11,6 +11,7 @@ import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus }
 import { beginMove, canMove, endMove, friendlyTransitionError, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
 import { renderMarkdown } from "./md";
+import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, serializeCommentDraft } from "./drafts";
 import type {
   AcRow,
   ActorInput,
@@ -1843,6 +1844,14 @@ export function ravnApp() {
       this.statusMenuOpen = false;
       this.ownerPopoverOpen = false;
       this.editingTask = false;
+      // Write/Preview toggles never outlive an open: every drawer opens in
+      // Write mode for both markdown fields (AC 1).
+      this.descShowPreview = false;
+      // Reset-then-restore: the comment form starts clean so one task's unsaved
+      // comment can never leak into the next, then a stored draft for THIS id is
+      // re-applied (drafts live in localStorage, not state — they survive
+      // navigation/close/reload by design, AC 2).
+      this.restoreCommentDraftForTask(id);
       this.totalComments = 0;
       this.loadingOlderComments = false;
       this.initTaskOpenCodeConfig();
@@ -2346,6 +2355,9 @@ export function ravnApp() {
     // ------------------------------------------------------------ task edit
     editingTask: false,
     savingEdit: false,
+    /** Write/Preview toggle for the DESCRIPTION markdown field (edit mode only).
+     *  Default = Write. Reset to Write in startEditing() and on every openTask(). */
+    descShowPreview: false,
     editDraft: {
       title: "",
       description: "",
@@ -2378,12 +2390,26 @@ export function ravnApp() {
         assigneeName: t.assignee?.name ?? "",
         assigneeType: (t.assignee?.type as "human" | "agent") || "human",
       };
+      // Snapshot FIRST (server truth), then layer the local draft on top — see below.
       this.editDraftOriginal = { ...this.editDraft };
+      const savedDesc = safeStorage.getItem(descriptionDraftKey(t.id));
+      if (savedDesc !== null && savedDesc.trim() !== "") {
+        // Draft auto-save restore (AC 2): the user's unsaved local draft wins
+        // over the server value, while editDraftOriginal keeps the SERVER truth
+        // so dirty-detection and the discard guard stay correct.
+        this.editDraft.description = savedDesc;
+      }
+      // A fresh edit session always starts in Write mode (AC 1).
+      this.descShowPreview = false;
       this.editingTask = true;
     },
 
     cancelEditing(): void {
       this.editingTask = false;
+      // The Cancel button is an explicit discard of the in-flight edit — drop
+      // the local description draft with it (AC 3). Idempotent if the draft was
+      // already cleared by a confirmed-discard path.
+      this.clearDescriptionDraft();
     },
 
     /** True when the in-flight task edit differs from the values loaded when
@@ -2407,7 +2433,31 @@ export function ravnApp() {
      *  close path and Escape). True = safe to proceed with the discard. */
     discardEditDraftIfConfirmed(): boolean {
       if (!this.editDraftDirty()) return true;
-      return this.confirmDiscard("Discard unsaved task edits? Changes to this task will be lost.");
+      const ok = this.confirmDiscard("Discard unsaved task edits? Changes to this task will be lost.");
+      // An explicitly CONFIRMED discard is exactly when the local description
+      // draft stops existing (AC 3): it lives in storage, so leaving it would
+      // resurrect itself on the next startEditing().
+      if (ok) this.clearDescriptionDraft();
+      return ok;
+    },
+
+    /** Debounced textarea-input handler (@input.debounce.400ms): persists the
+     *  CURRENT description draft under the loaded task's id (AC 2). No task
+     *  loaded → no-op. Blank value → removes the key so nothing stale lingers. */
+    saveDescriptionDraft(): void {
+      const id = this.detail?.id;
+      if (!id) return;
+      const raw = this.editDraft.description ?? "";
+      if (raw.trim() !== "") safeStorage.setItem(descriptionDraftKey(id), raw);
+      else safeStorage.removeItem(descriptionDraftKey(id));
+    },
+
+    /** Drop the loaded task's description draft from storage (AC 3). No-op when
+     *  no task is loaded; safe to call repeatedly. */
+    clearDescriptionDraft(): void {
+      const id = this.detail?.id;
+      if (!id) return;
+      safeStorage.removeItem(descriptionDraftKey(id));
     },
 
     async saveTaskEdit(): Promise<void> {
@@ -2415,6 +2465,9 @@ export function ravnApp() {
       const title = this.editDraft.title.trim();
       if (!t || !title || this.savingEdit) return;
 
+      // Captured BEFORE any await: the draft that gets cleared on success is
+      // the one for THIS task, even if detail moves during the flight (AC 3).
+      const descKey = descriptionDraftKey(t.id);
       this.savingEdit = true;
       const req: UpdateTaskReq = {
         actor: this.actor(),
@@ -2444,6 +2497,9 @@ export function ravnApp() {
       try {
         await api.updateTask(t.id, req);
         this.editingTask = false;
+        // Save succeeded → the description is server truth now; the local draft
+        // must not survive (AC 3).
+        safeStorage.removeItem(descKey);
         await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
       } catch (e) {
         if (ApiError.isVersionConflict(e)) {
@@ -2461,6 +2517,8 @@ export function ravnApp() {
             };
             await api.updateTask(t.id, retryReq);
             this.editingTask = false;
+            // 409-retry also landed the save → clear the draft exactly once.
+            safeStorage.removeItem(descKey);
             await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
             this.toast("Changed elsewhere — retried with the fresh version.", "info");
           } catch (e2) {
@@ -3101,9 +3159,35 @@ export function ravnApp() {
 
     // ----------------------------------------------------------------- comments
     commentForm: { kind: "progress" as CommentKind, body: "" },
+    /** Write/Preview toggle for the COMMENT markdown field (always present in
+     *  the drawer). Default = Write; reset on every openTask() (AC 1). */
+    commentShowPreview: false,
     postingComment: false,
     loadingOlderComments: false,
     totalComments: 0,
+
+    /** Reset-then-restore for a task OPEN (AC 2): the form goes back to
+     *  defaults FIRST so one task's unsaved comment can never leak into the
+     *  next, then a stored draft under THIS id (JSON body+kind) is re-applied.
+     *  Called from openTask(), which every drawer/full-page open funnels
+     *  through — drafts stay in storage across close/navigation/reload. */
+    restoreCommentDraftForTask(id: string): void {
+      this.commentShowPreview = false;
+      this.commentForm = { kind: "progress", body: "" };
+      const parsed = deserializeCommentDraft(safeStorage.getItem(commentDraftKey(id)));
+      if (parsed) this.commentForm = { body: parsed.body, kind: parsed.kind };
+    },
+
+    /** Debounced textarea-input handler (@input.debounce.400ms): persists the
+     *  CURRENT comment draft (body + selected type as JSON) under the loaded
+     *  task's id (AC 2). No task loaded → no-op; blank body → key removed. */
+    saveCommentDraft(): void {
+      const id = this.detail?.id;
+      if (!id) return;
+      const raw = this.commentForm.body ?? "";
+      if (raw.trim() !== "") safeStorage.setItem(commentDraftKey(id), serializeCommentDraft({ body: raw, kind: this.commentForm.kind }));
+      else safeStorage.removeItem(commentDraftKey(id));
+    },
 
     hasMoreOlderComments(): boolean {
       return !!this.detail && this.totalComments > this.detail.comments.length;
@@ -3185,6 +3269,9 @@ export function ravnApp() {
           this.totalComments = Math.max(this.totalComments + 1, d.comments.length);
         }
         this.commentForm.body = "";
+        // Comment posted → the local draft has served its purpose; clear it so
+        // re-opening this task never resurrects text already on screen (AC 3).
+        safeStorage.removeItem(commentDraftKey(t.id));
       } catch (e) {
         this.toast(errMsg(e), "error");
       } finally {
