@@ -121,6 +121,16 @@ function sanitizeHtml(html: string): string {
       }
     }
   }
+  // Wrap each <table> in a block scroll container so wide GFM tables scroll
+  // within themselves instead of blowing out their parent (the drawer).
+  for (const table of Array.from(doc.querySelectorAll("table"))) {
+    const parent = table.parentElement;
+    if (!parent || parent.classList.contains("md-table-wrap")) continue;
+    const wrap = doc.createElement("div");
+    wrap.className = "md-table-wrap";
+    parent.insertBefore(wrap, table);
+    wrap.appendChild(table);
+  }
   return doc.body.innerHTML;
 }
 

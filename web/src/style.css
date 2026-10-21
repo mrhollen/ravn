@@ -82,6 +82,12 @@ html.dark {
   .md-body td {
     @apply border border-zinc-200 px-2 py-1 text-left dark:border-zinc-700;
   }
+  /* Block scroll container injected around each rendered <table> by md.ts —
+     wide GFM tables scroll within themselves instead of blowing out their
+     parent (the task detail drawer). Plain block: stretches to 100% width. */
+  .md-table-wrap {
+    @apply overflow-x-auto;
+  }
   .md-body hr {
     @apply my-3 border-zinc-200 dark:border-zinc-800;
   }
