@@ -131,6 +131,20 @@ export function claimHint(t: Pick<TaskSummary, "claimed_by" | "claim_expires_at"
   return `until ${timeOfDay(t.claim_expires_at)} (${humanDuration(diff)})`;
 }
 
+/** Whether a claim lease has EXPIRED. Mirrors EXACTLY the "lease expired" branch of
+ *  {@link claimHint} (claimed AND expiring at/before `nowMs`) so the muted "expired"
+ *  styling and the "lease expired" text can never disagree: unclaimed, or a claim
+ *  with no recorded expiry, is never "expired"; an unparseable expiry is not. */
+export function isClaimExpired(
+  t: Pick<TaskSummary, "claimed_by" | "claim_expires_at">,
+  nowMs = Date.now(),
+): boolean {
+  if (!t.claimed_by || !t.claim_expires_at) return false; // unclaimed, or claimed-without-expiry => never "expired"
+  const diff = Date.parse(t.claim_expires_at) - nowMs;
+  if (Number.isNaN(diff)) return false;
+  return diff <= 0;
+}
+
 /** Real-time MM:SS countdown until lease expiry for the claim capsule. */
 export function formatClaimCountdown(claimExpiresAt?: string | null, nowMs = Date.now()): string {
   if (!claimExpiresAt) return "";

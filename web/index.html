@@ -670,11 +670,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                             draggedTaskId === task.id
                               ? 'opacity-40 border-dashed border-zinc-400 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900'
                               : [
-                                  // Uniform 1px FULL-PERIMETER border tinted by state
-                                  // (no thick side accents): claimed → indigo,
-                                  // blocked → red, else the standard neutral.
-                                  task.claimed_by
-                                    ? 'border-indigo-200/80 hover:border-indigo-300 dark:border-indigo-800 dark:hover:border-indigo-700'
+                                   // Uniform 1px FULL-PERIMETER border tinted by state
+                                   // (no thick side accents): claimed → indigo,
+                                   // blocked → red, else the standard neutral. An
+                                   // EXPIRED lease is inert — it keeps the neutral
+                                   // border, never the active indigo tint.
+                                   task.claimed_by && !claimExpired(task)
+                                     ? 'border-indigo-200/80 hover:border-indigo-300 dark:border-indigo-800 dark:hover:border-indigo-700'
                                     : isBlocked(task.id)
                                       ? 'border-red-200 hover:border-red-300 dark:border-red-800 dark:hover:border-red-700'
                                       : 'border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600',
@@ -749,21 +751,39 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                              x-text="(swipeDirection(task.id) === 'right' ? '→ ' : '← ') + swipeTargetLabel(task.id)">
                         </div>
 
-                        <!-- Claim capsule: compact indigo pill directly on claimed cards —
-                             activity icon + claimant + live lease hint. claimHint() text is kept
-                             verbatim ("until 15:53 (5m)") because the theme contrast suite
-                             samples it via getByText(/until \d{2}:\d{2}/). -->
-                        <div x-show="task.claimed_by" x-cloak
-                             class="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-md border border-indigo-200/80 bg-indigo-50/80 px-2 py-0.5 text-[11px] dark:border-indigo-800/70 dark:bg-indigo-950/60">
-                          <svg class="h-3 w-3 shrink-0 text-indigo-500 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                        <!-- Claim capsule: compact pill directly on claimed cards —
+                             activity icon + claimant + live lease hint. An ACTIVE lease keeps
+                             the indigo styling byte-for-byte; an EXPIRED lease (claimExpired(),
+                             driven by nowTick so it flips live) degrades to muted zinc with a
+                             dimmed struck-through name and grey hint, so it never reads healthy.
+                             claimHint() text is kept verbatim ("until 15:53 (5m)" / "lease
+                             expired") because the theme contrast suite samples it via
+                             getByText(/until \d{2}:\d{2}/). -->
+                        <div x-show="task.claimed_by" x-cloak data-testid="card-claim-capsule"
+                             class="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px]"
+                             :class="claimExpired(task)
+                               ? 'border-zinc-300/70 bg-zinc-100/80 dark:border-zinc-700/60 dark:bg-zinc-900/50'
+                               : 'border-indigo-200/80 bg-indigo-50/80 dark:border-indigo-800/70 dark:bg-indigo-950/60'">
+                          <svg class="h-3 w-3 shrink-0"
+                               :class="claimExpired(task)
+                                 ? 'text-zinc-400 dark:text-zinc-500'
+                                 : 'text-indigo-500 dark:text-indigo-400'"
+                               fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12h4l3-9 4 18 3-9h4"/>
                           </svg>
-                          <span class="truncate font-semibold text-zinc-900 dark:text-zinc-100"
+                          <span class="truncate font-semibold"
+                                :class="claimExpired(task)
+                                  ? 'text-zinc-500 dark:text-zinc-400 line-through'
+                                  : 'text-zinc-900 dark:text-zinc-100'"
                                 x-text="task.claimed_by ? task.claimed_by.name : ''"></span>
                           <template x-if="claimHint(task)">
                             <span class="shrink-0 text-zinc-400 dark:text-zinc-500">·</span>
                           </template>
-                          <span class="truncate font-medium text-indigo-700 dark:text-indigo-300" x-text="claimHint(task)"></span>
+                          <span class="truncate font-medium"
+                                :class="claimExpired(task)
+                                  ? 'text-zinc-600 dark:text-zinc-400'
+                                  : 'text-indigo-700 dark:text-indigo-300'"
+                                x-text="claimHint(task)"></span>
                         </div>
 
                         <!-- Parent task subtask completion counter and mini progress bar (AC2) -->
@@ -1704,18 +1724,38 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         <span x-text="claimBusy ? 'Claiming…' : 'Claim'"></span>
                       </button>
 
-                      <!-- When Claimed -->
-                      <div x-show="detail.claimed_by"
-                           class="inline-flex items-stretch overflow-hidden rounded-md border border-indigo-200/80 bg-white shadow-sm dark:border-indigo-800/70 dark:bg-zinc-900">
+                      <!-- When Claimed. An ACTIVE lease keeps the indigo split-capsule with
+                           the pulsing icon and live countdown, byte-for-byte as before; an
+                           EXPIRED lease (claimExpired(), driven by nowTick so it flips live)
+                           degrades to muted zinc — dimmed struck-through name, an explicit
+                           "lease expired" cue, NO pulse. The .live-countdown span stays in
+                           this source (a unit test asserts on the literal); x-show merely
+                           hides it while the lease is expired. -->
+                      <div x-show="detail.claimed_by" x-cloak data-testid="drawer-claim-capsule"
+                           class="inline-flex items-stretch overflow-hidden rounded-md border shadow-sm"
+                           :class="claimExpired(detail)
+                             ? 'border-zinc-300/70 bg-zinc-100/80 dark:border-zinc-700/60 dark:bg-zinc-900/50'
+                             : 'border-indigo-200/80 bg-white dark:border-indigo-800/70 dark:bg-zinc-900'">
                         <div class="flex items-center gap-2 px-2.5 py-1"
-                             :title="'Claimed by ' + actorLabel(detail.claimed_by) + (detail.claimed_at ? ' ' + relTime(detail.claimed_at) : '') + (detail.claim_expires_at ? ' · Lease expires at ' + detail.claim_expires_at : '')">
-                          <svg class="h-3.5 w-3.5 text-indigo-500 dark:text-indigo-400 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                             :title="'Claimed by ' + actorLabel(detail.claimed_by) + (detail.claimed_at ? ' ' + relTime(detail.claimed_at) : '') + (detail.claim_expires_at ? ' · Lease expires at ' + detail.claim_expires_at + (claimExpired(detail) ? ' (EXPIRED)' : '') : '')">
+                          <svg class="h-3.5 w-3.5"
+                               :class="claimExpired(detail)
+                                 ? 'text-zinc-400 dark:text-zinc-500'
+                                 : 'text-indigo-500 dark:text-indigo-400 animate-pulse'"
+                               fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12h4l3-9 4 18 3-9h4" />
                           </svg>
-                          <span class="font-semibold text-zinc-900 dark:text-zinc-100" x-text="detail.claimed_by?.name"></span>
-                          <span class="text-zinc-300 dark:text-zinc-700" x-show="detail.claim_expires_at">·</span>
+                          <span class="font-semibold"
+                                :class="claimExpired(detail)
+                                  ? 'text-zinc-500 dark:text-zinc-400 line-through'
+                                  : 'text-zinc-900 dark:text-zinc-100'"
+                                x-text="detail.claimed_by?.name"></span>
+                          <span class="shrink-0 text-[11px] font-medium text-zinc-600 dark:text-zinc-400"
+                                x-show="claimExpired(detail)" x-cloak data-testid="drawer-claim-expired">lease expired</span>
+                          <span class="text-zinc-300 dark:text-zinc-700"
+                                x-show="!claimExpired(detail) && detail.claim_expires_at">·</span>
                           <span class="live-countdown font-mono text-[11px] font-medium text-indigo-600 dark:text-indigo-300"
-                                x-show="detail.claim_expires_at"
+                                x-show="!claimExpired(detail) && detail.claim_expires_at"
                                 x-text="claimCountdown(detail)"></span>
                         </div>
                         <button type="button"
@@ -1723,7 +1763,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                                 :disabled="claimBusy"
                                 aria-label="Release"
                                 :title="'Release lease as ' + actor().name"
-                                class="flex items-center justify-center border-l border-indigo-100 px-2 text-zinc-400 transition hover:bg-red-50 hover:text-red-600 dark:border-indigo-900/60 dark:hover:bg-red-950/60 dark:hover:text-red-400">
+                                class="flex items-center justify-center border-l px-2 text-zinc-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/60 dark:hover:text-red-400"
+                                :class="claimExpired(detail)
+                                  ? 'border-zinc-200 dark:border-zinc-700'
+                                  : 'border-indigo-100 dark:border-indigo-900/60'">
                           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
                           </svg>

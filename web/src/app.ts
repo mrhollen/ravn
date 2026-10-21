@@ -47,6 +47,7 @@ import {
   dueCalendarDate,
   dueLabel,
   formatClaimCountdown,
+  isClaimExpired,
   isOverdue,
   localCalendarToday,
   initials,
@@ -3393,6 +3394,13 @@ export function ravnApp() {
       return formatClaimCountdown(t?.claim_expires_at, this.nowTick);
     },
 
+    /** Whether a task's claim lease has EXPIRED. Reads `this.nowTick` (the same
+     *  value claimCountdown() uses) so Alpine tracks it: the muted "expired"
+     *  styling flips live the moment a lease crosses expiry, without any poll. */
+    claimExpired(t: Pick<TaskSummary, "claimed_by" | "claim_expires_at">): boolean {
+      return isClaimExpired(t, this.nowTick);
+    },
+
     async claimCurrentTask(): Promise<void> {
       const d = this.detail;
       if (!d || this.claimBusy) return;
@@ -3726,6 +3734,7 @@ export function ravnApp() {
     dueLabel,
     claimHint,
     formatClaimCountdown,
+    isClaimExpired,
     actorLabel,
     initials,
     shortId,

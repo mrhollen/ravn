@@ -9,6 +9,7 @@ import {
   dueCalendarDate,
   fmtDueDate,
   formatClaimCountdown,
+  isClaimExpired,
   isOverdue,
   localCalendarToday,
   safeStorage,
@@ -2828,6 +2829,57 @@ test("Countdown: ravnApp.claimCountdown references reactive nowTick", () => {
   assert.equal(app.claimCountdown({}), "");
   app.nowTick += 100000;
   assert.equal(app.claimCountdown({ claim_expires_at: expiry }), "0:00");
+});
+
+test("isClaimExpired mirrors claimHint's 'lease expired' branch", () => {
+  const baseNow = 1700000000000;
+  const actor = { name: "a", type: "agent" };
+
+  // Unclaimed → never "expired".
+  assert.equal(isClaimExpired({}, baseNow), false);
+
+  // Claimed with no expiry recorded → never "expired" (there is nothing to expire).
+  assert.equal(isClaimExpired({ claimed_by: actor }, baseNow), false);
+
+  // Future expiry → active, not expired.
+  assert.equal(
+    isClaimExpired({ claimed_by: actor, claim_expires_at: new Date(baseNow + 10_000).toISOString() }, baseNow),
+    false,
+  );
+
+  // Exactly now → diff <= 0 → expired.
+  assert.equal(
+    isClaimExpired({ claimed_by: actor, claim_expires_at: new Date(baseNow).toISOString() }, baseNow),
+    true,
+  );
+
+  // Past expiry → expired.
+  assert.equal(
+    isClaimExpired({ claimed_by: actor, claim_expires_at: new Date(baseNow - 60_000).toISOString() }, baseNow),
+    true,
+  );
+
+  // Unparseable expiry → cannot be determined → not expired (matches claimHint returning "").
+  assert.equal(
+    isClaimExpired({ claimed_by: actor, claim_expires_at: "not-a-date" }, baseNow),
+    false,
+  );
+});
+
+test("Countdown: ravnApp.claimExpired flips live with nowTick", () => {
+  const app = ravnApp() as any;
+  const baseNow = 1700000000000;
+  app.nowTick = baseNow;
+  const actor = { name: "runner-2", type: "agent" };
+  const t = { claimed_by: actor, claim_expires_at: new Date(baseNow + 90_000).toISOString() }; // 1m30s lease
+
+  assert.equal(app.claimExpired(t), false); // 1m30s of lease left — active
+  app.nowTick += 60_000;
+  assert.equal(app.claimExpired(t), false); // 30s left — still active
+  app.nowTick += 30_000;
+  assert.equal(app.claimExpired(t), true); // crossed expiry → flips live, no reload needed
+  assert.equal(app.claimExpired({}), false); // unclaimed never flips
+  assert.equal(app.claimExpired({ claimed_by: actor }), false); // claimed without expiry never flips
 });
 
 test("OperationalBar: status menu and owner popover toggle and mutual exclusion", () => {
