@@ -64,7 +64,7 @@ html.dark {
     @apply rounded bg-zinc-100 px-1 py-0.5 font-mono text-[0.85em] text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200;
   }
   .md-body pre {
-    @apply my-2 overflow-x-auto rounded-lg bg-zinc-900 p-3 text-xs leading-relaxed text-zinc-100 dark:border dark:border-zinc-700;
+    @apply my-2 overflow-x-auto rounded-lg border border-zinc-200 bg-zinc-900 p-3 text-xs leading-relaxed text-zinc-100 dark:border-zinc-800 dark:bg-zinc-950;
   }
   .md-body pre code {
     @apply bg-transparent p-0 text-inherit;
