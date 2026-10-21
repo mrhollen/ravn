@@ -91,6 +91,19 @@ html.dark {
   .md-body hr {
     @apply my-3 border-zinc-200 dark:border-zinc-800;
   }
+
+  /* Modal / dialog standardization: uniform backdrop, header icon chip, close button. */
+  .modal-backdrop {
+    @apply bg-black/40 backdrop-blur-sm;
+  }
+
+  .modal-header-icon {
+    @apply rounded-lg bg-indigo-50 p-2 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400;
+  }
+
+  .modal-close {
+    @apply rounded-md p-1 text-lg leading-none text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-zinc-400 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100;
+  }
 }
 
 /* --- board canvas: kanban lanes & cards ------------------------------------

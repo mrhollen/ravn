@@ -930,16 +930,21 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       </main>
 
       <!-- ================================================== project settings modal -->
-      <div id="cb-project-settings" role="dialog" aria-modal="true" aria-labelledby="project-settings-title" x-show="showProjectSettings" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="requestCloseProjectSettings()">
+      <div id="cb-project-settings" role="dialog" aria-modal="true" aria-labelledby="project-settings-title" x-show="showProjectSettings" x-cloak class="fixed inset-0 z-40 overflow-y-auto modal-backdrop p-4" @click.self="requestCloseProjectSettings()">
         <div class="mx-auto mt-16 w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
           <header class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
-            <div>
-              <h2 id="project-settings-title" class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Project settings</h2>
-              <p class="text-xs text-zinc-600 dark:text-zinc-400">Edit project name and description</p>
+            <div class="flex items-center gap-2.5">
+              <span class="modal-header-icon">
+                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0M4.5 18H7.5" />
+                </svg>
+              </span>
+              <div>
+                <h2 id="project-settings-title" class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Project settings</h2>
+                <p class="text-xs text-zinc-600 dark:text-zinc-400">Edit project name and description</p>
+              </div>
             </div>
-            <button type="button" @click="requestCloseProjectSettings()" class="text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100" aria-label="Close">
-              <span class="text-lg leading-none">&times;</span>
-            </button>
+            <button type="button" @click="requestCloseProjectSettings()" class="modal-close" aria-label="Close">&times;</button>
           </header>
 
           <form @submit.prevent="saveProjectSettings()" class="mt-4 flex flex-col gap-4">
@@ -1098,12 +1103,12 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                        @keydown.enter.prevent="if (isArchiveInputValid()) archiveProject()"
                        class="field text-xs w-full bg-white dark:bg-zinc-900" />
                 <div class="flex items-center justify-end gap-2 pt-1">
-                  <button type="button" @click="cancelArchiveConfirm()" data-testid="cancel-archive-btn" class="btn-ghost text-xs">
+                  <button type="button" @click="cancelArchiveConfirm()" data-testid="cancel-archive-btn" class="btn-ghost">
                     Cancel
                   </button>
                   <button type="button" :disabled="!isArchiveInputValid() || projectSettingsBusy"
                           @click="archiveProject()" data-testid="confirm-archive-btn"
-                          class="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed dark:hover:bg-red-500">
+                          class="rounded-md bg-red-600 px-3 py-1.5 font-medium text-white shadow-sm hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed dark:hover:bg-red-500">
                     <span x-text="projectSettingsBusy ? 'Archiving…' : 'Archive'"></span>
                   </button>
                 </div>
@@ -1111,10 +1116,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
             </div>
 
             <div x-show="!showArchiveConfirm" class="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
-              <button type="button" @click="requestCloseProjectSettings()" class="btn-ghost text-xs">
+              <button type="button" @click="requestCloseProjectSettings()" class="btn-ghost">
                 Cancel
               </button>
-              <button type="submit" :disabled="projectSettingsBusy || !projectSettingsForm.name.trim()" class="btn-primary text-xs">
+              <button type="submit" :disabled="projectSettingsBusy || !projectSettingsForm.name.trim()" class="btn-primary">
                 <span x-text="projectSettingsBusy ? 'Saving…' : 'Save changes'"></span>
               </button>
             </div>
@@ -1123,11 +1128,11 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       </div>
 
       <!-- ========================================================== auth token modal -->
-      <div id="cb-auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" x-show="showAuthModal" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-4 backdrop-blur-sm" @click.self="closeAuthModal()">
+      <div id="cb-auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" x-show="showAuthModal" x-cloak class="fixed inset-0 z-40 overflow-y-auto modal-backdrop p-4" @click.self="closeAuthModal()">
         <div class="mx-auto mt-16 w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
           <header class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
             <div class="flex items-center gap-2.5">
-              <span class="rounded-lg bg-indigo-50 p-2 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400">
+              <span class="modal-header-icon">
                 <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                 </svg>
@@ -1137,9 +1142,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <p class="text-xs text-zinc-600 dark:text-zinc-400">Configure credentials for production servers</p>
               </div>
             </div>
-            <button type="button" @click="closeAuthModal()" class="text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
-              <span class="text-lg leading-none">&times;</span>
-            </button>
+            <button type="button" @click="closeAuthModal()" class="modal-close" aria-label="Close">&times;</button>
           </header>
 
           <form @submit.prevent="saveAuthToken()" class="mt-4 flex flex-col gap-4">
@@ -1160,10 +1163,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 Clear token
               </button>
               <div class="flex gap-2 ml-auto">
-                <button type="button" @click="closeAuthModal()" class="btn-ghost text-xs">
+                <button type="button" @click="closeAuthModal()" class="btn-ghost">
                   Cancel
                 </button>
-                <button type="submit" class="btn-primary text-xs">
+                <button type="submit" class="btn-primary">
                   Save token
                 </button>
               </div>
@@ -1173,15 +1176,23 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       </div>
 
       <!-- ========================================================== new task -->
-      <div id="cb-new-task" role="dialog" aria-modal="true" aria-labelledby="new-task-title" x-show="showNewTask" x-cloak class="fixed inset-0 z-40 overflow-y-auto bg-black/30 p-4" @click.self="requestCloseNewTask()">
-        <div class="mx-auto mt-10 w-full max-w-lg rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+      <div id="cb-new-task" role="dialog" aria-modal="true" aria-labelledby="new-task-title" x-show="showNewTask" x-cloak class="fixed inset-0 z-40 overflow-y-auto modal-backdrop p-4" @click.self="requestCloseNewTask()">
+        <div class="mx-auto mt-10 w-full max-w-lg rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
           <header class="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 px-5 py-3">
-            <h2 id="new-task-title" class="text-base font-semibold">
-              New task
-              <span class="ml-1 text-xs font-normal text-zinc-600 dark:text-zinc-400" x-text="'→ ' + statusLabel(newTaskTarget)"></span>
-            </h2>
-            <button type="button" @click="requestCloseNewTask()" aria-label="Close"
-                    class="text-xl leading-none text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">&times;</button>
+            <div class="flex items-center gap-2.5">
+              <span class="modal-header-icon">
+                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+              </span>
+              <div>
+                <h2 id="new-task-title" class="text-base font-semibold">
+                  New task
+                  <span class="ml-1 text-xs font-normal text-zinc-600 dark:text-zinc-400" x-text="'→ ' + statusLabel(newTaskTarget)"></span>
+                </h2>
+              </div>
+            </div>
+            <button type="button" @click="requestCloseNewTask()" aria-label="Close" class="modal-close">&times;</button>
           </header>
           <form @submit.prevent="createTask()" class="flex flex-col gap-3 px-5 py-4">
             <label class="flex flex-col text-xs font-medium text-zinc-600 dark:text-zinc-400">
@@ -1242,8 +1253,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
            :class="fullPageOpen ? 'relative flex min-h-0 flex-1 flex-col' : 'fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6'"
            @click.self="requestCloseDetail()">
         <!-- Modal backdrop: a click anywhere outside the panel closes it. -->
-        <div class="absolute inset-0 bg-black/30" x-show="!fullPageOpen" x-cloak
-             @click="requestCloseDetail()"></div>
+        <div class="absolute inset-0 modal-backdrop" x-show="!fullPageOpen" x-cloak
+              @click="requestCloseDetail()"></div>
           <aside :class="fullPageOpen
                ? 'mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col border-x border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900'
               : 'relative flex w-[80vw] max-w-5xl max-h-full flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900'">
@@ -1267,7 +1278,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                  </button>
                  <button type="button" @click="requestCloseDetail()" aria-label="Close"
                          data-testid="drawer-bar-close-btn"
-                         class="text-xl leading-none text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">&times;</button>
+                         class="modal-close">&times;</button>
                </div>
              </div>
            </template>
@@ -1372,7 +1383,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                        </svg>
                      </button>
                       <button type="button" @click="requestCloseDetail()" aria-label="Close" data-testid="detail-close-btn"
-                              class="shrink-0 text-xl leading-none text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">&times;</button>
+                              class="shrink-0 modal-close">&times;</button>
                   </div>
                 </div>
                 <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
@@ -1525,7 +1536,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                  <button type="submit" form="task-edit-form" :disabled="savingEdit || !editDraft.title.trim()" class="btn-primary px-3 py-1 text-xs"
                          x-text="savingEdit ? 'Saving…' : 'Save'"></button>
                  <button type="button" @click="requestCloseDetail()" aria-label="Close" data-testid="detail-close-edit-btn"
-                         class="ml-1 text-xl leading-none text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">&times;</button>
+                         class="ml-1 modal-close">&times;</button>
                </div>
              </div>
            </div>
@@ -2240,14 +2251,14 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       <!-- ====================================================== unsaved notes prompt -->
       <!-- z-[70]: sits above the detail modal (z-[60]) it guards. Backdrop click
            and Escape both mean "keep editing" (same convention as other modals). -->
-      <div id="cb-notes-confirm" role="dialog" aria-modal="true" aria-labelledby="notes-confirm-title" x-show="unsavedNotesAction" x-cloak class="fixed inset-0 z-[70] bg-black/40 p-4 backdrop-blur-sm" @click.self="cancelUnsavedNotes()">
+      <div id="cb-notes-confirm" role="dialog" aria-modal="true" aria-labelledby="notes-confirm-title" x-show="unsavedNotesAction" x-cloak class="fixed inset-0 z-[70] modal-backdrop p-4" @click.self="cancelUnsavedNotes()">
         <div class="mx-auto mt-24 w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
           <h2 id="notes-confirm-title" class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Unsaved note changes</h2>
           <p class="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
             The notes for this task have edits that haven't been saved. Discard them?
           </p>
           <div class="mt-5 flex items-center justify-end gap-2">
-            <button type="button" @click="cancelUnsavedNotes()" class="btn-ghost text-xs">Keep editing</button>
+            <button type="button" @click="cancelUnsavedNotes()" class="btn-ghost">Keep editing</button>
             <button type="button" @click="confirmUnsavedNotes()"
                     class="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-red-700 dark:hover:bg-red-500">
               <span x-text="unsavedNotesAction && unsavedNotesAction.kind === 'open' ? 'Discard & switch' : 'Discard & close'"></span>
@@ -2262,12 +2273,12 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               @close="previewModal.open = false"
               @cancel.prevent="closeImagePreview()"
               @click="if ($event.target === $el) closeImagePreview()"
-              class="fixed inset-0 m-auto max-w-4xl max-h-[90vh] rounded-xl border border-zinc-200 bg-white p-4 shadow-2xl backdrop:bg-black/60 dark:border-zinc-700 dark:bg-zinc-900 overflow-hidden text-zinc-900 dark:text-zinc-100">
+              class="fixed inset-0 m-auto max-w-4xl max-h-[90vh] rounded-xl border border-zinc-200 bg-white p-4 shadow-2xl backdrop:bg-black/40 backdrop:backdrop-blur-sm dark:border-zinc-700 dark:bg-zinc-900 overflow-hidden text-zinc-900 dark:text-zinc-100">
         <div class="flex flex-col max-h-[85vh]">
           <header class="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
             <div class="truncate text-xs font-mono text-zinc-600 dark:text-zinc-400" x-text="previewModal.alt || 'Image preview'"></div>
             <button type="button" @click="closeImagePreview()" aria-label="Close preview"
-                    class="rounded p-1 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-800 text-lg leading-none transition">✕</button>
+                    class="modal-close">✕</button>
           </header>
           <div class="mt-3 flex items-center justify-center overflow-auto max-h-[75vh]">
             <img :src="previewModal.src" :alt="previewModal.alt" class="max-w-full max-h-[75vh] object-contain rounded" />
