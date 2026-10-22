@@ -196,6 +196,12 @@ func TestNextTask_GuidancePlanFromLiveTool(t *testing.T) {
 	completedAt := "2026-09-27T18:00:00Z"
 
 	mock := &mockClient{
+		listProjectsFunc: func(ctx context.Context) (*apiclient.ProjectList, error) {
+			return &apiclient.ProjectList{
+				Projects: []apiclient.Project{{ID: "PROJ-ALPHA", Name: "Alpha Project"}},
+				Total:    1,
+			}, nil
+		},
 		listTasksFunc: func(ctx context.Context, f apiclient.TaskFilter) (*apiclient.TaskList, error) {
 			if f.Status == "todo" && f.Unblocked {
 				return &apiclient.TaskList{
@@ -350,7 +356,7 @@ func TestPrompts_GracefulEmptyDataFallback(t *testing.T) {
 			return &apiclient.TaskList{Tasks: []apiclient.TaskSummary{}, Total: 0}, nil
 		},
 		listProjectsFunc: func(ctx context.Context) (*apiclient.ProjectList, error) {
-			return &apiclient.ProjectList{Projects: []apiclient.Project{}, Total: 0}, nil
+			return &apiclient.ProjectList{Projects: []apiclient.Project{{ID: "PROJ-EMPTY", Name: "Empty Project"}}, Total: 1}, nil
 		},
 	}
 
@@ -366,7 +372,7 @@ func TestPrompts_GracefulEmptyDataFallback(t *testing.T) {
 		"params": {
 			"name": "next_task",
 			"arguments": {
-				"project_id": "NON-EXISTENT"
+				"project_id": "PROJ-EMPTY"
 			}
 		}
 	}`
@@ -398,7 +404,7 @@ func TestPrompts_GracefulEmptyDataFallback(t *testing.T) {
 		"params": {
 			"name": "triage_open_tasks",
 			"arguments": {
-				"project_id": "NON-EXISTENT"
+				"project_id": "PROJ-EMPTY"
 			}
 		}
 	}`
@@ -572,5 +578,129 @@ func TestPrompts_UpstreamErrorDegradesGracefully(t *testing.T) {
 	txt := res.Messages[0].Content.(mcpgo.TextContent).Text
 	if !strings.Contains(txt, "connection refused") {
 		t.Errorf("expected error message to be reported in prompt content, got: %s", txt)
+	}
+}
+
+// TestTriageOpenTasks_UnknownProjectNotFound verifies that an unknown
+// project_id yields an explicit not-found error instead of the misleading
+// "No Open Tasks" fallback.
+func TestTriageOpenTasks_UnknownProjectNotFound(t *testing.T) {
+	mock := &mockClient{
+		listProjectsFunc: func(ctx context.Context) (*apiclient.ProjectList, error) {
+			return &apiclient.ProjectList{
+				Projects: []apiclient.Project{{ID: "PROJ-1", Name: "Core Engine"}},
+				Total:    1,
+			}, nil
+		},
+		listTasksFunc: func(ctx context.Context, f apiclient.TaskFilter) (*apiclient.TaskList, error) {
+			return &apiclient.TaskList{Tasks: []apiclient.TaskSummary{}, Total: 0}, nil
+		},
+	}
+
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
+	defaultActor := apiclient.Actor{Type: "agent", Name: "test-agent"}
+	RegisterPrompts(mcs, mock, defaultActor)
+
+	triageMsg := `{
+		"jsonrpc": "2.0",
+		"id": 40,
+		"method": "prompts/get",
+		"params": {
+			"name": "triage_open_tasks",
+			"arguments": {
+				"project_id": "does-not-exist"
+			}
+		}
+	}`
+
+	resp := mcs.HandleMessage(context.Background(), json.RawMessage(triageMsg))
+	jsonResp, ok := resp.(mcpgo.JSONRPCResponse)
+	if !ok {
+		t.Fatalf("expected JSONRPCResponse, got %T: %+v", resp, resp)
+	}
+	res, ok := jsonResp.Result.(mcpgo.GetPromptResult)
+	if !ok {
+		t.Fatalf("expected GetPromptResult, got %T: %+v", jsonResp.Result, jsonResp.Result)
+	}
+	if len(res.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(res.Messages))
+	}
+	txtContent, ok := res.Messages[0].Content.(mcpgo.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", res.Messages[0].Content)
+	}
+	body := txtContent.Text
+
+	for _, want := range []string{"# Triage Error", "not found", "does-not-exist"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("triage body missing %q\nFull body:\n%s", want, body)
+		}
+	}
+	for _, notWant := range []string{"No Open Tasks"} {
+		if strings.Contains(body, notWant) {
+			t.Errorf("triage body must not contain %q (misleading fallback)\nFull body:\n%s", notWant, body)
+		}
+	}
+}
+
+// TestNextTask_UnknownProjectNotFound verifies that an unknown project_id
+// yields an explicit not-found error instead of the misleading "No Available
+// Tasks" fallback.
+func TestNextTask_UnknownProjectNotFound(t *testing.T) {
+	mock := &mockClient{
+		listProjectsFunc: func(ctx context.Context) (*apiclient.ProjectList, error) {
+			return &apiclient.ProjectList{
+				Projects: []apiclient.Project{{ID: "PROJ-1", Name: "Core Engine"}},
+				Total:    1,
+			}, nil
+		},
+		listTasksFunc: func(ctx context.Context, f apiclient.TaskFilter) (*apiclient.TaskList, error) {
+			return &apiclient.TaskList{Tasks: []apiclient.TaskSummary{}, Total: 0}, nil
+		},
+	}
+
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
+	defaultActor := apiclient.Actor{Type: "agent", Name: "test-agent"}
+	RegisterPrompts(mcs, mock, defaultActor)
+
+	nextMsg := `{
+		"jsonrpc": "2.0",
+		"id": 41,
+		"method": "prompts/get",
+		"params": {
+			"name": "next_task",
+			"arguments": {
+				"project_id": "does-not-exist"
+			}
+		}
+	}`
+
+	resp := mcs.HandleMessage(context.Background(), json.RawMessage(nextMsg))
+	jsonResp, ok := resp.(mcpgo.JSONRPCResponse)
+	if !ok {
+		t.Fatalf("expected JSONRPCResponse, got %T: %+v", resp, resp)
+	}
+	res, ok := jsonResp.Result.(mcpgo.GetPromptResult)
+	if !ok {
+		t.Fatalf("expected GetPromptResult, got %T: %+v", jsonResp.Result, jsonResp.Result)
+	}
+	if len(res.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(res.Messages))
+	}
+	txtContent, ok := res.Messages[0].Content.(mcpgo.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", res.Messages[0].Content)
+	}
+	body := txtContent.Text
+
+	for _, want := range []string{"# Next Task Error", "not found", "does-not-exist"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("next_task body missing %q\nFull body:\n%s", want, body)
+		}
+	}
+	for _, notWant := range []string{"No Available Tasks"} {
+		if strings.Contains(body, notWant) {
+			t.Errorf("next_task body must not contain %q (misleading fallback)\nFull body:\n%s", notWant, body)
+		}
 	}
 }
