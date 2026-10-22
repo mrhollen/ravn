@@ -57,27 +57,41 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
-      - name: "Pre-flight: repair apt/dpkg state"
+      - name: "Pre-flight: repair apt/dpkg state and reclaim disk space"
         run: |
           # Reused runner containers can carry a half-configured dpkg state from an
-          # interrupted package install; fix it before Playwright's apt step runs.
+          # interrupted package install (e.g. xvfb -> libgl1-mesa-dri -> libllvm15
+          # exhausting /tmp or rootfs during unpack); clean up and fix it first.
           export DEBIAN_FRONTEND=noninteractive
           SUDO=""
           if [ "$(id -u)" != "0" ] && command -v sudo >/dev/null 2>&1; then
             SUDO="sudo"
           fi
+          $SUDO rm -rf /tmp/apt-dpkg-install-* /tmp/playwright* /tmp/*.tar 2>/dev/null || true
+          if command -v docker >/dev/null 2>&1; then
+            docker rmi -f test-server test-mcp 2>/dev/null || true
+            docker image prune -f 2>/dev/null || true
+          fi
+          echo "--- Disk space before apt ---"
+          df -h / /tmp 2>/dev/null || true
+          # Remove any half-unpacked X11/Mesa/LLVM packages from prior install-deps runs;
+          # headless Chromium uses its bundled SwiftShader and does not need xvfb or libllvm.
+          $SUDO dpkg --remove --force-remove-reinstreq --force-depends \
+            xvfb libgl1 libglx0 libglx-mesa0 libgl1-mesa-dri libllvm15 2>/dev/null || true
           $SUDO apt-get update || true
           if ! $SUDO dpkg --configure -a || [ -n "$($SUDO dpkg --audit 2>/dev/null)" ]; then
             echo "Broken dpkg state detected, repairing..."
-            $SUDO apt-get install -f -y
+            $SUDO apt-get install -f -y --no-install-recommends
             $SUDO dpkg --configure -a
           fi
+          $SUDO apt-get clean || true
 
       - name: Build web application and install Playwright dependencies
         run: |
           cd web
           npm ci
 
+          export DEBIAN_FRONTEND=noninteractive
           SUDO=""
           if [ "$(id -u)" != "0" ] && command -v sudo >/dev/null 2>&1; then
             SUDO="sudo"
@@ -89,9 +103,26 @@ jobs:
 
           PW_PID=""
           if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
-            # Install system deps (apt) separately from the browser download so a
-            # package failure surfaces with apt's own error output.
-            { npx playwright install-deps chromium && npx playwright install chromium; } &
+            # Install only the headless Chromium shared libraries (skipping Playwright's
+            # `tools` bundle of xvfb -> libgl1-mesa-dri -> libllvm15 and 200MB of CJK fonts)
+            # and download only chromium-headless-shell.
+            {
+              PKGS=""
+              for p in \
+                libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcups2 libglib2.0-0 \
+                libcairo2 libdbus-1-3 libdrm2 libgbm1 libnspr4 libnss3 libpango-1.0-0 \
+                libwayland-client0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+                libxfixes3 libxkbcommon0 libxrandr2 libfontconfig1 libfreetype6 fonts-liberation; do
+                if apt-cache show "${p}t64" >/dev/null 2>&1; then
+                  PKGS="$PKGS ${p}t64"
+                else
+                  PKGS="$PKGS $p"
+                fi
+              done
+              $SUDO apt-get install -y --no-install-recommends $PKGS &&
+                $SUDO apt-get clean &&
+                npx playwright install --only-shell chromium
+            } &
             PW_PID=$!
           fi
 
@@ -103,10 +134,12 @@ jobs:
 
           if [ "$FAILED" -ne 0 ]; then
             echo "Frontend build or Playwright dependency installation failed."
+            echo "--- Disk space ---"
+            df -h / /tmp 2>/dev/null || true
             echo "--- dpkg audit ---"
             $SUDO dpkg --audit 2>/dev/null || true
             echo "--- apt term log (tail) ---"
-            tail -n 40 /var/log/apt/term.log 2>/dev/null || true
+            tail -n 100 /var/log/apt/term.log 2>/dev/null || true
             exit 1
           fi
 
@@ -145,6 +178,7 @@ jobs:
             docker build --target server-runtime -t test-server .
             echo "Building image target: mcp-runtime..."
             docker build --target mcp-runtime -t test-mcp .
+            docker rmi -f test-server test-mcp 2>/dev/null || true
             echo "Both image targets built successfully."
           else
             echo "Docker is not available in runner environment; skipping image build."
