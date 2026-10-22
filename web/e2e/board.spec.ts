@@ -349,6 +349,42 @@ test.describe('Web E2E test suite', () => {
     expect(plainRes.ok).toBe(true);
     const plain = (await plainRes.json()).task;
 
+    const acOnlyRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'AC Only Badge Task',
+        priority: 2,
+        acceptance_criteria: ['Criterion one', 'Criterion two'],
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(acOnlyRes.ok).toBe(true);
+    const acOnly = (await acOnlyRes.json()).task;
+
+    const commentOnlyRes = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        title: 'Comment Only Badge Task',
+        priority: 2,
+        actor: { name: 'e2e-seed', type: 'agent' },
+      }),
+    });
+    expect(commentOnlyRes.ok).toBe(true);
+    const commentOnly = (await commentOnlyRes.json()).task;
+    await fetch(`${serverUrl}/api/v1/tasks/${commentOnly.id}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor: { name: 'agent-1', type: 'agent' },
+        kind: 'progress',
+        body: 'Single comment',
+      }),
+    });
+
     // -------------------------------------------------------------------------
     // Load the board and assert the per-card badges
     // -------------------------------------------------------------------------
@@ -375,6 +411,15 @@ test.describe('Web E2E test suite', () => {
     await expect(commentBadge).toContainText('2');
     await expect(commentBadge).toHaveAttribute('title', '2 comments');
 
+    // Right-aligned badges: AC and comment badges sit to the right of the ID chip and near card right edge
+    const cardBox = (await richCard.boundingBox())!;
+    const idBox = (await richIdChip.boundingBox())!;
+    const acBox = (await acBadge.boundingBox())!;
+    const commentBox = (await commentBadge.boundingBox())!;
+    expect(acBox.x).toBeGreaterThan(idBox.x + idBox.width);
+    expect(commentBox.x).toBeGreaterThan(acBox.x);
+    expect(commentBox.x + commentBox.width).toBeGreaterThan(cardBox.x + cardBox.width - 30);
+
     // Plain task: short-ID chip present, AC and comment badges hidden.
     const plainCard = page.locator('article', { hasText: 'Plain Badge Task' });
     await expect(plainCard).toBeVisible();
@@ -382,7 +427,27 @@ test.describe('Web E2E test suite', () => {
     await expect(plainCard.getByTestId('card-ac-progress')).not.toBeVisible();
     await expect(plainCard.getByTestId('card-comment-count')).not.toBeVisible();
 
-    // QA evidence for the ticket: both cards with their badges in one shot.
+    // AC-only task: AC progress visible and right-aligned, comment badge hidden.
+    const acOnlyCard = page.locator('article', { hasText: 'AC Only Badge Task' });
+    await expect(acOnlyCard).toBeVisible();
+    const acOnlyBadge = acOnlyCard.getByTestId('card-ac-progress');
+    await expect(acOnlyBadge).toBeVisible();
+    await expect(acOnlyCard.getByTestId('card-comment-count')).not.toBeVisible();
+    const acOnlyCardBox = (await acOnlyCard.boundingBox())!;
+    const acOnlyBox = (await acOnlyBadge.boundingBox())!;
+    expect(acOnlyBox.x + acOnlyBox.width).toBeGreaterThan(acOnlyCardBox.x + acOnlyCardBox.width - 30);
+
+    // Comment-only task: comment badge visible and right-aligned, AC badge hidden.
+    const commentOnlyCard = page.locator('article', { hasText: 'Comment Only Badge Task' });
+    await expect(commentOnlyCard).toBeVisible();
+    const commentOnlyBadge = commentOnlyCard.getByTestId('card-comment-count');
+    await expect(commentOnlyBadge).toBeVisible();
+    await expect(commentOnlyCard.getByTestId('card-ac-progress')).not.toBeVisible();
+    const commentOnlyCardBox = (await commentOnlyCard.boundingBox())!;
+    const commentOnlyBox = (await commentOnlyBadge.boundingBox())!;
+    expect(commentOnlyBox.x + commentOnlyBox.width).toBeGreaterThan(commentOnlyCardBox.x + commentOnlyCardBox.width - 30);
+
+    // QA evidence for the ticket: cards with badges in one shot.
     await page.screenshot({ path: path.join(testInfo.outputDir, 'card-metadata-badges.png') });
   });
 

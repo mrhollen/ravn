@@ -915,27 +915,31 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                             <span x-text="task.assignee ? task.assignee.name : ''"></span>
                           </span>
 
-                          <!-- AC progress badge: only when the task has criteria; emerald once all are done. -->
-                          <span x-show="task.ac_total > 0" x-cloak data-testid="card-ac-progress"
-                                :title="(task.ac_done ?? 0) + ' of ' + task.ac_total + ' acceptance criteria complete'"
-                                class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ring-1"
-                                :class="(task.ac_done ?? 0) >= task.ac_total
-                                  ? 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-800'
-                                  : 'bg-zinc-100 text-zinc-600 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700'">
-                            <svg class="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            <span x-text="(task.ac_done ?? 0) + '/' + task.ac_total"></span>
-                          </span>
-                          <!-- Comment count badge: only when the thread is non-empty. -->
-                          <span x-show="(task.comment_count ?? 0) > 0" x-cloak data-testid="card-comment-count"
-                                :title="task.comment_count + (task.comment_count === 1 ? ' comment' : ' comments')"
-                                class="inline-flex items-center gap-1 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 ring-1 ring-sky-200 dark:bg-sky-950 dark:text-sky-300 dark:ring-sky-800">
-                            <svg class="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4-.8L3 20l1.3-3.9A7.9 7.9 0 012 12c0-4.418 4.03-8 9-8s10 3.582 10 8z" />
-                            </svg>
-                            <span x-text="task.comment_count"></span>
-                          </span>
+                          <!-- Right cluster: AC progress and comment count badges aligned to the right. -->
+                          <div x-show="task.ac_total > 0 || (task.comment_count ?? 0) > 0" x-cloak
+                               class="ml-auto inline-flex items-center gap-1.5">
+                            <!-- AC progress badge: only when the task has criteria; emerald once all are done. -->
+                            <span x-show="task.ac_total > 0" x-cloak data-testid="card-ac-progress"
+                                  :title="(task.ac_done ?? 0) + ' of ' + task.ac_total + ' acceptance criteria complete'"
+                                  class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ring-1"
+                                  :class="(task.ac_done ?? 0) >= task.ac_total
+                                    ? 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-800'
+                                    : 'bg-zinc-100 text-zinc-600 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700'">
+                              <svg class="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                              <span x-text="(task.ac_done ?? 0) + '/' + task.ac_total"></span>
+                            </span>
+                            <!-- Comment count badge: only when the thread is non-empty. -->
+                            <span x-show="(task.comment_count ?? 0) > 0" x-cloak data-testid="card-comment-count"
+                                  :title="task.comment_count + (task.comment_count === 1 ? ' comment' : ' comments')"
+                                  class="inline-flex items-center gap-1 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 ring-1 ring-sky-200 dark:bg-sky-950 dark:text-sky-300 dark:ring-sky-800">
+                              <svg class="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4-.8L3 20l1.3-3.9A7.9 7.9 0 012 12c0-4.418 4.03-8 9-8s10 3.582 10 8z" />
+                              </svg>
+                              <span x-text="task.comment_count"></span>
+                            </span>
+                          </div>
                         </div>
                       </article>
                     </template>
