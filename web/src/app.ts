@@ -67,6 +67,9 @@ export const LS_THEME = "ravn_theme";
 export { LS_TOKEN };
 const POLL_MS = 15_000;
 const MD_CACHE_MAX = 500;
+// Max visual card offset (px) while swiping. Commit/slop thresholds still use
+// the raw finger displacement — this clamp only limits what is drawn.
+const MAX_SWIPE_PX = 96;
 
 // --------------------------------------------------------------------------- theme
 /** UI theme choice. "system" (default) follows the OS prefers-color-scheme. */
@@ -2725,7 +2728,9 @@ export function ravnApp() {
         s.active = true;
       }
       if (s.active) {
-        s.dx = dx;
+        // Clamp only the displayed offset so a long fling can't throw the card
+        // far off-screen; slop + commit thresholds keep using raw dx.
+        s.dx = Math.max(-MAX_SWIPE_PX, Math.min(MAX_SWIPE_PX, dx));
         // Owning the gesture: stop vertical scroll and suppress the follow-up
         // compatibility click so the card doesn't open its detail drawer.
         e.preventDefault();
@@ -2751,6 +2756,12 @@ export function ravnApp() {
         return;
       }
       void this.moveTaskStatus(task.id, target);
+    },
+
+    onCardTouchCancel(_e: TouchEvent): void {
+      // A cancelled gesture (system interrupt, etc.) never commits a move —
+      // just snap the card back home via the release transition.
+      this.swipeState = { id: null, startX: 0, startY: 0, dx: 0, fromStatus: null, active: false };
     },
 
     toggleCardMenu(id: string): void {
