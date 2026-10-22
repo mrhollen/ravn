@@ -59,10 +59,31 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
+      - name: "Pre-flight: repair apt/dpkg state"
+        run: |
+          # Reused runner containers can carry a half-configured dpkg state from an
+          # interrupted package install; fix it before Playwright's apt step runs.
+          export DEBIAN_FRONTEND=noninteractive
+          SUDO=""
+          if [ "$(id -u)" != "0" ] && command -v sudo >/dev/null 2>&1; then
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update || true
+          if ! $SUDO dpkg --configure -a || [ -n "$($SUDO dpkg --audit 2>/dev/null)" ]; then
+            echo "Broken dpkg state detected, repairing..."
+            $SUDO apt-get install -f -y
+            $SUDO dpkg --configure -a
+          fi
+
       - name: Build web application and install Playwright dependencies
         run: |
           cd web
           npm ci
+
+          SUDO=""
+          if [ "$(id -u)" != "0" ] && command -v sudo >/dev/null 2>&1; then
+            SUDO="sudo"
+          fi
 
           echo "Starting web build and Playwright install concurrently..."
           npm run build &
@@ -70,7 +91,9 @@ jobs:
 
           PW_PID=""
           if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
-            npx playwright install --with-deps chromium &
+            # Install system deps (apt) separately from the browser download so a
+            # package failure surfaces with apt's own error output.
+            { npx playwright install-deps chromium && npx playwright install chromium; } &
             PW_PID=$!
           fi
 
@@ -82,6 +105,10 @@ jobs:
 
           if [ "$FAILED" -ne 0 ]; then
             echo "Frontend build or Playwright dependency installation failed."
+            echo "--- dpkg audit ---"
+            $SUDO dpkg --audit 2>/dev/null || true
+            echo "--- apt term log (tail) ---"
+            tail -n 40 /var/log/apt/term.log 2>/dev/null || true
             exit 1
           fi
 
