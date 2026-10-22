@@ -226,7 +226,7 @@ func maxMCPPayloadBytes() int64 {
 // so strict mark3labs/mcp-go modern validation does not reject client notifications
 // (such as notifications/roots/list_changed from modelcontextprotocol/go_sdk) with 400.
 // It also bounds memory consumption by enforcing maxMCPPayloadBytes on incoming bodies
-// using io.LimitReader, rejecting oversized requests with HTTP 413 Payload Too Large.
+// using http.MaxBytesReader, rejecting oversized requests with HTTP 413 Payload Too Large.
 func withModernMCPCompat(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -243,8 +243,19 @@ func withModernMCPCompat(next http.Handler) http.Handler {
 
 			protoVer := r.Header.Get("Mcp-Protocol-Version")
 			if protoVer != "" && r.Body != nil {
-				bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+				r.Body = http.MaxBytesReader(w, r.Body, limit+1)
+				bodyBytes, err := io.ReadAll(r.Body)
 				if err != nil {
+					var tooLarge *http.MaxBytesError
+					if errors.As(err, &tooLarge) {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusRequestEntityTooLarge)
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"error":   "payload_too_large",
+							"message": fmt.Sprintf("request payload exceeds limit of %d bytes", limit),
+						})
+						return
+					}
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusBadRequest)
 					_ = json.NewEncoder(w).Encode(map[string]any{

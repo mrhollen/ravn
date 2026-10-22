@@ -600,7 +600,7 @@ func TestWithModernMCPCompat_PayloadLimits(t *testing.T) {
 		}
 	})
 
-	t.Run("infinite streaming body bounded by LimitReader and rejected with 413", func(t *testing.T) {
+	t.Run("infinite streaming body bounded by MaxBytesReader and rejected with 413", func(t *testing.T) {
 		innerCalled = false
 		t.Setenv("MCP_MAX_PAYLOAD_BYTES", "512")
 		// Unknown Content-Length (-1) with infinite stream

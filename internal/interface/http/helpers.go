@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -15,12 +16,23 @@ import (
 	"github.com/mrhollen/ravn/internal/domain"
 )
 
+// maxJSONBodyBytes caps every JSON request body at 1MB. Bodies are wrapped in
+// http.MaxBytesReader so an oversized stream fails with *http.MaxBytesError
+// (mapped to 413 Payload Too Large) instead of being silently truncated into a
+// "malformed JSON" 400, and so net/http closes the connection (requestTooLarge)
+// rather than draining the rest of an oversized payload in the background.
+const maxJSONBodyBytes = 1 << 20
+
 // decodeJSON decodes the request body into v. Non-empty bodies must have
 // Content-Type: application/json (or media type application/json with parameters),
 // returning 415 ({"error":"unsupported media type"}) if mismatched.
 // Malformed JSON or a missing body is a 400 ({"error":"invalid input"})
 // and the handler returns false.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if r.Body != nil && r.Body != http.NoBody {
+		r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	}
+
 	hasBody := false
 	if r.Body != nil && r.Body != http.NoBody {
 		if r.ContentLength > 0 {
@@ -59,9 +71,17 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 
-	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, map[string]any{
+				"error":   "payload too large",
+				"message": fmt.Sprintf("request body exceeds the %d byte limit", maxJSONBodyBytes),
+			})
+			return false
+		}
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
 			"error":   "invalid input",
 			"message": "malformed JSON body: " + err.Error(),
@@ -83,8 +103,17 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any) (hasBody 
 		return false, true
 	}
 
-	rawBody, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	rawBody, err := io.ReadAll(r.Body)
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, map[string]any{
+				"error":   "payload too large",
+				"message": fmt.Sprintf("request body exceeds the %d byte limit", maxJSONBodyBytes),
+			})
+			return false, false
+		}
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
 			"error":   "invalid input",
 			"message": "unreadable request body: " + err.Error(),
