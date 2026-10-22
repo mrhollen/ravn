@@ -21,6 +21,28 @@ func RegisterPrompts(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor
 	registerNextTask(s, c, defaultActor)
 }
 
+// lookupProject resolves a project by id via ListProjects.
+//   - (name, true,  nil): project found; name is its display name.
+//   - ("",   false, nil): ListProjects succeeded but no project has this id —
+//     treat as "project not found".
+//   - ("",   false, err): listing failed (existence indeterminate); callers
+//     should proceed normally so the subsequent calls surface real failures.
+func lookupProject(ctx context.Context, c Client, projectID string) (name string, found bool, err error) {
+	projs, err := c.ListProjects(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	if projs == nil {
+		return "", false, nil
+	}
+	for _, p := range projs.Projects {
+		if p.ID == projectID {
+			return p.Name, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 func registerTriageOpenTasks(s *mcpsrv.MCPServer, c Client) {
 	prompt := mcpgo.NewPrompt(
 		"triage_open_tasks",
@@ -45,6 +67,22 @@ func registerTriageOpenTasks(s *mcpsrv.MCPServer, c Client) {
 						limit = 100
 					}
 				}
+			}
+		}
+
+		// Validate the requested project before listing tasks so an unknown id
+		// yields an explicit error instead of a misleading "No Open Tasks"
+		// fallback. A non-nil ListProjects error is NOT treated as not-found:
+		// proceed and let the task-listing error paths surface it.
+		var projectName string
+		if projectID != "" {
+			if name, found, err := lookupProject(ctx, c, projectID); err == nil && !found {
+				msg := fmt.Sprintf("# Triage Error\n\nProject %q was not found.\nThis is not an indication that tasks are complete — no task listing was attempted because the supplied project ID does not match any known project. Verify available projects with `list_projects`.\n", projectID)
+				return mcpgo.NewGetPromptResult("Open tasks triage summary", []mcpgo.PromptMessage{
+					mcpgo.NewPromptMessage(mcpgo.RoleUser, mcpgo.NewTextContent(msg)),
+				}), nil
+			} else if err == nil && found {
+				projectName = name
 			}
 		}
 
@@ -86,19 +124,6 @@ func registerTriageOpenTasks(s *mcpsrv.MCPServer, c Client) {
 			return mcpgo.NewGetPromptResult("Open tasks triage summary", []mcpgo.PromptMessage{
 				mcpgo.NewPromptMessage(mcpgo.RoleUser, mcpgo.NewTextContent(msg)),
 			}), nil
-		}
-
-		// Optional project name resolution
-		var projectName string
-		if projectID != "" {
-			if projs, err := c.ListProjects(ctx); err == nil && projs != nil {
-				for _, p := range projs.Projects {
-					if p.ID == projectID {
-						projectName = p.Name
-						break
-					}
-				}
-			}
 		}
 
 		// Identify blocked tasks
@@ -255,6 +280,19 @@ func registerNextTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Acto
 			}
 			if act := strings.TrimSpace(req.Params.Arguments["actor_name"]); act != "" {
 				actorName = act
+			}
+		}
+
+		// Validate the requested project before listing tasks so an unknown id
+		// yields an explicit error instead of a misleading "No Available Tasks"
+		// fallback. A non-nil ListProjects error is NOT treated as not-found:
+		// proceed and let the task-listing error paths surface it.
+		if projectID != "" {
+			if _, found, err := lookupProject(ctx, c, projectID); err == nil && !found {
+				msg := fmt.Sprintf("# Next Task Error\n\nProject %q was not found.\nThis is not an indication that tasks are complete — no unblocked task was selected because the supplied project ID does not match any known project. Verify available projects with `list_projects`.\n", projectID)
+				return mcpgo.NewGetPromptResult("Next task guidance", []mcpgo.PromptMessage{
+					mcpgo.NewPromptMessage(mcpgo.RoleUser, mcpgo.NewTextContent(msg)),
+				}), nil
 			}
 		}
 
