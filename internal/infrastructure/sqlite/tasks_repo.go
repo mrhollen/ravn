@@ -30,6 +30,28 @@ const taskColumns = `id, project_id, status, title, description, priority, due_a
 	assignee_type, assignee_name, claimed_by_type, claimed_by_name, claimed_at,
 	claim_expires_at, claim_ttl_sec, version, archived, created_at, updated_at, completed_at`
 
+// lastActivityExpr derives domain.Task.LastActivity on read: the MAX of the
+// task row's own updated_at and the latest child-row timestamp for this task
+// (comment, artifact, acceptance-criterion completion). Each child-table lookup
+// is COALESCEd to the empty string so SQLite's multi-argument MAX never sees a
+// NULL (it would return NULL if any argument were NULL); task.updated_at is
+// NOT NULL, so the result is never NULL. formatTS's fixed-width zero-padded
+// UTC form makes lexicographic text max == chronological max. Child-row
+// mutations never touch the parent row (no updated_at or version bump — ADR),
+// so this read-time derivation is the sole source of LastActivity.
+const lastActivityExpr = `MAX(task.updated_at,
+	COALESCE((SELECT MAX(c.created_at) FROM comment c WHERE c.task_id = task.id), ''),
+	COALESCE((SELECT MAX(a.created_at) FROM artifact a WHERE a.task_id = task.id), ''),
+	COALESCE((SELECT MAX(ac.completed_at) FROM acceptance_criterion ac WHERE ac.task_id = task.id), ''))`
+
+// taskSelect is the full-row SELECT list feeding scanTask: taskColumns plus the
+// derived last_activity column appended as the trailing target. Used by every
+// statement returning complete task rows — Get, List, and Claim's RETURNING.
+// Summary/aggregation queries (OpenTitles, BlockersOf, OpenTaskCounts, …) never
+// use it; they select their own light column lists and must not gain the extra
+// column.
+const taskSelect = taskColumns + ", " + lastActivityExpr + ` AS last_activity`
+
 // Create stores a new task row exactly as given (IDs and timestamps are
 // minted/stamped by the use case; fresh rows carry Version = 1 per the ADR).
 // The write is idempotent by unique ID: re-inserting an existing ID leaves
@@ -65,7 +87,7 @@ func (r *taskRepo) Create(ctx context.Context, t domain.Task) error {
 
 // Get returns the task with id or domain.ErrNotFound.
 func (r *taskRepo) Get(ctx context.Context, id domain.ID) (domain.Task, error) {
-	row := r.q.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM task WHERE id = ?`, string(id))
+	row := r.q.QueryRowContext(ctx, `SELECT `+taskSelect+` FROM task WHERE id = ?`, string(id))
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Task{}, domain.ErrNotFound
@@ -86,7 +108,7 @@ func (r *taskRepo) List(ctx context.Context, f application.TaskFilter) ([]domain
 		return nil, 0, fmt.Errorf("count tasks: %w", err)
 	}
 
-	query := `SELECT ` + taskColumns + ` FROM task WHERE ` + where +
+	query := `SELECT ` + taskSelect + ` FROM task WHERE ` + where +
 		` ORDER BY priority DESC, (due_at IS NULL), due_at ASC, created_at ASC`
 	if f.Limit > 0 { // <= 0 = unbounded when called directly; the use case always clamps
 		query += ` LIMIT ?`
@@ -294,7 +316,7 @@ func (r *taskRepo) Claim(ctx context.Context, taskID domain.ID, actor domain.Act
 		  AND (claimed_by_name IS NULL
 		       OR claim_expires_at < ?
 		       OR claimed_by_name = ?)
-		RETURNING `+taskColumns,
+		RETURNING `+taskSelect, // RETURNING evaluates post-update rows; the derived subqueries see the fresh updated_at
 		string(actor.Type), actor.Name,
 		formatTS(now), formatTS(expiry), ttlSec,
 		formatTS(now),
@@ -571,9 +593,13 @@ func taskListWhere(f application.TaskFilter) (string, []any) {
 	return strings.Join(conds, " AND "), args
 }
 
-// scanTask maps one row (in taskColumns order) to a domain.Task. NULL in the
-// nullable columns round-trips to the domain's zero/nil representation;
-// LastActivity has no column and is derived as UpdatedAt on every read (ADR).
+// scanTask maps one row (in taskSelect order — taskColumns plus the trailing
+// derived last_activity column) to a domain.Task. NULL in the nullable columns
+// round-trips to the domain's zero/nil representation. LastActivity has no
+// stored column: every full-row SELECT (taskSelect, see lastActivityExpr)
+// derives it at read time as MAX(updated_at, latest child-row timestamp across
+// comment / artifact / acceptance_criterion), so a child-row mutation shows up
+// on the next read without ever bumping the parent's updated_at or version.
 func scanTask(s scanner) (domain.Task, error) {
 	var (
 		t              domain.Task
@@ -594,11 +620,13 @@ func scanTask(s scanner) (domain.Task, error) {
 		createdAt      string
 		updatedAt      string
 		completedAt    *string
+		lastActivity   *string // derived (taskSelect), never NULL in practice — see lastActivityExpr
 	)
 	err := s.Scan(
 		&t.ID, &projectID, &status, &t.Title, &t.Description, &priority, &dueAt, &notes,
 		&assigneeType, &assigneeName, &claimedByType, &claimedByName, &claimedAt,
-		&claimExpiresAt, &claimTTL, &version, &archived, &createdAt, &updatedAt, &completedAt)
+		&claimExpiresAt, &claimTTL, &version, &archived, &createdAt, &updatedAt, &completedAt,
+		&lastActivity)
 	if err != nil {
 		return domain.Task{}, err
 	}
@@ -661,6 +689,17 @@ func scanTask(s scanner) (domain.Task, error) {
 		}
 		t.CompletedAt = &ts
 	}
-	t.LastActivity = updated // derived (no column in the MVP schema — ADR)
+	// LastActivity is derived on read by taskSelect (see lastActivityExpr): the
+	// SQL never yields NULL, but the pointer + fallback keeps a corrupt row from
+	// zeroing the field — it degrades to the previous "just UpdatedAt" semantics.
+	lastAct := updated
+	if lastActivity != nil {
+		ts, err := parseTS(*lastActivity)
+		if err != nil {
+			return domain.Task{}, fmt.Errorf("task %s last_activity %q: %w", t.ID, *lastActivity, err)
+		}
+		lastAct = ts
+	}
+	t.LastActivity = lastAct
 	return t, nil
 }

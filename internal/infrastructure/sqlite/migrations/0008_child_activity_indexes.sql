@@ -1,0 +1,12 @@
+-- 0008_child_activity_indexes: back the correlated last_activity subqueries in
+-- tasks_repo.go — LastActivity is derived on read as MAX(updated_at, latest
+-- child-row timestamp) over comment / artifact / acceptance_criterion per task.
+--
+-- comment and artifact ALREADY carry covering indexes from 0001 —
+-- idx_comment_task ON comment(task_id, created_at) and
+-- idx_artifact_task ON artifact(task_id, created_at) — which answer
+-- MAX(created_at) WHERE task_id = ? index-only, so no new index is added for
+-- them (a duplicate task_id-prefix index would only cost write amplification).
+-- acceptance_criterion lacks a task_id-anchored index: its UNIQUE(task_id, seq)
+-- matches on the prefix but still forces table lookups to read completed_at.
+CREATE INDEX IF NOT EXISTS idx_ac_task ON acceptance_criterion(task_id);
