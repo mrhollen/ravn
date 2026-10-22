@@ -196,19 +196,26 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
+	after := map[string]any{
+		"title":       task.Title,
+		"description": task.Description,
+		"status":      string(task.Status),
+		"priority":    int(task.Priority),
+	}
+	if task.DueAt != nil { // present-only: omit due_at when the task has no deadline
+		after["due_at"] = dueAtJSON(task.DueAt)
+	}
+	if task.Assignee != nil { // present-only: omit assignee when unassigned
+		after["assignee"] = actorJSON(task.Assignee)
+	}
 	ev := domain.Event{
 		ID:        s.idgen.NewID(),
 		ProjectID: &task.ProjectID, // always set when derivable
 		TaskID:    &task.ID,
 		Actor:     actor,
 		Kind:      domain.EventCreated,
-		After: compactJSON(map[string]any{
-			"title":       task.Title,
-			"description": task.Description,
-			"status":      string(task.Status),
-			"priority":    int(task.Priority),
-		}),
-		At: now,
+		After:     compactJSON(after),
+		At:        now,
 	}
 
 	var r Repos

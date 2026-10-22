@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -119,8 +120,41 @@ func TestTasksCreate_MintsIDStampsTimestampsStoresACsAppendsCreatedEvent(t *test
 	if ev.ProjectID == nil || *ev.ProjectID != testProjectID {
 		t.Errorf("event project id = %v, want %s (always set when derivable)", ev.ProjectID, testProjectID)
 	}
-	if ev.Before != "" || !strings.Contains(ev.After, "Ship the resume payload") {
-		t.Errorf("event payloads (%q, %q), want empty before + after carrying the title", ev.Before, ev.After)
+	if ev.Before != "" {
+		t.Errorf("event before = %q, want empty for a created event", ev.Before)
+	}
+	after := mustParseEventAfter(t, ev.After) // parse the map so ordering of keys is irrelevant
+	if after["title"] != "Ship the resume payload" || after["description"] != "markdown body" ||
+		after["status"] != string(domain.StatusTodo) || after["priority"] != float64(3) { // JSON numbers decode as float64
+		t.Errorf("event After base = %s, want title/description/status todo/priority 3", ev.After)
+	}
+	if got, want := after["due_at"], due.UTC().Format(time.RFC3339); got != want {
+		t.Errorf("event After due_at = %v, want RFC3339 UTC %q (present: task carries a deadline)", got, want)
+	}
+	assignee, ok := after["assignee"].(map[string]any) // present: task carries an assignee
+	if !ok || assignee["type"] != string(domain.ActorAgent) || assignee["name"] != "worker-b" {
+		t.Errorf("event After assignee = %v, want trimmed {agent worker-b}", after["assignee"])
+	}
+}
+
+func TestTasksCreate_CreatedEventOmitsUnsetOptionalFields(t *testing.T) {
+	svc, _, uow := newTaskTestEnv(t)
+
+	mustCreateTask(t, svc, "No optional fields", 2, nil) // no due date, never an assignee
+
+	evs := uow.events.events
+	if len(evs) != 1 {
+		t.Fatalf("expected exactly 1 event, got %d", len(evs))
+	}
+	after := mustParseEventAfter(t, evs[0].After)
+	for _, key := range []string{"due_at", "assignee"} {
+		if _, present := after[key]; present {
+			t.Errorf("event After = %q, want %s omitted when unset (present-only)", evs[0].After, key)
+		}
+	}
+	if after["title"] != "No optional fields" || after["status"] != string(domain.StatusTodo) ||
+		after["priority"] != float64(2) { // JSON numbers decode as float64
+		t.Errorf("event After base = %s, want the four core fields preserved", evs[0].After)
 	}
 }
 
@@ -659,6 +693,18 @@ func TestTasksGetDetail_AggregatesTheResumePayload(t *testing.T) {
 }
 
 // --- tiny assertion helpers ------------------------------------------------------
+
+// mustParseEventAfter unmarshals an event's compact-JSON payload into a map so
+// assertions can check key presence and values without depending on Go's
+// alphabetical marshalling order of map keys.
+func mustParseEventAfter(t *testing.T, after string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(after), &m); err != nil {
+		t.Fatalf("unmarshal event After %q: %v", after, err)
+	}
+	return m
+}
 
 func titlesOf(tasks []domain.Task) []string {
 	out := make([]string, len(tasks))
