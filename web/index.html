@@ -87,13 +87,13 @@
             sits just left of the settings-menu trigger at the right edge (the
             toggle button is hidden). Project settings live in the gear attached
             to the Projects dropdown, not in the strip. -->
-      <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-white px-4 py-3 shadow-sm md:gap-x-4 dark:border-zinc-800 dark:bg-zinc-900">
+      <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-white px-4 py-2 shadow-sm md:gap-x-3 dark:border-zinc-800 dark:bg-zinc-900">
         <!-- Brand icon: the faceted Rävn mark in the header, paired with an
              sr-only h1 to preserve the page's main heading for screen readers.
              Hidden below sm. -->
         <div class="mr-1 hidden leading-tight sm:block">
           <img src="/logo.svg" alt="Rävn — MCP-first kanban · visibility UI"
-               class="h-9 w-auto" />
+               class="h-8 w-auto" />
           <h1 class="sr-only">Rävn</h1>
         </div>
 
@@ -119,7 +119,7 @@
                       @click="toggleProjectMenu()"
                       @keydown.down.prevent="openProjectMenu('first')"
                       @keydown.up.prevent="openProjectMenu('last')"
-                       class="field flex min-w-0 flex-1 items-center justify-between gap-2 rounded-r-none border-r-0 text-left disabled:cursor-not-allowed disabled:opacity-50">
+                       class="field flex min-w-0 flex-1 items-center justify-between gap-2 rounded-r-none border-r-0 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50">
                 <span class="min-w-0 truncate" x-text="projectSelectLabel()"></span>
                 <!-- todo·doing·done count pill: board-state summary inside the
                      trigger (pre-filter counts — it summarizes the whole
@@ -141,9 +141,10 @@
 
               <!-- Project settings gear — opens the EXISTING project settings
                    modal; it is a plain modal button, NOT a header menu (no
-                   aria-haspopup/expanded state). Fixed w-11 (44px) so its
-                   main-axis size never inherits .field's w-full (a flex item
-                   with flex-basis:auto would otherwise claim 100% of the row);
+                   aria-haspopup/expanded state). Fixed w-9 (36px on desktop,
+                   44px on mobile via min-width rule) so its main-axis size
+                   never inherits .field's w-full (a flex item with
+                   flex-basis:auto would otherwise claim 100% of the row);
                    the select keeps the rest via flex-1. Disabled while !appBooted
                    (same gate as the adjacent trigger, so the whole unit stays
                    inert during startup) OR until a project is selected
@@ -155,7 +156,7 @@
                       aria-label="Project settings" title="Project settings"
                       :disabled="!appBooted || !selectedProjectId"
                       @click="closeProjectMenu(); openProjectSettings()"
-                      class="field flex w-11 shrink-0 items-center justify-center rounded-l-none text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400">
+                      class="field flex w-9 shrink-0 items-center justify-center rounded-l-none px-0 py-1.5 text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400">
                 <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.406l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.406l-1.298 2.247a1.125 1.125 0 01-1.369.49l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.406l1.004-.827c.292-.24.437-.613.43-.991a7.723 7.723 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.406l1.297-2.247a1.125 1.125 0 011.37-.49l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -230,7 +231,7 @@
                   (.field / .btn-* radius + border treatment), so it reads as its
                   own element beside the separated settings trigger. Below md it
                   stays the plain unbordered strip row. -->
-             <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none md:rounded-md md:border md:border-zinc-200 md:bg-white dark:md:border-zinc-700 dark:md:bg-zinc-900"
+             <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none md:rounded-md md:border md:border-zinc-200 md:bg-white md:px-2.5 md:py-1.5 dark:md:border-zinc-700 dark:md:bg-zinc-900"
                  role="status"
                  aria-live="polite"
                  aria-atomic="true"
@@ -278,7 +279,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              pulls the trigger back into row 1 in that state (and only then —
              showMobileMenu is desktop-inert), keeping it permanently reachable;
              the panel below clamps to the left edge for the same reason. -->
-         <!-- On md+ this anchor sits in the header's natural flex gap (gap-x-4)
+         <!-- On md+ this anchor sits in the header's natural flex gap (gap-x-3)
               to the RIGHT of the live-indicator pill — no negative margins, so
               the two controls can never overlap. Inert below md, where row 1
               packing is driven by the project capsule's flex-1. -->
@@ -298,7 +299,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     @click="toggleHeaderMenu()"
                     @keydown.down.prevent="openHeaderMenu('first')"
                     @keydown.up.prevent="openHeaderMenu('last')"
-                    class="relative flex h-9 w-9 shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border text-xs font-semibold shadow-sm transition-colors md:w-auto md:gap-1.5 md:rounded-md md:pl-2.5 md:pr-3"
+                    class="relative flex h-9 w-9 shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border text-xs font-semibold shadow-sm transition-colors md:h-auto md:w-auto md:gap-1.5 md:rounded-md md:py-1.5 md:pl-2.5 md:pr-2.5"
                     :class="headerMenuOpen
                       ? 'border-indigo-400 bg-indigo-600 text-white ring-2 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-700'
                       : 'border-zinc-200 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'">
@@ -409,7 +410,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              while that strip is expanded, so the ≤96px collapsed header budget
              at 375px still holds. SAME controls as the old in-main filter card:
              identical x-models, testids and button text, rendered exactly once. -->
-        <div class="w-full flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-zinc-100 bg-zinc-50/70 pt-1 text-xs dark:border-zinc-800 dark:bg-zinc-950"
+        <div class="-mx-4 -mb-2 w-[calc(100%+2rem)] flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-zinc-200/80 bg-zinc-50/70 px-4 py-1.5 text-xs dark:border-zinc-800 dark:bg-zinc-950"
              x-cloak
              :class="board && !fullPageOpen ? (showMobileMenu ? 'flex' : 'hidden md:flex') : 'hidden'">
           <div class="flex min-w-0 flex-wrap items-center gap-2.5">
@@ -430,10 +431,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
             <!-- Joined Filter split-capsule: Priority | Owner | Due | Unblocked only (+ conditional Reset) -->
             <div class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
-              <label class="flex items-center gap-1.5 px-2 py-1 text-zinc-700 dark:text-zinc-200" title="Filter cards by priority">
+              <label class="flex items-center gap-1.5 px-2.5 py-0.5 text-zinc-700 dark:text-zinc-200" title="Filter cards by priority">
                 <span class="text-zinc-600 dark:text-zinc-400">Priority</span>
                 <select x-model="filterPriority" aria-label="Filter by priority"
-                        class="max-w-[7rem] cursor-pointer rounded bg-transparent py-1 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                        class="max-w-[7rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
                   <option value="">All</option>
                   <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
                     <option :value="p" x-text="'P' + p + ' — ' + priorityName(p)"></option>
@@ -441,10 +442,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </select>
               </label>
 
-              <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2 py-1 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by assignee">
+              <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by assignee">
                 <span class="text-zinc-600 dark:text-zinc-400">Owner</span>
                 <select x-model="filterAssignee" aria-label="Filter by assignee"
-                        class="max-w-[8rem] cursor-pointer rounded bg-transparent py-1 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                        class="max-w-[8rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
                   <option value="">All</option>
                   <option value="unassigned">Unassigned</option>
                   <template x-for="name in availableAssignees()" :key="name">
@@ -453,10 +454,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </select>
               </label>
 
-              <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2 py-1 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by due date">
+              <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by due date">
                 <span class="text-zinc-600 dark:text-zinc-400">Due</span>
                 <select x-model="filterDue" aria-label="Filter by due date"
-                        class="max-w-[7rem] cursor-pointer rounded bg-transparent py-1 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                        class="max-w-[7rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
                   <option value="">All</option>
                   <option value="overdue">Overdue</option>
                   <option value="today">Due today</option>
@@ -464,7 +465,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </select>
               </label>
 
-              <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+              <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
                 <input type="checkbox" x-model="filterUnblocked"
                        class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
                 <span>Unblocked only</span>
@@ -472,7 +473,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
               <!-- Conditional Reset — same text/behavior as before -->
               <button type="button" @click="clearFilters()" x-show="hasActiveFilters()" x-cloak
-                      class="flex items-center border-l border-zinc-200 px-2 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
+                      class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
                 Reset filters
               </button>
             </div>
@@ -480,11 +481,11 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
           <!-- Joined Sort split-capsule: Sort by | direction (+ conditional Clear) -->
           <div class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
-            <label class="flex items-center gap-1.5 px-2 py-1 text-zinc-700 dark:text-zinc-200" title="Sort cards">
+            <label class="flex items-center gap-1.5 px-2.5 py-0.5 text-zinc-700 dark:text-zinc-200" title="Sort cards">
               <span class="text-zinc-600 dark:text-zinc-400">Sort by</span>
               <select x-model="sortKey" @change="setSort()"
                       data-testid="sort-key" aria-label="Sort cards by"
-                      class="max-w-[8rem] cursor-pointer rounded bg-transparent py-1 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                      class="max-w-[8rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
                 <template x-for="o in SORT_OPTIONS" :key="o.value">
                   <option :value="o.value" x-text="o.label"></option>
                 </template>
@@ -493,14 +494,14 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
             <button type="button" @click="toggleSortDir()" :disabled="sortKey === ''"
                     data-testid="sort-dir"
-                    class="flex items-center border-l border-zinc-200 px-2 py-1 font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                     :title="'Toggle direction (' + (sortDir === 'asc' ? 'ascending → descending' : 'descending → ascending') + ')'">
               <span x-text="sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'"></span>
             </button>
 
             <button type="button" @click="clearSort()" x-show="sortKey !== ''" x-cloak
                     data-testid="sort-clear"
-                    class="flex items-center border-l border-zinc-200 px-2 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
+                    class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
               Clear sort
             </button>
           </div>
