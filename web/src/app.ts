@@ -1255,6 +1255,39 @@ export function ravnApp() {
       return counts;
     },
 
+    /** Number of tasks currently VISIBLE across all three columns
+     *  (i.e. after client-side filtering in columns()). The board itself is
+     *  fetched unfiltered, so the delta against totalTaskCount() is exactly
+     *  what the active filters hide — no pagination/archival lives here. */
+    visibleTaskCount(): number {
+      let n = 0;
+      for (const col of this.columns()) n += col.tasks.length;
+      return n;
+    },
+
+    /** Total tasks in the project (pre-filter), summed over all statuses. */
+    totalTaskCount(): number {
+      const b = this.board;
+      if (!b) return 0;
+      let n = 0;
+      for (const s of STATUSES) n += b.tasks[s]?.length ?? 0;
+      return n;
+    },
+
+    /** Tasks hidden by the active filters (never negative). */
+    hiddenTaskCount(): number {
+      return Math.max(0, this.totalTaskCount() - this.visibleTaskCount());
+    },
+
+    /** True when the board should show the filtered-empty-state banner:
+     *  some filter is active, the project actually HAS tasks, yet every
+     *  column renders zero of them. A truly empty project keeps its plain
+     *  empty look (no banner) so the two states stay distinguishable. */
+    showFilteredEmptyState(): boolean {
+      if (!this.hasActiveFilters() || !this.board) return false;
+      return this.totalTaskCount() > 0 && this.visibleTaskCount() === 0;
+    },
+
     /** Column-header status dot color (To Do zinc, Doing amber, Done emerald). */
     colDotClass(status: Status): string {
       return status === "todo"
