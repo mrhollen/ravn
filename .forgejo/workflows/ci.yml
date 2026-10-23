@@ -20,8 +20,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
 
       - name: Check formatting (gofmt)
         run: |
@@ -42,6 +41,9 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -trimpath -o bin/ravn-server ./cmd/ravn-server
           CGO_ENABLED=0 go build -trimpath -o bin/ravn-mcp ./cmd/ravn-mcp
+          # Prune Go build cache immediately to free disk space for Node/Playwright/Docker
+          go clean -cache -modcache
+          rm -rf ~/.cache/go-build /root/.cache/go-build ~/go/pkg/mod /root/go/pkg/mod 2>/dev/null || true
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -70,7 +72,18 @@ jobs:
             /usr/local/share/boost \
             2>/dev/null || true
 
-          $SUDO rm -rf /tmp/apt-dpkg-install-* /tmp/playwright* /tmp/*.tar /tmp/*.tzst 2>/dev/null || true
+          $SUDO rm -rf \
+            /tmp/apt-dpkg-install-* \
+            /tmp/playwright* \
+            /tmp/*.tar \
+            /tmp/*.tzst \
+            ~/.cache/ms-playwright \
+            /root/.cache/ms-playwright \
+            ~/.cache/go-build \
+            /root/.cache/go-build \
+            ~/go/pkg/mod \
+            /root/go/pkg/mod \
+            2>/dev/null || true
           if command -v docker >/dev/null 2>&1; then
             docker rmi -f test-server test-mcp 2>/dev/null || true
             docker image prune -f 2>/dev/null || true
@@ -88,15 +101,6 @@ jobs:
             $SUDO dpkg --configure -a
           fi
           $SUDO apt-get clean || true
-
-      - name: Cache Playwright Chromium
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          # Cache only the lightweight headless shell to stay well under container disk limits
-          key: ${{ runner.os }}-playwright-shell-${{ hashFiles('web/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-shell-
 
       - name: Build web application and install Playwright dependencies
         run: |
@@ -167,6 +171,8 @@ jobs:
         run: |
           cd web
           npm run test:e2e
+          # Free disk space occupied by browser binaries before docker build
+          rm -rf ~/.cache/ms-playwright /root/.cache/ms-playwright 2>/dev/null || true
 
       - name: Validate Docker Compose configuration
         run: |
