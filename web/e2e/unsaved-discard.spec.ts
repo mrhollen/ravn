@@ -277,7 +277,7 @@ test.describe('Unsaved-draft discard guards (01M3MMZ188XJBGKFSWBGESK79D)', () =>
     expect(stored.title).toBe('Discard fixture task');
   });
 
-  test('AC2: NEW TASK dialog with typed title — Escape stays, backdrop accept discards, nothing created', async ({ page }) => {
+  test('AC2: NEW TASK dialog with typed title — Escape stays, backdrop triggers inline discard, Discard closes', async ({ page }) => {
     await openBoard(page);
     const listUrl = `${serverUrl}/api/v1/tasks?project_id=${projectId}`;
     const before = (await getJson(listUrl)).total;
@@ -293,17 +293,20 @@ test.describe('Unsaved-draft discard guards (01M3MMZ188XJBGKFSWBGESK79D)', () =>
     await expect(modal).toBeVisible();
     await expect(titleInput).toHaveValue('WIP new task draft');
 
-    // Backdrop click, accepted: the draft is discarded, the dialog closes, and
-    // no task exists on the server.
+    // Backdrop click: native dialog is gone (0 prompts), inline confirmation appears.
     const dialogs = watchAndAccept(page);
     await page.locator('#cb-new-task').click({ position: { x: 5, y: 5 } });
-    expect(dialogs()).toBe(1, 'backdrop click on a dirty new-task dialog must prompt');
+    expect(dialogs()).toBe(0, 'native dialog is gone');
+    await expect(modal.getByTestId('new-task-discard-confirm-msg')).toBeVisible();
+
+    // Clicking Discard discards draft and closes modal.
+    await modal.getByTestId('new-task-confirm-discard-btn').click();
     await expect(modal).toBeHidden();
     const after = (await getJson(listUrl)).total;
     expect(after).toBe(before, 'no task may have been created');
   });
 
-  test('AC2: NEW TASK Cancel button on a dirty form prompts; accept discards', async ({ page }) => {
+  test('AC2: NEW TASK Cancel button on a dirty form triggers inline confirm; accept discards without native dialog', async ({ page }) => {
     await openBoard(page);
     const listUrl = `${serverUrl}/api/v1/tasks?project_id=${projectId}`;
     const before = (await getJson(listUrl)).total;
@@ -313,10 +316,12 @@ test.describe('Unsaved-draft discard guards (01M3MMZ188XJBGKFSWBGESK79D)', () =>
     await expect(modal).toBeVisible();
     await modal.locator('input').first().fill('WIP via cancel button');
 
-    // Explicit user-chosen discard: Cancel must go through the same guard.
+    // Explicit user-chosen discard: Cancel triggers inline confirmation without native dialog.
     const dialogs = watchAndAccept(page);
-    await modal.getByRole('button', { name: 'Cancel' }).click();
-    expect(dialogs()).toBe(1, 'Cancel on a dirty form must prompt');
+    await modal.getByTestId('new-task-cancel-btn').click();
+    expect(dialogs()).toBe(0, 'native dialog is gone');
+    await expect(modal.getByTestId('new-task-discard-confirm-msg')).toBeVisible();
+    await modal.getByTestId('new-task-confirm-discard-btn').click();
     await expect(modal).toBeHidden();
     expect((await getJson(listUrl)).total).toBe(before);
   });

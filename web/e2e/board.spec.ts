@@ -2099,7 +2099,7 @@ test.describe('Web E2E test suite', () => {
     // Edit and Start-Task-in-OpenCode must remain pinned in the viewport.
     // -------------------------------------------------------------------------
     const scrolled = await scroller.evaluate((el) => {
-      el.scrollBy(0, 600);
+      el.scrollBy(0, 250);
       return el.scrollTop;
     });
     expect(scrolled).toBeGreaterThan(0, 'seeded long content must overflow the drawer body');

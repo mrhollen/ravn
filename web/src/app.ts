@@ -1761,6 +1761,7 @@ export function ravnApp() {
     // ---------------------------------------------------------------- new task
     showNewTask: false,
     newTaskTarget: "todo" as Status,
+    confirmNewTaskDiscard: false,
     newTask: {
       title: "",
       description: "",
@@ -1778,6 +1779,7 @@ export function ravnApp() {
 
     openNewTask(status: Status = "todo"): void {
       this.newTaskTarget = status;
+      this.confirmNewTaskDiscard = false;
       this.newTask = {
         title: "",
         description: "",
@@ -1798,7 +1800,17 @@ export function ravnApp() {
      *  requestCloseNewTask() so a half-typed draft is never lost. */
     closeNewTask(): void {
       this.showNewTask = false;
+      this.confirmNewTaskDiscard = false;
       this.duplicates = [];
+      this.newTask = {
+        title: "",
+        description: "",
+        priority: 0,
+        due: "",
+        acs: "",
+        assigneeName: "",
+        assigneeType: "human",
+      };
       this.closeDialog(this.newTaskFocus);
       this.newTaskFocus = null;
     },
@@ -1819,15 +1831,18 @@ export function ravnApp() {
     },
 
     /** Guarded close for the new-task dialog (× / Cancel / backdrop / Esc):
-     *  asks first when a draft would be lost. createTask() closes
-     *  UNCONDITIONALLY via closeNewTask() after a successful POST. */
+     *  shows confirmation in the button row when a draft would be lost.
+     *  createTask() closes UNCONDITIONALLY via closeNewTask() after a successful POST. */
     requestCloseNewTask(): void {
-      if (
-        this.newTaskDirty() &&
-        !this.confirmDiscard("Discard this new task draft? Unsaved details will be lost.")
-      )
+      if (this.newTaskDirty()) {
+        this.confirmNewTaskDiscard = true;
         return;
+      }
       this.closeNewTask();
+    },
+
+    cancelNewTaskConfirm(): void {
+      this.confirmNewTaskDiscard = false;
     },
 
     clearDuplicates(): void {
@@ -3826,7 +3841,10 @@ export function ravnApp() {
       else if (this.statusMenuOpen) this.statusMenuOpen = false;
       else if (this.ownerPopoverOpen) this.ownerPopoverOpen = false;
       else if (this.detailOpen) this.requestCloseDetail();
-      else if (this.showNewTask) this.requestCloseNewTask();
+      else if (this.showNewTask) {
+        if (this.confirmNewTaskDiscard) this.cancelNewTaskConfirm();
+        else this.requestCloseNewTask();
+      }
       else if (this.projectMenuOpen) this.closeProjectMenu(true); // header dropdowns are topmost
       else if (this.headerMenuOpen) this.closeHeaderMenu(true);
       else if (this.showNewProject) this.showNewProject = false;

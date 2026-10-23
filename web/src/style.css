@@ -1,5 +1,35 @@
 @import "tailwindcss";
 
+@theme {
+  --breakpoint-min1080: 1080px;
+}
+
+@layer components {
+  .btn-danger {
+    @apply rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-red-400 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-500 dark:focus-visible:ring-red-400 dark:focus-visible:ring-offset-zinc-900;
+  }
+
+  .task-detail-content-wrap {
+    @apply mx-auto w-full max-w-4xl min1080:max-w-5xl;
+  }
+
+  .task-detail-grid {
+    @apply grid grid-cols-1 items-start gap-5 min1080:grid-cols-[minmax(0,1.55fr)_minmax(20rem,1fr)] min1080:gap-6;
+  }
+
+  .task-detail-desc-card {
+    @apply min1080:rounded-lg min1080:border min1080:border-zinc-200 min1080:bg-white min1080:p-4 min1080:shadow-sm dark:min1080:border-zinc-700 dark:min1080:bg-zinc-900;
+  }
+
+  .task-detail-sidebar {
+    @apply flex flex-col gap-5 min1080:gap-4 min1080:rounded-xl min1080:border min1080:border-zinc-200 min1080:bg-zinc-50/70 min1080:p-4 dark:min1080:border-zinc-800 dark:min1080:bg-zinc-800/40;
+  }
+
+  .task-detail-sidebar-section {
+    @apply min1080:border-t min1080:border-zinc-200 min1080:pt-3 dark:min1080:border-zinc-800;
+  }
+}
+
 /* Class-based dark mode: `.dark` on <html>, set by the pre-paint bootstrap
    script in index.html and kept in sync by Alpine's theme toggle. Tailwind v4
    defaults to a media-query `dark:` variant, so opt into class-driven here. */

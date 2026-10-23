@@ -1561,41 +1561,56 @@ test("DiscardGuards: newTaskDirty flags any real content, never a fresh/blank fo
   assert.equal(app.newTaskDirty(), false, "back to a clean form");
 });
 
-test("DiscardGuards: requestCloseNewTask asks when dirty — decline stays, accept closes", () => {
+test("DiscardGuards: requestCloseNewTask uses inline confirmation instead of native dialog", () => {
   const app = ravnApp() as any;
   app.showNewTask = true;
   app.newTask.title = "WIP draft";
 
-  // Dirty close asks; declining keeps the draft and the dialog.
-  const stub = withConfirm(app, false);
-  try {
-    app.requestCloseNewTask();
-    assert.equal(app.showNewTask, true, "dirty → still open on decline");
-    assert.equal(stub.lastMessage.length > 0, true, "the discard prompt was asked");
+  // AC1: Native dialog is never invoked when cancelling the modal.
+  const strict = withConfirm(app, () => {
+    assert.fail("native window.confirm must never be called for new task discard");
+    return false;
+  });
 
-    const accept = withConfirm(app, true);
-    try {
-      app.requestCloseNewTask();
-      assert.equal(app.showNewTask, false, "accept discards the draft and closes");
-    } finally {
-      accept.restore();
-    }
+  try {
+    // Calling requestCloseNewTask on a dirty form triggers inline confirmation.
+    app.requestCloseNewTask();
+    assert.equal(app.showNewTask, true, "modal remains open");
+    assert.equal(app.confirmNewTaskDiscard, true, "inline confirmation activated");
+    assert.equal(app.newTask.title, "WIP draft", "form data preserved");
+
+    // AC5, AC6, AC7: Cancelling the confirmation restores state and allows creating task.
+    app.cancelNewTaskConfirm();
+    assert.equal(app.confirmNewTaskDiscard, false, "confirmation dismissed");
+    assert.equal(app.showNewTask, true, "modal remains open");
+    assert.equal(app.newTaskDirty(), true, "form data still intact");
+
+    // Re-trigger confirmation.
+    app.requestCloseNewTask();
+    assert.equal(app.confirmNewTaskDiscard, true);
+
+    // AC8: Discarding dismisses modal and clears all data.
+    app.closeNewTask();
+    assert.equal(app.showNewTask, false, "modal dismissed");
+    assert.equal(app.confirmNewTaskDiscard, false, "confirmation flag reset");
+    assert.equal(app.newTaskDirty(), false, "form data fully cleared");
   } finally {
-    stub.restore();
+    strict.restore();
   }
 
-  // A clean form closes WITHOUT asking: a hostile confirm must never be reached.
+  // A clean form closes immediately WITHOUT confirmation or native dialog.
   const fresh = ravnApp() as any;
   fresh.showNewTask = true;
-  const strict = withConfirm(fresh, () => {
+  const strictClean = withConfirm(fresh, () => {
     assert.fail("clean close must not call window.confirm");
     return false;
   });
   try {
     fresh.requestCloseNewTask();
-    assert.equal(fresh.showNewTask, false);
+    assert.equal(fresh.showNewTask, false, "clean form closes immediately");
+    assert.equal(fresh.confirmNewTaskDiscard, false);
   } finally {
-    strict.restore();
+    strictClean.restore();
   }
 });
 

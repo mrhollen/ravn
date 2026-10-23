@@ -1228,10 +1228,26 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               <textarea x-model="newTask.acs" rows="3" class="field mt-1 font-mono text-xs"
                         placeholder="login works&#10;logout works"></textarea>
             </label>
-            <div class="flex justify-end gap-2 pt-1">
-              <button type="button" @click="requestCloseNewTask()" class="btn-ghost">Cancel</button>
-              <button type="submit" :disabled="taskBusy || !newTask.title.trim()" class="btn-primary"
-                      x-text="taskBusy ? 'Creating…' : 'Create task'"></button>
+            <div class="flex items-center justify-between pt-1">
+              <div>
+                <span x-show="confirmNewTaskDiscard" x-cloak
+                      data-testid="new-task-discard-confirm-msg"
+                      class="text-sm font-medium text-red-600 dark:text-red-400">
+                  Discard this task?
+                </span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button type="button" x-show="!confirmNewTaskDiscard" @click="requestCloseNewTask()"
+                        data-testid="new-task-cancel-btn" class="btn-ghost">Cancel</button>
+                <button type="submit" x-show="!confirmNewTaskDiscard" :disabled="taskBusy || !newTask.title.trim()"
+                        data-testid="new-task-create-btn" class="btn-primary"
+                        x-text="taskBusy ? 'Creating…' : 'Create task'"></button>
+
+                <button type="button" x-show="confirmNewTaskDiscard" x-cloak @click="cancelNewTaskConfirm()"
+                        data-testid="new-task-confirm-cancel-btn" class="btn-ghost">Cancel</button>
+                <button type="button" x-show="confirmNewTaskDiscard" x-cloak @click="closeNewTask()"
+                        data-testid="new-task-confirm-discard-btn" class="btn-danger">Discard</button>
+              </div>
             </div>
           </form>
         </div>
@@ -1609,13 +1625,11 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </div>
               </form>
 
-              <!-- Content column. Modal mode caps the column at max-w-4xl (centered
-                   inside the wider panel) so it never feels crowded; full-page mode
-                   lets it span the roomy max-w-6xl workspace. The <aside> PANEL
-                   geometry is untouched in both skins. -->
+              <!-- Content column. Screens >= 1080px expand the modal content to max-w-5xl
+                   so the 2-column workspace has full room; screens < 1080px remain max-w-4xl. -->
               <div :class="fullPageOpen
                    ? 'flex flex-col gap-5 px-5 py-4'
-                   : 'mx-auto w-full max-w-4xl flex flex-col gap-5 px-5 py-4'">
+                   : 'task-detail-content-wrap flex flex-col gap-5 px-5 py-4'">
                 <!-- unified operational card -->
                 <div class="divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-zinc-50/70 text-xs dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-800/40">
                   <!-- Row 1: Primary Operational Bar -->
@@ -1829,21 +1843,17 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   </div>
                 </div>
 
-                <!-- Content split. Full-page mode renders the 2-column workspace:
+                <!-- Content split. Screens >= 1080px render the 2-column workspace:
                      a left primary column (description, acceptance criteria, comments)
                      beside a right context sidebar (notes, artifacts, relations,
-                     activity). Modal mode keeps everything as one clean stacked
-                     column. Gated on `fullPageOpen`, NOT on a bare breakpoint, so the
-                     centered modal never splits at wide widths. -->
-                <div :class="fullPageOpen
-                     ? 'grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(20rem,1fr)]'
-                     : 'flex flex-col gap-5'">
+                     activity). Screens < 1080px show the single stacked column. -->
+                <div class="task-detail-grid">
                   <!-- left primary column -->
-                  <div class="flex min-w-0 flex-col gap-5">
+                  <div class="flex min-w-0 flex-col gap-5" data-testid="detail-left-column">
 
                 <!-- description -->
                 <section x-show="!editingTask"
-                         :class="fullPageOpen ? 'rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-700 dark:bg-zinc-900' : ''">
+                         class="task-detail-desc-card">
                   <div class="flex items-center justify-between mb-1">
                     <h3 class="section-title mb-0">Description</h3>
                     <button type="button" @click="startEditing()" class="text-xs font-medium text-zinc-600 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200">Edit</button>
@@ -2007,12 +2017,9 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   </div> <!-- /left primary column -->
 
                   <!-- right context sidebar: notes scratchpad, artifacts, relations and
-                       activity. Full-page mode renders it as one boxed surface with
-                       border-t dividers; modal mode keeps the plain stacked group. -->
-                  <div class="min-w-0"
-                       :class="fullPageOpen
-                        ? 'flex flex-col gap-4 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-800/40'
-                        : 'flex flex-col gap-5'">
+                       activity. Screens >= 1080px render it as one boxed surface with
+                       border-t dividers; screens < 1080px keep the plain stacked group. -->
+                  <div class="min-w-0 task-detail-sidebar" data-testid="detail-right-column">
 
                 <!-- notes -->
                 <section>
@@ -2028,7 +2035,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </section>
 
                 <!-- artifacts -->
-                <section :class="fullPageOpen ? 'border-t border-zinc-200 pt-3 dark:border-zinc-800' : ''">
+                <section class="task-detail-sidebar-section">
                   <h3 class="section-title">Artifacts</h3>
                   <ul class="flex flex-col gap-1.5">
                     <template x-for="a in detail.artifacts" :key="a.id">
@@ -2122,7 +2129,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </section>
 
                 <!-- relations -->
-                <section :class="fullPageOpen ? 'border-t border-zinc-200 pt-3 dark:border-zinc-800' : ''" data-testid="detail-relations-section">
+                <section class="task-detail-sidebar-section" data-testid="detail-relations-section">
                   <div class="flex items-center justify-between mb-2">
                     <h3 class="section-title mb-0">Relations</h3>
                     <template x-if="relationRows().length > 0">
@@ -2222,7 +2229,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
                 <!-- activity -->
                 <section x-show="(detail ? detail.events.length : 0) > 0" x-cloak
-                         :class="fullPageOpen ? 'border-t border-zinc-200 pt-3 dark:border-zinc-800' : ''">
+                         class="task-detail-sidebar-section">
                   <h3 class="section-title">Activity</h3>
                   <ul class="text-xs text-zinc-600 dark:text-zinc-400">
                     <template x-for="e in detail.events.slice(0, 12)" :key="e.id">
