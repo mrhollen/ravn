@@ -216,10 +216,10 @@ test.describe('SSE singleton (boot init idempotence)', () => {
     await page.goto(serverUrl);
     await expect(page).toHaveTitle(/^(crowban|Rävn)$/);
 
-    const liveIndicator = page.locator('[data-testid="live-indicator"]');
-    await expect(liveIndicator).toBeVisible();
-    await expect(liveIndicator).toContainText('Live', { timeout: 15000 });
-    await expect(liveIndicator).toHaveAttribute('title', 'Live');
+    await page.waitForFunction(() => {
+      const app = (window as any).Alpine?.$data(document.querySelector('[x-data="app()"]'));
+      return app?.sseStatus === 'connected';
+    }, { timeout: 15000 });
 
     // -------------------------------------------------------------------------
     // Step 3: Steady state — exactly ONE constructed AND exactly ONE open

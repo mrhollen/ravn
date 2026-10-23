@@ -42,10 +42,14 @@
             x-show="!t.leaving"
             :role="t.kind === 'error' ? 'alert' : 'status'"
             :aria-live="t.kind === 'error' ? 'assertive' : 'polite'"
+            :data-testid="t.isSseDisconnect ? 'sse-disconnect-toast' : null"
             class="pointer-events-auto flex items-start gap-2 rounded-lg border px-3 py-2 text-sm shadow-md"
-            :class="t.kind === 'error'
-              ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
-              : 'border-zinc-200 bg-white text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200'"
+            :class="[
+              t.kind === 'error'
+                ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
+                : 'border-zinc-200 bg-white text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200',
+              t.borderClass || ''
+            ]"
             x-transition:enter="transition ease-out duration-200"
             x-transition:enter-start="opacity-0 translate-y-2 scale-95"
             x-transition:enter-end="opacity-100 translate-y-0 scale-100"
@@ -60,7 +64,7 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <span class="min-w-0 flex-1">
-              <span class="font-semibold" x-text="t.kind === 'error' ? 'Error: ' : ''"></span>
+              <span class="font-semibold" x-text="t.kind === 'error' && !t.hideErrorPrefix ? 'Error: ' : ''"></span>
               <span x-text="t.msg"></span>
               <template x-if="t.action">
                 <a :href="t.action.href" target="_blank" rel="noreferrer noopener"
@@ -213,49 +217,7 @@
           </svg>
         </button>
 
-         <!-- secondary controls: inline on md+, collapsible full-width strip on mobile -->
-         <!-- On md+ this sits immediately left of the settings-menu trigger in
-              the right-aligned cluster (the "+ New task" button's md:ml-auto
-              does the pushing), separated from it by the header's natural
-              flex gap — no negative margins anywhere. Below md it becomes the
-              full-width collapsible strip below row 1. Project settings moved
-              out of the strip into the gear attached to the Projects dropdown
-              — this strip carries only the live indicator. -->
-        <div class="flex flex-wrap items-center gap-x-5 gap-y-2"
-             :class="showMobileMenu ? 'w-full' : 'hidden md:flex'">
-            <!-- realtime SSE live status indicator — deliberately OUTSIDE the
-                consolidated menu; on md+ it sits immediately left of the menu
-                trigger. Click still triggers a manual reconnect. -->
-             <!-- md+: self-contained status pill — full rounded corners and a
-                  complete border, matching the other top-bar controls
-                  (.field / .btn-* radius + border treatment), so it reads as its
-                  own element beside the separated settings trigger. Below md it
-                  stays the plain unbordered strip row. -->
-             <div class="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none md:rounded-md md:border md:border-zinc-200 md:bg-white md:px-2.5 md:py-1.5 dark:md:border-zinc-700 dark:md:bg-zinc-900"
-                 role="status"
-                 aria-live="polite"
-                 aria-atomic="true"
-                 @click="connectSse()"
-                :class="{
-                  'text-emerald-700 dark:text-emerald-400': sseStatus === 'connected',
-                  'text-amber-700 dark:text-amber-400': sseStatus === 'connecting',
-                  'text-zinc-600 dark:text-zinc-400': sseStatus === 'disconnected'
-                }"
-                :title="sseStatus === 'connected' ? 'Live' : (sseStatus === 'connecting' ? 'Reconnecting…' : (polling ? 'Polling (fallback)' : 'Disconnected'))"
-                data-testid="live-indicator"
-           >
-             <span class="relative flex h-2 w-2">
-               <span x-show="sseStatus === 'connected'" class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-               <span class="relative inline-flex h-2 w-2 rounded-full"
-                     :class="{
-                       'bg-emerald-500': sseStatus === 'connected',
-                       'bg-amber-500': sseStatus === 'connecting',
-                       'bg-zinc-400': sseStatus === 'disconnected'
-                     }"></span>
-             </span>
-             <span x-text="sseStatus === 'connected' ? 'Live' : (sseStatus === 'connecting' ? 'Reconnecting' : (polling ? 'Polling' : 'Offline'))"></span>
-           </div>
-        </div>
+
 
         <!-- ================================================== header settings menu -->
         <!-- Consolidates the theme selector, actor identity ("Who are you?"),
@@ -280,8 +242,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              showMobileMenu is desktop-inert), keeping it permanently reachable;
              the panel below clamps to the left edge for the same reason. -->
          <!-- On md+ this anchor sits in the header's natural flex gap (gap-x-3)
-              to the RIGHT of the live-indicator pill — no negative margins, so
-              the two controls can never overlap. Inert below md, where row 1
+              at the right edge of the header. Inert below md, where row 1
               packing is driven by the project capsule's flex-1. -->
          <div class="relative" data-testid="header-menu-anchor"
               :class="showMobileMenu ? 'order-first' : ''">
@@ -303,8 +264,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     :class="headerMenuOpen
                       ? 'border-indigo-400 bg-indigo-600 text-white ring-2 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-700'
                       : 'border-zinc-200 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'">
-             <span x-text="actorGlyph()" aria-hidden="true"></span>
-             <span class="hidden max-w-[8rem] truncate md:inline" :title="actorName.trim() || 'You'"
+             <span class="md:hidden" data-testid="header-menu-initial" x-text="actorGlyph()" aria-hidden="true"></span>
+             <span class="hidden max-w-[8rem] truncate md:inline" data-testid="header-menu-name" :title="actorName.trim() || 'You'"
                    x-text="actorName.trim() || 'You'"></span>
              <span class="hidden select-none text-zinc-400 md:inline dark:text-zinc-500" aria-hidden="true">&#9662;</span>
            </button>

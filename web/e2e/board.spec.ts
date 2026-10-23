@@ -1285,11 +1285,11 @@ test.describe('Web E2E test suite', () => {
     await page.goto(`${serverUrl}`);
     await selectProjectViaDropdown(page, proj.id);
 
-    // Verify live status indicator is connected
-    const liveIndicator = page.locator('[data-testid="live-indicator"]');
-    await expect(liveIndicator).toBeVisible();
-    await expect(liveIndicator).toContainText('Live');
-    await expect(liveIndicator).toHaveAttribute('title', 'Live');
+    // Verify SSE connection is active
+    await page.waitForFunction(() => {
+      const app = (window as any).Alpine?.$data(document.querySelector('[x-data="app()"]'));
+      return app?.sseStatus === 'connected';
+    });
 
     // -------------------------------------------------------------------------
     // AC 1: Realtime card / column updates without waiting for poll interval
@@ -1405,7 +1405,10 @@ test.describe('Web E2E test suite', () => {
       app.handleSseDisconnect();
     });
 
-    await expect(liveIndicator).toContainText('Reconnecting');
+    await page.waitForFunction(() => {
+      const app = (window as any).Alpine?.$data(document.querySelector('[x-data="app()"]'));
+      return app?.sseStatus === 'connecting';
+    });
     const backoff1 = await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
       return app.sseBackoffMs;
@@ -1447,8 +1450,14 @@ test.describe('Web E2E test suite', () => {
     await expect(fallbackCard).toBeVisible({ timeout: 10000 });
 
     // Trigger manual reconnect
-    await liveIndicator.click();
-    await expect(liveIndicator).toContainText('Live', { timeout: 10000 });
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.connectSse();
+    });
+    await page.waitForFunction(() => {
+      const app = (window as any).Alpine?.$data(document.querySelector('[x-data="app()"]'));
+      return app?.sseStatus === 'connected';
+    }, { timeout: 10000 });
     const resetBackoff = await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
       return app.sseBackoffMs;

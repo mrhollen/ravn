@@ -158,9 +158,8 @@ html.dark {
     min-width: 44px;
   }
 
-  /* Clickable non-button controls (live indicator) and label-wrapped
+  /* Clickable non-button controls and label-wrapped
      checkboxes need an explicit height. */
-  [data-testid="live-indicator"],
   .tap-target {
     min-height: 44px;
   }

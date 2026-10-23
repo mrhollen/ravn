@@ -271,6 +271,14 @@ export interface Toast {
   msg: string;
   kind: "error" | "info";
   action?: { label: string; href: string };
+  /** Optional border class to override or customize the border. */
+  borderClass?: string;
+  /** When true, the toast will NOT auto-dismiss after 6.5s. */
+  persistent?: boolean;
+  /** When true, suppresses the "Error: " prefix even if kind is "error". */
+  hideErrorPrefix?: boolean;
+  /** Marker for the SSE disconnect notification toast. */
+  isSseDisconnect?: boolean;
   /** True while the leave transition plays (x-show hides it), then the row is
    *  dropped from the list. x-for removes nodes instantly, so the exit
    *  animation has to be driven through x-show first. */
@@ -350,16 +358,33 @@ export function ravnApp() {
     toasts: [] as Toast[],
     toastSeq: 0,
 
-    toast(msg: string, kind: "error" | "info" = "info", action?: { label: string; href: string }): void {
+    toast(
+      msg: string,
+      kind: "error" | "info" = "info",
+      action?: { label: string; href: string },
+      options?: {
+        persistent?: boolean;
+        borderClass?: string;
+        hideErrorPrefix?: boolean;
+        isSseDisconnect?: boolean;
+      }
+    ): number {
       const id = ++this.toastSeq;
       const item: Toast = { id, msg, kind };
       if (action) item.action = action;
+      if (options?.persistent) item.persistent = true;
+      if (options?.borderClass) item.borderClass = options.borderClass;
+      if (options?.hideErrorPrefix) item.hideErrorPrefix = true;
+      if (options?.isSseDisconnect) item.isSseDisconnect = true;
       this.toasts = [...this.toasts, item];
       // Global setTimeout (not window.setTimeout): identical in the browser,
       // but keeps async error paths unit-testable without a full window mock.
-      setTimeout(() => {
-        this.dismissToast(id);
-      }, 6500);
+      if (!options?.persistent) {
+        setTimeout(() => {
+          this.dismissToast(id);
+        }, 6500);
+      }
+      return id;
     },
 
     /** Manually drop one toast (its × button). Same removal path as auto-expiry.
@@ -367,6 +392,9 @@ export function ravnApp() {
      *  plays, then drop the row once that animation has finished — Alpine's
      *  x-for removes nodes instantly, so a direct filter would kill the exit. */
     dismissToast(id: number): void {
+      if (this.sseDisconnectToastId === id) {
+        this.sseDisconnectToastId = null;
+      }
       this.toasts = this.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t));
       setTimeout(() => {
         this.toasts = this.toasts.filter((t) => t.id !== id);
@@ -1474,6 +1502,9 @@ export function ravnApp() {
     sseStatus: "disconnected" as SseConnectionStatus,
     sseBackoffMs: 2000,
     sseReconnectTimer: 0 as number,
+    sseDisconnectDelayMs: 30000,
+    sseDisconnectedTimer: null as any,
+    sseDisconnectToastId: null as number | null,
     // Replay cursor (server-side Last-Event-ID): the last frame id received on
     // THIS connection + the project it belongs to. Reconnects send it as the
     // last_event_id query param so the server replays events missed while we
@@ -1487,6 +1518,47 @@ export function ravnApp() {
      *  flag so shipped bundles stay free of global test hooks. */
     _sseTelemetry: sseTelemetry,
 
+    scheduleSseDisconnectTimer(): void {
+      if (this.sseStatus === "connected") return;
+      if (this.sseDisconnectedTimer || this.sseDisconnectToastId) return;
+      this.sseDisconnectedTimer = setTimeout(() => {
+        this.sseDisconnectedTimer = null;
+        if (this.sseStatus !== "connected" && !this.sseDisconnectToastId) {
+          this.showSseDisconnectNotification();
+        }
+      }, this.sseDisconnectDelayMs);
+    },
+
+    clearSseDisconnectTimer(): void {
+      if (this.sseDisconnectedTimer) {
+        clearTimeout(this.sseDisconnectedTimer);
+        this.sseDisconnectedTimer = null;
+      }
+    },
+
+    showSseDisconnectNotification(): void {
+      if (this.sseDisconnectToastId) return;
+      this.sseDisconnectToastId = this.toast(
+        "Disconnected from server. Realtime updates paused.",
+        "error",
+        undefined,
+        {
+          persistent: true,
+          borderClass: "border-red-200 dark:border-red-800",
+          hideErrorPrefix: true,
+          isSseDisconnect: true,
+        }
+      );
+    },
+
+    clearSseDisconnectNotification(): void {
+      if (this.sseDisconnectToastId) {
+        const id = this.sseDisconnectToastId;
+        this.sseDisconnectToastId = null;
+        this.dismissToast(id);
+      }
+    },
+
     connectSse(): void {
       this.disconnectSse(false);
 
@@ -1496,6 +1568,7 @@ export function ravnApp() {
 
       if (!this.selectedProjectId) {
         this.sseStatus = "disconnected";
+        this.scheduleSseDisconnectTimer();
         return;
       }
 
@@ -1531,6 +1604,8 @@ export function ravnApp() {
         if (this.sse === es) {
           this.sseStatus = "connected";
           this.sseBackoffMs = 2000;
+          this.clearSseDisconnectTimer();
+          this.clearSseDisconnectNotification();
         }
       };
 
@@ -1606,6 +1681,7 @@ export function ravnApp() {
         sseTelemetry.closed++; // TEST-SUPPORT: a live stream was actually closed
       }
       this.sseStatus = "connecting";
+      this.scheduleSseDisconnectTimer();
 
       if (this.sseReconnectTimer) {
         window.clearTimeout(this.sseReconnectTimer);
@@ -1622,6 +1698,7 @@ export function ravnApp() {
           this.connectSse();
         } else {
           this.sseStatus = "disconnected";
+          this.scheduleSseDisconnectTimer();
         }
       }, delay);
     },
@@ -1639,6 +1716,7 @@ export function ravnApp() {
       if (resetBackoff) {
         this.sseBackoffMs = 2000;
         this.sseStatus = "disconnected";
+        this.scheduleSseDisconnectTimer();
         // Intentional teardown (project switch, logout): drop the replay cursor
         // so a later reconnect starts fresh instead of bursting a stale
         // backlog. Error-driven reconnects go through disconnectSse(false) and

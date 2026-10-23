@@ -263,11 +263,14 @@ test.describe('Mobile experience (375px, touch)', () => {
     expect(collapsed).not.toBeNull();
     expect(collapsed!.height).toBeLessThanOrEqual(96);
 
-    // Expanding the strip reveals the live indicator below row 1 (project
-    // settings no longer live here — they moved into the gear on the dropdown)…
+    // Expanding the strip opens the mobile bar (filters below row 1)
     await menuToggle.click();
     await expect(menuToggle).toHaveAttribute('aria-expanded', 'true');
-    await expect(page.locator('[data-testid="live-indicator"]')).toBeVisible();
+    await expect(page.locator('[data-testid="live-indicator"]')).toHaveCount(0);
+
+    // Initial avatar glyph is shown on mobile; full name is hidden on mobile
+    await expect(page.locator('[data-testid="header-menu-initial"]')).toBeVisible();
+    await expect(page.locator('[data-testid="header-menu-name"]')).toBeHidden();
 
     // …and the settings menu opens from its row-1 trigger: theme, identity and
     // data controls appear inside the panel (not in the strip), staying within

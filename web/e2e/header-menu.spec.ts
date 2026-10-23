@@ -199,55 +199,34 @@ test.describe('Consolidated header settings menu', () => {
       await expect(page.getByTestId(testid)).not.toBeVisible();
     }
 
-    // AC2: the liveness indicator stays OUT of the menu, positioned immediately
-    // to the LEFT of the trigger on this desktop width…
-    const live = page.locator('[data-testid="live-indicator"]');
-    await expect(live).toBeVisible();
+    // The liveness indicator has been removed from the header
+    // (task 01M5K1HDAHCNRCJA322P1YF8HR — replaced by 30s disconnect notification)
+    await expect(page.locator('[data-testid="live-indicator"]')).toHaveCount(0);
+
+    // Initial is hidden on desktop view (task 01M5K1PD4C3NNM2VSEKEPT9KT8); name displays as normal
+    await expect(trigger.getByTestId('header-menu-initial')).toBeHidden();
+    await expect(trigger.getByTestId('header-menu-name')).toBeVisible();
+    await expect(trigger.getByTestId('header-menu-name')).toContainText('You');
+
     const panelBox = await page.getByTestId('header-menu').boundingBox();
     expect(panelBox, 'panel is closed (x-show hidden) at this point').toBeNull();
-    const lbox = (await live.boundingBox())!;
-    const tbox = (await trigger.boundingBox())!;
-    expect(lbox.x + lbox.width, 'live indicator ends at or left of the trigger').toBeLessThanOrEqual(tbox.x);
-    // …now two STANDALONE controls separated by the header's natural flex gap
-    // (the old joined-pill negative margin is gone): a real gap > 0px…
-    expect(tbox.x - (lbox.x + lbox.width), 'gap between live indicator and trigger').toBeGreaterThan(0);
-    // …but they remain immediately adjacent in the right-aligned cluster.
-    expect(tbox.x - (lbox.x + lbox.width), '…and is immediately adjacent to it').toBeLessThan(24);
-    // …on the same header row (vertically centered with the trigger).
-    expect(Math.abs(lbox.y + lbox.height / 2 - (tbox.y + tbox.height / 2))).toBeLessThanOrEqual(12);
-
-    // Close-up evidence: indicator left of trigger, clipped to the header band.
-    const hbox = (await page.locator('header').first().boundingBox())!;
-    const clipX = Math.max(0, lbox.x - 12);
-    await page.screenshot({
-      path: path.join(testInfo.outputDir, 'live-indicator-left-of-trigger.png'),
-      clip: { x: clipX, y: hbox.y + 2, width: tbox.x + tbox.width + 10 - clipX, height: hbox.height - 4 },
-    });
   });
 
-  test('AC2: desktop (1024px) — trigger is a standalone rounded button; no intersection with the live indicator', async ({
+  test('AC2: desktop (1024px) — trigger is a standalone rounded button; liveness indicator is removed', async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await freshPage(page);
 
     const trigger = page.getByTestId('header-menu-trigger');
-    const live = page.locator('[data-testid="live-indicator"]');
     await expect(trigger).toBeVisible();
-    await expect(live).toBeVisible();
 
-    // Separated controls: the trigger bounding box does NOT intersect the
-    // live-indicator bounding box (the old joined pill let their borders meet/
-    // overlap via a negative margin; now they are distinct elements in the
-    // header's flex gap). Side-by-side boxes share a Y band by design — no
-    // rectangle intersection means they are disjoint on AT LEAST one axis, and
-    // here specifically they must be disjoint on X.
-    const lbox = (await live.boundingBox())!;
-    const tbox = (await trigger.boundingBox())!;
-    expect(lbox.x + lbox.width, 'live indicator ends strictly left of the trigger').toBeLessThan(tbox.x);
-    const overlapX = Math.min(tbox.x + tbox.width, lbox.x + lbox.width) - Math.max(tbox.x, lbox.x);
-    const overlapY = Math.min(tbox.y + tbox.height, lbox.y + lbox.height) - Math.max(tbox.y, lbox.y);
-    expect(overlapX > 0 && overlapY > 0, 'no bounding-box intersection').toBe(false);
+    // The live indicator is removed
+    await expect(page.locator('[data-testid="live-indicator"]')).toHaveCount(0);
+
+    // Initial is hidden on desktop view; name displays as normal
+    await expect(trigger.getByTestId('header-menu-initial')).toBeHidden();
+    await expect(trigger.getByTestId('header-menu-name')).toBeVisible();
 
     // Shape parity with the sibling top-bar controls (.field / .btn-primary /
     // .btn-ghost all use rounded-md): the trigger's COMPUTED border-radius must
@@ -262,11 +241,12 @@ test.describe('Consolidated header settings menu', () => {
     expect(Number.parseFloat(radii.trigger), 'trigger has a non-zero radius (not square)').toBeGreaterThan(0);
     expect(radii.trigger, 'trigger radius matches the sibling .btn-* rounded-md treatment').toBe(radii.cta);
 
-    // Evidence: close-up of the two separated desktop controls.
+    // Evidence: close-up of the desktop trigger button.
+    const tbox = (await trigger.boundingBox())!;
     const hbox = (await page.locator('header').first().boundingBox())!;
-    const clipX = Math.max(0, lbox.x - 12);
+    const clipX = Math.max(0, tbox.x - 24);
     await page.screenshot({
-      path: path.join(testInfo.outputDir, 'desktop-separated-controls.png'),
+      path: path.join(testInfo.outputDir, 'desktop-user-button-no-initial.png'),
       clip: { x: clipX, y: hbox.y + 2, width: tbox.x + tbox.width + 10 - clipX, height: hbox.height - 4 },
     });
   });
@@ -575,5 +555,89 @@ test.describe('Consolidated header settings menu', () => {
     await page.keyboard.press('Escape');
     await expect(panel).toBeHidden();
     await context.close();
+  });
+
+  test('task 01M5K1HDAHCNRCJA322P1YF8HR: SSE disconnect notification triggers after delay, persists, dismisses, and clears on reconnect', async ({
+    page,
+  }, testInfo) => {
+    await freshPage(page);
+
+    // Ensure no live-indicator
+    await expect(page.locator('[data-testid="live-indicator"]')).toHaveCount(0);
+
+    // Fast disconnect test: set delay to 50ms and trigger disconnect
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.sseDisconnectDelayMs = 50;
+      app.handleSseDisconnect();
+    });
+
+    const toast = page.locator('[data-testid="sse-disconnect-toast"]');
+    await expect(toast).toBeVisible({ timeout: 2000 });
+    await expect(toast).toContainText('Disconnected from server');
+    await expect(toast).toHaveClass(/border-red-200/);
+
+    // Screenshot evidence of disconnect notification with red border
+    await toast.screenshot({
+      path: path.join(testInfo.outputDir, 'sse-disconnect-toast.png'),
+    });
+
+    // Dismiss manually (AC 3)
+    const dismissBtn = toast.locator('button[aria-label="Dismiss notification"]');
+    await dismissBtn.click();
+    await expect(toast).toHaveCount(0);
+
+    // Trigger again (AC 4: clear on restore)
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.showSseDisconnectNotification();
+    });
+    await expect(page.locator('[data-testid="sse-disconnect-toast"]')).toBeVisible();
+
+    // Reconnect restores connection and clears notification
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.connectSse();
+    });
+    await expect(page.locator('[data-testid="sse-disconnect-toast"]')).toHaveCount(0, { timeout: 5000 });
+  });
+
+  test('task 01M5K1PD4C3NNM2VSEKEPT9KT8: Redundant initial removed on desktop, initial shown on mobile', async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await freshPage(page);
+
+    // Set actor name to 'DevTester'
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.actorName = 'DevTester';
+      app.saveActor();
+    });
+
+    const trigger = page.getByTestId('header-menu-trigger');
+    const initialSpan = trigger.getByTestId('header-menu-initial');
+    const nameSpan = trigger.getByTestId('header-menu-name');
+
+    // Desktop view: initial is hidden, full name is visible
+    await expect(initialSpan).toBeHidden();
+    await expect(nameSpan).toBeVisible();
+    await expect(nameSpan).toContainText('DevTester');
+
+    await trigger.screenshot({
+      path: path.join(testInfo.outputDir, 'desktop-user-button-name-only.png'),
+    });
+
+    // Switch to mobile viewport (375x812)
+    await page.setViewportSize({ width: 375, height: 812 });
+
+    // Mobile view: initial is visible ("D"), full name is hidden
+    await expect(initialSpan).toBeVisible();
+    await expect(initialSpan).toHaveText('D');
+    await expect(nameSpan).toBeHidden();
+
+    await trigger.screenshot({
+      path: path.join(testInfo.outputDir, 'mobile-user-button-initial-only.png'),
+    });
   });
 });

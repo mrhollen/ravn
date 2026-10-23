@@ -253,12 +253,20 @@ test.describe('toast notifications', () => {
     await expect(errorToast).toHaveAttribute('role', 'alert');
     await expect(errorToast).toHaveAttribute('aria-live', 'assertive');
 
-    // 2. Verify SSE connection indicator live region attributes (AC2)
-    const liveIndicator = page.locator('[data-testid="live-indicator"]');
-    await expect(liveIndicator).toBeVisible();
-    await expect(liveIndicator).toHaveAttribute('role', 'status');
-    await expect(liveIndicator).toHaveAttribute('aria-live', 'polite');
-    await expect(liveIndicator).toHaveAttribute('aria-atomic', 'true');
+    // 2. Verify live indicator is removed and SSE disconnect notification has role=alert
+    await expect(page.locator('[data-testid="live-indicator"]')).toHaveCount(0);
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.showSseDisconnectNotification();
+    });
+    const sseToast = page.locator('[data-testid="sse-disconnect-toast"]');
+    await expect(sseToast).toBeVisible();
+    await expect(sseToast).toHaveAttribute('role', 'alert');
+    await expect(sseToast).toHaveClass(/border-red-200/);
+    await page.evaluate(() => {
+      const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
+      app.clearSseDisconnectNotification();
+    });
 
     // 3. Verify duplicate task advisory live region attributes (AC3)
     await page.evaluate(() => {

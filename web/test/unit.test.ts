@@ -1281,9 +1281,8 @@ test("HeaderMenu: index.html wires the consolidated trigger + panel at the dropd
     !/Auth token configured\. Click to edit\./.test(html),
     "old inline token button title must be gone",
   );
-  // The live indicator stays OUT of the menu, in the header (left of trigger on md+).
-  assert.match(html, /data-testid="live-indicator"/);
-  assert.ok(!panel.includes('data-testid="live-indicator"'), "live indicator must NOT be inside the panel");
+  // The live indicator is removed from the header (task 01M5K1HDAHCNRCJA322P1YF8HR).
+  assert.ok(!html.includes('data-testid="live-indicator"'), "live indicator must be removed from the markup");
   // Panel sits at the dropdown tier: above header/board content, BELOW toasts
   // (z-50) and the detail modal (z-[60]).
   const panelClass = html.match(/<div id="header-menu-panel"[\s\S]{0,2000}?class="([^"]*)"/)?.[1];
@@ -3046,10 +3045,73 @@ test("Drafts: restoreCommentDraftForTask resets then restores per task (no cross
   assert.deepEqual(app.commentForm, { kind: "decision", body: "A's draft" });
   assert.equal(app.commentShowPreview, false, "restore resets the toggle back to Write mode");
 
-  // A corrupt payload degrades to clean defaults instead of throwing.
+  // Task C corrupt payload
   safeStorage.setItem(commentDraftKey("TC"), "{corrupted json");
   app.restoreCommentDraftForTask("TC");
   assert.deepEqual(app.commentForm, { kind: "progress", body: "" });
+});
+
+// ---------------------------------------------------------------------------
+// Header menu trigger name display & initial (task 01M5K1PD4C3NNM2VSEKEPT9KT8)
+// ---------------------------------------------------------------------------
+
+test("HeaderMenu: trigger markup hides initial on desktop (md:hidden) and uses initial on mobile", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  assert.match(
+    html,
+    /<span class="md:hidden" data-testid="header-menu-initial" x-text="actorGlyph\(\)" aria-hidden="true"><\/span>/,
+    "initial span must have md:hidden class",
+  );
+  assert.match(
+    html,
+    /<span class="hidden max-w-\[8rem\] truncate md:inline" data-testid="header-menu-name"/,
+    "name span must be revealed on desktop via md:inline",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Liveness indicator replacement with 30s disconnect notification (task 01M5K1HDAHCNRCJA322P1YF8HR)
+// ---------------------------------------------------------------------------
+
+test("SSE Disconnect Notification: triggers after delay, persists, clears on restore, and dismisses manually", async () => {
+  const app = ravnApp() as any;
+  app.sseDisconnectDelayMs = 50; // fast test delay
+
+  // 1. Initial state: no notification, timer can be scheduled
+  assert.equal(app.sseDisconnectToastId, null);
+  assert.equal(app.toasts.length, 0);
+
+  // 2. Schedule disconnect timer
+  app.scheduleSseDisconnectTimer();
+  assert.ok(app.sseDisconnectedTimer !== null, "timer must be scheduled");
+
+  // Wait for timer to fire
+  await new Promise((r) => setTimeout(r, 80));
+  assert.ok(app.sseDisconnectToastId !== null, "notification toast must be created");
+  assert.equal(app.toasts.length, 1);
+
+  const toast = app.toasts[0];
+  assert.equal(toast.id, app.sseDisconnectToastId);
+  assert.equal(toast.kind, "error");
+  assert.equal(toast.persistent, true, "notification must be persistent (no auto-expiry)");
+  assert.equal(toast.borderClass, "border-red-200 dark:border-red-800", "notification has red border like blocked tasks");
+  assert.equal(toast.hideErrorPrefix, true);
+  assert.equal(toast.isSseDisconnect, true);
+  assert.match(toast.msg, /Disconnected/);
+
+  // 3. Clear on connection restoration
+  app.clearSseDisconnectNotification();
+  assert.equal(app.sseDisconnectToastId, null, "toast ID cleared upon connection restoration");
+  assert.equal(app.toasts[0]?.leaving, true, "toast starts leaving transition");
+
+  // 4. Test manual dismissal
+  app.toasts = [];
+  app.scheduleSseDisconnectTimer();
+  await new Promise((r) => setTimeout(r, 80));
+  assert.ok(app.sseDisconnectToastId !== null);
+  const toastId = app.sseDisconnectToastId;
+  app.dismissToast(toastId);
+  assert.equal(app.sseDisconnectToastId, null, "manual dismiss clears sseDisconnectToastId");
 });
 
 
