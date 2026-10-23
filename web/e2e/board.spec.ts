@@ -1604,6 +1604,12 @@ test.describe('Web E2E test suite', () => {
 
       const configToggle = drawer.getByTestId('opencode-config-toggle');
       await expect(configToggle).toBeVisible();
+      const sb = await startOpenCodeBtn.boundingBox();
+      const cb = await configToggle.boundingBox();
+      expect(sb).not.toBeNull();
+      expect(cb).not.toBeNull();
+      expect(cb!.height).toBe(sb!.height);
+      await page.screenshot({ path: 'test-results/opencode-split-button-consistent-height.png' });
       await configToggle.click();
 
       const configPanel = drawer.getByTestId('opencode-config-panel');

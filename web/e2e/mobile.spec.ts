@@ -555,6 +555,12 @@ test.describe('Mobile experience (375px, touch)', () => {
     expect(ob!.width, 'icon-only width (<88px)').toBeLessThan(88);
     await expect(opencodeBtn).toHaveAttribute('aria-label', 'Start Task in OpenCode');
 
+    const configBtn = page.locator('[data-testid="opencode-config-toggle"]');
+    await expect(configBtn).toBeVisible();
+    const cb = await configBtn.boundingBox();
+    expect(cb, 'config button box missing').not.toBeNull();
+    expect(cb!.height, 'config button height matches opencode button').toBe(ob!.height);
+
     // (b) The title gets at least 60% of the viewport width in the header row.
     const tbox = await title.boundingBox();
     expect(tbox, 'title box missing').not.toBeNull();
