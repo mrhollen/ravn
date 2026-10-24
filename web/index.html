@@ -465,6 +465,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
               Clear sort
             </button>
+
+            <button type="button" @click="toggleHoistParents()" :aria-pressed="hoistParents"
+                    data-testid="sort-hoist-parents" aria-label="Hoist parent tickets to the top of each column"
+                    class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    title="Keep parent tickets at the top of each column">
+              <span x-text="'Hoist parents ' + (hoistParents ? '(on)' : '(off)')"></span>
+            </button>
           </div>
         </div>
       </header>

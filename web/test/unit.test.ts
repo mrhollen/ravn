@@ -546,9 +546,62 @@ test("Due: editing round-trip preserves the calendar day shown on the card (dupl
   assert.equal(dueCalendarDate(resaved), localYmd(2), "re-save keeps the calendar day even for offset values");
 
   // No due date → empty picker.
-  app.detail = { id: "Z", title: "t", description: "", priority: 3, assignee: undefined } as any;
+  app.detail = { id: "Z", title: "t", priority: 3, assignee: undefined } as any;
   app.startEditing();
   assert.equal(app.editDraft.due, "");
+});
+
+// --------------------------------------------------------------------------- Hoist-parents preference (parent cards float to the column top)
+test("HoistParents: defaults ON when unset, malformed value falls back to ON, toggle persists", () => {
+  safeStorage.clear();
+  const app = ravnApp();
+  assert.equal(app.hoistParents, true, "new user gets hoisting ON by default");
+
+  // Flip OFF → persisted as a raw JSON boolean.
+  app.toggleHoistParents();
+  assert.equal(app.hoistParents, false);
+  assert.equal(safeStorage.getItem("ravn.hoist_parents"), "false");
+  assert.equal(ravnApp().hoistParents, false, "OFF persists across restarts");
+
+  // Flip back ON → persisted and restored.
+  app.toggleHoistParents();
+  assert.equal(app.hoistParents, true);
+  assert.equal(ravnApp().hoistParents, true, "ON persists across restarts");
+
+  // Malformed stored values never throw and fall back to the ON default.
+  safeStorage.setItem("ravn.hoist_parents", "{not json");
+  assert.equal(ravnApp().hoistParents, true);
+  safeStorage.clear();
+});
+
+test("HoistParents: hoists within server order and under an active sort; OFF = plain behavior", () => {
+  safeStorage.clear();
+  const app = ravnApp(); // hoist ON by default
+  const t = (id: string, priority: number, subtaskTotal?: number) =>
+    ({ id, title: id, status: "todo", priority, version: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", subtask_total: subtaskTotal } as any);
+
+  // Server order: parentA (P3), soloC (P2), parentB (P1).
+  app.board = { project_id: "P", tasks: { todo: [t("parentA", 3, 2), t("soloC", 2), t("parentB", 1, 1)], doing: [], done: [] }, counts: {} } as any;
+  const titles = () => app.columns().find((c) => c.status === "todo")!.tasks.map((x) => x.title);
+
+  // ON + no sort key → groups hoisted, original relative order kept within each.
+  assert.equal(app.sortKey, "");
+  assert.deepEqual(titles(), ["parentA", "parentB", "soloC"]);
+
+  // ON + priority asc → each group sorted by the active key: [B(1), A(3)] then rest.
+  app.sortKey = "priority";
+  app.setSort(); // applies the criterion's default direction (asc for priority)
+  assert.deepEqual(titles(), ["parentB", "parentA", "soloC"]);
+
+  // OFF + same sort → plain whole-array sort; parents are not special-cased.
+  app.toggleHoistParents();
+  assert.deepEqual(titles(), ["parentB", "soloC", "parentA"]);
+
+  // OFF + no sort key → exact server order (today's behavior).
+  app.clearSort();
+  assert.deepEqual(titles(), ["parentA", "soloC", "parentB"]);
+
+  safeStorage.clear();
 });
 
 // --------------------------------------------------------------------------- Focus trap (task 01M3MMSVRFBPCK329KFSDR1WHV)

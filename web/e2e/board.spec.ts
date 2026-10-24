@@ -39,6 +39,85 @@ async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
   throw new Error(`Timed out waiting for server at ${url}`);
 }
 
+// Shared seed for the "hoist parents" tests below (one per acceptance
+// criterion): a project with two parent tasks — each linked to one child that is
+// then completed, so the board's subtask_total badge marks the parent and the
+// child leaves To Do — plus one standalone card. Canonical To-Do server order:
+// Parent A (P3), Standalone C (P2), Parent B (P1).
+async function seedHoistFixture(serverUrl: string, projectName: string): Promise<{ project: any }> {
+  const actor = { name: 'e2e-seed', type: 'agent' };
+
+  const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: projectName, actor }), // project names are unique server-side
+  });
+  expect(projRes.ok).toBe(true);
+  const project = await projRes.json();
+
+  const mkTask = async (title: string, priority: number) => {
+    const res = await fetch(`${serverUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: project.id, title, priority, actor }),
+    });
+    expect(res.ok).toBe(true);
+    return (await res.json()).task;
+  };
+
+  // todo → doing → done (direct todo→done is an invalid transition). Keeps the
+  // child counted for subtask_total (non-archived) off the To-Do column.
+  const moveDone = async (task: any) => {
+    const doing = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: task.version, status: 'doing', actor }),
+    });
+    expect(doing.ok).toBe(true);
+    const d = await doing.json();
+    const done = await fetch(`${serverUrl}/api/v1/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: d.version, status: 'done', actor }),
+    });
+    expect(done.ok).toBe(true);
+  };
+
+  const relateChild = async (child: any, parent: any) => {
+    const relRes = await fetch(`${serverUrl}/api/v1/tasks/${child.id}/relations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ other_id: parent.id, kind: 'child', actor }),
+    });
+    expect(relRes.ok).toBe(true);
+  };
+
+  const parentA = await mkTask('Parent A', 3);
+  const childOfA = await mkTask('Child of A', 2);
+  await relateChild(childOfA, parentA);
+  await moveDone(childOfA);
+
+  const parentB = await mkTask('Parent B', 1);
+  const childOfB = await mkTask('Child of B', 2);
+  await relateChild(childOfB, parentB);
+  await moveDone(childOfB);
+
+  const standaloneC = await mkTask('Standalone C', 2);
+
+  // Sanity: the board payload must mark both parents via subtask_total — the
+  // exact parent signal the hoist feature relies on.
+  const boardRes = await fetch(`${serverUrl}/api/v1/projects/${project.id}/board`);
+  expect(boardRes.ok).toBe(true);
+  const board = await boardRes.json();
+  const todoById: Record<string, any> = {};
+  for (const t of board.tasks.todo) todoById[t.id] = t;
+  expect(todoById[parentA.id].subtask_total).toBe(1);
+  expect(todoById[parentB.id].subtask_total).toBe(1);
+  expect(todoById[standaloneC.id].subtask_total ?? 0).toBe(0);
+
+  return { project };
+}
+
 test.describe('Web E2E test suite', () => {
   let serverProcess: ChildProcess;
   let tempDir: string;
@@ -1825,6 +1904,84 @@ test.describe('Web E2E test suite', () => {
     // Blocked badges & card counts still intact on sorted columns
     const countBadge = todoCol.locator('header span.rounded-full');
     await expect(countBadge).toHaveText('3');
+  });
+
+  test('hoist parents AC1: sort-bar toggle is present and ON by default, hoists under server order', async ({
+    page,
+  }) => {
+    const { project } = await seedHoistFixture(serverUrl, 'Hoist Parents Fixture AC1');
+
+    // Fresh context → empty localStorage → the preference defaults to ON.
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, project.id);
+
+    const todoCol = page.locator('section', { has: page.getByRole('heading', { name: 'To Do' }) });
+    await expect(todoCol).toBeVisible();
+    const cardTitles = async () => (await todoCol.locator('h3').allTextContents()).map((t) => t.trim());
+
+    // Default state: no sort selected, and the hoist toggle is visible in the bar…
+    await expect(page.locator('[data-testid="sort-key"]')).toHaveValue('');
+    const hoistToggle = page.locator('[data-testid="sort-hoist-parents"]');
+    await expect(hoistToggle).toBeVisible();
+    // …and ON by default for a new user.
+    await expect(hoistToggle).toHaveAttribute('aria-pressed', 'true');
+
+    // Under the default "Server order" (no sort key) parents are still hoisted:
+    // server order is Parent A (P3), Standalone C (P2), Parent B (P1) →
+    // hoisted to [Parent A, Parent B] with non-parents following.
+    await expect.poll(cardTitles, { timeout: 10000 }).toEqual(['Parent A', 'Parent B', 'Standalone C']);
+  });
+
+  test('hoist parents AC2: active priority sort keeps both groups sorted and hoists parents first', async ({
+    page,
+  }) => {
+    const { project } = await seedHoistFixture(serverUrl, 'Hoist Parents Fixture AC2');
+
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, project.id);
+
+    const todoCol = page.locator('section', { has: page.getByRole('heading', { name: 'To Do' }) });
+    await expect(todoCol).toBeVisible();
+    const cardTitles = async () => (await todoCol.locator('h3').allTextContents()).map((t) => t.trim());
+
+    // Priority ascending is the sort that would bury Parent A last — without
+    // hoisting the column reads [Parent B (P1), Standalone C (P2), Parent A (P3)].
+    await page.locator('[data-testid="sort-key"]').selectOption('priority');
+    await expect(page.locator('[data-testid="sort-dir"]')).toContainText('↑ Ascending');
+
+    // Hoisting ON: the two parents float to the top, sorted among themselves by
+    // priority (B before A); non-parents follow in the same criterion order.
+    await expect.poll(cardTitles).toEqual(['Parent B', 'Parent A', 'Standalone C']);
+  });
+
+  test('hoist parents AC3: toggle OFF sorts parents as normal cards and persists across reload', async ({
+    page,
+  }) => {
+    const { project } = await seedHoistFixture(serverUrl, 'Hoist Parents Fixture AC3');
+
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, project.id);
+
+    const todoCol = page.locator('section', { has: page.getByRole('heading', { name: 'To Do' }) });
+    await expect(todoCol).toBeVisible();
+    const cardTitles = async () => (await todoCol.locator('h3').allTextContents()).map((t) => t.trim());
+
+    const hoistToggle = page.locator('[data-testid="sort-hoist-parents"]');
+    await page.locator('[data-testid="sort-key"]').selectOption('priority');
+    await expect(hoistToggle).toHaveAttribute('aria-pressed', 'true'); // default ON before the flip
+    await expect.poll(cardTitles).toEqual(['Parent B', 'Parent A', 'Standalone C']);
+
+    // Flip the preference off: parents are no longer special-cased → plain priority asc.
+    await hoistToggle.click();
+    await expect(hoistToggle).toHaveAttribute('aria-pressed', 'false');
+    await expect.poll(cardTitles).toEqual(['Parent B', 'Standalone C', 'Parent A']);
+
+    // The preference (alongside the sort choice) survives a full page reload.
+    await page.reload();
+    await expect(page).toHaveTitle('Rävn');
+    await expect(page.locator('[data-testid="sort-key"]')).toHaveValue('priority');
+    await expect(hoistToggle).toHaveAttribute('aria-pressed', 'false');
+    await expect.poll(cardTitles).toEqual(['Parent B', 'Standalone C', 'Parent A']);
   });
 
   test('AC1-3: transient network failure on boot preserves the stored project and offers Retry', async ({

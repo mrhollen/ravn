@@ -63,6 +63,7 @@ import {
 export const LS_ACTOR = "ravn.actor";
 export const LS_PROJECT = "ravn.project";
 export const LS_SORT = "ravn.sort";
+export const LS_HOIST_PARENTS = "ravn.hoist_parents";
 export const LS_THEME = "ravn_theme";
 export { LS_TOKEN };
 const POLL_MS = 15_000;
@@ -127,6 +128,19 @@ function readStoredSort(): { key: SortKey; dir: SortDir } {
     return { key, dir };
   } catch {
     return { key: "", dir: "desc" };
+  }
+}
+
+/** Read the persisted hoist-parents preference; missing or malformed values
+ *  fall back to ON — new users get parent hoisting by default. */
+function readStoredHoistParents(): boolean {
+  try {
+    const raw = safeStorage.getItem(LS_HOIST_PARENTS);
+    if (raw === null) return true;
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === "boolean" ? parsed : true;
+  } catch {
+    return true;
   }
 }
 
@@ -223,6 +237,12 @@ function compareTasks(a: TaskSummary, b: TaskSummary, key: SortKey, dir: SortDir
   }
   if (cmp === 0) return a.id.localeCompare(b.id);
   return dir === "asc" ? cmp : -cmp;
+}
+
+/** A card is a "parent" when the board snapshot reports at least one child
+ *  task on it (subtask_total is only present/populated for parents). */
+function isParentTask(task: TaskSummary): boolean {
+  return (task.subtask_total ?? 0) > 0;
 }
 
 const SSE_EVENT_KINDS = [
@@ -1173,6 +1193,20 @@ export function ravnApp() {
     sortKey: readStoredSort().key,
     sortDir: readStoredSort().dir,
 
+    /** When ON (default), parent cards are hoisted to the top of their column;
+     *  the active sort still orders cards within each group. Persisted like the
+     *  sort choice (like actor name) so reloads keep the user's preference. */
+    hoistParents: readStoredHoistParents(),
+
+    toggleHoistParents(): void {
+      this.hoistParents = !this.hoistParents;
+      try {
+        safeStorage.setItem(LS_HOIST_PARENTS, JSON.stringify(this.hoistParents));
+      } catch {
+        /* private mode — non-fatal */
+      }
+    },
+
     /** Change handler: x-model has already written the raw value into sortKey;
      *  normalize it and apply the criterion's default direction. */
     setSort(): void {
@@ -1380,8 +1414,22 @@ export function ravnApp() {
         }
         // Client-side sort: re-applied on every render, so SSE/poll refreshes
         // keep the user's ordering without fighting live updates. Copies —
-        // never mutates the board arrays the optimistic-move code owns.
-        if (this.sortKey !== "") {
+        // never mutates the board arrays the optimistic-move code owns. With
+        // hoistParents ON (default) parent cards float to the top of the column
+        // regardless of the sort: each group is ordered with the same active
+        // key/direction, and under "Server order" (sortKey "") both groups keep
+        // their original relative order. Hoisting OFF falls through to exactly
+        // today's behavior — parents are not special-cased.
+        if (this.hoistParents) {
+          const parents = tasks.filter((t) => isParentTask(t));
+          const rest = tasks.filter((t) => !isParentTask(t));
+          if (this.sortKey !== "") {
+            const cmp = (a: TaskSummary, b: TaskSummary) => compareTasks(a, b, this.sortKey, this.sortDir);
+            parents.sort(cmp); // filter() copies — sorting in place is safe
+            rest.sort(cmp);
+          }
+          tasks = [...parents, ...rest];
+        } else if (this.sortKey !== "") {
           tasks = [...tasks].sort((a, b) => compareTasks(a, b, this.sortKey, this.sortDir));
         }
         return {
