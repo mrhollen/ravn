@@ -251,8 +251,11 @@ test.describe('Mobile experience (375px, touch)', () => {
       'row-1 trigger must not widen the document',
     );
 
-    // The inline actor input is gone from the strip: hidden while the menu is closed…
-    await expect(page.getByPlaceholder('you')).not.toBeVisible();
+    // The actor input lives in TWO mobile surfaces (the preferences dropdown and
+    // the hamburger's slide-down panel — see its header comment); strict-mode
+    // locators must be scoped per surface. Neither is visible while both are closed.
+    await expect(page.getByTestId('header-menu').getByPlaceholder('you')).toBeHidden();
+    await expect(page.getByTestId('mobile-menu-panel').getByPlaceholder('you')).toBeHidden();
 
     // …and the primary top bar (select + New task + hamburger + settings trigger)
     // still fits a single row: 44px control height + py-3 padding = ~68px, well
@@ -263,7 +266,8 @@ test.describe('Mobile experience (375px, touch)', () => {
     expect(collapsed).not.toBeNull();
     expect(collapsed!.height).toBeLessThanOrEqual(96);
 
-    // Expanding the strip opens the mobile bar (filters below row 1)
+    // Expanding the hamburger opens the slide-down panel directly below the
+    // header (normal document flow); the header row itself is unchanged.
     await menuToggle.click();
     await expect(menuToggle).toHaveAttribute('aria-expanded', 'true');
     await expect(page.locator('[data-testid="live-indicator"]')).toHaveCount(0);
@@ -274,22 +278,25 @@ test.describe('Mobile experience (375px, touch)', () => {
 
     // …and the settings menu opens from its row-1 trigger: theme, identity and
     // data controls appear inside the panel (not in the strip), staying within
-    // the 375px viewport.
+    // the 375px viewport. The slide-down panel is open at this point too, so
+    // the actor input must be scoped to the dropdown surface.
     await trigger.click();
     const panel = page.getByTestId('header-menu');
     await expect(panel).toBeVisible();
-    await expect(page.getByPlaceholder('you')).toBeVisible();
+    await expect(panel.getByPlaceholder('you')).toBeVisible();
     const mbox = await panel.boundingBox();
     expect(mbox).not.toBeNull();
     expect(mbox!.x).toBeGreaterThanOrEqual(0);
     expect(mbox!.x + mbox!.width).toBeLessThanOrEqual(MOBILE_VIEWPORT.width);
 
-    // Escape closes the menu first; a second Escape collapses the strip.
+    // Escape closes the dropdown first; a second Escape collapses the
+    // slide-down panel. Both surfaces hidden → both actor inputs hidden again.
     await page.keyboard.press('Escape');
     await expect(panel).toBeHidden();
     await page.keyboard.press('Escape');
     await expect(menuToggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(page.getByPlaceholder('you')).not.toBeVisible();
+    await expect(panel.getByPlaceholder('you')).toBeHidden();
+    await expect(page.getByTestId('mobile-menu-panel').getByPlaceholder('you')).toBeHidden();
 
     await context.close();
   });

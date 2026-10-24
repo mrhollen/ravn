@@ -2817,6 +2817,12 @@ export function ravnApp() {
     // Escape). Both funnel into moveTaskStatus(), so 409-rebase + rollback
     // behaviour is shared.
     showMobileMenu: false,
+    /** Mobile breakpoint flag mirroring Tailwind's `md:` (min-width 768px).
+     *  The hamburger's slide-down panel renders x-if'd on this flag so the two
+     *  mobile surfaces (panel vs. header strip) are exclusive in the DOM —
+     *  Playwright strict-mode testids require each id to match exactly once at
+     *  any viewport width. Updated from a matchMedia listener in _runBoot(). */
+    isMobile: false,
     cardMenuTaskId: null as string | null,
     swipeState: {
       id: null as string | null,
@@ -3995,6 +4001,14 @@ export function ravnApp() {
         // Track live OS preference changes — only relevant while in system mode.
         this._themeMq?.addEventListener("change", () => {
           if (this.theme === "system") this.applyTheme();
+        });
+        // Mobile breakpoint flag mirroring Tailwind's `md:` (min-width 768px):
+        // drives the x-if on the slide-down panel so its controls never coexist
+        // with their desktop/header instances in the DOM.
+        const mobileMq = window.matchMedia("(min-width: 768px)");
+        this.isMobile = !mobileMq.matches;
+        mobileMq.addEventListener("change", () => {
+          this.isMobile = !mobileMq.matches;
         });
         // Browser back/forward is a first-class way into and out of the full-
         // page task view (/tasks/<id>) — reconcile on every popstate.

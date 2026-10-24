@@ -549,8 +549,10 @@ test.describe('Consolidated header settings menu', () => {
     const mbox = (await panel.boundingBox())!;
     expect(mbox.x).toBeGreaterThanOrEqual(0);
     expect(mbox.x + mbox.width).toBeLessThanOrEqual(375, 'panel must not overflow the 375px viewport');
-    await expect(page.getByPlaceholder('you')).toBeVisible();
-    await expect(page.getByTestId('theme-toggle')).toBeVisible();
+    // Scoped: at <md a second actor input exists in the hamburger's slide-down
+    // panel (mobile-* testids) — strict mode requires one match per locator.
+    await expect(panel.getByPlaceholder('you')).toBeVisible();
+    await expect(panel.getByTestId('theme-toggle')).toBeVisible();
 
     await page.keyboard.press('Escape');
     await expect(panel).toBeHidden();

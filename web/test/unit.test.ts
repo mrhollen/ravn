@@ -1220,9 +1220,13 @@ test("DrawerError: openTask clears a previous task's error state before loading"
 
 test("Dropdown: index.html has no standalone New project button and wires the custom control", () => {
   const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  // The old standalone buttons are gone from the DESKTOP HEADER (the mobile
+  // slide-down panel below </header> intentionally carries labeled
+  // "New project" / "Settings" rows for touch — see its comment in index.html).
+  const headerHtml = html.slice(html.indexOf("<header"), html.indexOf("</header>") + "</header>".length);
   // The old header ghost button (and its toggle expression) is gone.
-  assert.ok(!/@click="showNewProject = !showNewProject"/.test(html), "standalone toggle handler must be gone");
-  assert.ok(!/>New project<\/button>/.test(html), "no standalone 'New project' <button> remains");
+  assert.ok(!/@click="showNewProject = !showNewProject"/.test(headerHtml), "standalone toggle handler must be gone from the header");
+  assert.ok(!/>New project<\/button>/.test(headerHtml), "no standalone 'New project' <button> remains in the header");
   // Custom trigger + menu panel + in-panel creation action exist.
   assert.match(html, /data-testid="project-select"/);
   assert.match(html, /data-testid="project-menu"/);
@@ -1401,10 +1405,13 @@ test("HeaderMenu: toggle opens/closes; Escape chain and mutual exclusion with th
 test("ProjectSettingsGear: index.html wires the gear into the project-dropdown split control", () => {
   const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
 
-  // AC1 — the old spelled-out button is gone from the header.
+  // AC1 — the old spelled-out button is gone from the DESKTOP HEADER. (The
+  // mobile slide-down panel below </header> intentionally carries a labeled
+  // Settings row for touch — see that panel's comment in index.html.)
+  const headerHtml = html.slice(html.indexOf("<header"), html.indexOf("</header>") + "</header>".length);
   assert.ok(
-    !/<button[^>]*>\s*Settings\s*<\/button>/.test(html),
-    'spelled-out "Settings" ghost button must be removed',
+    !/<button[^>]*>\s*Settings\s*<\/button>/.test(headerHtml),
+    'spelled-out "Settings" ghost button must be removed from the header',
   );
 
   // The gear lives INSIDE the project-dropdown wrapper (so it is visually

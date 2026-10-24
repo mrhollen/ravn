@@ -83,14 +83,17 @@
 
       <!-- ============================================================== top bar -->
        <!-- Mobile: row 1 = [project dropdown (select + attached settings
-            gear)][+ New task][hamburger][settings menu trigger]; the secondary
-            control (live indicator) collapses behind the hamburger into a strip
-            below row 1. When that strip expands to its own full-width row,
-            order-first pulls the trigger back into row 1 so it never drops to a
-            third line. On md+ the strip is inline again — the live indicator
-            sits just left of the settings-menu trigger at the right edge (the
-            toggle button is hidden). Project settings live in the gear attached
-            to the Projects dropdown, not in the strip. -->
+             gear)][+ New task][hamburger][settings menu trigger] — ONE stable
+             row that never changes height when the hamburger is toggled. The
+             secondary controls (theme, actor identity, auto-refresh, auth token,
+             live status) plus the filter/sort strip live in a dedicated
+             slide-down panel rendered in normal document flow DIRECTLY BELOW
+             the header (<template x-if="isMobile">), so expanding it pushes the
+             board down without touching the header. On md+ the same controls sit
+             inline: the tier-2 filter/sort strip docks as a second header row and
+             theme/identity/token live in the avatar preferences dropdown at the
+             right edge. Project settings live in the gear attached to the
+             Projects dropdown. -->
       <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-white px-4 py-2 shadow-sm md:gap-x-3 dark:border-zinc-800 dark:bg-zinc-900">
         <!-- Brand icon: the faceted Rävn mark in the header, paired with an
              sr-only h1 to preserve the page's main heading for screen readers.
@@ -208,10 +211,15 @@
           + New task
         </button>
 
-        <!-- hamburger toggle (mobile only) -->
+        <!-- hamburger toggle (mobile only). Pressed state: the expanded
+             slide-down panel lives just below this row, so an accent fill on
+             the trigger makes the open/close coupling obvious. -->
         <button type="button" data-testid="menu-toggle" aria-label="Board menu"
                 :aria-expanded="showMobileMenu" @click="showMobileMenu = !showMobileMenu"
-                class="btn-ghost md:hidden">
+                class="btn-ghost md:hidden"
+                :class="showMobileMenu
+                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-300'
+                  : ''">
           <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
           </svg>
@@ -236,16 +244,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              returns focus to the trigger; outside clicks close without
              stealing focus. Panel sits at z-40 — the dropdown tier (below
              toasts z-50 and the detail modal z-[60]). -->
-        <!-- When the mobile strip is expanded it takes a full-width row of its
-             own, which would wrap this anchor onto a third line. `order-first`
-             pulls the trigger back into row 1 in that state (and only then —
-             showMobileMenu is desktop-inert), keeping it permanently reachable;
-             the panel below clamps to the left edge for the same reason. -->
-         <!-- On md+ this anchor sits in the header's natural flex gap (gap-x-3)
-              at the right edge of the header. Inert below md, where row 1
-              packing is driven by the project capsule's flex-1. -->
-         <div class="relative" data-testid="header-menu-anchor"
-              :class="showMobileMenu ? 'order-first' : ''">
+          <!-- On md+ this anchor sits in the header's natural flex gap (gap-x-3)
+               at the right edge of the header. Inert below md, where row 1
+               packing is driven by the project capsule's flex-1 — and now that
+               the mobile expansion renders BELOW the header (slide-down panel),
+               nothing ever reorders this anchor: it stays permanently reachable
+               in row 1 at every width. -->
+          <div class="relative" data-testid="header-menu-anchor">
             <!-- Below md: the compact avatar circle (initial only) — unchanged
                  footprint, no svg inside. On md+ it widens into a STANDALONE
                  rounded button matching the other top-bar controls (.field /
@@ -277,8 +282,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                @keydown.home.prevent="moveHeaderFocus('home')"
                @keydown.end.prevent="moveHeaderFocus('end')"
                @keydown.escape="closeHeaderMenu(true)"
-               class="absolute top-full z-40 mt-1.5 w-72 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-950"
-               :class="showMobileMenu ? 'left-0' : 'right-0'">
+                class="absolute right-0 top-full z-40 mt-1.5 w-72 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
             <!-- identity summary: mirrors the trigger glyph -->
             <div class="flex items-center gap-2.5 px-3 pb-2 pt-1.5">
               <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white"
@@ -365,15 +369,16 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
         <!-- ===================================================== Tier 2: filters & sort -->
         <!-- Docked inside <header> as a full-width second row (the header's
-             flex-wrap makes w-full start its own line). Shown on md+ whenever a
-             board is loaded and the full-page task view isn't owning the region;
-             below md it rides the hamburger's collapsible area — visible only
-             while that strip is expanded, so the ≤96px collapsed header budget
-             at 375px still holds. SAME controls as the old in-main filter card:
-             identical x-models, testids and button text, rendered exactly once. -->
+             flex-wrap makes w-full start its own line) — DESKTOP ONLY via
+             x-if="!isMobile": below md the SAME controls render exactly once in
+             the slide-down panel's "Filters & sort" group instead, so every
+             filter/sort data-testid matches a single DOM node at any viewport
+             width (Playwright strict mode). Shown whenever a board is loaded and
+             the full-page task view isn't owning the region. -->
+        <template x-if="!isMobile">
         <div class="-mx-4 -mb-2 w-[calc(100%+2rem)] flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-zinc-200/80 bg-zinc-50/70 px-4 py-1.5 text-xs dark:border-zinc-800 dark:bg-zinc-950"
              x-cloak
-             :class="board && !fullPageOpen ? (showMobileMenu ? 'flex' : 'hidden md:flex') : 'hidden'">
+             :class="board && !fullPageOpen ? 'flex' : 'hidden'">
           <div class="flex min-w-0 flex-wrap items-center gap-2.5">
             <!-- Compact search input (magnifier icon; same x-model as before).
                  The visible "Search" label is deliberate: theme.spec.ts samples
@@ -466,15 +471,260 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               Clear sort
             </button>
 
-            <button type="button" @click="toggleHoistParents()" :aria-pressed="hoistParents"
-                    data-testid="sort-hoist-parents" aria-label="Hoist parent tickets to the top of each column"
-                    class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                    title="Keep parent tickets at the top of each column">
-              <span x-text="'Hoist parents ' + (hoistParents ? '(on)' : '(off)')"></span>
-            </button>
+              <button type="button" @click="toggleHoistParents()" :aria-pressed="hoistParents"
+                      data-testid="sort-hoist-parents" aria-label="Hoist parent tickets to the top of each column"
+                      class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      title="Keep parent tickets at the top of each column">
+                <span x-text="'Hoist parents ' + (hoistParents ? '(on)' : '(off)')"></span>
+              </button>
           </div>
         </div>
+        </template>
       </header>
+
+      <!-- ================================================== mobile slide-down panel -->
+      <!-- Mobile (<md) ONLY, gated by x-if="isMobile" (matchMedia 768px, same
+           breakpoint as Tailwind's md:) so these controls NEVER coexist with
+           their header/dropdown instances in the DOM — every data-testid must
+           match exactly one node at any viewport width for Playwright strict
+           mode. The hamburger's showMobileMenu expands THIS panel in normal
+           document flow directly below the header: the <header> keeps its one
+           stable row (identical height open vs. closed) and the board content
+           is pushed down while it is open. On md+ this whole section is absent
+           from the DOM; the same capabilities live inline in the tier-2 strip
+           and the avatar preferences dropdown above. -->
+      <template x-if="isMobile">
+        <section data-testid="mobile-menu-panel" role="region" aria-label="Board menu"
+                 x-show="showMobileMenu" x-cloak
+                 class="flex flex-col border-b border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+
+          <!-- Group 1: Actions — project settings + new project (previously
+               the gear-attached dropdown entry / standalone button). -->
+          <div data-testid="mobile-group-actions" class="px-4 pb-3 pt-3">
+            <h3 class="section-title">Actions</h3>
+            <div class="grid grid-cols-2 gap-2">
+              <button type="button" data-testid="mobile-settings-btn" @click="openProjectSettings()" :disabled="!selectedProjectId"
+                      class="btn-secondary w-full">Settings</button>
+              <button type="button" data-testid="mobile-new-project-btn" @click="openNewProject()"
+                      class="btn-secondary w-full">New project</button>
+            </div>
+          </div>
+
+          <div class="border-t border-zinc-200 dark:border-zinc-700"></div>
+
+          <!-- Group 2: Theme — same segmented control state (theme) as the
+               preferences dropdown; larger touch targets, no exemption. -->
+          <div data-testid="mobile-group-theme" class="px-4 pb-3 pt-2">
+            <h3 class="section-title">Theme</h3>
+            <div role="group" aria-label="Theme" data-testid="mobile-theme-toggle"
+                 class="flex w-full items-stretch overflow-hidden rounded-md border border-zinc-300 shadow-sm dark:border-zinc-700">
+              <button type="button" data-testid="mobile-theme-light" @click="setTheme('light')"
+                      :aria-pressed="theme === 'light'" title="Always use the light theme"
+                      class="flex-1 justify-center px-2 text-xs font-medium transition-colors"
+                      :class="theme === 'light'
+                        ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                        : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+                Light
+              </button>
+              <span class="w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
+              <button type="button" data-testid="mobile-theme-dark" @click="setTheme('dark')"
+                      :aria-pressed="theme === 'dark'" title="Always use the dark theme"
+                      class="flex-1 justify-center px-2 text-xs font-medium transition-colors"
+                      :class="theme === 'dark'
+                        ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                        : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+                Dark
+              </button>
+              <span class="w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
+              <button type="button" data-testid="mobile-theme-system" @click="setTheme('system')"
+                      :aria-pressed="theme === 'system'" title="Follow the operating system color scheme"
+                      class="flex-1 justify-center px-2 text-xs font-medium transition-colors"
+                      :class="theme === 'system'
+                        ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                        : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+                System
+              </button>
+            </div>
+          </div>
+
+          <div class="border-t border-zinc-200 dark:border-zinc-700"></div>
+
+          <!-- Group 3: Identity & token — the actor name sent with every write
+               plus the auth-token entry (same state as the dropdown's items). -->
+          <div data-testid="mobile-group-identity" class="px-4 pb-3 pt-2">
+            <h3 class="section-title">Identity &amp; Token</h3>
+            <label class="flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400" title="Identity sent with every write (actor name)">
+              Who are you?
+              <input type="text" data-testid="mobile-actor-input" x-model="actorName" @change="saveActor()"
+                     placeholder="you" autocomplete="off" class="field" />
+            </label>
+            <button type="button" data-testid="mobile-token-item" @click="openTokenFromMenu()"
+                    class="mt-2 flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium shadow-sm transition-colors"
+                    :class="authToken
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 dark:hover:bg-emerald-900'
+                      : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'"
+                    :title="authToken ? 'Auth token configured — click to edit' : 'No auth token set — click to configure'">
+              <svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+              <span x-text="authToken ? 'Token: set' : 'Token: none'"></span>
+              <svg class="ml-auto h-3.5 w-3.5 shrink-0 text-zinc-500 dark:text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="border-t border-zinc-200 dark:border-zinc-700"></div>
+
+          <!-- Group 4: Status & refresh — SSE live state (the liveness indicator
+               removed from the header now surfaces here on mobile only) and the
+               15s auto-refresh poller. -->
+          <div data-testid="mobile-group-status" class="px-4 pb-3 pt-2">
+            <h3 class="section-title">Status &amp; Refresh</h3>
+            <div role="status" aria-live="polite" data-testid="mobile-sse-status" @click="connectSse()"
+                 class="flex w-full cursor-pointer select-none items-center gap-1.5 text-xs font-medium"
+                 :class="sseStatus === 'connected'
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : sseStatus === 'connecting'
+                      ? 'text-amber-600 dark:text-amber-400'
+                      : (polling ? 'text-sky-700 dark:text-sky-400' : 'text-zinc-500 dark:text-zinc-400')"
+                 :title="sseStatus === 'connected'
+                    ? 'Live — connected to the event stream. Click to reconnect.'
+                    : sseStatus === 'connecting'
+                      ? 'Reconnecting to the event stream…'
+                      : (polling ? 'Stream down — falling back to 15s polling. Click to reconnect.' : 'Offline. Click to connect.')">
+              <span class="relative flex h-2 w-2" aria-hidden="true">
+                <span class="absolute inline-flex h-full w-full rounded-full opacity-75"
+                      :class="{
+                        'animate-ping bg-emerald-400': sseStatus === 'connected',
+                        'animate-ping bg-amber-400': sseStatus === 'connecting'
+                      }"></span>
+                <span class="relative inline-flex h-2 w-2 rounded-full"
+                      :class="{
+                        'bg-emerald-500 dark:bg-emerald-400': sseStatus === 'connected',
+                        'bg-amber-500 dark:bg-amber-400': sseStatus === 'connecting',
+                        'bg-sky-500 dark:bg-sky-400': sseStatus !== 'connected' && sseStatus !== 'connecting' && polling,
+                        'bg-zinc-400 dark:bg-zinc-500': sseStatus !== 'connected' && sseStatus !== 'connecting' && !polling
+                      }"></span>
+              </span>
+              <span x-text="sseStatus === 'connected' ? 'Live' : sseStatus === 'connecting' ? 'Reconnecting…' : (polling ? 'Polling every 15s' : 'Offline — click to connect')"></span>
+            </div>
+            <label class="tap-target mt-2 flex cursor-pointer items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300" title="Re-fetches the board every 15 seconds">
+              <input type="checkbox" data-testid="mobile-auto-refresh-toggle" x-model="polling" @change="pollingChanged()"
+                     class="h-4 w-4 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
+              Auto-refresh <span class="text-xs text-zinc-600 dark:text-zinc-400">(every 15 s)</span>
+            </label>
+          </div>
+
+          <!-- Group 5: Filters & sort — the SAME capsule markup, x-models and
+               testids as the desktop tier-2 strip (exactly one instance in the
+               DOM at any width; see that strip's comment). Single-root x-show on
+               purpose, NOT a nested <template x-if>: Alpine's x-if clones only
+               the template's FIRST element child, which would silently drop every
+               sibling after the divider. -->
+          <div x-show="board && !fullPageOpen" x-cloak>
+            <div class="border-t border-zinc-200 dark:border-zinc-700"></div>
+            <div data-testid="mobile-group-filters" class="flex flex-col gap-2 px-4 pb-4 pt-2 text-xs">
+              <h3 class="section-title !mb-1">Filters &amp; sort</h3>
+              <div class="flex min-w-0 flex-wrap items-center gap-2.5">
+                <label class="flex min-w-0 items-center gap-1.5">
+                  <span class="shrink-0 font-medium text-zinc-600 dark:text-zinc-400">Search</span>
+                  <span class="relative flex items-center">
+                    <svg class="pointer-events-none absolute left-2 h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+                    </svg>
+                    <input type="text" x-model="filterSearch" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
+                           class="field w-full py-1 pl-7 pr-2 text-xs sm:w-56" />
+                  </span>
+                </label>
+
+                <!-- Joined Filter split-capsule: Priority | Owner | Due | Unblocked only (+ conditional Reset) -->
+                <div class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+                  <label class="flex items-center gap-1.5 px-2.5 py-0.5 text-zinc-700 dark:text-zinc-200" title="Filter cards by priority">
+                    <span class="text-zinc-600 dark:text-zinc-400">Priority</span>
+                    <select x-model="filterPriority" aria-label="Filter by priority"
+                            class="max-w-[7rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                      <option value="">All</option>
+                      <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
+                        <option :value="p" x-text="'P' + p + ' — ' + priorityName(p)"></option>
+                      </template>
+                    </select>
+                  </label>
+
+                  <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by assignee">
+                    <span class="text-zinc-600 dark:text-zinc-400">Owner</span>
+                    <select x-model="filterAssignee" aria-label="Filter by assignee"
+                            class="max-w-[8rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                      <option value="">All</option>
+                      <option value="unassigned">Unassigned</option>
+                      <template x-for="name in availableAssignees()" :key="name">
+                        <option :value="name" x-text="name"></option>
+                      </template>
+                    </select>
+                  </label>
+
+                  <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by due date">
+                    <span class="text-zinc-600 dark:text-zinc-400">Due</span>
+                    <select x-model="filterDue" aria-label="Filter by due date"
+                            class="max-w-[7rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                      <option value="">All</option>
+                      <option value="overdue">Overdue</option>
+                      <option value="today">Due today</option>
+                      <option value="week">Due this week</option>
+                    </select>
+                  </label>
+
+                  <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                    <input type="checkbox" x-model="filterUnblocked"
+                           class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
+                    <span>Unblocked only</span>
+                  </label>
+
+                  <!-- Conditional Reset — same text/behavior as before -->
+                  <button type="button" @click="clearFilters()" x-show="hasActiveFilters()" x-cloak
+                          class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
+                    Reset filters
+                  </button>
+                </div>
+
+                <!-- Joined Sort split-capsule: Sort by | direction (+ conditional Clear) -->
+                <div class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+                  <label class="flex items-center gap-1.5 px-2.5 py-0.5 text-zinc-700 dark:text-zinc-200" title="Sort cards">
+                    <span class="text-zinc-600 dark:text-zinc-400">Sort by</span>
+                    <select x-model="sortKey" @change="setSort()"
+                            data-testid="sort-key" aria-label="Sort cards by"
+                            class="max-w-[8rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
+                      <template x-for="o in SORT_OPTIONS" :key="o.value">
+                        <option :value="o.value" x-text="o.label"></option>
+                      </template>
+                    </select>
+                  </label>
+
+                  <button type="button" @click="toggleSortDir()" :disabled="sortKey === ''"
+                          data-testid="sort-dir"
+                          class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          :title="'Toggle direction (' + (sortDir === 'asc' ? 'ascending → descending' : 'descending → ascending') + ')'">
+                    <span x-text="sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'"></span>
+                  </button>
+
+                  <button type="button" @click="clearSort()" x-show="sortKey !== ''" x-cloak
+                          data-testid="sort-clear"
+                          class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
+                    Clear sort
+                  </button>
+
+                  <button type="button" @click="toggleHoistParents()" :aria-pressed="hoistParents"
+                          data-testid="sort-hoist-parents" aria-label="Hoist parent tickets to the top of each column"
+                          class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          title="Keep parent tickets at the top of each column">
+                    <span x-text="'Hoist parents ' + (hoistParents ? '(on)' : '(off)')"></span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </template>
 
       <!-- ======================================================== new project -->
       <div x-show="showNewProject" x-cloak class="border-b border-zinc-200 bg-white px-4 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
