@@ -95,13 +95,20 @@ func TestOpenAppliesMigrationsAndSeedsStatuses(t *testing.T) {
 		}
 	}
 
-	// Connection pragmas applied: WAL journaling + foreign keys ON.
+	// Connection pragmas applied: WAL journaling + synchronous=NORMAL + foreign keys ON.
 	var mode string
 	if err := db.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&mode); err != nil {
 		t.Fatalf("pragma journal_mode: %v", err)
 	}
 	if mode != "wal" {
 		t.Errorf("journal_mode = %q, want wal", mode)
+	}
+	var sync int
+	if err := db.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&sync); err != nil {
+		t.Fatalf("pragma synchronous: %v", err)
+	}
+	if sync != 1 {
+		t.Errorf("synchronous = %d, want 1 (NORMAL)", sync)
 	}
 	var fk int
 	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&fk); err != nil {
@@ -373,3 +380,42 @@ func TestOpenMemory(t *testing.T) {
 		t.Errorf("Health on :memory: db = %q, want ok", got)
 	}
 }
+
+func TestOpenAppliesSynchronousNormalPragma(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// 1. Verify single Open connection (Writer)
+	db := openTestDB(t)
+	var syncVal int
+	if err := db.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&syncVal); err != nil {
+		t.Fatalf("query PRAGMA synchronous on Open: %v", err)
+	}
+	if syncVal != 1 {
+		t.Errorf("PRAGMA synchronous on Open = %d, want 1 (NORMAL)", syncVal)
+	}
+
+	// 2. Verify dual pool (both Writer and Reader connections)
+	pool, closePool, err := OpenPool(ctx, filepath.Join(t.TempDir(), "sync-pool-test.db"))
+	if err != nil {
+		t.Fatalf("OpenPool: %v", err)
+	}
+	t.Cleanup(func() { closePool() })
+
+	var writerSync int
+	if err := pool.Writer.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&writerSync); err != nil {
+		t.Fatalf("query PRAGMA synchronous on pool.Writer: %v", err)
+	}
+	if writerSync != 1 {
+		t.Errorf("PRAGMA synchronous on pool.Writer = %d, want 1 (NORMAL)", writerSync)
+	}
+
+	var readerSync int
+	if err := pool.Reader.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&readerSync); err != nil {
+		t.Fatalf("query PRAGMA synchronous on pool.Reader: %v", err)
+	}
+	if readerSync != 1 {
+		t.Errorf("PRAGMA synchronous on pool.Reader = %d, want 1 (NORMAL)", readerSync)
+	}
+}
+

@@ -176,7 +176,7 @@ CREATE TABLE task (
 );
 -- Canonical ordering (the "what's next" index). SQLite has no NULLS LAST keyword:
 -- (due_at IS NULL) sorts 0 before 1 → nulls last. EXACT expression used in every ORDER BY:
-CREATE INDEX idx_task_order ON task(project_id, priority DESC, due_at ASC, created_at ASC) WHERE archived = 0;
+CREATE INDEX idx_task_order ON task(project_id, priority DESC, (due_at IS NULL) ASC, due_at ASC, created_at ASC) WHERE archived = 0;
 CREATE INDEX idx_task_lookup ON task(project_id, status);
 
 CREATE TABLE acceptance_criterion (

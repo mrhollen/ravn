@@ -215,6 +215,30 @@ func toInt(v any) int {
 	}
 }
 
+// toBool coerces a decoded JSON argument value to a boolean.
+// It accepts boolean types and string representations ("true", "false", "1", "0", etc.).
+// If the value cannot be coerced into a boolean, it returns (false, false).
+func toBool(v any) (bool, bool) {
+	switch val := v.(type) {
+	case bool:
+		return val, true
+	case string:
+		s := strings.TrimSpace(val)
+		if b, err := strconv.ParseBool(s); err == nil {
+			return b, true
+		}
+		if strings.EqualFold(s, "true") {
+			return true, true
+		}
+		if strings.EqualFold(s, "false") {
+			return false, true
+		}
+		return false, false
+	default:
+		return false, false
+	}
+}
+
 // --- the 14 tools -----------------------------------------------------------------------
 
 func registerListProjects(s *mcpsrv.MCPServer, c Client) {
@@ -429,7 +453,7 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		assigneeProp(),
 		mcpgo.WithBoolean("clear_assignee",
 			mcpgo.Description("true = remove durable assignee (task becomes unassigned). Takes precedence over assignee if both are given in the same call.")),
-		mcpgo.WithBoolean("archived",
+		mcpgo.WithAny("archived",
 			mcpgo.Description("Archive (true) or unarchive (false) the task.")),
 		mcpgo.WithBoolean("override_blockers",
 			mcpgo.Description("true = bypass unresolved blocker check when transitioning to done.")),
@@ -473,7 +497,10 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		body.Assignee = optionalActor(args, "assignee")
 		body.ClearAssignee = req.GetBool("clear_assignee", false)
 		if v, ok := args["archived"]; ok {
-			b, _ := v.(bool)
+			b, ok := toBool(v)
+			if !ok {
+				return mcpgo.NewToolResultError(`{"error":"invalid input","message":"update_task: \"archived\" must be a boolean"}`), nil
+			}
 			body.Archived = &b
 		}
 		body.OverrideBlockers = req.GetBool("override_blockers", false)

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -380,5 +381,102 @@ func TestRelease_Force_ClearsLeaseForAnyActor(t *testing.T) {
 	if noop.Version != 3 || noop.Claim.Present() {
 		t.Errorf("idempotent force release mutated row: v=%d holder=%+v expiry=%v",
 			noop.Version, noop.Claim.By(), noop.Claim.Expiry())
+	}
+}
+
+func TestExplainQueryPlan_TaskOrderIndex(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	// AC 2: EXPLAIN QUERY PLAN confirms that SELECT ... ORDER BY priority DESC, (due_at IS NULL), due_at ASC, created_at ASC
+	// scans idx_task_order directly without 'USE TEMP B-TREE FOR LAST 3 TERMS OF ORDER BY'.
+	query := `EXPLAIN QUERY PLAN SELECT id FROM task WHERE project_id = ? AND archived = 0 ORDER BY priority DESC, (due_at IS NULL), due_at ASC, created_at ASC`
+	rows, err := db.QueryContext(ctx, query, "01M00000000000000000000001")
+	if err != nil {
+		t.Fatalf("explain query plan: %v", err)
+	}
+	defer rows.Close()
+
+	var details []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatalf("scan explain row: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate explain rows: %v", err)
+	}
+
+	fullPlan := strings.Join(details, "\n")
+	t.Logf("Query plan:\n%s", fullPlan)
+
+	if !strings.Contains(fullPlan, "idx_task_order") {
+		t.Errorf("expected plan to use idx_task_order, got: %s", fullPlan)
+	}
+	if strings.Contains(fullPlan, "USE TEMP B-TREE") {
+		t.Errorf("plan unexpectedly contains temp B-tree filesort: %s", fullPlan)
+	}
+}
+
+func TestMigration0009_TaskOrderIndex_EliminatesTempBTree(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	// Explicitly recreate the old index without (due_at IS NULL) to simulate pre-0009 state
+	if _, err := db.ExecContext(ctx, `DROP INDEX IF EXISTS idx_task_order`); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE INDEX idx_task_order ON task(project_id, priority DESC, due_at ASC, created_at ASC) WHERE archived = 0`); err != nil {
+		t.Fatalf("recreate old index: %v", err)
+	}
+
+	query := `EXPLAIN QUERY PLAN SELECT id FROM task WHERE project_id = ? AND archived = 0 ORDER BY priority DESC, (due_at IS NULL), due_at ASC, created_at ASC`
+
+	explain := func() string {
+		rows, err := db.QueryContext(ctx, query, "01M00000000000000000000001")
+		if err != nil {
+			t.Fatalf("explain query plan: %v", err)
+		}
+		defer rows.Close()
+
+		var details []string
+		for rows.Next() {
+			var id, parent, notused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+				t.Fatalf("scan explain row: %v", err)
+			}
+			details = append(details, detail)
+		}
+		return strings.Join(details, "\n")
+	}
+
+	// 1. With the old index, SQLite must emit USE TEMP B-TREE FOR LAST 3 TERMS OF ORDER BY
+	oldPlan := explain()
+	if !strings.Contains(oldPlan, "USE TEMP B-TREE FOR LAST 3 TERMS OF ORDER BY") {
+		t.Fatalf("expected old index plan to use temp b-tree, got:\n%s", oldPlan)
+	}
+
+	// 2. Apply migration 0009 script
+	m0009, err := migrationFS.ReadFile("migrations/0009_task_order_due_nulls.sql")
+	if err != nil {
+		t.Fatalf("read 0009 migration: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, string(m0009)); err != nil {
+		t.Fatalf("execute 0009 migration: %v", err)
+	}
+
+	// 3. With the new index, SQLite must NOT emit USE TEMP B-TREE and must scan idx_task_order directly
+	newPlan := explain()
+	if !strings.Contains(newPlan, "idx_task_order") {
+		t.Errorf("expected new index plan to use idx_task_order, got:\n%s", newPlan)
+	}
+	if strings.Contains(newPlan, "USE TEMP B-TREE") {
+		t.Errorf("expected new index plan to eliminate temp b-tree, got:\n%s", newPlan)
 	}
 }

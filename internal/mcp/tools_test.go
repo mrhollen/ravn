@@ -962,6 +962,168 @@ func TestUpdateTaskClearDueAndAssigneeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUpdateTaskArchivedCoercion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	t.Run("passing archived \"true\" sends Archived: &true in upstream request", func(t *testing.T) {
+		*calls = nil
+		res := callTool(t, c, ctx, "update_task", map[string]any{
+			"id":       "T1",
+			"version":  4,
+			"archived": "true",
+		})
+		if res.IsError {
+			t.Fatalf("update_task with archived: \"true\" returned isError: %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		var sent apiclient.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
+		}
+		if sent.Archived == nil || !*sent.Archived {
+			t.Errorf("Archived = %v, want &true", sent.Archived)
+		}
+	})
+
+	t.Run("passing archived true sends Archived: &true in upstream request", func(t *testing.T) {
+		*calls = nil
+		res := callTool(t, c, ctx, "update_task", map[string]any{
+			"id":       "T1",
+			"version":  4,
+			"archived": true,
+		})
+		if res.IsError {
+			t.Fatalf("update_task with archived: true returned isError: %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		var sent apiclient.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
+		}
+		if sent.Archived == nil || !*sent.Archived {
+			t.Errorf("Archived = %v, want &true", sent.Archived)
+		}
+	})
+
+	t.Run("passing archived \"false\" sends Archived: &false in upstream request", func(t *testing.T) {
+		*calls = nil
+		res := callTool(t, c, ctx, "update_task", map[string]any{
+			"id":       "T1",
+			"version":  4,
+			"archived": "false",
+		})
+		if res.IsError {
+			t.Fatalf("update_task with archived: \"false\" returned isError: %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		var sent apiclient.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
+		}
+		if sent.Archived == nil || *sent.Archived {
+			t.Errorf("Archived = %v, want &false", sent.Archived)
+		}
+	})
+
+	t.Run("passing archived false sends Archived: &false in upstream request", func(t *testing.T) {
+		*calls = nil
+		res := callTool(t, c, ctx, "update_task", map[string]any{
+			"id":       "T1",
+			"version":  4,
+			"archived": false,
+		})
+		if res.IsError {
+			t.Fatalf("update_task with archived: false returned isError: %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		var sent apiclient.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
+		}
+		if sent.Archived == nil || *sent.Archived {
+			t.Errorf("Archived = %v, want &false", sent.Archived)
+		}
+	})
+
+	t.Run("passing archived \"not-a-bool\" returns isError with validation error message", func(t *testing.T) {
+		res := callTool(t, c, ctx, "update_task", map[string]any{
+			"id":       "T1",
+			"version":  4,
+			"archived": "not-a-bool",
+		})
+		if !res.IsError {
+			t.Fatalf("expected isError for archived: \"not-a-bool\", got success: %s", firstText(t, res))
+		}
+		wantMsg := `{"error":"invalid input","message":"update_task: \"archived\" must be a boolean"}`
+		if got := firstText(t, res); got != wantMsg {
+			t.Errorf("validation error message mismatch:\n got  %s\n want %s", got, wantMsg)
+		}
+	})
+
+	t.Run("passing invalid non-boolean type returns isError with validation error message", func(t *testing.T) {
+		res := callTool(t, c, ctx, "update_task", map[string]any{
+			"id":       "T1",
+			"version":  4,
+			"archived": 12345,
+		})
+		if !res.IsError {
+			t.Fatalf("expected isError for non-boolean type, got success: %s", firstText(t, res))
+		}
+		wantMsg := `{"error":"invalid input","message":"update_task: \"archived\" must be a boolean"}`
+		if got := firstText(t, res); got != wantMsg {
+			t.Errorf("validation error message mismatch:\n got  %s\n want %s", got, wantMsg)
+		}
+	})
+}
+
+func TestToBool(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     any
+		wantVal   bool
+		wantValid bool
+	}{
+		{"bool true", true, true, true},
+		{"bool false", false, false, true},
+		{"string true", "true", true, true},
+		{"string false", "false", false, true},
+		{"string TRUE", "TRUE", true, true},
+		{"string FALSE", "FALSE", false, true},
+		{"string True", "True", true, true},
+		{"string False", "False", false, true},
+		{"string with whitespace", "  true  ", true, true},
+		{"string 1", "1", true, true},
+		{"string 0", "0", false, true},
+		{"string t", "t", true, true},
+		{"string f", "f", false, true},
+		{"invalid string not-a-bool", "not-a-bool", false, false},
+		{"invalid empty string", "", false, false},
+		{"invalid whitespace string", "   ", false, false},
+		{"invalid int", 1, false, false},
+		{"invalid float", 0.0, false, false},
+		{"invalid nil", nil, false, false},
+		{"invalid slice", []string{"true"}, false, false},
+		{"invalid map", map[string]any{"archived": true}, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotVal, gotValid := toBool(tt.input)
+			if gotValid != tt.wantValid {
+				t.Errorf("toBool(%v) valid = %v, want %v", tt.input, gotValid, tt.wantValid)
+			}
+			if gotVal != tt.wantVal {
+				t.Errorf("toBool(%v) val = %v, want %v", tt.input, gotVal, tt.wantVal)
+			}
+		})
+	}
+}
+
 func TestReleaseAndHeartbeatRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

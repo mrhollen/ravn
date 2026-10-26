@@ -50,15 +50,17 @@ func (p *DBPool) Close() error {
 	return errors.Join(errs...)
 }
 
-// dsnFor builds the DSN with ravn's connection pragmas: WAL journaling, a
-// 5-second busy timeout, and foreign keys ON. foreign_keys is a per-connection
-// setting in SQLite, so it must ride the DSN (applied on every new
+// dsnFor builds the DSN with ravn's connection pragmas: WAL journaling,
+// synchronous NORMAL (safe in WAL mode without per-commit fsyncs), a
+// 5-second busy timeout, and foreign keys ON. foreign_keys and synchronous are
+// per-connection settings in SQLite, so they must ride the DSN (applied on every new
 // connection) rather than being set once at open. The file: URI form also
 // accepts ":memory:" for throwaway in-process databases.
 func dsnFor(path string) string {
 	return "file:" + path +
 		"?_pragma=busy_timeout(5000)" +
 		"&_pragma=journal_mode(WAL)" +
+		"&_pragma=synchronous(NORMAL)" +
 		"&_pragma=foreign_keys(1)"
 }
 
