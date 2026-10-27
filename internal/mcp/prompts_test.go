@@ -18,6 +18,7 @@ import (
 type mockClient struct {
 	baseURLFunc      func() string
 	listProjectsFunc func(ctx context.Context) (*apiclient.ProjectList, error)
+	getProjectFunc   func(ctx context.Context, id string) (*apiclient.Project, error)
 	listTasksFunc    func(ctx context.Context, f apiclient.TaskFilter) (*apiclient.TaskList, error)
 	getTaskFunc      func(ctx context.Context, id string, commentLimit, eventLimit int) (*apiclient.TaskDetail, error)
 }
@@ -34,6 +35,13 @@ func (m *mockClient) ListProjects(ctx context.Context) (*apiclient.ProjectList, 
 		return m.listProjectsFunc(ctx)
 	}
 	return &apiclient.ProjectList{}, nil
+}
+
+func (m *mockClient) GetProject(ctx context.Context, id string) (*apiclient.Project, error) {
+	if m.getProjectFunc != nil {
+		return m.getProjectFunc(ctx, id)
+	}
+	return nil, errors.New("unimplemented")
 }
 
 func (m *mockClient) CreateProject(ctx context.Context, req apiclient.CreateProjectRequest) (*apiclient.Project, error) {
@@ -701,6 +709,121 @@ func TestNextTask_UnknownProjectNotFound(t *testing.T) {
 	for _, notWant := range []string{"No Available Tasks"} {
 		if strings.Contains(body, notWant) {
 			t.Errorf("next_task body must not contain %q (misleading fallback)\nFull body:\n%s", notWant, body)
+		}
+	}
+}
+
+// TestPromptsGet_NextTask_EmptyAcceptanceCriteria verifies that when a task has no
+// acceptance criteria, the next_task prompt:
+// 1. Does not generate complete_ac calls (avoiding seq 1 failures on 0-AC tasks)
+// 2. Informs the agent that no acceptance criteria are defined, or suggests adding them
+func TestPromptsGet_NextTask_EmptyAcceptanceCriteria(t *testing.T) {
+	mock := &mockClient{
+		listProjectsFunc: func(ctx context.Context) (*apiclient.ProjectList, error) {
+			return &apiclient.ProjectList{
+				Projects: []apiclient.Project{
+					{ID: "PROJ-NO-AC", Name: "Project No AC"},
+				},
+				Total: 1,
+			}, nil
+		},
+		listTasksFunc: func(ctx context.Context, f apiclient.TaskFilter) (*apiclient.TaskList, error) {
+			return &apiclient.TaskList{
+				Tasks: []apiclient.TaskSummary{
+					{
+						ID:       "TASK-NO-AC",
+						Title:    "Investigate Memory Leak",
+						Status:   "todo",
+						Priority: 3,
+						Version:  1,
+					},
+				},
+				Total: 1,
+			}, nil
+		},
+		getTaskFunc: func(ctx context.Context, id string, commentLimit, eventLimit int) (*apiclient.TaskDetail, error) {
+			return &apiclient.TaskDetail{
+				TaskSummary: apiclient.TaskSummary{
+					ID:       id,
+					Title:    "Investigate Memory Leak",
+					Status:   "todo",
+					Priority: 3,
+					Version:  1,
+				},
+				ProjectID:          "PROJ-NO-AC",
+				Description:        "Investigate heap growth during high load.",
+				Notes:              "",
+				AcceptanceCriteria: []apiclient.AcceptanceCriterion{}, // Empty ACs
+				Comments:           []apiclient.Comment{},
+			}, nil
+		},
+	}
+
+	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
+	defaultActor := apiclient.Actor{Type: "agent", Name: "agent-mcp"}
+	RegisterPrompts(mcs, mock, defaultActor)
+
+	getMsg := `{
+		"jsonrpc": "2.0",
+		"id": 50,
+		"method": "prompts/get",
+		"params": {
+			"name": "next_task",
+			"arguments": {
+				"project_id": "PROJ-NO-AC",
+				"actor_name": "agent-mcp"
+			}
+		}
+	}`
+
+	resp := mcs.HandleMessage(context.Background(), json.RawMessage(getMsg))
+	jsonResp, ok := resp.(mcpgo.JSONRPCResponse)
+	if !ok {
+		t.Fatalf("expected JSONRPCResponse, got %T: %+v", resp, resp)
+	}
+
+	res, ok := jsonResp.Result.(mcpgo.GetPromptResult)
+	if !ok {
+		t.Fatalf("expected GetPromptResult, got %T: %+v", jsonResp.Result, jsonResp.Result)
+	}
+
+	if len(res.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(res.Messages))
+	}
+
+	txtContent, ok := res.Messages[0].Content.(mcpgo.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", res.Messages[0].Content)
+	}
+	body := txtContent.Text
+
+	// AC 1: Does NOT contain complete_ac call instructions
+	if strings.Contains(body, "complete_ac(") {
+		t.Errorf("next_task prompt must not contain complete_ac calls when task has no acceptance criteria, got:\n%s", body)
+	}
+
+	// AC 2: Informs the agent that no acceptance criteria are defined, or suggests adding them
+	expectedNotice := "No acceptance criteria are defined for this task. You may add criteria using `add_ac` if helpful, but completing criteria is not required before moving to done."
+	if !strings.Contains(body, expectedNotice) {
+		t.Errorf("next_task prompt missing notice explaining no ACs are defined, got:\n%s", body)
+	}
+
+	// Workflow step 4 header should be present
+	if !strings.Contains(body, "4. **Acceptance Criteria**:") {
+		t.Errorf("next_task prompt missing step 4 header, got:\n%s", body)
+	}
+
+	// Other playbook steps should still be present
+	expectedOtherSteps := []string{
+		"1. **Claim the Task**",
+		"2. **Inspect & Update Notes**",
+		"3. **Heartbeat During Long Work**",
+		"5. **Attach Testing Evidence**",
+		"6. **Finish and Release**",
+	}
+	for _, step := range expectedOtherSteps {
+		if !strings.Contains(body, step) {
+			t.Errorf("next_task prompt missing workflow step %q", step)
 		}
 	}
 }

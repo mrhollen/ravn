@@ -454,7 +454,7 @@ func registerNextTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Acto
 			firstAC := detail.AcceptanceCriteria[0]
 			sb.WriteString(fmt.Sprintf("4. **Complete Acceptance Criteria** (mark each AC with evidence):\n   `complete_ac(id=%q, seq=%d, actor={\"type\": \"agent\", \"name\": %q}, done=true, note=\"Tested and verified\")`\n\n", detail.ID, firstAC.Seq, actorName))
 		} else {
-			sb.WriteString(fmt.Sprintf("4. **Complete Acceptance Criteria**:\n   `complete_ac(id=%q, seq=1, actor={\"type\": \"agent\", \"name\": %q}, done=true, note=\"...\")`\n\n", detail.ID, actorName))
+			sb.WriteString("4. **Acceptance Criteria**:\n   No acceptance criteria are defined for this task. You may add criteria using `add_ac` if helpful, but completing criteria is not required before moving to done.\n\n")
 		}
 
 		sb.WriteString(fmt.Sprintf("5. **Attach Testing Evidence** (encouraged, not required — humans verify via artifacts):\n   If you ran tests or verification commands, upload the output so a human can review it:\n   `attach_artifact(id=%q, kind=\"command-output\", ref=\"<path-or-URL of the test/verification output>\", summary=\"e.g. go test ./... — all pass\")`\n   To attach screenshots or other workspace files (video, audio, PDF, logs), ALWAYS encode the file to base64 and pass: `attach_artifact(id=%q, kind=\"screenshot\", data_base64=\"<base64-bytes>\", filename=\"screenshot.png\", summary=\"...\")`. Never pass local filesystem paths in ref.\n\n", detail.ID, detail.ID))

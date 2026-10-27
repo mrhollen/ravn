@@ -79,6 +79,26 @@ func (c *Client) CreateProject(ctx context.Context, req CreateProjectRequest) (*
 	return &out, nil
 }
 
+// GetProject → GET /projects/{id}. 200 with the project row.
+func (c *Client) GetProject(ctx context.Context, id string) (*Project, error) {
+	var out Project
+	path := "/projects/" + url.PathEscape(id)
+	if err := c.do(ctx, "GetProject", http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateProject → PUT /projects/{id}. 200 with the updated project row.
+func (c *Client) UpdateProject(ctx context.Context, id string, req UpdateProjectRequest) (*Project, error) {
+	var out Project
+	path := "/projects/" + url.PathEscape(id)
+	if err := c.do(ctx, "UpdateProject", http.MethodPut, path, nil, &req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ListTasks → GET /tasks. Canonical order (priority DESC → due ASC with undated
 // last → created ASC) inside the offset/limit envelope. Zero filter fields add
 // no query params; the server applies its own defaults (limit 20).

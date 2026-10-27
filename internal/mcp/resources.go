@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	taskResourceURIScheme    = "ravn://task/{id}"
-	projectResourceURIScheme = "ravn://project/{id}"
+	taskResourceURIScheme          = "ravn://task/{id}"
+	projectResourceURIScheme       = "ravn://project/{id}"
+	legacyTaskResourceURIScheme    = "crowban://task/{id}"
+	legacyProjectResourceURIScheme = "crowban://project/{id}"
 )
 
 // RegisterResources registers Rävn read-only MCP resources and resource templates onto s.
@@ -37,6 +39,9 @@ func registerTaskResource(s *mcpsrv.MCPServer, c Client) {
 		if id == "" {
 			if strings.HasPrefix(req.Params.URI, "ravn://task/") {
 				id = strings.TrimPrefix(req.Params.URI, "ravn://task/")
+				id = strings.TrimSpace(id)
+			} else if strings.HasPrefix(req.Params.URI, "crowban://task/") {
+				id = strings.TrimPrefix(req.Params.URI, "crowban://task/")
 				id = strings.TrimSpace(id)
 			}
 		}
@@ -74,6 +79,14 @@ func registerTaskResource(s *mcpsrv.MCPServer, c Client) {
 		mcpgo.WithTemplateDescription("URI template for retrieving task resume payloads by task ULID."),
 	)
 	s.AddResourceTemplate(tmpl, handler)
+
+	legacyTmpl := mcpgo.NewResourceTemplate(
+		legacyTaskResourceURIScheme,
+		"Task Resume Payload (Legacy)",
+		mcpgo.WithTemplateMIMEType("application/json"),
+		mcpgo.WithTemplateDescription("Legacy URI template for retrieving task resume payloads by task ULID."),
+	)
+	s.AddResourceTemplate(legacyTmpl, handler)
 }
 
 func registerProjectResource(s *mcpsrv.MCPServer, c Client) {
@@ -88,37 +101,35 @@ func registerProjectResource(s *mcpsrv.MCPServer, c Client) {
 			if strings.HasPrefix(req.Params.URI, "ravn://project/") {
 				id = strings.TrimPrefix(req.Params.URI, "ravn://project/")
 				id = strings.TrimSpace(id)
+			} else if strings.HasPrefix(req.Params.URI, "crowban://project/") {
+				id = strings.TrimPrefix(req.Params.URI, "crowban://project/")
+				id = strings.TrimSpace(id)
 			}
 		}
 		if id == "" || id == "{id}" {
 			return nil, fmt.Errorf("project ID required: specify a project ULID in URI (e.g. ravn://project/<id>)")
 		}
 
-		projects, err := c.ListProjects(ctx)
+		p, err := c.GetProject(ctx, id)
 		if err != nil {
 			if e, ok := apiclient.AsAPIError(err); ok {
-				return nil, fmt.Errorf("projects list: %s", string(e.Body))
+				return nil, fmt.Errorf("project %q: %s", id, string(e.Body))
 			}
-			return nil, fmt.Errorf("projects list: %w", err)
+			return nil, fmt.Errorf("project %q: %w", id, err)
 		}
 
-		for _, p := range projects.Projects {
-			if p.ID == id {
-				data, err := json.Marshal(p)
-				if err != nil {
-					return nil, fmt.Errorf("marshal project %q: %w", id, err)
-				}
-				return []mcpgo.ResourceContents{
-					mcpgo.TextResourceContents{
-						URI:      req.Params.URI,
-						MIMEType: "application/json",
-						Text:     string(data),
-					},
-				}, nil
-			}
+		data, err := json.Marshal(p)
+		if err != nil {
+			return nil, fmt.Errorf("marshal project %q: %w", id, err)
 		}
 
-		return nil, fmt.Errorf("project %q not found", id)
+		return []mcpgo.ResourceContents{
+			mcpgo.TextResourceContents{
+				URI:      req.Params.URI,
+				MIMEType: "application/json",
+				Text:     string(data),
+			},
+		}, nil
 	}
 
 	// Register as a resource template listed in resources/templates/list
@@ -129,4 +140,12 @@ func registerProjectResource(s *mcpsrv.MCPServer, c Client) {
 		mcpgo.WithTemplateDescription("URI template for retrieving project summaries by project ULID."),
 	)
 	s.AddResourceTemplate(tmpl, handler)
+
+	legacyTmpl := mcpgo.NewResourceTemplate(
+		legacyProjectResourceURIScheme,
+		"Project Summary (Legacy)",
+		mcpgo.WithTemplateMIMEType("application/json"),
+		mcpgo.WithTemplateDescription("Legacy URI template for retrieving project summaries by project ULID."),
+	)
+	s.AddResourceTemplate(legacyTmpl, handler)
 }

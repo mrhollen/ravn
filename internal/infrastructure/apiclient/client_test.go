@@ -169,6 +169,175 @@ func TestCreateProject_MethodPathBodyDecode(t *testing.T) {
 	}
 }
 
+func TestCreateProject_WithOpenCodeConfig(t *testing.T) {
+	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		if cap.method != http.MethodPost || cap.path != "/api/v1/projects" {
+			t.Errorf("got %s %s, want POST /api/v1/projects", cap.method, cap.path)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(cap.body, &raw); err != nil {
+			t.Fatalf("body not JSON: %v (%s)", err, cap.body)
+		}
+		if raw["opencode_server_url"] != "http://localhost:4444" {
+			t.Errorf("opencode_server_url = %v, want http://localhost:4444", raw["opencode_server_url"])
+		}
+		if raw["opencode_directory"] != "/home/user/project" {
+			t.Errorf("opencode_directory = %v, want /home/user/project", raw["opencode_directory"])
+		}
+		if raw["opencode_model"] != "anthropic/claude-3-5-sonnet" {
+			t.Errorf("opencode_model = %v, want anthropic/claude-3-5-sonnet", raw["opencode_model"])
+		}
+		if raw["opencode_agent"] != "coder" {
+			t.Errorf("opencode_agent = %v, want coder", raw["opencode_agent"])
+		}
+		if raw["opencode_variant"] != "fast" {
+			t.Errorf("opencode_variant = %v, want fast", raw["opencode_variant"])
+		}
+
+		writeJSONTest(w, http.StatusCreated, `{
+			"id":"P1",
+			"name":"Website Redesign",
+			"description":"MVP landing page work",
+			"opencode_server_url":"http://localhost:4444",
+			"opencode_directory":"/home/user/project",
+			"opencode_model":"anthropic/claude-3-5-sonnet",
+			"opencode_agent":"coder",
+			"opencode_variant":"fast",
+			"created_at":"2026-09-20T09:00:00Z",
+			"updated_at":"2026-09-20T09:00:00Z"
+		}`)
+	}))
+
+	p, err := c.CreateProject(context.Background(), CreateProjectRequest{
+		Actor:             Actor{Name: "ada"},
+		Name:              "Website Redesign",
+		Description:       "MVP landing page work",
+		OpenCodeServerURL: "http://localhost:4444",
+		OpenCodeDirectory: "/home/user/project",
+		OpenCodeModel:     "anthropic/claude-3-5-sonnet",
+		OpenCodeAgent:     "coder",
+		OpenCodeVariant:   "fast",
+	})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if p.OpenCodeModel != "anthropic/claude-3-5-sonnet" ||
+		p.OpenCodeServerURL != "http://localhost:4444" ||
+		p.OpenCodeDirectory != "/home/user/project" ||
+		p.OpenCodeAgent != "coder" ||
+		p.OpenCodeVariant != "fast" {
+		t.Errorf("unexpected project row: %+v", p)
+	}
+}
+
+// --- GetProject -------------------------------------------------------------------------
+
+const projectGetBody = `{
+  "id": "01J3YV2NMB4D9C6K8F0H3L5P7Q",
+  "name": "Website Redesign",
+  "description": "MVP landing page work",
+  "opencode_server_url": "http://localhost:4444",
+  "opencode_directory": "/home/user/code",
+  "opencode_model": "anthropic/claude-3-5-sonnet",
+  "opencode_agent": "coder",
+  "opencode_variant": "fast",
+  "archived": false,
+  "created_at": "2026-09-20T09:00:00Z",
+  "updated_at": "2026-09-20T09:00:00Z"
+}`
+
+func TestGetProject_DecodesFields(t *testing.T) {
+	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		if cap.method != http.MethodGet || cap.path != "/api/v1/projects/01J3YV2NMB4D9C6K8F0H3L5P7Q" {
+			t.Errorf("got %s %s, want GET /api/v1/projects/01J3YV2NMB4D9C6K8F0H3L5P7Q", cap.method, cap.path)
+		}
+		writeJSONTest(w, http.StatusOK, projectGetBody)
+	}))
+
+	p, err := c.GetProject(context.Background(), "01J3YV2NMB4D9C6K8F0H3L5P7Q")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if p.ID != "01J3YV2NMB4D9C6K8F0H3L5P7Q" || p.Name != "Website Redesign" {
+		t.Errorf("project = %+v", p)
+	}
+	if p.OpenCodeModel != "anthropic/claude-3-5-sonnet" {
+		t.Errorf("opencode_model = %q, want anthropic/claude-3-5-sonnet", p.OpenCodeModel)
+	}
+	if p.OpenCodeServerURL != "http://localhost:4444" || p.OpenCodeDirectory != "/home/user/code" {
+		t.Errorf("server_url/dir = %q, %q", p.OpenCodeServerURL, p.OpenCodeDirectory)
+	}
+	if p.OpenCodeAgent != "coder" || p.OpenCodeVariant != "fast" {
+		t.Errorf("agent/variant = %q, %q", p.OpenCodeAgent, p.OpenCodeVariant)
+	}
+}
+
+func TestGetProject_404PreservesBody(t *testing.T) {
+	notFound := `{"error":"not found","resource":"project","id":"NOPE","message":"project not found"}`
+	c, _ := newTestServer(t, "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSONTest(w, http.StatusNotFound, notFound)
+	}))
+
+	_, err := c.GetProject(context.Background(), "NOPE")
+	e := wantAPIError(t, err, http.StatusNotFound)
+	if string(e.Body) != notFound {
+		t.Errorf("body not verbatim:\n got %s\nwant %s", e.Body, notFound)
+	}
+}
+
+// --- UpdateProject ----------------------------------------------------------------------
+
+func TestUpdateProject_MethodPathBodyDecode(t *testing.T) {
+	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		if cap.method != http.MethodPut || cap.path != "/api/v1/projects/P1" {
+			t.Errorf("got %s %s, want PUT /api/v1/projects/P1", cap.method, cap.path)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(cap.body, &raw); err != nil {
+			t.Fatalf("body not JSON: %v (%s)", err, cap.body)
+		}
+		// Check that omitted fields are absent on the wire
+		for _, k := range []string{"description", "opencode_directory", "archived"} {
+			if _, present := raw[k]; present {
+				t.Errorf("field %q must be omitted from the body (got %s)", k, cap.body)
+			}
+		}
+		if v, _ := raw["name"].(string); v != "Renamed Project" {
+			t.Errorf("name = %v, want Renamed Project", raw["name"])
+		}
+		if v, _ := raw["opencode_model"].(string); v != "openai/gpt-4o" {
+			t.Errorf("opencode_model = %v, want openai/gpt-4o", raw["opencode_model"])
+		}
+		if v, _ := raw["opencode_server_url"].(string); v != "http://localhost:5555" {
+			t.Errorf("opencode_server_url = %v, want http://localhost:5555", raw["opencode_server_url"])
+		}
+		writeJSONTest(w, http.StatusOK, `{
+			"id":"P1",
+			"name":"Renamed Project",
+			"opencode_server_url":"http://localhost:5555",
+			"opencode_model":"openai/gpt-4o",
+			"created_at":"2026-09-20T09:00:00Z",
+			"updated_at":"2026-09-26T15:48:03Z"
+		}`)
+	}))
+
+	name := "Renamed Project"
+	serverURL := "http://localhost:5555"
+	model := "openai/gpt-4o"
+	p, err := c.UpdateProject(context.Background(), "P1", UpdateProjectRequest{
+		Actor:             Actor{Name: "eve"},
+		Name:              &name,
+		OpenCodeServerURL: &serverURL,
+		OpenCodeModel:     &model,
+	})
+	if err != nil {
+		t.Fatalf("UpdateProject: %v", err)
+	}
+	if p.ID != "P1" || p.Name != "Renamed Project" || p.OpenCodeModel != "openai/gpt-4o" || p.OpenCodeServerURL != "http://localhost:5555" {
+		t.Errorf("updated project = %+v", p)
+	}
+}
+
 // --- ListTasks --------------------------------------------------------------------------
 
 func TestListTasks_QueryBuildingAndEnvelope(t *testing.T) {

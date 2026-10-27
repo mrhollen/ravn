@@ -276,28 +276,37 @@ func TestResourcesRead_UnknownIDSurfacesError(t *testing.T) {
 	}
 }
 
-// TestProjectResourceRead tests reading ravn://project/{id}.
+// TestProjectResourceRead tests reading ravn://project/{id} and crowban://project/{id}.
 func TestProjectResourceRead(t *testing.T) {
+	var listProjectsCalled bool
+	var getProjectCalledWith string
+
 	mock := &mockClient{
 		listProjectsFunc: func(ctx context.Context) (*apiclient.ProjectList, error) {
-			return &apiclient.ProjectList{
-				Projects: []apiclient.Project{
-					{
-						ID:          "PROJ-1",
-						Name:        "Core Engine",
-						Description: "Engine work",
-						TaskCounts:  &apiclient.StatusCounts{Todo: 5, Doing: 2, Done: 10},
-					},
-				},
-				Total: 1,
-			}, nil
+			listProjectsCalled = true
+			return nil, fmt.Errorf("ListProjects should not be called")
+		},
+		getProjectFunc: func(ctx context.Context, id string) (*apiclient.Project, error) {
+			getProjectCalledWith = id
+			if id == "PROJ-1" {
+				return &apiclient.Project{
+					ID:          "PROJ-1",
+					Name:        "Core Engine",
+					Description: "Engine work",
+					TaskCounts:  &apiclient.StatusCounts{Todo: 5, Doing: 2, Done: 10},
+				}, nil
+			}
+			return nil, &apiclient.APIError{
+				StatusCode: 404,
+				Body:       []byte(fmt.Sprintf(`{"error":"not_found","message":"project %q not found"}`, id)),
+			}
 		},
 	}
 
 	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	RegisterResources(mcs, mock)
 
-	// 1. Success read
+	// 1. Success read via ravn://project/PROJ-1
 	readMsg := `{
 		"jsonrpc": "2.0",
 		"id": 30,
@@ -319,11 +328,48 @@ func TestProjectResourceRead(t *testing.T) {
 	if !strings.Contains(txtContent.Text, "Core Engine") || !strings.Contains(txtContent.Text, `"todo":5`) {
 		t.Errorf("project resource content missing expected fields: %s", txtContent.Text)
 	}
+	if getProjectCalledWith != "PROJ-1" {
+		t.Errorf("GetProject called with %q, want PROJ-1", getProjectCalledWith)
+	}
+	if listProjectsCalled {
+		t.Errorf("ListProjects must NOT be called when reading project resource")
+	}
 
-	// 2. Unknown project surfaces error
-	unknownMsg := `{
+	// 2. Reading crowban://project/PROJ-1 does not fetch all projects in the system (AC 3)
+	getProjectCalledWith = ""
+	listProjectsCalled = false
+	crowbanMsg := `{
 		"jsonrpc": "2.0",
 		"id": 31,
+		"method": "resources/read",
+		"params": {
+			"uri": "crowban://project/PROJ-1"
+		}
+	}`
+	resp = mcs.HandleMessage(context.Background(), json.RawMessage(crowbanMsg))
+	jsonResp, ok = resp.(mcpgo.JSONRPCResponse)
+	if !ok {
+		t.Fatalf("expected JSONRPCResponse, got %T: %+v", resp, resp)
+	}
+	readResult, ok = jsonResp.Result.(mcpgo.ReadResourceResult)
+	if !ok {
+		t.Fatalf("expected ReadResourceResult, got %T", jsonResp.Result)
+	}
+	txtContent = readResult.Contents[0].(mcpgo.TextResourceContents)
+	if !strings.Contains(txtContent.Text, "Core Engine") || !strings.Contains(txtContent.Text, `"todo":5`) {
+		t.Errorf("crowban project resource content missing expected fields: %s", txtContent.Text)
+	}
+	if getProjectCalledWith != "PROJ-1" {
+		t.Errorf("GetProject called with %q for crowban scheme, want PROJ-1", getProjectCalledWith)
+	}
+	if listProjectsCalled {
+		t.Errorf("ListProjects must NOT be called when reading crowban://project/<id>")
+	}
+
+	// 3. Unknown project surfaces error
+	unknownMsg := `{
+		"jsonrpc": "2.0",
+		"id": 32,
 		"method": "resources/read",
 		"params": {
 			"uri": "ravn://project/UNKNOWN-PROJECT"

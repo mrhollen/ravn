@@ -161,6 +161,9 @@ type Project struct {
 	Description       string        `json:"description,omitempty"`
 	OpenCodeServerURL string        `json:"opencode_server_url,omitempty"`
 	OpenCodeDirectory string        `json:"opencode_directory,omitempty"`
+	OpenCodeModel     string        `json:"opencode_model,omitempty"`
+	OpenCodeAgent     string        `json:"opencode_agent,omitempty"`
+	OpenCodeVariant   string        `json:"opencode_variant,omitempty"`
 	Archived          bool          `json:"archived"`
 	CreatedAt         string        `json:"created_at"`
 	UpdatedAt         string        `json:"updated_at"`
@@ -178,9 +181,27 @@ type Health struct {
 
 // CreateProjectRequest is POST /projects. Name must be non-empty (else 400).
 type CreateProjectRequest struct {
-	Actor       Actor  `json:"actor"`
-	Name        string `json:"name"`
-	Description string `json:"description"` // optional markdown
+	Actor             Actor  `json:"actor"`
+	Name              string `json:"name"`
+	Description       string `json:"description"` // optional markdown
+	OpenCodeServerURL string `json:"opencode_server_url,omitempty"`
+	OpenCodeDirectory string `json:"opencode_directory,omitempty"`
+	OpenCodeModel     string `json:"opencode_model,omitempty"`
+	OpenCodeAgent     string `json:"opencode_agent,omitempty"`
+	OpenCodeVariant   string `json:"opencode_variant,omitempty"`
+}
+
+// UpdateProjectRequest is PUT /projects/{id}. Pointer semantics: nil = unchanged.
+type UpdateProjectRequest struct {
+	Actor             Actor   `json:"actor"`
+	Name              *string `json:"name,omitempty"`
+	Description       *string `json:"description,omitempty"`
+	OpenCodeServerURL *string `json:"opencode_server_url,omitempty"`
+	OpenCodeDirectory *string `json:"opencode_directory,omitempty"`
+	OpenCodeModel     *string `json:"opencode_model,omitempty"`
+	OpenCodeAgent     *string `json:"opencode_agent,omitempty"`
+	OpenCodeVariant   *string `json:"opencode_variant,omitempty"`
+	Archived          *bool   `json:"archived,omitempty"`
 }
 
 // TaskFilter selects GET /tasks query params; zero values mean "use the server

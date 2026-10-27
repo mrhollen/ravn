@@ -34,6 +34,7 @@ import (
 type Client interface {
 	BaseURL() string
 	ListProjects(ctx context.Context) (*apiclient.ProjectList, error)
+	GetProject(ctx context.Context, id string) (*apiclient.Project, error)
 	CreateProject(ctx context.Context, req apiclient.CreateProjectRequest) (*apiclient.Project, error)
 	ListTasks(ctx context.Context, f apiclient.TaskFilter) (*apiclient.TaskList, error)
 	GetTask(ctx context.Context, id string, commentLimit, eventLimit int) (*apiclient.TaskDetail, error)
