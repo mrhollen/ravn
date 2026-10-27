@@ -1081,6 +1081,104 @@ func TestUpdateTaskArchivedCoercion(t *testing.T) {
 	})
 }
 
+func TestUpdateTaskDescriptionHandling(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	t.Run("passing description: \"\" sets Description: &\"\" in upstream PATCH request (clearing description)", func(t *testing.T) {
+		*calls = nil
+		res := callTool(t, c, ctx, "update_task", map[string]any{
+			"id":          "T1",
+			"version":     4,
+			"description": "",
+		})
+		if res.IsError {
+			t.Fatalf("update_task with description: \"\" returned isError: %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		var sent apiclient.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
+		}
+		if sent.Description == nil {
+			t.Fatalf("expected Description != nil, got nil")
+		}
+		if *sent.Description != "" {
+			t.Errorf("Description = %q, want \"\"", *sent.Description)
+		}
+	})
+
+	t.Run("passing description with whitespace only sets Description: &\"\" in upstream PATCH request", func(t *testing.T) {
+		*calls = nil
+		res := callTool(t, c, ctx, "update_task", map[string]any{
+			"id":          "T1",
+			"version":     4,
+			"description": "   ",
+		})
+		if res.IsError {
+			t.Fatalf("update_task with description: \"   \" returned isError: %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		var sent apiclient.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
+		}
+		if sent.Description == nil {
+			t.Fatalf("expected Description != nil, got nil")
+		}
+		if *sent.Description != "" {
+			t.Errorf("Description = %q, want \"\"", *sent.Description)
+		}
+	})
+
+	t.Run("omitting description leaves Description: nil in upstream PATCH request (preserving description)", func(t *testing.T) {
+		*calls = nil
+		res := callTool(t, c, ctx, "update_task", map[string]any{
+			"id":      "T1",
+			"version": 4,
+			"title":   "New Title",
+		})
+		if res.IsError {
+			t.Fatalf("update_task without description returned isError: %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		var sent apiclient.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
+		}
+		if sent.Description != nil {
+			t.Errorf("expected Description == nil when omitted, got %q", *sent.Description)
+		}
+	})
+
+	t.Run("passing description: \"new text\" sets Description: &\"new text\"", func(t *testing.T) {
+		*calls = nil
+		res := callTool(t, c, ctx, "update_task", map[string]any{
+			"id":          "T1",
+			"version":     4,
+			"description": "new text",
+		})
+		if res.IsError {
+			t.Fatalf("update_task with description: \"new text\" returned isError: %s", firstText(t, res))
+		}
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		var sent apiclient.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
+		}
+		if sent.Description == nil {
+			t.Fatalf("expected Description != nil, got nil")
+		}
+		if *sent.Description != "new text" {
+			t.Errorf("Description = %q, want \"new text\"", *sent.Description)
+		}
+	})
+}
+
 func TestToBool(t *testing.T) {
 	tests := []struct {
 		name      string

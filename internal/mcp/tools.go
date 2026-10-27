@@ -477,8 +477,8 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 			s := v
 			body.Title = &s
 		}
-		if v := strings.TrimSpace(req.GetString("description", "")); v != "" {
-			s := v
+		if _, ok := args["description"]; ok {
+			s := strings.TrimSpace(req.GetString("description", ""))
 			body.Description = &s
 		}
 		if v := strings.TrimSpace(req.GetString("status", "")); v != "" {

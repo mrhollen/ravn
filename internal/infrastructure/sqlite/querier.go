@@ -34,3 +34,14 @@ func isConstraintViolation(err error) bool {
 	}
 	return drvErr.Code()&0xff == 19 // primary code SQLITE_CONSTRAINT; extended bits carry the subtype
 }
+
+// isUniqueConstraintViolation reports whether err is a SQLite UNIQUE constraint
+// violation (SQLITE_CONSTRAINT_UNIQUE, extended result code 2067 = 19 | (8 << 8)).
+func isUniqueConstraintViolation(err error) bool {
+	var drvErr *moderncsqlite.Error
+	if !errors.As(err, &drvErr) {
+		return false
+	}
+	// SQLITE_CONSTRAINT_UNIQUE is 2067 (19 | (8 << 8))
+	return drvErr.Code() == 2067
+}

@@ -44,7 +44,7 @@ func (r *relationRepo) Add(ctx context.Context, rel domain.Relation) error {
 		string(rel.ID), string(rel.TaskID), string(rel.OtherTaskID), string(rel.Kind), formatTS(rel.CreatedAt))
 	if err != nil {
 		if isConstraintViolation(err) {
-			if rel.Kind == domain.RelationChild { // only the partial index can fire on a child row
+			if rel.Kind == domain.RelationChild && isUniqueConstraintViolation(err) {
 				return fmt.Errorf("%w: task %s already has a parent", domain.ErrParentConflict, rel.TaskID)
 			}
 			return fmt.Errorf("%w: relation %s violates a schema constraint", domain.ErrInvalid, rel.ID)

@@ -296,3 +296,134 @@ func TestRelations_RealSQL_AddRemoveRoundTripNoVersionBump(t *testing.T) {
 		t.Errorf("versions after add+remove: A=%d B=%d, want both %d (relations never bump)", aFin.Version, bFin.Version, aBefore)
 	}
 }
+
+// TestRelationRepo_Add_ConstraintErrorClassification verifies that SQLite
+// constraint failures on relationRepo.Add are accurately classified:
+//   - Foreign key violations (e.g. non-existent task IDs) return domain.ErrInvalid
+//   - CHECK constraint violations (e.g. task_id == other_task_id) return domain.ErrInvalid
+//   - Only partial UNIQUE index violations (idx_relation_one_parent_child) return domain.ErrParentConflict
+func TestRelationRepo_Add_ConstraintErrorClassification(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openTestDB(t)
+	_, tasks, projects := newRelationUseCase(t, db)
+
+	p := mustCreateProject(t, ctx, projects)
+	a, err := tasks.Create(ctx, testActor, application.TaskInput{Title: "A", ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("create A: %v", err)
+	}
+	b, err := tasks.Create(ctx, testActor, application.TaskInput{Title: "B", ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("create B: %v", err)
+	}
+	c, err := tasks.Create(ctx, testActor, application.TaskInput{Title: "C", ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("create C: %v", err)
+	}
+
+	repo := newRelationRepo(db)
+	now := time.Now().UTC()
+
+	t.Run("non-existent other_task_id returns ErrInvalid (FK failure), not ErrParentConflict", func(t *testing.T) {
+		rel := domain.Relation{
+			ID:          "rel-fk-other",
+			TaskID:      a.ID,
+			OtherTaskID: domain.ID("non-existent-parent-task-id"),
+			Kind:        domain.RelationChild,
+			CreatedAt:   now,
+		}
+		err := repo.Add(ctx, rel)
+		if err == nil {
+			t.Fatal("expected error adding relation with non-existent other_task_id, got nil")
+		}
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("error = %v, want wrapping domain.ErrInvalid", err)
+		}
+		if errors.Is(err, domain.ErrParentConflict) {
+			t.Errorf("error = %v unexpectedly wraps domain.ErrParentConflict", err)
+		}
+	})
+
+	t.Run("non-existent task_id returns ErrInvalid (FK failure), not ErrParentConflict", func(t *testing.T) {
+		rel := domain.Relation{
+			ID:          "rel-fk-task",
+			TaskID:      domain.ID("non-existent-child-task-id"),
+			OtherTaskID: b.ID,
+			Kind:        domain.RelationChild,
+			CreatedAt:   now,
+		}
+		err := repo.Add(ctx, rel)
+		if err == nil {
+			t.Fatal("expected error adding relation with non-existent task_id, got nil")
+		}
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("error = %v, want wrapping domain.ErrInvalid", err)
+		}
+		if errors.Is(err, domain.ErrParentConflict) {
+			t.Errorf("error = %v unexpectedly wraps domain.ErrParentConflict", err)
+		}
+	})
+
+	t.Run("self-edge child relation returns ErrInvalid (CHECK constraint failure), not ErrParentConflict", func(t *testing.T) {
+		rel := domain.Relation{
+			ID:          "rel-check-self",
+			TaskID:      a.ID,
+			OtherTaskID: a.ID,
+			Kind:        domain.RelationChild,
+			CreatedAt:   now,
+		}
+		err := repo.Add(ctx, rel)
+		if err == nil {
+			t.Fatal("expected error adding self-edge relation, got nil")
+		}
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("error = %v, want wrapping domain.ErrInvalid", err)
+		}
+		if errors.Is(err, domain.ErrParentConflict) {
+			t.Errorf("error = %v unexpectedly wraps domain.ErrParentConflict", err)
+		}
+	})
+
+	t.Run("second parent returns ErrParentConflict", func(t *testing.T) {
+		// First parent: A is child-of B.
+		rel1 := domain.Relation{
+			ID:          "rel-parent-1",
+			TaskID:      a.ID,
+			OtherTaskID: b.ID,
+			Kind:        domain.RelationChild,
+			CreatedAt:   now,
+		}
+		if err := repo.Add(ctx, rel1); err != nil {
+			t.Fatalf("first parent Add: %v", err)
+		}
+
+		// Second parent: A is child-of C (second parent) -> partial unique index violation.
+		rel2 := domain.Relation{
+			ID:          "rel-parent-2",
+			TaskID:      a.ID,
+			OtherTaskID: c.ID,
+			Kind:        domain.RelationChild,
+			CreatedAt:   now,
+		}
+		err := repo.Add(ctx, rel2)
+		if err == nil {
+			t.Fatal("expected error adding second parent to task A, got nil")
+		}
+		if !errors.Is(err, domain.ErrParentConflict) {
+			t.Errorf("error = %v, want wrapping domain.ErrParentConflict", err)
+		}
+		if errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("error = %v unexpectedly wraps domain.ErrInvalid", err)
+		}
+	})
+}
+
+func TestIsUniqueConstraintViolation(t *testing.T) {
+	if isUniqueConstraintViolation(nil) {
+		t.Error("nil error should not be unique constraint violation")
+	}
+	if isUniqueConstraintViolation(errors.New("generic error")) {
+		t.Error("generic error should not be unique constraint violation")
+	}
+}

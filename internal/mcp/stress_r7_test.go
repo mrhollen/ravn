@@ -546,3 +546,141 @@ func assertTaskInDB(t *testing.T, db *sql.DB, taskID string, wantDue bool, wantA
 		t.Errorf("expected assignee in SQLite to be NULL, got type=%q name=%q", assigneeType.String, assigneeName.String)
 	}
 }
+
+func TestUpdateTaskDescription_LiveSQLiteRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// 1. Stand up real SQLite database
+	dbPath := filepath.Join(t.TempDir(), "live_desc_test.db")
+	db, closeDB, err := sqlite.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open failed: %v", err)
+	}
+	t.Cleanup(func() { _ = closeDB() })
+
+	broker := pubsub.NewBroker()
+	uow := sqlite.NewUnitOfWork(db, sqlite.WithPublisher(broker))
+	now := clock.New()
+	mint := idgen.New()
+
+	app := httpapi.NewApp(httpapi.Deps{
+		Projects:   application.NewProjects(uow, now, mint),
+		Tasks:      application.NewTasks(uow, now, mint),
+		Comments:   application.NewComments(uow, now, mint),
+		Artifacts:  application.NewArtifacts(uow, now, mint),
+		Acceptance: application.NewAcceptance(uow, now, mint),
+		Relations:  application.NewRelations(uow, now, mint),
+		Broker:     broker,
+	})
+
+	mux := http.NewServeMux()
+	httpapi.RegisterRoutes(mux, app)
+	httpServer := httptest.NewServer(mux)
+	t.Cleanup(httpServer.Close)
+
+	// 2. Stand up real MCP server pointing to the live HTTP server
+	api := apiclient.New(httpServer.URL, "")
+	mcs := mcpsrv.NewMCPServer("ravn", "1.0.0", ServerOptions()...)
+	RegisterTools(mcs, api, apiclient.Actor{Type: "agent", Name: "test-agent"})
+	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
+		mcpsrv.WithStateLess(true),
+		mcpsrv.WithEndpointPath("/mcp"),
+	)
+	mcpMux := http.NewServeMux()
+	mcpMux.Handle("/mcp", streamable)
+	mcpServer := httptest.NewServer(mcpMux)
+	t.Cleanup(mcpServer.Close)
+
+	// 3. Connect real MCP client
+	c := dial(t, mcpServer.URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// Step A: Create a project
+	projRes := callTool(t, c, ctx, "create_project", map[string]any{
+		"name": "Description Test Project",
+	})
+	if projRes.IsError {
+		t.Fatalf("create_project failed: %s", firstText(t, projRes))
+	}
+	projectID := asMap(t, firstText(t, projRes))["id"].(string)
+
+	// Step B: Create a task with initial description
+	taskRes := callTool(t, c, ctx, "create_task", map[string]any{
+		"project_id":  projectID,
+		"title":       "Task with description",
+		"description": "Initial description text",
+	})
+	if taskRes.IsError {
+		t.Fatalf("create_task failed: %s", firstText(t, taskRes))
+	}
+	taskCreated := asMap(t, firstText(t, taskRes))
+	taskSummary := taskCreated["task"].(map[string]any)
+	taskID := taskSummary["id"].(string)
+	version := int(taskSummary["version"].(float64))
+
+	// Verify initial description in SQLite
+	assertTaskDescriptionInDB(t, db, taskID, "Initial description text")
+
+	// Step C: update_task omitting description leaves existing description unchanged (AC 2)
+	updNoDesc := callTool(t, c, ctx, "update_task", map[string]any{
+		"id":      taskID,
+		"version": version,
+		"title":   "Updated Title Only",
+	})
+	if updNoDesc.IsError {
+		t.Fatalf("update_task without description failed: %s", firstText(t, updNoDesc))
+	}
+	updNoDescData := asMap(t, firstText(t, updNoDesc))
+	version = int(updNoDescData["version"].(float64))
+	assertTaskDescriptionInDB(t, db, taskID, "Initial description text")
+
+	// Step D: update_task with description: "" clears task description in database (AC 1)
+	updClearDesc := callTool(t, c, ctx, "update_task", map[string]any{
+		"id":          taskID,
+		"version":     version,
+		"description": "",
+	})
+	if updClearDesc.IsError {
+		t.Fatalf("update_task with description: \"\" failed: %s", firstText(t, updClearDesc))
+	}
+	updClearData := asMap(t, firstText(t, updClearDesc))
+	version = int(updClearData["version"].(float64))
+	assertTaskDescriptionInDB(t, db, taskID, "")
+
+	// Step E: update_task with new description sets new text
+	updNewDesc := callTool(t, c, ctx, "update_task", map[string]any{
+		"id":          taskID,
+		"version":     version,
+		"description": "Brand new description",
+	})
+	if updNewDesc.IsError {
+		t.Fatalf("update_task with new description failed: %s", firstText(t, updNewDesc))
+	}
+	updNewData := asMap(t, firstText(t, updNewDesc))
+	version = int(updNewData["version"].(float64))
+	assertTaskDescriptionInDB(t, db, taskID, "Brand new description")
+
+	// Step F: update_task with whitespace description "   " also clears description
+	updWhitespaceDesc := callTool(t, c, ctx, "update_task", map[string]any{
+		"id":          taskID,
+		"version":     version,
+		"description": "   ",
+	})
+	if updWhitespaceDesc.IsError {
+		t.Fatalf("update_task with whitespace description failed: %s", firstText(t, updWhitespaceDesc))
+	}
+	assertTaskDescriptionInDB(t, db, taskID, "")
+}
+
+func assertTaskDescriptionInDB(t *testing.T, db *sql.DB, taskID string, want string) {
+	t.Helper()
+	row := db.QueryRow(`SELECT description FROM task WHERE id = ?`, taskID)
+	var got string
+	if err := row.Scan(&got); err != nil {
+		t.Fatalf("Scan task description for %s failed: %v", taskID, err)
+	}
+	if got != want {
+		t.Errorf("task %s description in SQLite = %q, want %q", taskID, got, want)
+	}
+}
