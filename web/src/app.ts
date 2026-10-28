@@ -64,8 +64,10 @@ export const LS_ACTOR = "ravn.actor";
 export const LS_PROJECT = "ravn.project";
 export const LS_SORT = "ravn.sort";
 export const LS_HOIST_PARENTS = "ravn.hoist_parents";
+export const LS_CARD_DENSITY = "ravn.card_density";
 export const LS_THEME = "ravn_theme";
 export { LS_TOKEN };
+export const DEFAULT_DONE_LIMIT = 20;
 const POLL_MS = 15_000;
 const MD_CACHE_MAX = 500;
 // Max visual card offset (px) while swiping. Commit/slop thresholds still use
@@ -141,6 +143,23 @@ function readStoredHoistParents(): boolean {
     return typeof parsed === "boolean" ? parsed : true;
   } catch {
     return true;
+  }
+}
+
+// ------------------------------------------------------------- card density
+export type CardDensity = "comfortable" | "compact";
+
+export function isCardDensity(v: unknown): v is CardDensity {
+  return v === "comfortable" || v === "compact";
+}
+
+/** Read persisted card density preference; anything malformed falls back to comfortable. */
+export function readStoredCardDensity(): CardDensity {
+  try {
+    const raw = safeStorage.getItem(LS_CARD_DENSITY);
+    return isCardDensity(raw) ? raw : "comfortable";
+  } catch {
+    return "comfortable";
   }
 }
 
@@ -1241,6 +1260,37 @@ export function ravnApp() {
       return o && o.value !== "" ? o.label : "";
     },
 
+    // ----------------------------------------------------------- card density
+    cardDensity: readStoredCardDensity(),
+
+    setCardDensity(mode: CardDensity): void {
+      this.cardDensity = mode;
+      try {
+        safeStorage.setItem(LS_CARD_DENSITY, mode);
+      } catch {
+        /* private mode — non-fatal */
+      }
+    },
+
+    toggleCardDensity(): void {
+      this.setCardDensity(this.cardDensity === "comfortable" ? "compact" : "comfortable");
+    },
+
+    // ---------------------------------------------------- done column pagination
+    doneLimit: DEFAULT_DONE_LIMIT,
+
+    showMoreDone(step = 20): void {
+      this.doneLimit += step;
+    },
+
+    showAllDone(): void {
+      this.doneLimit = Infinity;
+    },
+
+    collapseDone(): void {
+      this.doneLimit = DEFAULT_DONE_LIMIT;
+    },
+
     // ------------------------------------------------------------------ filters
     filterPriority: "" as string,
     filterAssignee: "" as string,
@@ -1326,7 +1376,7 @@ export function ravnApp() {
      *  what the active filters hide — no pagination/archival lives here. */
     visibleTaskCount(): number {
       let n = 0;
-      for (const col of this.columns()) n += col.tasks.length;
+      for (const col of this.columns()) n += col.totalCount ?? col.tasks.length;
       return n;
     },
 
@@ -1371,7 +1421,7 @@ export function ravnApp() {
       return "bg-zinc-100 text-zinc-600 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700";
     },
 
-    columns(): { status: Status; label: string; tasks: TaskSummary[] }[] {
+    columns(): { status: Status; label: string; tasks: TaskSummary[]; totalCount: number }[] {
       const b = this.board;
       return STATUSES.map((s) => {
         let tasks = b ? b.tasks[s] ?? [] : [];
@@ -1418,8 +1468,13 @@ export function ravnApp() {
         // hoistParents ON (default) parent cards float to the top of the column
         // regardless of the sort: each group is ordered with the same active
         // key/direction, and under "Server order" (sortKey "") both groups keep
-        // their original relative order. Hoisting OFF falls through to exactly
-        // today's behavior — parents are not special-cased.
+        // their original relative order (except Done, which orders newest-first).
+        const cmpDone = (a: TaskSummary, b: TaskSummary) => {
+          const timeA = (a as any).completed_at || a.updated_at || a.created_at || "";
+          const timeB = (b as any).completed_at || b.updated_at || b.created_at || "";
+          return timeB.localeCompare(timeA);
+        };
+
         if (this.hoistParents) {
           const parents = tasks.filter((t) => isParentTask(t));
           const rest = tasks.filter((t) => !isParentTask(t));
@@ -1427,15 +1482,28 @@ export function ravnApp() {
             const cmp = (a: TaskSummary, b: TaskSummary) => compareTasks(a, b, this.sortKey, this.sortDir);
             parents.sort(cmp); // filter() copies — sorting in place is safe
             rest.sort(cmp);
+          } else if (s === "done") {
+            parents.sort(cmpDone);
+            rest.sort(cmpDone);
           }
           tasks = [...parents, ...rest];
         } else if (this.sortKey !== "") {
           tasks = [...tasks].sort((a, b) => compareTasks(a, b, this.sortKey, this.sortDir));
+        } else if (s === "done") {
+          tasks = [...tasks].sort(cmpDone);
         }
+
+        const totalCount = tasks.length;
+        const renderedTasks =
+          s === "done" && totalCount > this.doneLimit
+            ? tasks.slice(0, this.doneLimit)
+            : tasks;
+
         return {
           status: s,
           label: STATUS_LABEL[s],
-          tasks,
+          tasks: renderedTasks,
+          totalCount,
         };
       });
     },
@@ -1445,6 +1513,7 @@ export function ravnApp() {
         safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
       } catch { /* ignore */ }
       this.board = null;
+      this.doneLimit = DEFAULT_DONE_LIMIT;
       this.openCodeOptions = null;
       this.openCodeOptionsProjectId = "";
       // The blocked-state cache belongs to the project being LEFT: reset it,

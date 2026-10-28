@@ -477,6 +477,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       title="Keep parent tickets at the top of each column">
                 <span x-text="'Hoist parents ' + (hoistParents ? '(on)' : '(off)')"></span>
               </button>
+
+              <button type="button" @click="toggleCardDensity()" :aria-pressed="cardDensity === 'compact'"
+                      data-testid="card-density-toggle" aria-label="Toggle card display density between comfortable and compact"
+                      class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      :title="'Switch to ' + (cardDensity === 'comfortable' ? 'compact' : 'comfortable') + ' card density'">
+                <span x-text="'Density: ' + (cardDensity === 'compact' ? 'Compact' : 'Comfortable')"></span>
+              </button>
           </div>
         </div>
         </template>
@@ -581,18 +588,24 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                15s auto-refresh poller. -->
           <div data-testid="mobile-group-status" class="px-4 pb-3 pt-2">
             <h3 class="section-title">Status &amp; Refresh</h3>
-            <div role="status" aria-live="polite" data-testid="mobile-sse-status" @click="connectSse()"
-                 class="flex w-full cursor-pointer select-none items-center gap-1.5 text-xs font-medium"
-                 :class="sseStatus === 'connected'
-                    ? 'text-emerald-700 dark:text-emerald-400'
-                    : sseStatus === 'connecting'
-                      ? 'text-amber-600 dark:text-amber-400'
-                      : (polling ? 'text-sky-700 dark:text-sky-400' : 'text-zinc-500 dark:text-zinc-400')"
-                 :title="sseStatus === 'connected'
-                    ? 'Live — connected to the event stream. Click to reconnect.'
-                    : sseStatus === 'connecting'
-                      ? 'Reconnecting to the event stream…'
-                      : (polling ? 'Stream down — falling back to 15s polling. Click to reconnect.' : 'Offline. Click to connect.')">
+            <!-- Rendered as a semantic <button>: native keyboard focus +
+                 Enter/Space activation for free. aria-live (a global ARIA
+                 attribute) keeps announcing state changes politely; the old
+                 role="status" was dropped because an explicit role on a button
+                 overrides its implicit interactive semantics. hover/active/
+                 focus-visible classes make the interactivity visually evident. -->
+            <button type="button" data-testid="mobile-sse-status" aria-live="polite" @click="connectSse()"
+                    class="flex w-full cursor-pointer select-none items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium transition-colors hover:bg-zinc-100 active:bg-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+                    :class="sseStatus === 'connected'
+                       ? 'text-emerald-700 dark:text-emerald-400'
+                       : sseStatus === 'connecting'
+                         ? 'text-amber-600 dark:text-amber-400'
+                         : (polling ? 'text-sky-700 dark:text-sky-400' : 'text-zinc-500 dark:text-zinc-400')"
+                    :title="sseStatus === 'connected'
+                       ? 'Live — connected to the event stream. Click to reconnect.'
+                       : sseStatus === 'connecting'
+                         ? 'Reconnecting to the event stream…'
+                         : (polling ? 'Stream down — falling back to 15s polling. Click to reconnect.' : 'Offline. Click to connect.')">
               <span class="relative flex h-2 w-2" aria-hidden="true">
                 <span class="absolute inline-flex h-full w-full rounded-full opacity-75"
                       :class="{
@@ -608,7 +621,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       }"></span>
               </span>
               <span x-text="sseStatus === 'connected' ? 'Live' : sseStatus === 'connecting' ? 'Reconnecting…' : (polling ? 'Polling every 15s' : 'Offline — click to connect')"></span>
-            </div>
+            </button>
             <label class="tap-target mt-2 flex cursor-pointer items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300" title="Re-fetches the board every 15 seconds">
               <input type="checkbox" data-testid="mobile-auto-refresh-toggle" x-model="polling" @change="pollingChanged()"
                      class="h-4 w-4 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
@@ -718,6 +731,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                           class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                           title="Keep parent tickets at the top of each column">
                     <span x-text="'Hoist parents ' + (hoistParents ? '(on)' : '(off)')"></span>
+                  </button>
+
+                  <button type="button" @click="toggleCardDensity()" :aria-pressed="cardDensity === 'compact'"
+                          data-testid="card-density-toggle" aria-label="Toggle card display density between comfortable and compact"
+                          class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          :title="'Switch to ' + (cardDensity === 'comfortable' ? 'compact' : 'comfortable') + ' card density'">
+                    <span x-text="'Density: ' + (cardDensity === 'compact' ? 'Compact' : 'Comfortable')"></span>
                   </button>
                 </div>
               </div>
@@ -868,7 +888,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                        <span class="status-dot" :class="colDotClass(col.status)" aria-hidden="true"></span>
                        <h2 class="truncate text-xs font-bold uppercase tracking-wider text-zinc-800 dark:text-zinc-100" x-text="col.label"></h2>
                        <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1" :class="colCountPillClass(col.status)"
-                             x-text="col.tasks.length"></span>
+                             x-text="col.totalCount ?? col.tasks.length"></span>
                        <span x-show="sortKey !== ''" x-cloak data-testid="sort-indicator"
                              class="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:ring-indigo-800"
                              :title="'Cards sorted by ' + activeSortLabel() + (sortDir === 'asc' ? ' (ascending)' : ' (descending)') + '. Pick “Server order” in the toolbar to reset.'"
@@ -914,8 +934,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         @click="handleCardClick(task.id)"
                         @keydown.enter.self="openTask(task.id)"
                         @keydown.space.self.prevent="openTask(task.id)"
+                        :data-card-density="cardDensity"
                          class="relative w-full rounded-lg border p-3 text-left shadow-sm transition select-none focus:outline-none focus:ring-2 focus:ring-zinc-400"
                           :class="[
+                            cardDensity === 'compact' ? 'card-compact' : '',
                             draggedTaskId === task.id
                               ? 'opacity-40 border-dashed border-zinc-400 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900'
                               : [
@@ -943,7 +965,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       >
                         <div class="flex items-start justify-between gap-2">
                           <h3 :id="'card-title-' + task.id"
-                              class="min-w-0 break-words text-sm font-medium leading-snug"
+                              class="card-title min-w-0 break-words text-sm font-medium leading-snug"
                               :class="col.status === 'done' ? 'line-through' : ''"
                               x-text="task.title"></h3>
                            <!-- Right-aligned control group: priority badge FIRST, then the ⋮ move-menu
@@ -1009,10 +1031,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                              expired") because the theme contrast suite samples it via
                              getByText(/until \d{2}:\d{2}/). -->
                         <div x-show="task.claimed_by" x-cloak data-testid="card-claim-capsule"
-                             class="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px]"
-                             :class="claimExpired(task)
-                               ? 'border-zinc-300/70 bg-zinc-100/80 dark:border-zinc-700/60 dark:bg-zinc-900/50'
-                               : 'border-indigo-200/80 bg-indigo-50/80 dark:border-indigo-800/70 dark:bg-indigo-950/60'">
+                             class="inline-flex max-w-full items-center gap-1.5 rounded-md border"
+                             :class="[
+                               cardDensity === 'compact' ? 'mt-1 px-1.5 py-0 text-[10px]' : 'mt-2 px-2 py-0.5 text-[11px]',
+                               claimExpired(task)
+                                 ? 'border-zinc-300/70 bg-zinc-100/80 dark:border-zinc-700/60 dark:bg-zinc-900/50'
+                                 : 'border-indigo-200/80 bg-indigo-50/80 dark:border-indigo-800/70 dark:bg-indigo-950/60'
+                             ]">
                           <svg class="h-3 w-3 shrink-0"
                                :class="claimExpired(task)
                                  ? 'text-zinc-400 dark:text-zinc-500'
@@ -1039,7 +1064,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         <div x-show="(task.subtask_total ?? 0) > 0" x-cloak
                              data-testid="card-subtask-progress"
                              :title="(task.subtask_done ?? 0) + ' of ' + task.subtask_total + ' subtasks done'"
-                             class="mt-2 flex flex-col gap-1 rounded border border-zinc-200/90 bg-zinc-50/80 p-1.5 dark:border-zinc-700/70 dark:bg-zinc-800/60">
+                             class="flex flex-col rounded border border-zinc-200/90 bg-zinc-50/80 dark:border-zinc-700/70 dark:bg-zinc-800/60"
+                             :class="cardDensity === 'compact' ? 'mt-1 p-1 gap-0.5' : 'mt-2 p-1.5 gap-1'">
                           <div class="flex items-center justify-between text-[11px] font-medium leading-none">
                             <span class="inline-flex items-center gap-1"
                                   :class="(task.subtask_done ?? 0) >= task.subtask_total
@@ -1062,7 +1088,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                           </div>
                         </div>
 
-                        <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
+                        <div class="card-meta-row flex flex-wrap items-center text-zinc-600 dark:text-zinc-400"
+                             :class="cardDensity === 'compact' ? 'mt-1 gap-x-2 gap-y-0.5 text-[11px]' : 'mt-2 gap-x-3 gap-y-1 text-xs'">
                           <!-- Task short ID: the card's identity chip — muted monospace,
                                full ULID in the title for copy/lookup. -->
                           <span data-testid="card-short-id" :title="'Task ' + task.id"
@@ -1161,6 +1188,36 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         </div>
                       </article>
                     </template>
+                    <!-- Done column pagination / expansion controls (AC1) -->
+                    <div x-show="col.status === 'done' && ((col.totalCount ?? col.tasks.length) > 20 || doneLimit > 20)" x-cloak
+                         data-testid="done-pagination"
+                         class="flex flex-col gap-1.5 pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                      <div class="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 px-1">
+                        <span x-text="'Showing ' + col.tasks.length + ' of ' + (col.totalCount ?? col.tasks.length) + ' done tasks'"></span>
+                        <span x-show="col.tasks.length < (col.totalCount ?? col.tasks.length)" x-text="'(' + ((col.totalCount ?? col.tasks.length) - col.tasks.length) + ' older hidden)'"></span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <button type="button" x-show="col.tasks.length < (col.totalCount ?? col.tasks.length)"
+                                @click="showMoreDone()"
+                                data-testid="done-show-more"
+                                class="flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700">
+                          <span x-text="'Show more (' + Math.min(20, (col.totalCount ?? col.tasks.length) - col.tasks.length) + ' older)'"></span>
+                        </button>
+                        <button type="button" x-show="col.tasks.length < (col.totalCount ?? col.tasks.length)"
+                                @click="showAllDone()"
+                                data-testid="done-show-all"
+                                class="flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700">
+                          <span x-text="'Show all (' + (col.totalCount ?? col.tasks.length) + ')'"></span>
+                        </button>
+                        <button type="button" x-show="doneLimit > 20"
+                                @click="collapseDone()"
+                                data-testid="done-collapse"
+                                class="rounded-md border border-zinc-300 bg-zinc-50 px-2.5 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                                :class="col.tasks.length >= (col.totalCount ?? col.tasks.length) ? 'w-full' : ''">
+                          Collapse
+                        </button>
+                      </div>
+                    </div>
                     <div
                       x-show="dragOverStatus === col.status && draggedFromStatus !== col.status"
                       x-cloak

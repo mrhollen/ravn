@@ -168,6 +168,27 @@ html.dark {
   opacity: 0.82;
 }
 
+/* --- card density modes (comfortable vs compact) --------------------------
+   Comfortable (default): spacious padding and multi-line title.
+   Compact: tighter padding, 2-line title clamp, and smaller metadata gap. */
+.card-compact {
+  padding: 0.5rem 0.625rem !important;
+}
+.card-compact .card-title {
+  font-size: 0.8125rem;
+  line-height: 1.15rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card-compact .card-meta-row {
+  margin-top: 0.25rem;
+  row-gap: 0.25rem;
+  column-gap: 0.5rem;
+  font-size: 0.6875rem;
+}
+
 /* --- mobile tap targets ------------------------------------------------------
    44x44px minimum touch-target guideline (WCAG 2.5.8 / Apple HIG) applied on
    small screens only, so the desktop UI keeps its denser layout. Checkboxes are

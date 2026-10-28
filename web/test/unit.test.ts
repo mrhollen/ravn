@@ -17,7 +17,18 @@ import {
 import { escapeHtml, isAllowedHref, renderMarkdown } from "../src/md.ts";
 import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, serializeCommentDraft } from "../src/drafts.ts";
 import { ApiError, api } from "../src/api.ts";
-import { ravnApp, isMobileDetailViewport, MOBILE_DETAIL_MAX_WIDTH, sseTelemetry, taskRouteIdFromPath, taskRoutePath } from "../src/app.ts";
+import {
+  ravnApp,
+  isMobileDetailViewport,
+  MOBILE_DETAIL_MAX_WIDTH,
+  sseTelemetry,
+  taskRouteIdFromPath,
+  taskRoutePath,
+  LS_CARD_DENSITY,
+  DEFAULT_DONE_LIMIT,
+  readStoredCardDensity,
+  isCardDensity,
+} from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
 import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, shouldApplyBoard } from "../src/refresh.ts";
@@ -3188,5 +3199,111 @@ test("SSE Disconnect Notification: triggers after delay, persists, clears on res
   app.dismissToast(toastId);
   assert.equal(app.sseDisconnectToastId, null, "manual dismiss clears sseDisconnectToastId");
 });
+
+// ----------------------------------------------------------- Card Density & Done Pagination
+test("CardDensity: readStoredCardDensity defaults to comfortable and validates values", () => {
+  safeStorage.clear();
+  assert.equal(isCardDensity("comfortable"), true);
+  assert.equal(isCardDensity("compact"), true);
+  assert.equal(isCardDensity("spacious"), false);
+  assert.equal(isCardDensity(null), false);
+
+  assert.equal(readStoredCardDensity(), "comfortable");
+  safeStorage.setItem(LS_CARD_DENSITY, "compact");
+  assert.equal(readStoredCardDensity(), "compact");
+  safeStorage.setItem(LS_CARD_DENSITY, "invalid");
+  assert.equal(readStoredCardDensity(), "comfortable");
+});
+
+test("CardDensity: app state initialization, toggle and persistence", () => {
+  safeStorage.clear();
+  const app = ravnApp() as any;
+  assert.equal(app.cardDensity, "comfortable");
+
+  app.toggleCardDensity();
+  assert.equal(app.cardDensity, "compact");
+  assert.equal(safeStorage.getItem(LS_CARD_DENSITY), "compact");
+
+  app.toggleCardDensity();
+  assert.equal(app.cardDensity, "comfortable");
+  assert.equal(safeStorage.getItem(LS_CARD_DENSITY), "comfortable");
+
+  app.setCardDensity("compact");
+  assert.equal(app.cardDensity, "compact");
+  assert.equal(safeStorage.getItem(LS_CARD_DENSITY), "compact");
+});
+
+test("DonePagination: columns() caps Done tasks to doneLimit and orders by recency", () => {
+  const app = ravnApp() as any;
+  assert.equal(DEFAULT_DONE_LIMIT, 20);
+  assert.equal(app.doneLimit, 20);
+
+  // Generate 25 done tasks with staggered completion/update times
+  const doneTasks = Array.from({ length: 25 }, (_, i) => ({
+    id: `task-${String(i).padStart(2, "0")}`,
+    title: `Done Task ${i}`,
+    status: "done",
+    priority: 3,
+    version: 1,
+    created_at: `2026-10-01T10:00:${String(i).padStart(2, "0")}Z`,
+    updated_at: `2026-10-02T12:00:${String(i).padStart(2, "0")}Z`,
+    completed_at: `2026-10-02T12:00:${String(i).padStart(2, "0")}Z`,
+  }));
+
+  app.board = {
+    project_id: "test-proj",
+    tasks: {
+      todo: [],
+      doing: [],
+      done: doneTasks,
+    },
+  };
+
+  const cols = app.columns();
+  const doneCol = cols.find((c: any) => c.status === "done");
+  assert.ok(doneCol);
+  assert.equal(doneCol.totalCount, 25);
+  assert.equal(doneCol.tasks.length, 20, "Should cap rendered Done tasks to default limit of 20");
+  // Server order sort: task-24 has latest timestamp -> should be first
+  assert.equal(doneCol.tasks[0].id, "task-24");
+  assert.equal(doneCol.tasks[19].id, "task-05");
+
+  // Show more (step = 20) -> limit becomes 40 -> renders all 25
+  app.showMoreDone();
+  assert.equal(app.doneLimit, 40);
+  const colsExpanded = app.columns();
+  const doneColExpanded = colsExpanded.find((c: any) => c.status === "done");
+  assert.equal(doneColExpanded.tasks.length, 25);
+
+  // Collapse -> resets to 20
+  app.collapseDone();
+  assert.equal(app.doneLimit, 20);
+  const colsCollapsed = app.columns();
+  const doneColCollapsed = colsCollapsed.find((c: any) => c.status === "done");
+  assert.equal(doneColCollapsed.tasks.length, 20);
+
+  // Show all -> Infinity -> renders all 25
+  app.showAllDone();
+  assert.equal(app.doneLimit, Infinity);
+  const colsAll = app.columns();
+  const doneColAll = colsAll.find((c: any) => c.status === "done");
+  assert.equal(doneColAll.tasks.length, 25);
+});
+
+test("DonePagination & Density: index.html wires markup for pagination and density toggle", () => {
+  const htmlPath = path.resolve(__dirname, "../index.html");
+  const html = fs.readFileSync(htmlPath, "utf-8");
+
+  // Verify pagination testids exist in index.html
+  assert.ok(html.includes('data-testid="done-pagination"'), "Must wire done-pagination container");
+  assert.ok(html.includes('data-testid="done-show-more"'), "Must wire done-show-more button");
+  assert.ok(html.includes('data-testid="done-show-all"'), "Must wire done-show-all button");
+  assert.ok(html.includes('data-testid="done-collapse"'), "Must wire done-collapse button");
+
+  // Verify card density controls in toolbar
+  assert.ok(html.includes('data-testid="card-density-toggle"'), "Must wire card-density-toggle in toolbar");
+  assert.ok(html.includes(':data-card-density="cardDensity"'), "Must set data-card-density on card article");
+});
+
 
 

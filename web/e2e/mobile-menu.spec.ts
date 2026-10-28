@@ -156,6 +156,28 @@ test.describe('Mobile slide-down menu panel (360px)', () => {
     return { context, page };
   }
 
+  /** Wait until the live SSE stream reports connected (real server, no mocks). */
+  async function waitSseConnected(page: import('@playwright/test').Page): Promise<void> {
+    await page.waitForFunction(
+      () => {
+        const app = (window as any).Alpine?.$data(document.querySelector('[x-data]'));
+        return app?.sseStatus === 'connected';
+      },
+      { timeout: 15000 },
+    );
+  }
+
+  /** Read the app's TEST-SUPPORT counter of constructed EventSources
+   *  (_sseTelemetry in src/app.ts) — every connectSse() constructs exactly one,
+   *  so it is a deterministic proof that connectSse() ran. */
+  async function sseOpenedCount(page: import('@playwright/test').Page): Promise<number> {
+    return page.evaluate(() => {
+      const root = document.querySelector('[x-data]');
+      if (!root || !(window as any).Alpine) throw new Error('Alpine not started');
+      return (window as any).Alpine.$data(root)._sseTelemetry.opened;
+    });
+  }
+
   test('AC1/AC2: grouped slide-down panel below the header with all seven controls', async ({ browser }, testInfo) => {
     const { context, page } = await openMobileMenuBoard(browser);
 
@@ -256,6 +278,102 @@ test.describe('Mobile slide-down menu panel (360px)', () => {
     expect(h3.height, 'header height stable after collapsing too').toBe(h1.height);
     const topRestored = (await boardFirst.boundingBox())!.y;
     expect(Math.abs(topRestored - topBefore), 'board returns to its original offset').toBeLessThanOrEqual(2);
+
+    await context.close();
+  });
+
+  test('AC1/AC2: SSE status indicator is a semantic button — focusable, Enter re-triggers connectSse', async ({ browser }) => {
+    const { context, page } = await openMobileMenuBoard(browser);
+    await waitSseConnected(page);
+
+    await page.getByRole('button', { name: 'Board menu' }).click();
+    const panel = page.getByTestId('mobile-menu-panel');
+    await expect(panel).toBeVisible();
+
+    const status = panel.getByTestId('mobile-sse-status');
+    await expect(status).toHaveText('Live');
+
+    // AC1 — it IS a <button> (not a clickable div): element tag + its type.
+    expect(
+      await status.evaluate((el) => el.tagName.toLowerCase()),
+      'the indicator is a real <button> element',
+    ).toBe('button');
+    await expect(status).toHaveAttribute('type', 'button');
+
+    // AC2 — a REAL keyboard Tab walk (keyboard modality) reaches the button and
+    // :focus-visible matches, so the focus-ring classes apply. Focus is on
+    // <body>/the just-clicked trigger after page load + panel open, so the walk
+    // starts near the page top; bounded loop keyed off document.activeElement
+    // (deterministic even if tab order shifts — same technique as
+    // focus-visible.spec.ts). NOTE: run this BEFORE any script .focus() on the
+    // element — blur() leaves Chromium's tab anchor at the blurred element, so a
+    // walk started after it would lap the whole board before wrapping back.
+    let hit = false;
+    for (let i = 0; i < 30 && !hit; i++) {
+      await page.keyboard.press('Tab');
+      hit = await page.evaluate(
+        () => document.activeElement?.getAttribute('data-testid') === 'mobile-sse-status',
+      );
+    }
+    expect(hit, 'keyboard Tab reached the SSE status indicator').toBe(true);
+    await expect(status).toBeFocused();
+    expect(
+      await status.evaluate((el) => (el as HTMLElement).matches(':focus-visible')),
+      'keyboard-focused indicator matches :focus-visible (focus ring applies)',
+    ).toBe(true);
+
+    // AC1 — Enter activation reaches connectSse(): every call constructs exactly
+    // one EventSource, so the TEST-SUPPORT opened counter must tick by 1.
+    const openedBefore = await sseOpenedCount(page);
+    await status.press('Enter');
+    await expect.poll(async () => sseOpenedCount(page), { timeout: 5000 }).toBe(openedBefore + 1);
+    // The forced reconnect lands against the live server → "Live" again.
+    await waitSseConnected(page);
+    await expect(status).toHaveText('Live');
+
+    // AC1 — also programmatically focusable: .focus() puts document.activeElement
+    // on it (the button is keyboard-focusable, so this can never be a dead div).
+    await status.focus();
+    await expect(status, 'document.activeElement lands on the indicator after .focus()').toBeFocused();
+
+    await context.close();
+  });
+
+  test('AC3: disconnected + polling shows the distinct sky color, not grey', async ({ browser }, testInfo) => {
+    const { context, page } = await openMobileMenuBoard(browser);
+    await waitSseConnected(page);
+
+    await page.getByRole('button', { name: 'Board menu' }).click();
+    const panel = page.getByTestId('mobile-menu-panel');
+    await expect(panel).toBeVisible();
+
+    // Auto-refresh (polling) is on by default — the polling fallback branch is
+    // armed as soon as the stream goes down.
+    const refresh = panel.getByTestId('mobile-auto-refresh-toggle');
+    await expect(refresh).toBeChecked();
+
+    const status = panel.getByTestId('mobile-sse-status');
+    await expect(status).toHaveText('Live');
+
+    // Force the disconnected+polling state through the app's own teardown path:
+    // intentional close — sseStatus → 'disconnected', no auto-reconnect scheduled.
+    await page.evaluate(() => {
+      const root = document.querySelector('[x-data]');
+      if (!root || !(window as any).Alpine) throw new Error('Alpine not started');
+      (window as any).Alpine.$data(root).disconnectSse(true);
+    });
+
+    await expect(status, 'polling fallback text').toHaveText('Polling every 15s');
+    // AC3 — the indicator TEXT is sky (active), never the grey "offline" shade…
+    await expect(status).toHaveClass(/(^|\s)text-sky-700/);
+    await expect(status).not.toHaveClass(/(^|\s)text-zinc-500/);
+    // …and the DOT carries a sky background, not the dead-offline bg-zinc-400.
+    const dot = status.locator('span.relative > span.relative');
+    await expect(dot).toHaveClass(/(^|\s)bg-sky-500/);
+    await expect(dot).not.toHaveClass(/(^|\s)bg-zinc-400/);
+
+    // Evidence: the panel in its sky "Polling every 15s" state.
+    await page.screenshot({ path: path.join(testInfo.outputDir, 'sse-status-polling-sky.png') });
 
     await context.close();
   });
