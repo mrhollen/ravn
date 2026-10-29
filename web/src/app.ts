@@ -115,7 +115,7 @@ const DEFAULT_SORT_DIR: Record<Exclude<SortKey, "">, SortDir> = {
   title: "asc", // alphabetical
 };
 
-function isSortKey(v: unknown): v is SortKey {
+export function isSortKey(v: unknown): v is SortKey {
   return typeof v === "string" && SORT_OPTIONS.some((o) => o.value === v);
 }
 
@@ -183,6 +183,103 @@ export function taskRouteIdFromPath(pathname: string): string | null {
 /** Pathname for task `id`'s full-page route. */
 export function taskRoutePath(id: string): string {
   return "/tasks/" + encodeURIComponent(id);
+}
+
+// ---------------------------------------------------------------- URL query sync
+export interface BoardQueryParams {
+  project?: string;
+  priority?: string;
+  owner?: string;
+  due?: string;
+  unblocked?: boolean;
+  q?: string;
+  sort?: SortKey;
+  dir?: SortDir;
+}
+
+/** Parse query parameters from a URL search string into board state. */
+export function parseBoardQueryParams(search: string): BoardQueryParams {
+  if (!search) return {};
+  const s = search.startsWith("?") ? search.slice(1) : search;
+  if (!s) return {};
+  const params = new URLSearchParams(s);
+  const result: BoardQueryParams = {};
+
+  const project = params.get("project");
+  if (project && project.trim() !== "") {
+    result.project = project.trim();
+  }
+
+  const priority = params.get("priority");
+  if (priority !== null && priority !== "" && priority.toLowerCase() !== "all") {
+    const num = Number(priority);
+    if (!isNaN(num) && num >= 0 && num <= 5) {
+      result.priority = String(num);
+    }
+  }
+
+  const owner = params.get("owner");
+  if (owner && owner.trim() !== "" && owner.toLowerCase() !== "all") {
+    result.owner = owner.trim();
+  }
+
+  const due = params.get("due");
+  if (due && ["today", "overdue", "week"].includes(due.trim().toLowerCase())) {
+    result.due = due.trim().toLowerCase();
+  }
+
+  const unblocked = params.get("unblocked");
+  if (unblocked === "1" || unblocked === "true") {
+    result.unblocked = true;
+  }
+
+  const q = params.get("q");
+  if (q && q.trim() !== "") {
+    result.q = q.trim();
+  }
+
+  const sort = params.get("sort");
+  if (sort && isSortKey(sort) && sort !== "") {
+    result.sort = sort;
+  }
+
+  const dir = params.get("dir");
+  if (dir === "asc" || dir === "desc") {
+    result.dir = dir;
+  }
+
+  return result;
+}
+
+/** Serialize board state into a URL query string (with leading '?'). */
+export function buildBoardQueryString(params: BoardQueryParams): string {
+  const q = new URLSearchParams();
+  if (params.project && params.project.trim() !== "") {
+    q.set("project", params.project.trim());
+  }
+  if (params.priority !== undefined && params.priority !== "" && params.priority !== "all") {
+    q.set("priority", params.priority);
+  }
+  if (params.owner && params.owner.trim() !== "" && params.owner !== "all") {
+    q.set("owner", params.owner.trim());
+  }
+  if (params.due && ["today", "overdue", "week"].includes(params.due.trim().toLowerCase())) {
+    q.set("due", params.due.trim().toLowerCase());
+  }
+  if (params.unblocked) {
+    q.set("unblocked", "1");
+  }
+  if (params.q && params.q.trim() !== "") {
+    q.set("q", params.q.trim());
+  }
+  if (params.sort && isSortKey(params.sort)) {
+    q.set("sort", params.sort);
+    if (params.dir === "asc" || params.dir === "desc") {
+      q.set("dir", params.dir);
+    }
+  }
+  const s = q.toString();
+  return s ? `?${s}` : "";
 }
 
 // ---------------------------------------------------------------- detail surface
@@ -1251,18 +1348,21 @@ export function ravnApp() {
       this.sortKey = k;
       if (k !== "") this.sortDir = DEFAULT_SORT_DIR[k];
       this.saveSort();
+      this.syncUrlState(true);
     },
 
     toggleSortDir(): void {
       if (this.sortKey === "") return;
       this.sortDir = this.sortDir === "asc" ? "desc" : "asc";
       this.saveSort();
+      this.syncUrlState(true);
     },
 
     clearSort(): void {
       if (this.sortKey === "") return;
       this.sortKey = "";
       this.saveSort();
+      this.syncUrlState(true);
     },
 
     saveSort(): void {
@@ -1346,6 +1446,99 @@ export function ravnApp() {
       this.filterUnblocked = false;
       this.filterDue = "";
       this.filterSearch = "";
+      this.syncUrlState(true);
+    },
+
+    // -------------------------------------------------------- URL query sync
+    _urlSyncTimer: null as any,
+    _restoringUrlState: false,
+
+    buildBoardQueryString(): string {
+      return buildBoardQueryString({
+        project: this.selectedProjectId,
+        priority: this.filterPriority,
+        owner: this.filterAssignee,
+        due: this.filterDue,
+        unblocked: this.filterUnblocked,
+        q: this.filterSearch,
+        sort: this.sortKey,
+        dir: this.sortDir,
+      });
+    },
+
+    boardUrl(): string {
+      const q = this.buildBoardQueryString();
+      return q ? `/${q}` : "/";
+    },
+
+    syncUrlState(immediate = false): void {
+      if (this._restoringUrlState) return;
+      if (typeof window === "undefined" || !window.history?.replaceState) return;
+      if (taskRouteIdFromPath(window.location.pathname) !== null) return;
+      const doSync = () => {
+        this._urlSyncTimer = null;
+        const query = this.buildBoardQueryString();
+        const newUrl = "/" + query + (window.location.hash || "");
+        const currentUrl =
+          (window.location.pathname || "/") +
+          (window.location.search || "") +
+          (window.location.hash || "");
+        if (newUrl !== currentUrl) {
+          window.history.replaceState(null, "", newUrl);
+        }
+      };
+      if (immediate) {
+        if (this._urlSyncTimer) {
+          clearTimeout(this._urlSyncTimer);
+          this._urlSyncTimer = null;
+        }
+        doSync();
+      } else {
+        if (this._urlSyncTimer) clearTimeout(this._urlSyncTimer);
+        this._urlSyncTimer = setTimeout(doSync, 150);
+      }
+    },
+
+    applyQueryParams(params: BoardQueryParams, isPopState = false): void {
+      this._restoringUrlState = true;
+      try {
+        if (params.project) {
+          this.selectedProjectId = params.project;
+        }
+        if (params.priority !== undefined || isPopState) {
+          this.filterPriority = params.priority ?? "";
+        }
+        if (params.owner !== undefined || isPopState) {
+          this.filterAssignee = params.owner ?? "";
+        }
+        if (params.due !== undefined || isPopState) {
+          this.filterDue = params.due ?? "";
+        }
+        if (params.unblocked !== undefined || isPopState) {
+          this.filterUnblocked = params.unblocked ?? false;
+        }
+        if (params.q !== undefined || isPopState) {
+          this.filterSearch = params.q ?? "";
+        }
+        if (params.sort !== undefined) {
+          this.sortKey = params.sort;
+          this.sortDir = params.dir ?? (DEFAULT_SORT_DIR[params.sort as Exclude<SortKey, "">] || "desc");
+        } else if (isPopState) {
+          const s = readStoredSort();
+          this.sortKey = s.key;
+          this.sortDir = s.dir;
+        }
+      } finally {
+        this._restoringUrlState = false;
+      }
+    },
+
+    initFromUrl(): void {
+      if (typeof window === "undefined" || !window.location) return;
+      const search = window.location.search || "";
+      if (!search) return;
+      const params = parseBoardQueryParams(search);
+      this.applyQueryParams(params, false);
     },
 
     listTasksParams(): ListTasksParams {
@@ -1547,6 +1740,7 @@ export function ravnApp() {
       this._boardSeq.next();
       this.connectSse();
       void this.loadBoard();
+      this.syncUrlState(true);
     },
 
     async loadBoard(silent = false): Promise<void> {
@@ -2156,7 +2350,7 @@ export function ravnApp() {
         taskRouteIdFromPath(window.location.pathname) !== null
       ) {
         if (pushedEntry) window.history.back();
-        else window.history.replaceState(null, "", "/");
+        else window.history.replaceState(null, "", this.boardUrl());
       }
     },
 
@@ -2205,7 +2399,7 @@ export function ravnApp() {
             } catch (e) {
               if (ApiError.isUnauthorized(e)) this.openAuthModal();
               else this.toast(errMsg(e), "error");
-              window.history.replaceState(null, "", "/");
+              window.history.replaceState(null, "", this.boardUrl());
             }
           })();
         } else {
@@ -2213,8 +2407,17 @@ export function ravnApp() {
           this.fullPageOpen = true;
           this.fullPagePushed = false;
         }
-      } else if (this.fullPageOpen) {
-        this.closeDetail();
+      } else {
+        if (this.fullPageOpen) {
+          this.closeDetail();
+        }
+        const oldProject = this.selectedProjectId;
+        const search = window.location.search || "";
+        const params = parseBoardQueryParams(search);
+        this.applyQueryParams(params, true);
+        if (this.selectedProjectId && this.selectedProjectId !== oldProject) {
+          void this.loadBoard();
+        }
       }
     },
 
@@ -2230,7 +2433,7 @@ export function ravnApp() {
       } catch (e) {
         if (ApiError.isUnauthorized(e)) this.openAuthModal();
         else this.toast(errMsg(e), "error");
-        if (typeof window !== "undefined") window.history.replaceState(null, "", "/");
+        if (typeof window !== "undefined") window.history.replaceState(null, "", this.boardUrl());
         if (this.selectedProjectId) {
           await this.loadBoard();
           this.connectSse();
@@ -4053,6 +4256,28 @@ export function ravnApp() {
         // Browser back/forward is a first-class way into and out of the full-
         // page task view (/tasks/<id>) — reconcile on every popstate.
         window.addEventListener("popstate", () => this.onPopState());
+
+        // Restore URL query parameters (filters, sort, project)
+        this.initFromUrl();
+      }
+      if (typeof (this as any).$watch === "function") {
+        const watchProps = [
+          "filterPriority",
+          "filterAssignee",
+          "filterDue",
+          "filterUnblocked",
+          "filterSearch",
+          "sortKey",
+          "sortDir",
+          "selectedProjectId",
+        ];
+        for (const prop of watchProps) {
+          (this as any).$watch(prop, () => {
+            if (!this._restoringUrlState) {
+              this.syncUrlState(prop !== "filterSearch");
+            }
+          });
+        }
       }
       this.applyTheme();
       if (typeof document !== "undefined") {
@@ -4116,6 +4341,7 @@ export function ravnApp() {
         // No projects yet — invite creating one.
         this.showNewProject = true;
       }
+      this.syncUrlState(true);
     },
 
     /** Retry button on the boot-error screen (ticket 01M3MMYP938G972KY8NF7RGMQR):

@@ -390,7 +390,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <svg class="pointer-events-none absolute left-2 h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
                 </svg>
-                <input type="text" x-model="filterSearch" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
+                <input type="text" x-model="filterSearch" @input="syncUrlState()" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
                        class="field w-40 py-1 pl-7 pr-2 text-xs sm:w-52 md:w-60" />
               </span>
             </label>
@@ -399,7 +399,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
             <div class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
               <label class="flex items-center gap-1.5 px-2.5 py-0.5 text-zinc-700 dark:text-zinc-200" title="Filter cards by priority">
                 <span class="text-zinc-600 dark:text-zinc-400">Priority</span>
-                <select x-model="filterPriority" aria-label="Filter by priority"
+                <select x-model="filterPriority" @change="syncUrlState(true)" aria-label="Filter by priority"
                         class="max-w-[7rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
                   <option value="">All</option>
                   <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
@@ -410,7 +410,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
               <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by assignee">
                 <span class="text-zinc-600 dark:text-zinc-400">Owner</span>
-                <select x-model="filterAssignee" aria-label="Filter by assignee"
+                <select x-model="filterAssignee" @change="syncUrlState(true)" aria-label="Filter by assignee"
                         class="max-w-[8rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
                   <option value="">All</option>
                   <option value="unassigned">Unassigned</option>
@@ -422,7 +422,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
               <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by due date">
                 <span class="text-zinc-600 dark:text-zinc-400">Due</span>
-                <select x-model="filterDue" aria-label="Filter by due date"
+                <select x-model="filterDue" @change="syncUrlState(true)" aria-label="Filter by due date"
                         class="max-w-[7rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
                   <option value="">All</option>
                   <option value="overdue">Overdue</option>
@@ -432,7 +432,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               </label>
 
               <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-                <input type="checkbox" x-model="filterUnblocked" data-testid="filter-unblocked"
+                <input type="checkbox" x-model="filterUnblocked" @change="syncUrlState(true)" data-testid="filter-unblocked"
                        class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
                 <span>Unblocked only</span>
               </label>
@@ -646,7 +646,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     <svg class="pointer-events-none absolute left-2 h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
                     </svg>
-                    <input type="text" x-model="filterSearch" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
+                    <input type="text" x-model="filterSearch" @input="syncUrlState()" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
                            class="field w-full py-1 pl-7 pr-2 text-xs sm:w-56" />
                   </span>
                 </label>
@@ -655,7 +655,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <div class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
                   <label class="flex items-center gap-1.5 px-2.5 py-0.5 text-zinc-700 dark:text-zinc-200" title="Filter cards by priority">
                     <span class="text-zinc-600 dark:text-zinc-400">Priority</span>
-                    <select x-model="filterPriority" aria-label="Filter by priority"
+                    <select x-model="filterPriority" @change="syncUrlState(true)" aria-label="Filter by priority"
                             class="max-w-[7rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
                       <option value="">All</option>
                       <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
@@ -666,7 +666,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
                   <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by assignee">
                     <span class="text-zinc-600 dark:text-zinc-400">Owner</span>
-                    <select x-model="filterAssignee" aria-label="Filter by assignee"
+                    <select x-model="filterAssignee" @change="syncUrlState(true)" aria-label="Filter by assignee"
                             class="max-w-[8rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
                       <option value="">All</option>
                       <option value="unassigned">Unassigned</option>
@@ -678,7 +678,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
                   <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by due date">
                     <span class="text-zinc-600 dark:text-zinc-400">Due</span>
-                    <select x-model="filterDue" aria-label="Filter by due date"
+                    <select x-model="filterDue" @change="syncUrlState(true)" aria-label="Filter by due date"
                             class="max-w-[7rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-zinc-400">
                       <option value="">All</option>
                       <option value="overdue">Overdue</option>
@@ -688,7 +688,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   </label>
 
                   <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-                    <input type="checkbox" x-model="filterUnblocked" data-testid="mobile-filter-unblocked"
+                    <input type="checkbox" x-model="filterUnblocked" @change="syncUrlState(true)" data-testid="mobile-filter-unblocked"
                            class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
                     <span>Unblocked only</span>
                   </label>

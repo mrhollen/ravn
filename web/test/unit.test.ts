@@ -28,6 +28,8 @@ import {
   DEFAULT_DONE_LIMIT,
   readStoredCardDensity,
   isCardDensity,
+  parseBoardQueryParams,
+  buildBoardQueryString,
 } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
 import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
@@ -3330,6 +3332,181 @@ test("DonePagination & Density: index.html wires markup for pagination and densi
   assert.ok(html.includes('data-testid="card-density-toggle"'), "Must wire card-density-toggle in toolbar");
   assert.ok(html.includes(':data-card-density="cardDensity"'), "Must set data-card-density on card article");
 });
+
+test("URL Sync: parseBoardQueryParams parses all supported board filter, sort, and project parameters", () => {
+  const search = "?project=01M3J9HHEGY26V7142C0603A3S&priority=4&owner=antigravity&due=today&unblocked=1&q=mcp&sort=priority&dir=asc";
+  const params = parseBoardQueryParams(search);
+
+  assert.equal(params.project, "01M3J9HHEGY26V7142C0603A3S");
+  assert.equal(params.priority, "4");
+  assert.equal(params.owner, "antigravity");
+  assert.equal(params.due, "today");
+  assert.equal(params.unblocked, true);
+  assert.equal(params.q, "mcp");
+  assert.equal(params.sort, "priority");
+  assert.equal(params.dir, "asc");
+
+  // Invalid or 'all' values fall back cleanly
+  const emptyParams = parseBoardQueryParams("?priority=all&owner=all&due=invalid&unblocked=0&sort=unknown&dir=sideways");
+  assert.equal(emptyParams.priority, undefined);
+  assert.equal(emptyParams.owner, undefined);
+  assert.equal(emptyParams.due, undefined);
+  assert.equal(emptyParams.unblocked, undefined);
+  assert.equal(emptyParams.sort, undefined);
+  assert.equal(emptyParams.dir, undefined);
+});
+
+test("URL Sync: buildBoardQueryString round-trips and omits empty/default parameters", () => {
+  const qs = buildBoardQueryString({
+    project: "proj_1",
+    priority: "3",
+    owner: "agent_qa",
+    due: "overdue",
+    unblocked: true,
+    q: "search query",
+    sort: "due_at",
+    dir: "desc",
+  });
+  assert.equal(
+    qs,
+    "?project=proj_1&priority=3&owner=agent_qa&due=overdue&unblocked=1&q=search+query&sort=due_at&dir=desc"
+  );
+
+  // When all filters are empty, only project (if present) is kept
+  const emptyFiltersQs = buildBoardQueryString({
+    project: "proj_1",
+    priority: "",
+    owner: "",
+    due: "",
+    unblocked: false,
+    q: "",
+  });
+  assert.equal(emptyFiltersQs, "?project=proj_1");
+
+  // When nothing is set, returns empty string
+  assert.equal(buildBoardQueryString({}), "");
+});
+
+test("URL Sync: syncUrlState updates window.history.replaceState without polluting history (AC1)", () => {
+  const origWindow = (globalThis as any).window;
+  const replacedUrls: string[] = [];
+  try {
+    (globalThis as any).window = {
+      matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+      location: { pathname: "/", search: "", hash: "" },
+      history: {
+        replaceState(_state: unknown, _title: string, url: string) {
+          replacedUrls.push(url);
+          (globalThis as any).window.location.search = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+        },
+      },
+      setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
+      clearTimeout: (id: any) => globalThis.clearTimeout(id),
+    };
+
+    const app = ravnApp() as any;
+    app.selectedProjectId = "proj_alpha";
+    app.filterPriority = "2";
+    app.filterUnblocked = true;
+
+    app.syncUrlState(true);
+    assert.equal(replacedUrls.length, 1);
+    assert.equal(replacedUrls[0], "/?project=proj_alpha&priority=2&unblocked=1");
+
+    // Setting sort and syncing
+    app.sortKey = "priority";
+    app.sortDir = "asc";
+    app.syncUrlState(true);
+    assert.equal(replacedUrls.length, 2);
+    assert.equal(replacedUrls[1], "/?project=proj_alpha&priority=2&unblocked=1&sort=priority&dir=asc");
+  } finally {
+    if (origWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = origWindow;
+  }
+});
+
+test("URL Sync: clearFilters clears filter parameters from URL query string (AC3)", () => {
+  const origWindow = (globalThis as any).window;
+  const replacedUrls: string[] = [];
+  try {
+    (globalThis as any).window = {
+      matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+      location: { pathname: "/", search: "?project=proj_alpha&priority=4&unblocked=1&q=test", hash: "" },
+      history: {
+        replaceState(_state: unknown, _title: string, url: string) {
+          replacedUrls.push(url);
+          (globalThis as any).window.location.search = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+        },
+      },
+    };
+
+    const app = ravnApp() as any;
+    app.selectedProjectId = "proj_alpha";
+    app.filterPriority = "4";
+    app.filterUnblocked = true;
+    app.filterSearch = "test";
+
+    // Calling clearFilters resets filter state and syncs URL immediately
+    app.clearFilters();
+    assert.equal(app.filterPriority, "");
+    assert.equal(app.filterUnblocked, false);
+    assert.equal(app.filterSearch, "");
+    assert.equal(replacedUrls.length, 1);
+    assert.equal(replacedUrls[0], "/?project=proj_alpha", "Filters removed from URL, project preserved");
+  } finally {
+    if (origWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = origWindow;
+  }
+});
+
+test("URL Sync: applyQueryParams and initFromUrl restore board state and reconcile on popstate (AC2/AC4)", () => {
+  const origWindow = (globalThis as any).window;
+  try {
+    (globalThis as any).window = {
+      matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+      location: {
+        pathname: "/",
+        search: "?project=proj_beta&priority=1&owner=alice&due=today&unblocked=1&q=needle&sort=due_at&dir=asc",
+        hash: "",
+      },
+      history: {
+        replaceState: () => {},
+      },
+    };
+
+    const app = ravnApp() as any;
+    app.initFromUrl();
+
+    assert.equal(app.selectedProjectId, "proj_beta");
+    assert.equal(app.filterPriority, "1");
+    assert.equal(app.filterAssignee, "alice");
+    assert.equal(app.filterDue, "today");
+    assert.equal(app.filterUnblocked, true);
+    assert.equal(app.filterSearch, "needle");
+    assert.equal(app.sortKey, "due_at");
+    assert.equal(app.sortDir, "asc");
+
+    // Popstate to an empty search clears filters back to default
+    app.applyQueryParams(parseBoardQueryParams(""), true);
+    assert.equal(app.filterPriority, "");
+    assert.equal(app.filterAssignee, "");
+    assert.equal(app.filterDue, "");
+    assert.equal(app.filterUnblocked, false);
+    assert.equal(app.filterSearch, "");
+  } finally {
+    if (origWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = origWindow;
+  }
+});
+
+test("URL Sync: index.html wires syncUrlState on filter inputs", () => {
+  const htmlPath = path.resolve(__dirname, "../index.html");
+  const html = fs.readFileSync(htmlPath, "utf-8");
+
+  assert.ok(html.includes('@input="syncUrlState()"'), "Must wire input syncUrlState on search field");
+  assert.ok(html.includes('@change="syncUrlState(true)"'), "Must wire change syncUrlState on dropdowns/checkboxes");
+});
+
 
 
 
