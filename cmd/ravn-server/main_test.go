@@ -563,8 +563,10 @@ func TestRouterRealtimeEventsEndToEnd(t *testing.T) {
 		if result.err != nil {
 			t.Fatalf("read SSE event: %v", result.err)
 		}
-		if result.event != "created" {
-			t.Errorf("event = %q, want created", result.event)
+		// Default (unnamed) message frame: no `event:` line; the kind rides in
+		// the JSON payload so clients dispatch by payload.kind.
+		if result.event != "" {
+			t.Errorf("event line = %q, want empty (default message frame)", result.event)
 		}
 		var payload struct {
 			TaskID string `json:"task_id"`

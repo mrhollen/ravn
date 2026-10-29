@@ -444,20 +444,33 @@ the path form.
 
 Stream framing (both endpoints): an initial comment line `: connected`, then a
 `: ping` comment every 15 seconds to keep idle streams alive through proxies.
-Each mutation is one SSE event:
+Each mutation is one **default (unnamed) SSE message frame** — an `id:` line
+plus ONE `data:` JSON payload, with no `event:` line. The routing field is the
+payload's `kind` member:
 
 ```
 id: 01J3ZKQ5M2T8V4X6Y0Z2A4B6C8
-event: status-changed
 data: {"event_id":"…","project_id":"01J3YV2NMB4D9C6K8F0H3L5P7Q","task_id":"01J3ZK8WQ9X7M2P4R6S8T0U2V4","kind":"status-changed","status":"doing","actor":{"type":"agent","name":"runner-2"},"timestamp":"2026-09-26T15:48:03Z"}
 ```
+
+Why unnamed frames: per the WHATWG EventSource spec a frame carrying
+`event: <name>` is delivered only to listeners registered for that exact name —
+`onmessage` never fires for it. Named framing therefore forced every client to
+whitelist each kind, and any server-side addition of a new kind was silently
+dropped by clients written before it (desync until the next poll). With
+unnamed frames one `onmessage` handler receives every event and dispatches by
+payload.kind, so a new kind keeps the UI in sync without a client code change.
+(Pre-fix server builds emitted `event: <kind>` lines; the web client still
+registers named listeners for the canonical kinds below as defense-in-depth
+for mixed-version deploys.)
 
 The `data` payload omits `project_id`, `task_id`, `status`, and `actor` when
 empty. The canonical event kinds are: `created`, `updated`, `status-changed`,
 `claimed`, `released`, `heartbeat`, `assigned`, `noted`, `commented`,
 `ac-toggled`, `ac-added`, `ac-updated`, `ac-removed`, `artifact-added`,
 `relation-changed` (one event per mutation — the same feed as the task detail's
-`events` tail, live).
+`events` tail, live). The stream is not constrained to this set: whatever kind
+a mutation emits is delivered verbatim in the payload.
 
 SSE clients cannot set headers, so when auth is enabled the token rides on the
 query string: `…/events?project_id=…&token=<RAVN_TOKEN>`.

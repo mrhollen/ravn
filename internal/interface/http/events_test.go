@@ -145,14 +145,15 @@ func TestEvents_SSE_ConnectAndReceiveTaskCreated(t *testing.T) {
 	}
 	createdTask := mustDecode[createTaskResponse](t, body).Task
 
-	// Read event from SSE stream
+	// Read event from SSE stream. The frame must be a DEFAULT (unnamed)
+	// message frame: no `event:` line — the kind lives in the JSON payload.
 	ev, err := readSSEEvent(reader, 2*time.Second)
 	if err != nil {
 		t.Fatalf("readSSEEvent: %v", err)
 	}
 
-	if ev.Event != "created" {
-		t.Errorf("ev.Event = %q, want created", ev.Event)
+	if ev.Event != "" {
+		t.Errorf("ev.Event = %q, want empty (default message frame — kind must ride in the payload, not an event: line)", ev.Event)
 	}
 	var data realtimeEventDTO
 	if err := json.Unmarshal([]byte(ev.Data), &data); err != nil {
@@ -202,8 +203,9 @@ func TestEvents_SSE_ReceiveTaskUpdatedAndClaimed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readSSEEvent (claim): %v", err)
 	}
-	if ev.Event != "claimed" {
-		t.Errorf("ev.Event = %q, want claimed", ev.Event)
+	// Default message frame: kind must NOT appear as an `event:` line.
+	if ev.Event != "" {
+		t.Errorf("ev.Event = %q, want empty (default message frame)", ev.Event)
 	}
 	var data realtimeEventDTO
 	if err := json.Unmarshal([]byte(ev.Data), &data); err != nil {
@@ -217,6 +219,125 @@ func TestEvents_SSE_ReceiveTaskUpdatedAndClaimed(t *testing.T) {
 	}
 	if data.Kind != "claimed" {
 		t.Errorf("data.Kind = %q, want claimed", data.Kind)
+	}
+}
+
+// TestEvents_SSE_WireFormatIsDefaultMessageFrame pins the framing contract
+// that makes client-side kind routing future-proof: every frame is a DEFAULT
+// (unnamed) SSE message — an `id:` line plus ONE `data:` JSON payload and NO
+// `event:` line — with the kind riding inside the payload. Per the WHATWG SSE
+// spec, named frames fire only pre-registered per-name listeners; unnamed
+// frames always reach onmessage. A single onmessage handler therefore receives
+// EVERY event, including kinds emitted after the client was written.
+func TestEvents_SSE_WireFormatIsDefaultMessageFrame(t *testing.T) {
+	stk, _, srv := newRealtimeStack(t)
+
+	proj := createProject(t, stk, "Wire Format Project")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/projects/"+proj.ID+"/events", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("connect to SSE: %v", err)
+	}
+	defer res.Body.Close()
+
+	reader := bufio.NewReader(res.Body)
+
+	newTask(t, stk, proj.ID, "Wire Format Task")
+
+	ev, err := readSSEEvent(reader, 2*time.Second)
+	if err != nil {
+		t.Fatalf("readSSEEvent: %v", err)
+	}
+	// id present (replay cursor), NO event line, kind in the payload.
+	if ev.ID == "" {
+		t.Fatal("frame has no id — Last-Event-ID replay cannot work without it")
+	}
+	if ev.Event != "" {
+		t.Fatalf("frame carries an event: line %q — must be a default (unnamed) message frame", ev.Event)
+	}
+	var data realtimeEventDTO
+	if err := json.Unmarshal([]byte(ev.Data), &data); err != nil {
+		t.Fatalf("unmarshal payload: %v (raw %q)", err, ev.Data)
+	}
+	if data.Kind == "" {
+		t.Fatal("payload has no kind — the routing field is required in the data JSON")
+	}
+	if data.Kind != string(domain.EventCreated) {
+		t.Errorf("payload kind = %q, want %q", data.Kind, domain.EventCreated)
+	}
+	if ev.ID != data.EventID {
+		t.Errorf("frame id %q != payload event_id %q — must agree for cursor round-trips", ev.ID, data.EventID)
+	}
+}
+
+// TestEvents_SSE_UnknownSyntheticKindFlowsThroughAsMessage proves the wire
+// level of "new kinds need no client change": a brand-new pubsub kind that no
+// client whitelist could contain is delivered unchanged as a default message
+// frame with its kind in the payload. The broker intentionally does not
+// validate kinds (canonicality is enforced at emission sites), so synthetic
+// kinds are legal stream traffic and must reach subscribers verbatim.
+func TestEvents_SSE_UnknownSyntheticKindFlowsThroughAsMessage(t *testing.T) {
+	stk, broker, srv := newRealtimeStack(t)
+
+	proj := createProject(t, stk, "Synthetic Kind Project")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/projects/"+proj.ID+"/events", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("connect to SSE: %v", err)
+	}
+	defer res.Body.Close()
+
+	reader := bufio.NewReader(res.Body)
+
+	// The handler subscribes AFTER the response headers go out, so wait until
+	// this stream is actually registered before publishing (no lost-wakeup).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if broker.SubscriberCountForProject(domain.ID(proj.ID)) >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	const syntheticKind = "task-archived" // NOT a canonical kind on purpose
+	projID := domain.ID(proj.ID)
+	broker.Publish(domain.Event{
+		ID:        idgen.New().NewID(),
+		ProjectID: &projID,
+		Kind:      domain.EventKind(syntheticKind),
+		At:        time.Now().UTC(),
+	})
+
+	ev, err := readSSEEvent(reader, 2*time.Second)
+	if err != nil {
+		t.Fatalf("readSSEEvent (synthetic kind): %v", err)
+	}
+	if ev.Event != "" {
+		t.Fatalf("synthetic-kind frame carries an event: line %q — must be a default message frame", ev.Event)
+	}
+	var data realtimeEventDTO
+	if err := json.Unmarshal([]byte(ev.Data), &data); err != nil {
+		t.Fatalf("unmarshal synthetic payload: %v (raw %q)", err, ev.Data)
+	}
+	if data.Kind != syntheticKind {
+		t.Errorf("payload kind = %q, want %q (new kinds must flow through verbatim)", data.Kind, syntheticKind)
+	}
+	if data.ProjectID != proj.ID {
+		t.Errorf("payload project_id = %q, want %q", data.ProjectID, proj.ID)
 	}
 }
 
@@ -683,9 +804,13 @@ func TestEvents_SSE_LastEventIDReplaysMissedEventsHeader(t *testing.T) {
 				gotTasks, []string{frames[0].Event, frames[1].Event}, want)
 		}
 	}
-	// The replayed frame carries the same id C had in the log (no re-mint).
-	if frames[0].ID == "" || frames[0].Event != "created" {
-		t.Fatalf("replayed frame = id %q kind %q, want a created frame with an id", frames[0].ID, frames[0].Event)
+	// The replayed frame carries the same id C had in the log (no re-mint),
+	// and is a default message frame (kind in payload, no event: line).
+	if frames[0].ID == "" {
+		t.Fatalf("replayed frame has no id — cursor cannot work without it")
+	}
+	if frames[0].Event != "" {
+		t.Errorf("replayed frame ev.Event = %q, want empty (default message frame)", frames[0].Event)
 	}
 }
 
@@ -720,7 +845,7 @@ func TestEvents_SSE_LastEventIDQueryParamReplays(t *testing.T) {
 
 	frames := readSSETaskEvents(t, reader, 1)
 	if got := taskIDOfSSEFrame(t, frames[0]); got != taskC.ID {
-		t.Fatalf("query-param replay frame = task %q kind %q, want task %q — lowercase cursor must still replay C (and only C)", got, frames[0].Event, taskC.ID)
+		t.Fatalf("query-param replay frame = task %q, want task %q — lowercase cursor must still replay C (and only C)", got, taskC.ID)
 	}
 	if frames[0].ID != createdEventID(t, stk, taskC.ID) {
 		t.Errorf("replayed frame id = %q, want the id C has in the event log", frames[0].ID)

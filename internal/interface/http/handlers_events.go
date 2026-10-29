@@ -99,16 +99,27 @@ func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID dom
 		return nil
 	}
 
-	// formatEventFrame renders one event as an SSE frame. Marshal failures are
-	// reported to the caller (which skips that event and keeps streaming); I/O
-	// failures surface through writeChunk and end the stream.
+	// formatEventFrame renders one event as a DEFAULT (unnamed) SSE message
+	// frame — an `id:` line plus a single `data:` JSON payload, with NO
+	// `event:` line. The routing field is the payload's "kind" member
+	// (realtimeEventDTO.Kind), so every client dispatches by parsing the JSON
+	// instead of pre-registering one EventSource listener per kind. That
+	// matters because per the WHATWG spec a frame carrying `event: <name>` is
+	// delivered ONLY to listeners registered for exactly that name —
+	// onmessage never fires for named frames — so any server-side addition of
+	// a new kind would have been silently dropped by every client whose
+	// whitelist predated it. With unnamed frames, one onmessage handler sees
+	// everything and a brand-new kind keeps the UI in sync without a client
+	// code change. Marshal failures are reported to the caller (which skips
+	// that event and keeps streaming); I/O failures surface through writeChunk
+	// and end the stream.
 	formatEventFrame := func(ev domain.Event) (string, error) {
 		dto := toRealtimeEventDTO(ev)
 		data, err := json.Marshal(dto)
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("id: %s\nevent: %s\ndata: %s\n\n", string(ev.ID), string(ev.Kind), string(data)), nil
+		return fmt.Sprintf("id: %s\ndata: %s\n\n", string(ev.ID), string(data)), nil
 	}
 
 	// Initial comment confirming stream readiness

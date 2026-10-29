@@ -12,6 +12,7 @@ import { beginMove, canMove, endMove, friendlyTransitionError, MOVE_TIMEOUT_MS, 
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
 import { renderMarkdown } from "./md";
 import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, serializeCommentDraft } from "./drafts";
+import { dispatchRealtimeEvent, KNOWN_REALTIME_KINDS } from "./realtime";
 import type {
   AcRow,
   ActorInput,
@@ -26,7 +27,6 @@ import type {
   OpenCodeModelOption,
   OpenCodeOptionsResponse,
   ProjectWithCounts,
-  RealtimeEventPayload,
   RelationRow,
   SseConnectionStatus,
   StartOpenCodeInput,
@@ -369,24 +369,18 @@ function isParentTask(task: TaskSummary): boolean {
   return (task.subtask_total ?? 0) > 0;
 }
 
-const SSE_EVENT_KINDS = [
-  "message",
-  "created",
-  "updated",
-  "status-changed",
-  "claimed",
-  "released",
-  "heartbeat",
-  "assigned",
-  "noted",
-  "commented",
-  "ac-toggled",
-  "artifact-added",
-  "relation-changed",
-  "ac-added",
-  "ac-updated",
-  "ac-removed",
-];
+/** NAMED-event listener registrations kept for backward compatibility with
+ *  server builds that still emit `event: <kind>` frames (pre-fix wire format).
+ *  Per the WHATWG spec a named frame ONLY fires listeners registered for that
+ *  exact name — onmessage never sees it — so this list must cover every kind
+ *  an OLD server can emit. The PRIMARY path is es.onmessage below: current
+ *  servers emit unnamed (default) frames with the kind inside the JSON
+ *  payload, and dispatchRealtimeEvent() routes by payload.kind — so a brand-
+ *  new server-side kind never needs to be added here or anywhere in the
+ *  client. "message" is deliberately NOT listed: default frames are handled
+ *  by onmessage alone, and registering a named "message" listener too would
+ *  double-dispatch every frame. */
+const LEGACY_NAMED_SSE_EVENT_KINDS = [...KNOWN_REALTIME_KINDS];
 
 /** TEST-SUPPORT telemetry for the SSE singleton guarantee (ticket
  *  01M3VJ5PQEAJ60B0QGPNZT8NKP): counts EventSource constructions and close
@@ -2673,10 +2667,19 @@ export function ravnApp() {
         this.handleSseEvent(e);
       };
 
-      for (const kind of SSE_EVENT_KINDS) {
+      // PRIMARY PATH: the server emits every event as a DEFAULT (unnamed)
+      // message frame with the kind inside the JSON payload, so this single
+      // onmessage handler receives EVERYTHING — including kinds this client
+      // was never written to know about (dispatchRealtimeEvent() routes by
+      // payload.kind and falls back to the generic refresh for unknown ones).
+      es.onmessage = onEvent;
+
+      // DEFENSE-IN-DEPTH: also listen for the legacy NAMED frames an older
+      // server build may still emit (`event: <kind>`), so a mixed-version
+      // deploy keeps updating the UI. Both paths land in handleSseEvent.
+      for (const kind of LEGACY_NAMED_SSE_EVENT_KINDS) {
         es.addEventListener(kind, onEvent);
       }
-      es.onmessage = onEvent;
 
       es.onerror = () => {
         if (this.sse !== es) return;
@@ -2684,52 +2687,52 @@ export function ravnApp() {
       };
     },
 
+    /** Thin adapter over the pure dispatchRealtimeEvent() core (see
+     *  realtime.ts): wires component state and refresh methods in as hooks.
+     *  Routing happens by PAYLOAD KIND, not by EventSource event name — known
+     *  kinds and unknown/future kinds both take the coalesced silent reload,
+     *  plus an in-place drawer re-fetch when the event names the open task. */
     handleSseEvent(e: MessageEvent): void {
       try {
-        if (!e.data) return;
-        const data: RealtimeEventPayload = JSON.parse(e.data);
-
-        // Project scoping check
-        if (data.project_id && data.project_id !== this.selectedProjectId) {
-          return;
-        }
-
-        // Advance the replay cursor: MessageEvent.lastEventId carries the SSE
-        // frame id, which is exactly what a reconnect needs to catch up.
-        if (e.lastEventId) {
-          this.sseLastEventId = e.lastEventId;
-          this.sseLastEventProjectId = this.selectedProjectId;
-        }
-
-        // Coalesced silent reload: a burst of events (agent batch ops) within
-        // SSE_RELOAD_DEBOUNCE_MS schedules ONE board + ONE projects round after
-        // the quiet period instead of N parallel ones; each individual event
-        // still refreshes at most once per window. (The drawer's in-place task
-        // refresh below stays per-event — its race is a separate concern.)
-        this.sseReloadDebounce?.schedule();
-
-        // If the task detail drawer is currently open for the event's task_id,
-        // re-fetch the task detail in-place (api.getTask(data.task_id)) to show
-        // new comments, notes, claims, and status changes instantly.
-        if (
-          data.task_id &&
-          this.detailOpen &&
-          (this.detailId === data.task_id || this.detail?.id === data.task_id)
-        ) {
-          void this.refreshDetail(true, data.task_id).then((applied) => {
-            // refreshDetail now returns false when its payload was discarded by
-            // the ownership guard (drawer closed or switched mid-flight) — and
-            // even for an applied payload we re-verify at settle time, so a
-            // stale SSE event can never trigger comment side effects after the
-            // drawer closed or moved on.
-            if (!applied) return;
-            if (this.detailOpen && this.detail && this.detail.id === data.task_id) {
-              void this.initComments(data.task_id);
-            }
-          });
-        }
+        dispatchRealtimeEvent(
+          { data: e.data, lastEventId: e.lastEventId },
+          {
+            selectedProjectId: () => this.selectedProjectId,
+            isDetailOpenFor: (taskId) =>
+              Boolean(this.detailOpen && (this.detailId === taskId || this.detail?.id === taskId)),
+            advanceCursor: (lastEventId, projectId) => {
+              // MessageEvent.lastEventId carries the SSE frame id — exactly what
+              // a reconnect needs to catch up; the project match guards against
+              // replaying an old project's backlog after a switch.
+              this.sseLastEventId = lastEventId;
+              this.sseLastEventProjectId = projectId ?? "";
+            },
+            scheduleReload: () => {
+              // Coalesced silent reload: a burst of events (agent batch ops)
+              // within SSE_RELOAD_DEBOUNCE_MS schedules ONE board + ONE projects
+              // round after the quiet period instead of N parallel ones. This is
+              // also the generic fallback that keeps the UI in sync for event
+              // kinds this client has never seen.
+              this.sseReloadDebounce?.schedule();
+            },
+            refreshDetail: (taskId) =>
+              this.refreshDetail(true, taskId).then((applied) => {
+                // refreshDetail now returns false when its payload was discarded by
+                // the ownership guard (drawer closed or switched mid-flight) — and
+                // even for an applied payload we re-verify at settle time, so a
+                // stale SSE event can never trigger comment side effects after the
+                // drawer closed or moved on.
+                if (!applied) return false;
+                if (this.detailOpen && this.detail && this.detail.id === taskId) {
+                  void this.initComments(taskId);
+                }
+                return true;
+              }).catch(() => false), // a failed re-fetch must never surface as an unhandled rejection on the stream path
+          }
+        );
       } catch {
-        /* malformed SSE payload — non-fatal */
+        /* defensive: dispatchRealtimeEvent never throws, but a stream handler
+           must survive anything the socket can deliver */
       }
     },
 
