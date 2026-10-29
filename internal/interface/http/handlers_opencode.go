@@ -106,21 +106,28 @@ func parseOpenCodeModel(ref string) (providerID, modelID string, err error) {
 	return ref[:i], ref[i+1:], nil
 }
 
-// formatOpenCodePrompt formats the autonomous agent prompt with task details,
-// acceptance criteria, and explicit instructions to interact with Rävn via
-// MCP — including clarification that the task has already been claimed on the
-// agent's behalf under 'opencode', recommendations to attach test artifacts,
-// and instructions to commit and push changes upon completion.
-func formatOpenCodePrompt(task domain.Task, acs []domain.AcceptanceCriterion) string {
+// maxOpenCodePromptComments caps how many of the newest thread comments are
+// inlined into the dispatch prompt (the tail is already newest first).
+const maxOpenCodePromptComments = 5
+
+// formatOpenCodePrompt formats the autonomous agent prompt from the full
+// TaskDetail loaded by handleOpenCodeStart: task basics, acceptance criteria,
+// and — omitted when empty — the durable resume notes (prior context), the
+// task's open blockers, and the last few thread comments (newest first). It
+// ends with explicit instructions to interact with Rävn via MCP — including
+// clarification that the task has already been claimed on the agent's behalf
+// under 'opencode', recommendations to attach test artifacts, and instructions
+// to commit and push changes upon completion.
+func formatOpenCodePrompt(detail *application.TaskDetail) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Task ID: %s\n", task.ID))
-	sb.WriteString(fmt.Sprintf("Title: %s\n", task.Title))
-	sb.WriteString(fmt.Sprintf("Description: %s\n", task.Description))
+	sb.WriteString(fmt.Sprintf("Task ID: %s\n", detail.Task.ID))
+	sb.WriteString(fmt.Sprintf("Title: %s\n", detail.Task.Title))
+	sb.WriteString(fmt.Sprintf("Description: %s\n", detail.Task.Description))
 	sb.WriteString("Acceptance Criteria:\n")
-	if len(acs) == 0 {
+	if len(detail.AcceptanceCriteria) == 0 {
 		sb.WriteString("(None)\n")
 	} else {
-		for _, ac := range acs {
+		for _, ac := range detail.AcceptanceCriteria {
 			box := "[ ]"
 			if ac.Done {
 				box = "[x]"
@@ -128,7 +135,38 @@ func formatOpenCodePrompt(task domain.Task, acs []domain.AcceptanceCriterion) st
 			sb.WriteString(fmt.Sprintf("- %s Seq %d: %s\n", box, ac.Seq, ac.Text))
 		}
 	}
-	sb.WriteString("Instructions: You are assigned to autonomously work on and complete this task in Rävn. This task has already been automatically claimed on your behalf under actor 'opencode' before this session started, granting you explicit permission to work on it (you do not need to claim it again, and must not halt if you see the 'opencode' lease; if you refresh or release the lease, use actor 'opencode'). Use the Rävn MCP tools (or REST API) as you progress: update notes with your plan and progress, complete acceptance criteria using complete_ac as you verify them, and mark the task done when all criteria are met. When tests or verification commands produce output, upload it as evidence with attach_artifact (kind command-output/log/screenshot, ref = URL or data_base64 = base64 file content) so a human can verify your work — encouraged, not required. Once all acceptance criteria are verified and tests pass, commit and push your code changes to the git repository.")
+
+	// Durable resume notes — prior context for a resuming agent. Omitted when
+	// empty so first-dispatch prompts stay short.
+	if strings.TrimSpace(detail.Task.Notes) != "" {
+		sb.WriteString("\nResume Notes (prior context — the task's durable notes, verbatim):\n")
+		sb.WriteString(strings.TrimRight(detail.Task.Notes, "\n"))
+		sb.WriteString("\n")
+	}
+
+	// Open blockers. TaskDetail.Blockers is already computed at read time by
+	// GetDetail as the outgoing blocked-by edges whose targets are NOT done (or
+	// archived) — done targets never appear here, so nothing further to filter.
+	if len(detail.Blockers) > 0 {
+		sb.WriteString("\nOpen Blockers (unfinished tasks this task is blocked by — resolve or wait on them before marking this task done):\n")
+		for _, b := range detail.Blockers {
+			sb.WriteString(fmt.Sprintf("- [%s] %s (status: %s)\n", b.ID, b.Title, b.Status))
+		}
+	}
+
+	// Recent comments — the comment tail is already newest first; cap at 5.
+	if len(detail.Comments) > 0 {
+		cms := detail.Comments
+		if len(cms) > maxOpenCodePromptComments {
+			cms = cms[:maxOpenCodePromptComments]
+		}
+		sb.WriteString(fmt.Sprintf("\nRecent Comments (up to %d, newest first):\n", maxOpenCodePromptComments))
+		for _, cm := range cms {
+			sb.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", cm.Actor.Name, cm.Kind, cm.Body))
+		}
+	}
+
+	sb.WriteString("\nInstructions: You are assigned to autonomously work on and complete this task in Rävn. This task has already been automatically claimed on your behalf under actor 'opencode' before this session started, granting you explicit permission to work on it (you do not need to claim it again, and must not halt if you see the 'opencode' lease; if you refresh or release the lease, use actor 'opencode'). Use the Rävn MCP tools (or REST API) as you progress: update notes with your plan and progress, complete acceptance criteria using complete_ac as you verify them, and mark the task done when all criteria are met. When tests or verification commands produce output, upload it as evidence with attach_artifact (kind command-output/log/screenshot, ref = URL or data_base64 = base64 file content) so a human can verify your work — encouraged, not required. Once all acceptance criteria are verified and tests pass, commit and push your code changes to the git repository.")
 	return sb.String()
 }
 
@@ -208,7 +246,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	promptText := formatOpenCodePrompt(detail.Task, detail.AcceptanceCriteria)
+	promptText := formatOpenCodePrompt(&detail)
 
 	// Step 1: Create OpenCode session
 	sessionURLParsed, err := url.Parse(serverURL + "/session")

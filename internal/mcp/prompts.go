@@ -364,106 +364,115 @@ func registerNextTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Acto
 		}
 
 		// 3. Format Agent Onboarding Prompt
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("# Task Onboarding: [%s] %s\n\n", detail.ID, detail.Title))
-		sb.WriteString(fmt.Sprintf("You have been assigned to work on task **%s** (%q).\n\n", detail.ID, detail.Title))
-
-		sb.WriteString("## Task Details\n")
-		sb.WriteString(fmt.Sprintf("- **ID**: `%s`\n", detail.ID))
-		if detail.ProjectID != "" {
-			sb.WriteString(fmt.Sprintf("- **Project ID**: `%s`\n", detail.ProjectID))
-		}
-		sb.WriteString(fmt.Sprintf("- **Priority**: %d (0=lowest, 5=highest)\n", detail.Priority))
-		sb.WriteString(fmt.Sprintf("- **Status**: `%s`\n", detail.Status))
-		sb.WriteString(fmt.Sprintf("- **Version**: %d\n", detail.Version))
-		if detail.DueAt != nil {
-			sb.WriteString(fmt.Sprintf("- **Due Date**: %s\n", *detail.DueAt))
-		} else {
-			sb.WriteString("- **Due Date**: None\n")
-		}
-		if detail.Assignee != nil {
-			sb.WriteString(fmt.Sprintf("- **Durable Assignee**: %s (%s)\n", detail.Assignee.Name, detail.Assignee.Type))
-		} else {
-			sb.WriteString("- **Durable Assignee**: Unassigned\n")
-		}
-		if detail.ClaimedBy != nil {
-			expiry := ""
-			if detail.ClaimExpiresAt != nil {
-				expiry = fmt.Sprintf(" until %s", *detail.ClaimExpiresAt)
-			}
-			sb.WriteString(fmt.Sprintf("- **Claim Lease**: %s (%s)%s\n", detail.ClaimedBy.Name, detail.ClaimedBy.Type, expiry))
-		}
-		sb.WriteString("\n")
-
-		// Description
-		sb.WriteString("### Description\n")
-		if strings.TrimSpace(detail.Description) != "" {
-			sb.WriteString(detail.Description + "\n\n")
-		} else {
-			sb.WriteString("*(No description provided)*\n\n")
-		}
-
-		// Acceptance Criteria
-		sb.WriteString("### Acceptance Criteria\n")
-		if len(detail.AcceptanceCriteria) == 0 {
-			sb.WriteString("*(No acceptance criteria specified)*\n\n")
-		} else {
-			for _, ac := range detail.AcceptanceCriteria {
-				box := "[ ]"
-				extra := ""
-				if ac.Done {
-					box = "[x]"
-					if ac.Note != "" {
-						extra = fmt.Sprintf(" - *%s*", ac.Note)
-					}
-				}
-				sb.WriteString(fmt.Sprintf("- %s **Seq %d**: %s%s\n", box, ac.Seq, ac.Text, extra))
-			}
-			sb.WriteString("\n")
-		}
-
-		// Resume Notes / Context
-		sb.WriteString("### Resume Notes & Durable Context\n")
-		if strings.TrimSpace(detail.Notes) != "" {
-			sb.WriteString(detail.Notes + "\n\n")
-		} else {
-			sb.WriteString("*(No previous notes recorded)*\n\n")
-		}
-
-		// Recent Comments
-		if len(detail.Comments) > 0 {
-			sb.WriteString("### Recent Discussion\n")
-			for _, cm := range detail.Comments {
-				sb.WriteString(fmt.Sprintf("- **%s** (%s, %s): %s\n", cm.Actor.Name, cm.Kind, cm.CreatedAt, cm.Body))
-			}
-			sb.WriteString("\n")
-		}
-
-		// Step-by-step agent workflow playbook
-		sb.WriteString("---\n\n")
-		sb.WriteString("## Rävn Agent Workflow Playbook\n")
-		sb.WriteString(fmt.Sprintf("Execute this task following the standard Rävn workflow as agent **%q**:\n\n", actorName))
-
-		sb.WriteString(fmt.Sprintf("1. **Claim the Task** (acquire exclusive lease):\n   `claim_task(id=%q, actor={\"type\": \"agent\", \"name\": %q})`\n\n", detail.ID, actorName))
-
-		sb.WriteString(fmt.Sprintf("2. **Inspect & Update Notes** (record initial plan & findings):\n   `update_notes(id=%q, actor={\"type\": \"agent\", \"name\": %q}, notes=\"## Plan\\n1. ...\")`\n\n", detail.ID, actorName))
-
-		sb.WriteString(fmt.Sprintf("3. **Heartbeat During Long Work** (keep claim active before 15m TTL expires):\n   `heartbeat_task(id=%q, actor={\"type\": \"agent\", \"name\": %q})`\n\n", detail.ID, actorName))
-
-		if len(detail.AcceptanceCriteria) > 0 {
-			firstAC := detail.AcceptanceCriteria[0]
-			sb.WriteString(fmt.Sprintf("4. **Complete Acceptance Criteria** (mark each AC with evidence):\n   `complete_ac(id=%q, seq=%d, actor={\"type\": \"agent\", \"name\": %q}, done=true, note=\"Tested and verified\")`\n\n", detail.ID, firstAC.Seq, actorName))
-		} else {
-			sb.WriteString("4. **Acceptance Criteria**:\n   No acceptance criteria are defined for this task. You may add criteria using `add_ac` if helpful, but completing criteria is not required before moving to done.\n\n")
-		}
-
-		sb.WriteString(fmt.Sprintf("5. **Attach Testing Evidence** (encouraged, not required — humans verify via artifacts):\n   If you ran tests or verification commands, upload the output so a human can review it:\n   `attach_artifact(id=%q, kind=\"command-output\", ref=\"<path-or-URL of the test/verification output>\", summary=\"e.g. go test ./... — all pass\")`\n   To attach screenshots or other workspace files (video, audio, PDF, logs), ALWAYS encode the file to base64 and pass: `attach_artifact(id=%q, kind=\"screenshot\", data_base64=\"<base64-bytes>\", filename=\"screenshot.png\", summary=\"...\")`. Never pass local filesystem paths in ref.\n\n", detail.ID, detail.ID))
-
-		sb.WriteString(fmt.Sprintf("6. **Finish and Release** (release FIRST — `release_task` always resets status to todo, so mark done AFTER it, using the fresh version the release response returns):\n   - Release lease: `release_task(id=%q, actor={\"type\": \"agent\", \"name\": %q})`\n   - Move to done: `update_task(id=%q, version=<version from the release response>, status=\"done\", actor={\"type\": \"agent\", \"name\": %q})`\n",
-			detail.ID, actorName, detail.ID, actorName))
+		body := buildNextTaskText(detail, actorName)
 
 		return mcpgo.NewGetPromptResult("Next task guidance", []mcpgo.PromptMessage{
-			mcpgo.NewPromptMessage(mcpgo.RoleUser, mcpgo.NewTextContent(sb.String())),
+			mcpgo.NewPromptMessage(mcpgo.RoleUser, mcpgo.NewTextContent(body)),
 		}), nil
 	})
+}
+
+// buildNextTaskText formats the full next_task onboarding prompt body: task
+// details, description, acceptance criteria, resume notes, recent discussion,
+// and the step-by-step agent workflow playbook for actorName.
+func buildNextTaskText(detail *apiclient.TaskDetail, actorName string) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# Task Onboarding: [%s] %s\n\n", detail.ID, detail.Title))
+	sb.WriteString(fmt.Sprintf("You have been assigned to work on task **%s** (%q).\n\n", detail.ID, detail.Title))
+
+	sb.WriteString("## Task Details\n")
+	sb.WriteString(fmt.Sprintf("- **ID**: `%s`\n", detail.ID))
+	if detail.ProjectID != "" {
+		sb.WriteString(fmt.Sprintf("- **Project ID**: `%s`\n", detail.ProjectID))
+	}
+	sb.WriteString(fmt.Sprintf("- **Priority**: %d (0=lowest, 5=highest)\n", detail.Priority))
+	sb.WriteString(fmt.Sprintf("- **Status**: `%s`\n", detail.Status))
+	sb.WriteString(fmt.Sprintf("- **Version**: %d\n", detail.Version))
+	if detail.DueAt != nil {
+		sb.WriteString(fmt.Sprintf("- **Due Date**: %s\n", *detail.DueAt))
+	} else {
+		sb.WriteString("- **Due Date**: None\n")
+	}
+	if detail.Assignee != nil {
+		sb.WriteString(fmt.Sprintf("- **Durable Assignee**: %s (%s)\n", detail.Assignee.Name, detail.Assignee.Type))
+	} else {
+		sb.WriteString("- **Durable Assignee**: Unassigned\n")
+	}
+	if detail.ClaimedBy != nil {
+		expiry := ""
+		if detail.ClaimExpiresAt != nil {
+			expiry = fmt.Sprintf(" until %s", *detail.ClaimExpiresAt)
+		}
+		sb.WriteString(fmt.Sprintf("- **Claim Lease**: %s (%s)%s\n", detail.ClaimedBy.Name, detail.ClaimedBy.Type, expiry))
+	}
+	sb.WriteString("\n")
+
+	// Description
+	sb.WriteString("### Description\n")
+	if strings.TrimSpace(detail.Description) != "" {
+		sb.WriteString(detail.Description + "\n\n")
+	} else {
+		sb.WriteString("*(No description provided)*\n\n")
+	}
+
+	// Acceptance Criteria
+	sb.WriteString("### Acceptance Criteria\n")
+	if len(detail.AcceptanceCriteria) == 0 {
+		sb.WriteString("*(No acceptance criteria specified)*\n\n")
+	} else {
+		for _, ac := range detail.AcceptanceCriteria {
+			box := "[ ]"
+			extra := ""
+			if ac.Done {
+				box = "[x]"
+				if ac.Note != "" {
+					extra = fmt.Sprintf(" - *%s*", ac.Note)
+				}
+			}
+			sb.WriteString(fmt.Sprintf("- %s **Seq %d**: %s%s\n", box, ac.Seq, ac.Text, extra))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Resume Notes / Context
+	sb.WriteString("### Resume Notes & Durable Context\n")
+	if strings.TrimSpace(detail.Notes) != "" {
+		sb.WriteString(detail.Notes + "\n\n")
+	} else {
+		sb.WriteString("*(No previous notes recorded)*\n\n")
+	}
+
+	// Recent Comments
+	if len(detail.Comments) > 0 {
+		sb.WriteString("### Recent Discussion\n")
+		for _, cm := range detail.Comments {
+			sb.WriteString(fmt.Sprintf("- **%s** (%s, %s): %s\n", cm.Actor.Name, cm.Kind, cm.CreatedAt, cm.Body))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Step-by-step agent workflow playbook
+	sb.WriteString("---\n\n")
+	sb.WriteString("## Rävn Agent Workflow Playbook\n")
+	sb.WriteString(fmt.Sprintf("Execute this task following the standard Rävn workflow as agent **%q**:\n\n", actorName))
+
+	sb.WriteString(fmt.Sprintf("1. **Claim the Task** (acquire exclusive lease):\n   `claim_task(id=%q, actor={\"type\": \"agent\", \"name\": %q})`\n\n", detail.ID, actorName))
+
+	sb.WriteString(fmt.Sprintf("2. **Inspect & Update Notes** (record initial plan & findings):\n   `update_notes(id=%q, actor={\"type\": \"agent\", \"name\": %q}, notes=\"## Plan\\n1. ...\")`\n\n", detail.ID, actorName))
+
+	sb.WriteString(fmt.Sprintf("3. **Heartbeat During Long Work** (keep claim active before 15m TTL expires):\n   `heartbeat_task(id=%q, actor={\"type\": \"agent\", \"name\": %q})`\n\n", detail.ID, actorName))
+
+	if len(detail.AcceptanceCriteria) > 0 {
+		firstAC := detail.AcceptanceCriteria[0]
+		sb.WriteString(fmt.Sprintf("4. **Complete Acceptance Criteria** (mark each AC with evidence):\n   `complete_ac(id=%q, seq=%d, actor={\"type\": \"agent\", \"name\": %q}, done=true, note=\"Tested and verified\")`\n   Repeat for EVERY criterion — the move to done is rejected with 400 while any acceptance criterion remains unchecked.\n\n", detail.ID, firstAC.Seq, actorName))
+	} else {
+		sb.WriteString("4. **Acceptance Criteria**:\n   No acceptance criteria are defined for this task, so none are required before marking it done. But be aware the done transition enforces an AC gate: if you add ANY criteria via `add_ac`, you MUST check each one off with `complete_ac` (done=true) before calling `update_task(status=\"done\")` — a single unchecked criterion makes the update fail with 400.\n\n")
+	}
+
+	sb.WriteString(fmt.Sprintf("5. **Attach Testing Evidence** (encouraged, not required — humans verify via artifacts):\n   If you ran tests or verification commands, upload the output so a human can review it:\n   `attach_artifact(id=%q, kind=\"command-output\", ref=\"<path-or-URL of the test/verification output>\", summary=\"e.g. go test ./... — all pass\")`\n   To attach screenshots or other workspace files (video, audio, PDF, logs), ALWAYS encode the file to base64 and pass: `attach_artifact(id=%q, kind=\"screenshot\", data_base64=\"<base64-bytes>\", filename=\"screenshot.png\", summary=\"...\")`. Never pass local filesystem paths in ref.\n\n", detail.ID, detail.ID))
+
+	sb.WriteString(fmt.Sprintf("6. **Finish** (marking done is atomic and releases your claim — do NOT release first):\n   Call `update_task(id=%q, version=<current task version>, status=\"done\", actor={\"type\": \"agent\", \"name\": %q})` DIRECTLY — the transition to done clears the claim lease in the SAME atomic update, so calling `release_task` beforehand wastes a round-trip and briefly drops the task back to todo (a race window where another polling agent can grab it).\n   Reserve `release_task` for ABANDONING work you will not finish (it resets status to todo). When handing off IN-PROGRESS work to another agent or human, prefer `handoff_task`: it atomically reassigns the task, posts a handoff comment with context, and releases your lease in one call.\n",
+		detail.ID, actorName))
+
+	return sb.String()
 }

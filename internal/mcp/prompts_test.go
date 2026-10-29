@@ -351,8 +351,7 @@ func TestNextTask_GuidancePlanFromLiveTool(t *testing.T) {
 		"claim_task(id=\"TASK-TOP-PRIORITY\", actor={\"type\": \"agent\", \"name\": \"agent-mcp\"})",
 		"Attach Testing Evidence",
 		"attach_artifact(id=\"TASK-TOP-PRIORITY\", kind=\"command-output\"",
-		"release_task(id=\"TASK-TOP-PRIORITY\"",
-		"update_task(id=\"TASK-TOP-PRIORITY\", version=<version from the release response>, status=\"done\"",
+		"update_task(id=\"TASK-TOP-PRIORITY\", version=<current task version>, status=\"done\"",
 		"heartbeat_task(id=\"TASK-TOP-PRIORITY\"",
 		"complete_ac(id=\"TASK-TOP-PRIORITY\", seq=1",
 	}
@@ -361,6 +360,23 @@ func TestNextTask_GuidancePlanFromLiveTool(t *testing.T) {
 		if !strings.Contains(body, sub) {
 			t.Errorf("prompt body missing expected content: %q\nFull body:\n%s", sub, body)
 		}
+	}
+
+	// Step 6 must NOT instruct release-FIRST-then-done (release_task first drops
+	// the task to todo briefly); marking done is atomic and releases the lease.
+	for _, notWant := range []string{
+		"release FIRST",
+		"version=<version from the release response>",
+	} {
+		if strings.Contains(body, notWant) {
+			t.Errorf("prompt body must not contain %q (release-before-done instruction)\nFull body:\n%s", notWant, body)
+		}
+	}
+
+	// The AC gate must be stated for the has-AC case too: every criterion is
+	// required to be checked off before done.
+	if !strings.Contains(body, "the move to done is rejected with 400 while any acceptance criterion remains unchecked") {
+		t.Errorf("prompt body missing AC-gate statement for has-AC task\nFull body:\n%s", body)
 	}
 }
 
@@ -721,10 +737,97 @@ func TestNextTask_UnknownProjectNotFound(t *testing.T) {
 	}
 }
 
+// TestBuildNextTaskText_ACGateAndFinishStep validates prompt-text accuracy
+// (Epic 01M5XSNG2ZK5VSS7QTME49Z1WM AC1/AC2) at the unit level for both the
+// zero-AC and has-AC paths of buildNextTaskText:
+//   - a task with ZERO acceptance criteria must not claim "completing
+//     criteria is not required"; it must state that any criterion added via
+//     add_ac MUST be completed before the unconditional done-gate passes.
+//   - Step 6 must instruct transitioning DIRECTLY to done via update_task
+//     (which atomically releases the lease), with release_task reserved for
+//     abandoning/handoff and handoff_task preferred — never release-first.
+func TestBuildNextTaskText_ACGateAndFinishStep(t *testing.T) {
+	baseDetail := &apiclient.TaskDetail{
+		TaskSummary: apiclient.TaskSummary{
+			ID:       "TASK-UNIT",
+			Title:    "Unit Task",
+			Status:   "todo",
+			Priority: 2,
+			Version:  7,
+		},
+		ProjectID:   "PROJ-UNIT",
+		Description: "unit-test task",
+	}
+
+	t.Run("zero ACs states the done-gate accurately", func(t *testing.T) {
+		d := *baseDetail
+		d.AcceptanceCriteria = []apiclient.AcceptanceCriterion{}
+		body := buildNextTaskText(&d, "unit-agent")
+
+		for _, notWant := range []string{
+			"completing criteria is not required", // the false pre-fix claim
+			"release FIRST",                       // release-before-done phrasing
+			"version=<version from the release response>",
+		} {
+			if strings.Contains(body, notWant) {
+				t.Errorf("zero-AC prompt must not contain %q\nFull body:\n%s", notWant, body)
+			}
+		}
+
+		for _, want := range []string{
+			"No acceptance criteria are defined for this task, so none are required before marking it done.",
+			"if you add ANY criteria via `add_ac`, you MUST check each one off with `complete_ac` (done=true)",
+			"6. **Finish** (marking done is atomic and releases your claim — do NOT release first):",
+			"update_task(id=\"TASK-UNIT\", version=<current task version>, status=\"done\", actor={\"type\": \"agent\", \"name\": \"unit-agent\"})",
+			"clears the claim lease in the SAME atomic update",
+			"Reserve `release_task` for ABANDONING work you will not finish",
+			"prefer `handoff_task`",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("zero-AC prompt missing %q\nFull body:\n%s", want, body)
+			}
+		}
+
+		// No complete_ac playbook call should be generated for a 0-AC task.
+		if strings.Contains(body, "complete_ac(id=") {
+			t.Errorf("zero-AC prompt must not generate a complete_ac call\nFull body:\n%s", body)
+		}
+	})
+
+	t.Run("has ACs restates the done-gate", func(t *testing.T) {
+		d := *baseDetail
+		d.AcceptanceCriteria = []apiclient.AcceptanceCriterion{
+			{Seq: 1, Text: "First criterion", Done: false},
+			{Seq: 2, Text: "Second criterion", Done: true},
+		}
+		body := buildNextTaskText(&d, "unit-agent")
+
+		for _, want := range []string{
+			"4. **Complete Acceptance Criteria** (mark each AC with evidence):",
+			"complete_ac(id=\"TASK-UNIT\", seq=1",
+			"Repeat for EVERY criterion — the move to done is rejected with 400 while any acceptance criterion remains unchecked.",
+			"6. **Finish** (marking done is atomic and releases your claim — do NOT release first):",
+			"update_task(id=\"TASK-UNIT\", version=<current task version>, status=\"done\"",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("has-AC prompt missing %q\nFull body:\n%s", want, body)
+			}
+		}
+		for _, notWant := range []string{
+			"release FIRST",
+			"version=<version from the release response>",
+		} {
+			if strings.Contains(body, notWant) {
+				t.Errorf("has-AC prompt must not contain %q\nFull body:\n%s", notWant, body)
+			}
+		}
+	})
+}
+
 // TestPromptsGet_NextTask_EmptyAcceptanceCriteria verifies that when a task has no
 // acceptance criteria, the next_task prompt:
 // 1. Does not generate complete_ac calls (avoiding seq 1 failures on 0-AC tasks)
-// 2. Informs the agent that no acceptance criteria are defined, or suggests adding them
+// 2. Informs the agent of the done-gate accurately (see AC1/AC2 above)
 func TestPromptsGet_NextTask_EmptyAcceptanceCriteria(t *testing.T) {
 	mock := &mockClient{
 		listProjectsFunc: func(ctx context.Context) (*apiclient.ProjectList, error) {
@@ -810,10 +913,20 @@ func TestPromptsGet_NextTask_EmptyAcceptanceCriteria(t *testing.T) {
 		t.Errorf("next_task prompt must not contain complete_ac calls when task has no acceptance criteria, got:\n%s", body)
 	}
 
-	// AC 2: Informs the agent that no acceptance criteria are defined, or suggests adding them
-	expectedNotice := "No acceptance criteria are defined for this task. You may add criteria using `add_ac` if helpful, but completing criteria is not required before moving to done."
+	// AC 2 (Epic 01M5XSNG...): no more false "completing criteria is not
+	// required" claim — the done transition enforces an UNCONDITIONAL AC gate,
+	// so any criterion added via add_ac MUST be completed before done.
+	for _, notWant := range []string{
+		"completing criteria is not required",
+	} {
+		if strings.Contains(body, notWant) {
+			t.Errorf("next_task prompt must not claim %q (done transition has an unconditional AC gate)\nFull body:\n%s", notWant, body)
+		}
+	}
+
+	expectedNotice := "No acceptance criteria are defined for this task, so none are required before marking it done. But be aware the done transition enforces an AC gate: if you add ANY criteria via `add_ac`, you MUST check each one off with `complete_ac` (done=true) before calling `update_task(status=\"done\")` — a single unchecked criterion makes the update fail with 400."
 	if !strings.Contains(body, expectedNotice) {
-		t.Errorf("next_task prompt missing notice explaining no ACs are defined, got:\n%s", body)
+		t.Errorf("next_task prompt missing accurate AC-gate notice, got:\n%s", body)
 	}
 
 	// Workflow step 4 header should be present
@@ -827,11 +940,32 @@ func TestPromptsGet_NextTask_EmptyAcceptanceCriteria(t *testing.T) {
 		"2. **Inspect & Update Notes**",
 		"3. **Heartbeat During Long Work**",
 		"5. **Attach Testing Evidence**",
-		"6. **Finish and Release**",
+		"6. **Finish** (marking done is atomic and releases your claim — do NOT release first):",
 	}
 	for _, step := range expectedOtherSteps {
 		if !strings.Contains(body, step) {
 			t.Errorf("next_task prompt missing workflow step %q", step)
+		}
+	}
+
+	// Step 6 (Epic AC2): finishing = update_task(status="done") directly;
+	// release_task is reserved for abandoning/handoff, handoff_task preferred.
+	for _, want := range []string{
+		"update_task(id=\"TASK-NO-AC\", version=<current task version>, status=\"done\"",
+		"clears the claim lease in the SAME atomic update",
+		"Reserve `release_task` for ABANDONING work you will not finish",
+		"prefer `handoff_task`",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("next_task prompt step 6 missing %q\nFull body:\n%s", want, body)
+		}
+	}
+	for _, notWant := range []string{
+		"release FIRST",
+		"version=<version from the release response>",
+	} {
+		if strings.Contains(body, notWant) {
+			t.Errorf("next_task prompt step 6 must not contain %q\nFull body:\n%s", notWant, body)
 		}
 	}
 }
