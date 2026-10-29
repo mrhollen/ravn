@@ -95,13 +95,17 @@ func TestClaim_AllBlockersDoneOrArchived_ClaimsNormally(t *testing.T) {
 	doneB := mustCreateTask(t, svc, "Already finished", 1, nil)
 	archB := mustCreateTask(t, svc, "Archived mid-flight", 1, nil)
 
+	// Edges are created BEFORE the blockers settle: relation adds to an
+	// already-archived task are rejected (the archived-task guard), so a
+	// blocker that ends up archived must have been linked while active.
+	mustBlock(t, rels, x, doneB)
+	mustBlock(t, rels, x, archB)
+
 	mustDone(t, svc, doneB.ID)
 	archive := true
 	if _, err := svc.Update(ctx, testAgent, archB.ID, TaskUpdateInput{Archived: &archive}); err != nil {
 		t.Fatalf("archive blocker: %v", err)
 	}
-	mustBlock(t, rels, x, doneB)
-	mustBlock(t, rels, x, archB)
 
 	fc.SetNow(fc.now.Add(time.Minute))
 	got, err := svc.Claim(ctx, claimAgent, x.ID, 600, false) // no override needed

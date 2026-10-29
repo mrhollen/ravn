@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mrhollen/ravn/internal/domain"
@@ -60,9 +61,17 @@ func NewRelations(uow UnitOfWork, clock Clock, idgen IDGenerator) *Relations {
 // edges: giving a task that already has a DIFFERENT parent a new one fails
 // with domain.ErrParentConflict (a wrapped sentinel whose message names the
 // existing parent); re-adding the SAME parent is the idempotent no-op above,
-// not an error. Validation failures: unknown action or kind → ErrInvalid;
+// not an error. An EXCEPTION to the rule: if the existing parent's task is
+// ARCHIVED it no longer blocks — a reassignment onto a different active
+// parent removes the stale child edge (remove event) and stores the new one
+// in the same unit of work, so a task whose parent got archived can always
+// take a new one. Validation failures: unknown action or kind → ErrInvalid;
 // a == b (self-relation) → ErrInvalid; either task missing → ErrNotFound;
-// cross-project pair → ErrInvalid.
+// cross-project pair → ErrInvalid; and for ADDS only, either endpoint
+// archived → ErrInvalid naming the archived task(s). REMOVES are NOT subject
+// to the archived guard: an existing edge touching an archived task can
+// always be cleaned up (e.g. unrelating a stale parent), so delete stays
+// possible even after the related task is archived.
 //
 // Remove semantics (action = RelateRemove): deletes exactly the stored edge —
 // for the 'parent' alias that is the inverse child edge, so removing "b as a's
@@ -111,6 +120,19 @@ func (s *Relations) Relate(ctx context.Context, actor domain.Actor, aID, bID dom
 		if at.ProjectID != bt.ProjectID {
 			return fmt.Errorf("%w: tasks %s and %s are in different projects", domain.ErrInvalid, aID, bID)
 		}
+		// Archived-task guard (adds only): no NEW relation may involve an
+		// archived task — neither as subject nor object. Removes still work
+		// past archived endpoints so stale edges stay cleanable.
+		if action == RelateAdd && (at.Archived || bt.Archived) {
+			var archived []string
+			if at.Archived {
+				archived = append(archived, string(aID))
+			}
+			if bt.Archived {
+				archived = append(archived, string(bID))
+			}
+			return fmt.Errorf("%w: cannot add a relation involving archived task %s", domain.ErrInvalid, strings.Join(archived, ", "))
+		}
 		srcTask := &at
 		if src == bID { // parent alias flipped the stored direction; the event/parent-check source is task b
 			srcTask = &bt
@@ -132,16 +154,22 @@ func (s *Relations) Relate(ctx context.Context, actor domain.Actor, aID, bID dom
 // addEdge implements RelateAdd inside the caller's unit of work. It first
 // distinguishes the idempotent no-op (identical edge already stored → return
 // it, no event) from a real change; for child edges it then enforces the
-// ≤1-parent rule against the current edge set before upserting. For blocked-by
-// and child relations, it enforces cycle detection so circular dependencies
-// or hierarchies cannot be formed. The repository additionally backstops the
-// parent rule with the partial unique index (its ErrParentConflict is propagated
-// verbatim if a concurrent writer wins the check-then-write race).
+// ≤1-parent rule against the current edge set before upserting — with one
+// exception: an existing child edge whose parent task is ARCHIVED is stale
+// residue (the archived guard forbids touching it further), so reassignment
+// past it REMOVES that row (remove event, same tx) and proceeds with the new
+// edge. For blocked-by and child relations, it enforces cycle detection so
+// circular dependencies or hierarchies cannot be formed. The repository
+// additionally backstops the parent rule with the partial unique index (its
+// ErrParentConflict is propagated verbatim if a concurrent writer wins the
+// check-then-write race — after the stale removal above, at most one live
+// child row per task exists, so the replacement insert cannot violate it).
 func (s *Relations) addEdge(ctx context.Context, r *Repos, actor domain.Actor, src, dst domain.ID, kind domain.RelationKind, now time.Time, srcTask domain.Task, out *domain.Relation, created *bool) error {
 	edges, err := r.Relations.ListByTask(ctx, src)
 	if err != nil {
 		return err
 	}
+	var dropped domain.Relation // removeEdge's out param for stale-edge replacement
 	for _, e := range edges {
 		switch {
 		case e.TaskID == src && e.OtherTaskID == dst && e.Kind == kind:
@@ -149,6 +177,16 @@ func (s *Relations) addEdge(ctx context.Context, r *Repos, actor domain.Actor, s
 			*created = false
 			return nil
 		case e.TaskID == src && e.Kind == domain.RelationChild && kind == domain.RelationChild && e.OtherTaskID != dst:
+			if parent, perr := r.Tasks.Get(ctx, e.OtherTaskID); perr == nil && parent.Archived {
+				// Stale edge to an archived parent: replace it so reassignment
+				// is possible (the ≤1-parent rule + DB unique index allow only
+				// one stored child row per task). removeEvent appended here;
+				// the add event for the new parent follows below.
+				if err := s.removeEdge(ctx, r, actor, src, e.OtherTaskID, domain.RelationChild, now, srcTask, &dropped); err != nil {
+					return err
+				}
+				continue
+			}
 			return fmt.Errorf("%w: task %s already has a parent (%s)", domain.ErrParentConflict, src, e.OtherTaskID)
 		}
 	}

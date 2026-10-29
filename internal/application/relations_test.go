@@ -478,6 +478,209 @@ func TestRelate_ValidationErrors(t *testing.T) {
 	_ = pid1 // project id asserted via events in other tests; kept for seed symmetry
 }
 
+// fakeArchive marks a seeded task archived directly in the fake. Deliberately
+// bypasses Tasks.Update: archiving through the use case appends its own
+// task-updated event and bumps the version, while these tests count relation
+// events exactly (the child-row rule).
+func fakeArchive(t *testing.T, uow *fakeUoW, id domain.ID) {
+	t.Helper()
+	task, ok := uow.tasks.byID[id]
+	if !ok {
+		t.Fatalf("task %s missing from fake", id)
+	}
+	task.Archived = true
+	uow.tasks.byID[id] = task
+}
+
+// TestRelate_AddRejectedWhenEitherEndpointArchived satisfies AC 1: adding any
+// relation kind where either endpoint is archived fails with a wrapped
+// domain.ErrInvalid naming the archived task(s) and writes NOTHING — no edge,
+// no event. The guard covers both tool-boundary directions and the 'parent'
+// alias, which lands on the inverse stored direction.
+func TestRelate_AddRejectedWhenEitherEndpointArchived(t *testing.T) {
+	cases := []struct {
+		name     string
+		setup    func(uow *fakeUoW, ids []domain.ID) // which endpoints to archive before the add
+		call     func(rels *Relations, ctx context.Context, ids []domain.ID) error
+		namedIds []string // task IDs the error message must name
+	}{
+		{
+			name:  "subject archived (child add)",
+			setup: func(uow *fakeUoW, ids []domain.ID) { fakeArchive(t, uow, ids[0]) },
+			call: func(rels *Relations, ctx context.Context, ids []domain.ID) error {
+				_, _, e := rels.Relate(ctx, relateTestActor, ids[0], ids[1], domain.RelationChild, RelateAdd)
+				return e
+			},
+			namedIds: []string{"task-a"},
+		},
+		{
+			name:  "object archived (blocked-by add)",
+			setup: func(uow *fakeUoW, ids []domain.ID) { fakeArchive(t, uow, ids[1]) },
+			call: func(rels *Relations, ctx context.Context, ids []domain.ID) error {
+				_, _, e := rels.Relate(ctx, relateTestActor, ids[0], ids[1], domain.RelationBlockedBy, RelateAdd)
+				return e
+			},
+			namedIds: []string{"task-b"},
+		},
+		{
+			name:  "parent alias onto archived parent",
+			setup: func(uow *fakeUoW, ids []domain.ID) { fakeArchive(t, uow, ids[2]) }, // C archived; "C is parent of B"
+			call: func(rels *Relations, ctx context.Context, ids []domain.ID) error {
+				_, _, e := rels.Relate(ctx, relateTestActor, ids[2], ids[1], domain.RelationParent, RelateAdd)
+				return e
+			},
+			namedIds: []string{"task-c"},
+		},
+		{
+			name:  "both endpoints archived (related add)",
+			setup: func(uow *fakeUoW, ids []domain.ID) { fakeArchive(t, uow, ids[0]); fakeArchive(t, uow, ids[1]) },
+			call: func(rels *Relations, ctx context.Context, ids []domain.ID) error {
+				_, _, e := rels.Relate(ctx, relateTestActor, ids[0], ids[1], domain.RelationRelated, RelateAdd)
+				return e
+			},
+			namedIds: []string{"task-a", "task-b"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rels, _, uow, events := newRelationEnv(t)
+			ctx := context.Background()
+			_, ids := seedRelationWorld(t, uow, "world", "A", "B", "C")
+			tc.setup(uow, ids)
+
+			err := tc.call(rels, ctx, ids)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("Relate error = %v, want errors.Is domain.ErrInvalid", err)
+			}
+			if !strings.Contains(err.Error(), "archived") {
+				t.Errorf("error message %q should mention 'archived'", err)
+			}
+			for _, id := range tc.namedIds {
+				if !strings.Contains(err.Error(), id) {
+					t.Errorf("error message %q should name archived task %s", err, id)
+				}
+			}
+			if len(uow.relations.edges) != 0 || len(events.events) != 0 {
+				t.Errorf("rejected add must write nothing: edges=%+v events=%d", uow.relations.edges, len(events.events))
+			}
+		})
+	}
+}
+
+// TestRelate_ReassignPastArchivedParent satisfies AC 2: B has parent A; A is
+// then archived; setting B's parent to active C must SUCCEED (previously this
+// failed with domain.ErrParentConflict because the stale child edge to A
+// blocked every other parent). The replacement removes the stale row in the
+// SAME unit of work — remove event (Before set) then add event (After set),
+// both on B — and afterwards even re-adding the archived parent is rejected
+// by the archived guard.
+func TestRelate_ReassignPastArchivedParent(t *testing.T) {
+	rels, tasks, uow, events := newRelationEnv(t)
+	ctx := context.Background()
+	pid, ids := seedRelationWorld(t, uow, "world", "A", "B", "C")
+	a, b, c := ids[0], ids[1], ids[2]
+
+	// B's parent is A: stored child edge b→a.
+	if _, _, err := rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateAdd); err != nil {
+		t.Fatalf("add parent A: %v", err)
+	}
+	fakeArchive(t, uow, a)
+
+	// Reassign B's parent to active C.
+	rel, created, err := rels.Relate(ctx, relateTestActor, c, b, domain.RelationParent, RelateAdd)
+	if err != nil {
+		t.Fatalf("reassign past archived parent: %v", err)
+	}
+	if !created {
+		t.Errorf("reassign created = false, want true")
+	}
+	want := edgeTriple{b, c, domain.RelationChild}
+	if got := tripleOf(rel); got != want {
+		t.Fatalf("reassigned stored edge = %+v, want inverse child edge %+v", got, want)
+	}
+
+	// Exactly one live child row remains: the stale b→a edge was replaced.
+	if len(uow.relations.edges) != 1 || tripleOf(uow.relations.edges[0]) != want {
+		t.Fatalf("edges after reassignment = %+v, want exactly the new (b→c, child) edge", uow.relations.edges)
+	}
+
+	// B's resume payload reflects the new parent.
+	detail, err := tasks.GetDetail(ctx, b, 0, 0)
+	if err != nil {
+		t.Fatalf("GetDetail(b): %v", err)
+	}
+	found := false
+	for _, e := range detail.Relations {
+		if tripleOf(e) == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("GetDetail(b).Relations missing new child edge %v; got %+v", want, detail.Relations)
+	}
+
+	// Events: 1 (initial add) + remove(stale a) + add(new c), all on B/pid.
+	if len(events.events) != 3 {
+		t.Fatalf("events = %d (%+v), want 3", len(events.events), events.events)
+	}
+	rm := events.events[1]
+	if rm.Kind != domain.EventRelationChanged || rm.TaskID == nil || *rm.TaskID != b || rm.ProjectID == nil || *rm.ProjectID != pid {
+		t.Errorf("stale-edge remove event = %+v, want relation-changed on %s/%s", rm, b, pid)
+	}
+	wantBefore := map[string]any{"action": "remove", "kind": "child", "other_id": string(a)}
+	if gotB := unmarshalEventJSON(t, rm.Before); !mapsEqual(gotB, wantBefore) {
+		t.Errorf("stale-edge remove event Before = %s, want %v", rm.Before, wantBefore)
+	}
+	addEv := events.events[2]
+	if addEv.Kind != domain.EventRelationChanged || addEv.TaskID == nil || *addEv.TaskID != b {
+		t.Errorf("reassign add event = %+v, want relation-changed on %s", addEv, b)
+	}
+	wantAfter := map[string]any{"action": "add", "kind": "child", "other_id": string(c)}
+	if gotA := unmarshalEventJSON(t, addEv.After); !mapsEqual(gotA, wantAfter) {
+		t.Errorf("reassign add event After = %s, want %v", addEv.After, wantAfter)
+	}
+
+	// The archived parent stays rejected — even a same-edge re-add.
+	_, _, err = rels.Relate(ctx, relateTestActor, a, b, domain.RelationParent, RelateAdd)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("re-adding the archived parent error = %v, want wrapped domain.ErrInvalid", err)
+	}
+}
+
+// TestRelate_RemoveAllowedWithArchivedEndpoint documents the guard's scope:
+// REMOVES are NOT subject to the archived-task guard — a stale edge touching
+// an archived task (B blocked-by A, then A archived) can still be unrelated so
+// old relations stay cleanable.
+func TestRelate_RemoveAllowedWithArchivedEndpoint(t *testing.T) {
+	rels, _, uow, events := newRelationEnv(t)
+	ctx := context.Background()
+	_, ids := seedRelationWorld(t, uow, "world", "A", "B")
+	a, b := ids[0], ids[1]
+
+	if _, _, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationBlockedBy, RelateAdd); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	fakeArchive(t, uow, a)
+
+	got, created, err := rels.Relate(ctx, relateTestActor, b, a, domain.RelationBlockedBy, RelateRemove)
+	if err != nil {
+		t.Fatalf("remove across archived endpoint must succeed (cleanup), got: %v", err)
+	}
+	if created {
+		t.Errorf("remove created = true, want false")
+	}
+	want := edgeTriple{b, a, domain.RelationBlockedBy}
+	if t3 := tripleOf(got); t3 != want {
+		t.Errorf("removed edge = %+v, want %+v", got, want)
+	}
+	if len(uow.relations.edges) != 0 {
+		t.Errorf("edges after remove = %+v, want none", uow.relations.edges)
+	}
+	if len(events.events) != 2 {
+		t.Fatalf("events = %d (%+v), want 2 (add + remove)", len(events.events), events.events)
+	}
+}
+
 // mapsEqual compares two decoded JSON payloads exactly (both non-nil here).
 func mapsEqual(got, want map[string]any) bool {
 	if len(got) != len(want) {

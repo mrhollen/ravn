@@ -108,6 +108,12 @@ func TestGetDetail_DoneOrArchivedTargetsDoNotBlock(t *testing.T) {
 	doneTarget := mustCreateTask(t, svc, "Already finished", 1, nil)
 	archivedTarget := mustCreateTask(t, svc, "Archived mid-flight", 1, nil)
 
+	// Edges are created BEFORE the targets settle: relation adds to an
+	// already-archived task are rejected (the archived-task guard), so a
+	// blocker that ends up archived must have been linked while active.
+	mustBlock(t, rels, x, doneTarget)
+	mustBlock(t, rels, x, archivedTarget)
+
 	doingStatus := domain.StatusDoing
 	if _, err := svc.Update(ctx, testAgent, doneTarget.ID, TaskUpdateInput{Status: &doingStatus}); err != nil {
 		t.Fatalf("move target to doing: %v", err)
@@ -120,9 +126,6 @@ func TestGetDetail_DoneOrArchivedTargetsDoNotBlock(t *testing.T) {
 	if _, err := svc.Update(ctx, testAgent, archivedTarget.ID, TaskUpdateInput{Archived: &archive}); err != nil {
 		t.Fatalf("archive target: %v", err)
 	}
-
-	mustBlock(t, rels, x, doneTarget)
-	mustBlock(t, rels, x, archivedTarget)
 
 	// Locked-down semantics: only NOT-done AND not-archived targets block. Both
 	// of x's blockers are resolved, so it is startable despite two outgoing
