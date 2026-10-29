@@ -2258,3 +2258,103 @@ func TestMCPServerNameAndActorFallback(t *testing.T) {
 		t.Errorf("fallback actor = %+v, want agent %q from RAVN_AGENT_NAME", fb.Actor, customAgent)
 	}
 }
+
+// TestNumericParamSchemasAreIntegerWithBounds asserts the REGISTERED JSON schema
+// of every integer argument matches what the backend actually accepts, so LLM
+// clients are told up front — not after a 400 round-trip — that these take
+// integers within these bounds. The bounds mirror the real enforcement:
+//
+//	priority        0–5, out of range → 400
+//	    list_tasks: parseTaskFilter (interface/http/helpers.go);
+//	    create/update: application/tasks.go Create & Update ("out of range 0–5")
+//	limit           positive integer, default 20, > 100 clamped   — parseTaskFilter / List
+//	offset          non-negative                                  — parseTaskFilter / List
+//	comment_limit   >= 0 (0 = default 10), > 50 clamped           — parseTailLimit + GetDetail
+//	event_limit     >= 0 (0 = default 20), > 100 clamped          — parseTailLimit + GetDetail
+//	ttl_sec         >= 0 (negative → 400; 0 = default 900), > 3600 clamped — Claim
+//	version         >= 1 (fresh tasks are version 1)              — UpdateTaskRequest / update_task
+func TestNumericParamSchemasAreIntegerWithBounds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, _ := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	list, err := c.ListTools(ctx, mcpgo.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("c.ListTools failed: %v", err)
+	}
+	byName := make(map[string]map[string]any, len(list.Tools)) // tool name → properties map
+	for i := range list.Tools {
+		byName[list.Tools[i].Name] = list.Tools[i].InputSchema.Properties
+	}
+
+	cases := []struct {
+		tool, prop string
+		min, max   int // -1 = "no such key expected", >= 0 = expected JSON number
+	}{
+		{"list_tasks", "priority", 0, 5},
+		{"create_task", "priority", 0, 5},
+		{"update_task", "priority", 0, 5},
+		{"list_tasks", "limit", 1, 100},
+		{"list_tasks", "offset", 0, -1},
+		{"get_task", "comment_limit", 0, 50},
+		{"get_task", "event_limit", 0, 100},
+		{"claim_task", "ttl_sec", 0, 3600},
+		{"update_task", "version", 1, -1},
+	}
+
+	for _, tc := range cases {
+		props := byName[tc.tool]
+		if props == nil {
+			t.Fatalf("%s: tool not found or InputSchema.Properties is empty", tc.tool)
+		}
+		raw, ok := props[tc.prop]
+		if !ok {
+			t.Errorf("%s: input schema missing property %q", tc.tool, tc.prop)
+			continue
+		}
+		prop, _ := raw.(map[string]any)
+		if prop == nil {
+			t.Errorf("%s.%s: property is %T, want object", tc.tool, tc.prop, raw)
+			continue
+		}
+		if prop["type"] != "integer" {
+			t.Errorf("%s.%s schema type = %v, want \"integer\"", tc.tool, tc.prop, prop["type"])
+		}
+		assertBound := func(key string, want int) {
+			if want < 0 {
+				if _, present := prop[key]; present {
+					t.Errorf("%s.%s: schema has unexpected %q = %v", tc.tool, tc.prop, key, prop[key])
+				}
+				return
+			}
+			got, ok := prop[key].(float64) // JSON numbers decode as float64
+			if !ok {
+				t.Errorf("%s.%s: schema missing %q (or not numeric: %v)", tc.tool, tc.prop, key, prop[key])
+				return
+			}
+			if got != float64(want) {
+				t.Errorf("%s.%s: schema %s = %v, want %d", tc.tool, tc.prop, key, got, want)
+			}
+		}
+		assertBound("minimum", tc.min)
+		assertBound("maximum", tc.max)
+	}
+
+	// End-to-end proof the fix works: values that used to decode as floats and
+	// only fail later server-side are now rejected at MCP input-schema
+	// validation with a self-correcting message (WithInputSchemaValidation is
+	// on via ServerOptions()).
+	if res := callTool(t, c, ctx, "list_tasks", map[string]any{"priority": 2.5}); !res.IsError {
+		t.Errorf("list_tasks priority=2.5: want schema-validation error, got success: %s", firstText(t, res))
+	}
+	if res := callTool(t, c, ctx, "claim_task", map[string]any{"id": "T1", "ttl_sec": -5}); !res.IsError {
+		t.Errorf("claim_task ttl_sec=-5: want schema-validation error, got success: %s", firstText(t, res))
+	}
+	if res := callTool(t, c, ctx, "update_task", map[string]any{"id": "T1", "version": 0.5}); !res.IsError {
+		t.Errorf("update_task version=0.5: want schema-validation error, got success: %s", firstText(t, res))
+	}
+}
+
