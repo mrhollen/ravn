@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -872,5 +874,177 @@ func TestWithModernMCPCompat_SingleObjectBodyRestoredAndBackfilled(t *testing.T)
 	}
 	if parsed["jsonrpc"] != "2.0" || parsed["method"] != "notifications/roots/list_changed" {
 		t.Fatalf("original message fields were corrupted downstream: %v", parsed)
+	}
+}
+
+// nonEmptyLines splits a stream on newlines and drops the empty entries
+// (response framing is one JSON-RPC document per line).
+func nonEmptyLines(s string) []string {
+	var out []string
+	for _, ln := range strings.Split(s, "\n") {
+		if strings.TrimSpace(ln) != "" {
+			out = append(out, ln)
+		}
+	}
+	return out
+}
+
+// TestRunStdio_HandshakeServesJSONRPC drives the stdio run path exactly like a
+// standard MCP client (Claude Desktop, Cursor, IDE extensions) does: JSON-RPC
+// on stdin/stdout of a subprocess — no port is bound. It asserts that
+// initialize yields a well-formed response (jsonrpc 2.0, matching id,
+// serverInfo.name "ravn", non-empty capabilities) and that tools/list returns
+// the registered tool names, proving the shared MCPServer object is fully
+// wired in stdio mode just as it is behind HTTP.
+func TestRunStdio_HandshakeServesJSONRPC(t *testing.T) {
+	mcs := newMCPServer("http://ravn-server:8080", "", "test-agent")
+
+	stdin := strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"stdio-test","version":"1.0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
+	}, "\n") + "\n")
+
+	var stdout bytes.Buffer
+	if err := runStdio(context.Background(), stdin, &stdout, mcs); err != nil {
+		t.Fatalf("runStdio returned error: %v (stdout=%q)", err, stdout.String())
+	}
+
+	lines := nonEmptyLines(stdout.String())
+	if len(lines) == 0 {
+		t.Fatal("expected JSON-RPC responses on stdout, got none")
+	}
+
+	var initResp, toolsResp map[string]any
+	for _, line := range lines {
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			t.Fatalf("stdout carried non-JSON text %q: %v", line, err)
+		}
+		id, _ := msg["id"].(float64)
+		switch id {
+		case 1:
+			initResp = msg
+		case 2:
+			toolsResp = msg
+		}
+	}
+
+	if initResp == nil {
+		t.Fatalf("no response for initialize (id=1) on stdout: %q", stdout.String())
+	}
+	if initResp["jsonrpc"] != "2.0" {
+		t.Errorf("initialize response jsonrpc = %v, want %q", initResp["jsonrpc"], "2.0")
+	}
+	result, _ := initResp["result"].(map[string]any)
+	if result == nil {
+		t.Fatalf("initialize response missing result: %v", initResp)
+	}
+	info, _ := result["serverInfo"].(map[string]any)
+	if info["name"] != "ravn" {
+		t.Errorf("initialize serverInfo.name = %v, want %q", result["serverInfo"], "ravn")
+	}
+	caps, ok := result["capabilities"].(map[string]any)
+	if !ok || len(caps) == 0 {
+		t.Errorf("initialize capabilities missing or empty: %v", result["capabilities"])
+	}
+
+	if toolsResp == nil {
+		t.Fatalf("no response for tools/list (id=2) on stdout: %q", stdout.String())
+	}
+	tres, _ := toolsResp["result"].(map[string]any)
+	var tools []any
+	if tres != nil {
+		tools, _ = tres["tools"].([]any)
+	}
+	if len(tools) == 0 {
+		t.Fatalf("tools/list returned no tools: %v", toolsResp)
+	}
+	names := map[string]bool{}
+	for _, raw := range tools {
+		tool, _ := raw.(map[string]any)
+		name, _ := tool["name"].(string)
+		names[name] = true
+	}
+	for _, want := range []string{"list_projects", "create_task", "get_task"} {
+		if !names[want] {
+			t.Errorf("tools/list over stdio missing %q; got %v", want, names)
+		}
+	}
+}
+
+// TestRunStdio_StdoutCarriesOnlyJSONRPC asserts stream isolation in stdio mode:
+// every non-empty line written to stdout is a valid JSON-RPC message — no stray
+// log or banner text may corrupt the protocol stream — and even error paths
+// stay inside the protocol (malformed input → PARSE_ERROR -32700, unknown
+// method → METHOD_NOT_FOUND -32601, both on stdout). os.Stderr is captured in
+// parallel to prove no protocol line ever leaks into it.
+func TestRunStdio_StdoutCarriesOnlyJSONRPC(t *testing.T) {
+	// The SDK builds its StdioServer error logger from os.Stderr at
+	// construction time (NewStdioServer), so the capture must be installed
+	// before runStdio is called.
+	stderrPipeR, stderrPipeW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = stderrPipeW
+	defer func() { os.Stderr = oldStderr }()
+
+	mcs := newMCPServer("http://ravn-server:8080", "", "test-agent")
+	stdin := strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"stdio-test","version":"1.0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`this is not json at all`,
+		`{"jsonrpc":"2.0","id":9,"method":"no/such/method","params":{}}`,
+	}, "\n") + "\n")
+
+	var stdout bytes.Buffer
+	if err := runStdio(context.Background(), stdin, &stdout, mcs); err != nil {
+		t.Fatalf("runStdio returned error: %v (stdout=%q)", err, stdout.String())
+	}
+	stderrPipeW.Close()
+	stderrCaptured, _ := io.ReadAll(stderrPipeR)
+	stderrPipeR.Close()
+
+	out := stdout.String()
+	lines := nonEmptyLines(out)
+	if len(lines) == 0 {
+		t.Fatal("expected JSON-RPC responses on stdout")
+	}
+
+	var parseErrSeen, unknownMethodSeen bool
+	for _, line := range lines {
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			t.Fatalf("stdout carried non-JSON text (stray log?): %q: %v", line, err)
+		}
+		if _, ok := msg["jsonrpc"]; !ok {
+			t.Fatalf("stdout line is not a JSON-RPC message (stray log?): %q", line)
+		}
+		errObj, _ := msg["error"].(map[string]any)
+		if errObj == nil {
+			continue
+		}
+		code, _ := errObj["code"].(float64)
+		switch {
+		case msg["id"] == nil && code == -32700:
+			parseErrSeen = true
+		case msg["id"] != nil && code == -32601:
+			unknownMethodSeen = true
+		}
+	}
+
+	if !parseErrSeen {
+		t.Errorf("malformed input line did not produce a PARSE_ERROR (-32700) response on stdout: %q", out)
+	}
+	if !unknownMethodSeen {
+		t.Errorf("unknown method did not produce a METHOD_NOT_FOUND (-32601) response on stdout: %q", out)
+	}
+
+	for _, line := range lines {
+		if strings.Contains(string(stderrCaptured), line) {
+			t.Errorf("JSON-RPC protocol line leaked into stderr: %q", line)
+		}
 	}
 }

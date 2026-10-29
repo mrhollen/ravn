@@ -1,7 +1,8 @@
 // ravn-mcp exposes the ravn REST API as MCP tools over stateless
-// Streamable HTTP plus legacy SSE for GET-only clients (docs/ARCHITECTURE.md §6).
-// It is a pure protocol adapter — no SQLite, no use cases: env config →
-// apiclient → MCP server → http.Server.
+// Streamable HTTP plus legacy SSE for GET-only clients (docs/ARCHITECTURE.md §6),
+// or — when launched by a local MCP client as a subprocess — over STDIO: plain
+// JSON-RPC on stdin/stdout, no port. It is a pure protocol adapter — no SQLite,
+// no use cases: env config → apiclient → MCP server → transport (HTTP or stdio).
 package main
 
 import (
@@ -35,14 +36,48 @@ var version = "dev"
 func main() {
 	var (
 		addr      = flag.String("addr", envOr("MCP_ADDR", ":9080"), "listen address for the MCP HTTP server, e.g. :9080")
-		apiURL    = flag.String("api-url", envOr("RAVN_API_URL", "http://ravn-server:8080"), "upstream ravn-server API URL")
-		token     = flag.String("token", os.Getenv("RAVN_TOKEN"), "bearer token forwarded to ravn-server; gates incoming MCP requests when set")
+		apiURL    = flag.String("api-url", envOr("RAVN_API_URL", "http://ravn-server:8080"), "upstream rawn-server API URL")
+		token     = flag.String("token", os.Getenv("RAVN_TOKEN"), "bearer token forwarded to raw-server; gates incoming MCP requests when set")
 		agentName = flag.String("agent-name", envOr("RAVN_AGENT_NAME", "agent"), "default actor name stamped on tool calls when omitted")
+		transport = flag.String("transport", envOr("RAVN_MCP_TRANSPORT", "http"), "protocol transport to serve: http (Streamable HTTP + SSE) or stdio (JSON-RPC over stdin/stdout)")
+		stdioFlag = flag.Bool("stdio", false, "serve the stdio transport (shorthand for -transport=stdio)")
 	)
 	flag.Parse()
 
+	// Diagnostics go to stderr in BOTH modes. In stdio mode stdout carries the
+	// JSON-RPC protocol stream and any stray byte would corrupt it; the SDK's
+	// StdioServer error logger also defaults to os.Stderr (NewStdioServer), so
+	// nothing other than runStdio's protocol output can ever reach stdout.
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
+
+	mode := strings.ToLower(strings.TrimSpace(*transport))
+	if *stdioFlag {
+		mode = "stdio" // the -stdio flag wins over -transport / RAVN_MCP_TRANSPORT
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	switch mode {
+	case "stdio":
+		// No port is bound: local MCP clients (Claude Desktop, Cursor, IDE
+		// extensions) launch us as a subprocess and speak MCP over stdin/stdout.
+		mcs := newMCPServer(*apiURL, *token, *agentName)
+		logger.Info("ravn-mcp running stdio transport", "upstream", *apiURL, "default_actor", *agentName)
+		if err := runStdio(ctx, os.Stdin, os.Stdout, mcs); err != nil &&
+			!errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+			logger.Error("stdio server error", "err", err)
+			os.Exit(1)
+		}
+		logger.Info("stopped")
+		return
+	case "http":
+		// default — behavior unchanged from before the stdio transport existed
+	default:
+		logger.Error("unknown transport", "transport", mode, "valid_transports", []string{"http", "stdio"})
+		os.Exit(2)
+	}
 
 	handler, streamable, sse := buildHandlerStack(logger, *apiURL, *token, *agentName)
 
@@ -51,9 +86,6 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -74,13 +106,12 @@ func main() {
 	logger.Info("stopped")
 }
 
-// buildHandlerStack wires the MCP protocol adapter exactly as production does:
-// tool/prompt/resource registration on a shared MCPServer behind both the
-// streamable-HTTP and legacy SSE transports, plus the auth/logging/compat
-// middleware. It returns the composed http.Handler and the two streaming
-// transports so callers can close their sessions on shutdown (see
-// shutdownServer).
-func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (http.Handler, *mcpsrv.StreamableHTTPServer, *mcpsrv.SSEServer) {
+// newMCPServer builds the fully-registered MCP server object — upstream API
+// client plus all tools, prompts and resources — in exactly ONE place so both
+// transports share identical registration: the HTTP path wraps the result in
+// StreamableHTTPServer/SSEServer handlers (buildHandlerStack) and the stdio
+// path wraps it in a StdioServer (runStdio). No tool is ever registered twice.
+func newMCPServer(apiURL, token, agentName string) *mcpsrv.MCPServer {
 	// The container default actor. RAVN_AGENT_NAME names THIS agent so its
 	// claims/attribution survive even on calls where the model forgot to pass
 	// an explicit actor (claims key on the name).
@@ -92,6 +123,30 @@ func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (ht
 	mcp.RegisterTools(mcs, client, defaultActor)
 	mcp.RegisterPrompts(mcs, client, defaultActor)
 	mcp.RegisterResources(mcs, client)
+
+	return mcs
+}
+
+// runStdio serves the MCP server as JSON-RPC over stdin/stdout for the lifetime
+// of ctx (or until the client closes its end of the pipe — EOF is a clean stop
+// and yields nil). It binds no port. stdout carries ONLY the protocol stream:
+// the slog default handler in main() writes to os.Stderr, and the SDK's
+// StdioServer error logger defaults to os.Stderr as well (NewStdioServer). The
+// reader/writer parameters exist so tests can drive a full handshake through
+// in-memory streams without touching the real stdio or opening any socket.
+func runStdio(ctx context.Context, stdin io.Reader, stdout io.Writer, s *mcpsrv.MCPServer) error {
+	std := mcpsrv.NewStdioServer(s)
+	return std.Listen(ctx, stdin, stdout)
+}
+
+// buildHandlerStack wires the MCP protocol adapter exactly as production does:
+// a fully-registered MCPServer (from newMCPServer) behind both the
+// streamable-HTTP and legacy SSE transports, plus the auth/logging/compat
+// middleware. It returns the composed http.Handler and the two streaming
+// transports so callers can close their sessions on shutdown (see
+// shutdownServer).
+func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (http.Handler, *mcpsrv.StreamableHTTPServer, *mcpsrv.SSEServer) {
+	mcs := newMCPServer(apiURL, token, agentName)
 
 	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
 		mcpsrv.WithStateLess(true), // no session state: every request is self-contained — restartable/scaleable
@@ -120,7 +175,9 @@ func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (ht
 	mux.Handle("/mcp", streamable) // streamable handles both POST (requests/notifs) and GET (listening stream)
 	mux.Handle("/sse", sse.SSEHandler())
 	mux.Handle("/message", messageHandlerWithSessionFallback(sse.MessageHandler()))
-	mux.HandleFunc("GET /healthz", mcp.HealthzHandler(client))
+	// Second, independent client for the /healthz upstream probe — same URL
+	// and credentials as the one registered inside the MCP server.
+	mux.HandleFunc("GET /healthz", mcp.HealthzHandler(apiclient.New(apiURL, token)))
 
 	return withLogging(logger, withAuth(token, withModernMCPCompat(mux))), streamable, sse
 }
