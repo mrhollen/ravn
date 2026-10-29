@@ -84,6 +84,10 @@ func (m *mockClient) HeartbeatTask(ctx context.Context, id string, actor apiclie
 	return nil, errors.New("unimplemented")
 }
 
+func (m *mockClient) HandoffTask(ctx context.Context, id string, req apiclient.HandoffRequest) (*apiclient.HandoffResult, error) {
+	return nil, errors.New("unimplemented")
+}
+
 func (m *mockClient) AddComment(ctx context.Context, id string, req apiclient.CommentRequest) (*apiclient.Comment, error) {
 	return nil, errors.New("unimplemented")
 }

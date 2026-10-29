@@ -96,10 +96,14 @@ func (f *fakeProjects) Update(_ context.Context, p domain.Project) error {
 // order + Limit/Offset and reports the pre-pagination total.
 type fakeTasks struct {
 	byID map[domain.ID]domain.Task
-	// failUpdate, when non-nil, is invoked by Update before the version check;
-	// a non-nil result replaces the normal outcome (simulates a concurrent
-	// writer racing between the use case's Get and Update).
-	failUpdate func(t domain.Task) error
+    // failUpdate, when non-nil, is invoked by Update before the version check;
+    // a non-nil result replaces the normal outcome (simulates a concurrent
+    // writer racing between the use case's Get and Update).
+    failUpdate func(t domain.Task) error
+    // failHandoff, when non-nil, is invoked by Handoff BEFORE any mutation so a
+    // test can force the atomic handoff write to fail mid-transaction and assert
+    // nothing (task row, comment, events) was persisted.
+    failHandoff func(t domain.Task) error
 	// lastFilter records the most recent List filter so tests can assert the
 	// use case's clamping of Limit/Offset.
 	lastFilter TaskFilter
@@ -391,6 +395,49 @@ func (f *fakeTasks) Heartbeat(_ context.Context, id domain.ID, actor domain.Acto
 	expiry := now.Add(time.Duration(cur.Claim.TTLSeconds()) * time.Second)
 	cur.Claim = cur.Claim.ExtendedTo(expiry) // only the expiry re-stamps (TTL + grant kept)
 	f.byID[id] = cur                         // Version and UpdatedAt intentionally untouched
+	return cur, nil
+}
+
+// Handoff mirrors the SQLite adapter's lease-conditional handoff write in memory:
+// it applies next.Notes/next.Assignee, clears the lease, moves status→todo and
+// bumps version ONCE — but only for an ACTIVE self-lease (name key, unexpired, not
+// archived). On a 0-row outcome it re-reads and classifies exactly like the SQL:
+// no active lease at all → domain.ErrNotClaimed; a different live holder won →
+// *domain.ClaimConflictError{Holder, ExpiresAt}. failHandoff lets tests force the
+// write to error BEFORE any mutation so the use case's rollback/no-partial-state
+// contract is verifiable at the unit level.
+func (f *fakeTasks) Handoff(_ context.Context, id domain.ID, actor domain.Actor, now time.Time, next domain.Task) (domain.Task, error) {
+	if f.failHandoff != nil { // fault injection: the handoff write fails mid-transaction
+		if err := f.failHandoff(next); err != nil {
+			return domain.Task{}, err
+		}
+	}
+	cur, ok := f.byID[id]
+	if !ok {
+		return domain.Task{}, domain.ErrNotFound
+	}
+	activeSelf := cur.Claim.Present() && !cur.Claim.Expiry().Before(now) && sameLeaseHolder(&cur, actor) && !cur.Archived
+	if !activeSelf {
+		// Mirror the SQL's 0-rows classification: a live lease that is not ours is
+		// a conflict; anything else (absent/expired/archived) is "not claimed".
+		fresh := f.byID[id]
+		active := fresh.Claim.Present() && !fresh.Claim.Expiry().Before(now)
+		if !active {
+			return domain.Task{}, fmt.Errorf(
+				"%w: task %s has no active claim lease — claim it before handing off", domain.ErrNotClaimed, id)
+		}
+		holder, exp := fresh.Claim.By(), fresh.Claim.Expiry()
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *holder, ExpiresAt: exp}
+	}
+	cur.Notes = next.Notes
+	cur.Assignee = next.Assignee // nil clears the durable owner
+	if cur.Status != domain.StatusDone {
+		cur.Status = domain.StatusTodo
+	}
+	cur.Claim = cur.Claim.Released() // all-or-nothing clear
+	cur.Version++
+	cur.UpdatedAt = now
+	f.byID[id] = cur
 	return cur, nil
 }
 

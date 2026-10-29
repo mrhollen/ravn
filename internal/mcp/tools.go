@@ -43,6 +43,7 @@ type Client interface {
 	ClaimTask(ctx context.Context, id string, actor apiclient.Actor, ttlSec int) (*apiclient.TaskSummary, error)
 	ReleaseTask(ctx context.Context, id string, actor apiclient.Actor, note string) (*apiclient.TaskSummary, error)
 	HeartbeatTask(ctx context.Context, id string, actor apiclient.Actor) (*apiclient.TaskSummary, error)
+	HandoffTask(ctx context.Context, id string, req apiclient.HandoffRequest) (*apiclient.HandoffResult, error)
 	AddComment(ctx context.Context, id string, req apiclient.CommentRequest) (*apiclient.Comment, error)
 	UpdateNotes(ctx context.Context, id string, actor apiclient.Actor, notes string) (*apiclient.TaskSummary, error)
 	CompleteAC(ctx context.Context, id string, seq int, req apiclient.ACToggleRequest) (*apiclient.AcceptanceCriterion, error)
@@ -68,7 +69,7 @@ func ServerOptions() []mcpsrv.ServerOption {
 	}
 }
 
-// RegisterTools wires every ravn MCP tool onto s (the full 17-tool surface,
+// RegisterTools wires every ravn MCP tool onto s (the full 18-tool surface,
 // docs/API.md route table). defaultActor is the container-default identity
 // (from RAVN_AGENT_NAME) used whenever a mutating call arrives without a
 // usable `actor` object.
@@ -82,6 +83,7 @@ func RegisterTools(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) 
 	registerClaimTask(s, c, defaultActor)
 	registerReleaseTask(s, c, defaultActor)
 	registerHeartbeatTask(s, c, defaultActor)
+	registerHandoffTask(s, c, defaultActor)
 	registerAddComment(s, c, defaultActor)
 	registerUpdateNotes(s, c, defaultActor)
 	registerCompleteAC(s, c, defaultActor)
@@ -616,6 +618,47 @@ func registerHeartbeatTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient
 			return invalidInput("heartbeat_task", "id"), nil
 		}
 		row, err := c.HeartbeatTask(ctx, id, resolveActor(req.GetArguments(), defaultActor))
+		if err != nil {
+			return fail(c, err), nil
+		}
+		return textResult(row)
+	})
+}
+
+func registerHandoffTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+	tool := mcpgo.NewTool("handoff_task",
+		mcpgo.WithDescription(
+			"Atomically hand off a task you hold to its next actor in ONE call, replacing the fragile update_notes + add_comment + assign + release sequence. You must hold the ACTIVE claim lease: an active lease held by someone else → isError with the 409 claim-conflict body verbatim naming the real holder and expiry; no active lease at all → isError with a 409 \"not claimed\" body (claim_task first). On success it, in one transaction: optionally replaces notes, sets/clears the durable assignee, appends exactly ONE comment (kind defaults to \"handoff\"; only \"handoff\"|\"question\" — anything else → 400), clears the lease and moves status back to todo, bumping the version once. Returns compact JSON {\"task\":<fresh row>,\"comment\":<created comment>}. "+actorHint),
+		mcpgo.WithString("id", mcpgo.Required(),
+			mcpgo.Description("Task ULID you currently hold a claim lease on.")),
+		mcpgo.WithString("kind",
+			mcpgo.Description("Comment kind to post: \"handoff\" (default) or \"question\". Any other value → 400 invalid input.")),
+		mcpgo.WithString("body",
+			mcpgo.Description("Optional handoff comment markdown. Omit/empty → a concise synthesized default (e.g. \"Handed off to <receiver> by <actor>\").")),
+		mcpgo.WithString("notes",
+			mcpgo.Description("Optional new notes blob (REPLACE-ON-WRITE). Omit/empty leaves the stored notes untouched — it is never a clear.")),
+		actorShapedProp("to_assignee", "The receiver: sets the durable assignee to this actor. Omit to leave the current assignee unchanged."),
+		mcpgo.WithBoolean("clear_assignee",
+			mcpgo.Description("true = remove the durable assignee (task returns unassigned). Takes precedence over to_assignee if both are given.")),
+		actorProp(),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id := strings.TrimSpace(req.GetString("id", ""))
+		if id == "" {
+			return invalidInput("handoff_task", "id"), nil
+		}
+		args := req.GetArguments()
+		body := apiclient.HandoffRequest{
+			Actor:         resolveActor(args, defaultActor),
+			Kind:          strings.TrimSpace(req.GetString("kind", "")),
+			Body:          req.GetString("body", ""),
+			Notes:         req.GetString("notes", ""),
+			ClearAssignee: req.GetBool("clear_assignee", false),
+		}
+		if !body.ClearAssignee {
+			body.ToAssignee = optionalActor(args, "to_assignee") // nil when absent/empty — leaves assignee unchanged
+		}
+		row, err := c.HandoffTask(ctx, id, body)
 		if err != nil {
 			return fail(c, err), nil
 		}

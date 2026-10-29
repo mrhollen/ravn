@@ -465,6 +465,32 @@ type heartbeatReq struct {
 	Actor actorInput `json:"actor"`
 }
 
+// handoffReq is POST /tasks/{id}/handoff — the atomic lease-conditional handoff.
+// Actor is the sender who currently holds the active claim lease. Kind selects the
+// comment kind (optional; default "handoff"; only "handoff"|"question" — anything
+// else → 400). Body is optional markdown for the comment; empty → a concise
+// synthesized default. Notes, when non-empty after trimming, replaces the resume
+// blob (omitted/empty leaves it untouched — never a clear). ToAssignee sets the
+// durable assignee to the receiver; ClearAssignee takes precedence over ToAssignee
+// when true (the task returns unassigned). On success → 200 with {task, comment};
+// 409 claim-conflict names the real holder+expiry; 409 "not claimed" = no active
+// lease.
+type handoffReq struct {
+	Actor         actorInput `json:"actor"`
+	Kind          string     `json:"kind"`
+	Body          string     `json:"body"`
+	Notes         string     `json:"notes"`
+	ToAssignee    *actorInput `json:"to_assignee"`
+	ClearAssignee bool       `json:"clear_assignee"`
+}
+
+// handoffResp is the 200 body of POST /tasks/{id}/handoff: the fresh task row
+// (version bumped exactly once) plus the single comment appended during it.
+type handoffResp struct {
+	Task    taskSummaryDTO `json:"task"`
+	Comment commentDTO     `json:"comment"`
+}
+
 // commentReq is POST /tasks/{id}/comments. Kind must be one of
 // progress|question|decision|handoff|note (else 400); Body is markdown and
 // must not be empty after trimming (else 400).

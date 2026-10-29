@@ -477,6 +477,66 @@ func (r *taskRepo) Heartbeat(ctx context.Context, taskID domain.ID, actor domain
 	return fresh, nil
 }
 
+// Handoff is the atomic lease-conditional handoff write (see the port doc). It
+// applies ONLY next.Notes and next.Assignee from the composed row — no other field
+// of next is read — and unconditionally clears the claim lease AND moves status to
+// todo (unless already done) and bumps Version once. The WHERE clause is the race
+// guard: it matches only when actor holds an ACTIVE, non-archived lease as of now
+// (claimed_by_name = actor AND claim_expires_at >= now), so a concurrent release or
+// expiry makes the update touch 0 rows. On 0 rows we re-read and classify exactly
+// like Release/Heartbeat: no active lease at all → domain.ErrNotClaimed ("claim
+// first"); a different live holder won → *domain.ClaimConflictError{Holder,
+// ExpiresAt}. The durable assignee is applied from next (nil clears it); notes is
+// replaced as given. Returns the fresh row via a post-write re-read.
+func (r *taskRepo) Handoff(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time, next domain.Task) (domain.Task, error) {
+	var at, an *string
+	if next.Assignee != nil { // present-only: both NULL clears the durable owner
+		t := string(next.Assignee.Type)
+		n := next.Assignee.Name
+		at, an = &t, &n
+	}
+	res, err := r.q.ExecContext(ctx, `
+        UPDATE task SET
+            notes = ?,
+            assignee_type = ?, assignee_name = ?,
+            claimed_by_type = NULL, claimed_by_name = NULL,
+            claimed_at = NULL, claim_expires_at = NULL, claim_ttl_sec = NULL,
+            status = CASE WHEN status = 'done' THEN 'done' ELSE 'todo' END,
+            version = version + 1, updated_at = ?
+        WHERE id = ?
+          AND archived = 0
+          AND claimed_by_name = ?
+          AND claim_expires_at >= ?`,
+		next.Notes, at, an,
+		formatTS(now),
+		string(taskID), actor.Name, formatTS(now))
+	if err != nil {
+		return domain.Task{}, fmt.Errorf("handoff task %s: %w", taskID, err)
+	}
+	n, aerr := res.RowsAffected()
+	if aerr != nil {
+		return domain.Task{}, fmt.Errorf("rows affected after handoff task %s: %w", taskID, aerr)
+	}
+	if n == 0 { // lost the lease race or no active lease — re-read to classify (mirrors Release)
+		current, gerr := r.Get(ctx, taskID)
+		if gerr != nil {
+			return domain.Task{}, gerr // ErrNotFound if the row vanished entirely
+		}
+		active := current.Claim.Present() && !current.Claim.Expiry().Before(now)
+		if !active { // unclaimed, expired, or just released by a concurrent call — nobody to hand off from
+			return domain.Task{}, fmt.Errorf(
+				"%w: task %s has no active claim lease — claim it before handing off", domain.ErrNotClaimed, taskID)
+		}
+		holder, exp := current.Claim.By(), current.Claim.Expiry()
+		return domain.Task{}, &domain.ClaimConflictError{Holder: *holder, ExpiresAt: exp}
+	}
+	fresh, rerr := r.Get(ctx, taskID) // read back the stored result of the guarded write
+	if rerr != nil {
+		return domain.Task{}, fmt.Errorf("re-read task %s after handoff: %w", taskID, rerr)
+	}
+	return fresh, nil
+}
+
 // OpenTaskCounts computes per-(project, status) open task counts in ONE grouped
 // query (ARCHITECTURE §5: GET /projects rows carry per-status counts — keep it
 // a single scan of the task table, no N+1 fan-out per project). Only

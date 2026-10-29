@@ -273,6 +273,21 @@ type TaskRepository interface {
 	// does NOT touch updated_at: keep-alive is not a state change. Returns the
 	// fresh row (doubles as a health check).
 	Heartbeat(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time) (domain.Task, error)
+
+	// Handoff atomically hands a task off in ONE version-guarded, lease-conditional
+	// write: it applies the composed row changes carried in next (Notes and Assignee
+	// only — no other field of next is read), clears the claim lease AND moves status
+	// to todo, and bumps Version exactly once — but ONLY when actor holds an ACTIVE
+	// (unexpired) lease on taskID as of now. The guard is the WHERE clause
+	// (claimed_by_name = actor AND claim_expires_at >= now), so a concurrent release
+	// or expiry cannot race it: the loser path re-reads and classifies — no active
+	// lease at all (unclaimed, expired, or just released) → domain.ErrNotClaimed
+	// wrapped with the task id; a different live holder won → *domain.ClaimConflictError
+	// {Holder, ExpiresAt}. Nothing is mutated on either loser path. The caller sets
+	// next.Version to the stored version it last read and next.UpdatedAt = now; only
+	// Notes/Assignee drive the write (status→todo + lease clear + the single version
+	// bump are applied by this method regardless). Returns the fresh row.
+	Handoff(ctx context.Context, taskID domain.ID, actor domain.Actor, now time.Time, next domain.Task) (domain.Task, error)
 }
 
 // AcceptanceCriterionRepository persists a task's ordered acceptance-criteria

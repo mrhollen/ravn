@@ -303,6 +303,27 @@ type HeartbeatRequest struct {
 	Actor Actor `json:"actor"`
 }
 
+// HandoffRequest is POST /tasks/{id}/handoff — the atomic lease-conditional
+// handoff. Kind defaults to "handoff" when empty (only "handoff"|"question" are
+// legal; anything else → 400). Body, when empty, yields a synthesized default
+// comment. Notes replaces the resume blob only when non-empty after trimming.
+// ClearAssignee takes precedence over ToAssignee when true.
+type HandoffRequest struct {
+	Actor         Actor  `json:"actor"`
+	Kind          string `json:"kind,omitempty"`
+	Body          string `json:"body,omitempty"`
+	Notes         string `json:"notes,omitempty"`
+	ToAssignee    *Actor `json:"to_assignee,omitempty"`
+	ClearAssignee bool   `json:"clear_assignee,omitempty"`
+}
+
+// HandoffResult is the 200 body of POST /tasks/{id}/handoff: the fresh task row
+// (version bumped exactly once) plus the single comment appended during it.
+type HandoffResult struct {
+	Task    TaskSummary `json:"task"`
+	Comment Comment     `json:"comment"`
+}
+
 // CommentRequest is POST /tasks/{id}/comments. Kind must be one of
 // progress|question|decision|handoff|note (else 400); Body is markdown and must
 // be non-empty after trimming (else 400). Appends are NOT idempotent.

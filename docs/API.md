@@ -299,6 +299,7 @@ extras (the web frontend uses them directly).
 | `POST /tasks/{id}/claim`              | acquire/renew the claim lease                            | `claim_task` |
 | `POST /tasks/{id}/release`            | holder releases the lease                                | `release_task` |
 | `POST /tasks/{id}/heartbeat`          | keep the lease alive (no version bump)                   | `heartbeat_task` |
+| `POST /tasks/{id}/handoff`            | atomic lease-conditional handoff (notes/assignee + one comment + release) → 200 {task,comment} | `handoff_task` |
 | `POST /tasks/{id}/comments`           | append a typed comment → 201                             | `add_comment` |
 | `GET  /tasks/{id}/comments`           | paged comment thread + total (UI)                        | — |
 | `PUT  /tasks/{id}/notes`              | replace the notes blob                                   | `update_notes` |

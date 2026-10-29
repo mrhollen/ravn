@@ -1174,6 +1174,218 @@ func (s *Tasks) Heartbeat(ctx context.Context, actor domain.Actor, id domain.ID)
 	return stored, nil
 }
 
+// HandOffInput carries the optional effects of an atomic handoff (see HandOff):
+// Kind + Body select the comment that is ALWAYS appended; Notes replaces the
+// resume blob when non-empty after trimming; Assignee / ClearAssignee move
+// durable ownership exactly like Update (ClearAssignee wins over Assignee).
+type HandOffInput struct {
+	Kind  domain.CommentKind // CommentHandoff|CommentQuestion; empty → CommentHandoff
+	Body  string             // optional; empty after trimming → a synthesized default
+	Notes string             // optional; non-empty after trimming → replace notes
+	Assignee *domain.Actor   // optional; set the durable assignee to the receiver
+	ClearAssignee bool       // takes precedence over Assignee when true (mirrors Update)
+}
+
+// HandOffResult is the atomic handoff outcome: the fresh task row (version
+// bumped exactly once) plus the single comment appended during the handoff.
+type HandOffResult struct {
+	Task    domain.Task
+	Comment domain.Comment
+}
+
+// HandOff atomically hands a task off to its next actor in ONE unit of work,
+// replacing the fragile update_notes + add_comment + assign + release sequence
+// (ARCHITECTURE §5 POST /tasks/{id}/handoff, MCP handoff_task). It is gated on
+// the actor holding an ACTIVE claim lease; on success it (in one transaction)
+// optionally replaces notes, sets/clears the durable assignee, appends exactly
+// ONE comment of in.Kind with in.Body (synthesizing a default body when empty),
+// clears the lease and moves status to todo — bumping the task version EXACTLY
+// once. It emits a `noted` event when notes change, an `assigned` event when the
+// assignee changes, ONE `commented` event, and ONE `released` event (the release
+// carries the doing→todo transition; no separate status-changed is emitted).
+//
+// Validation fails with domain.ErrInvalid BEFORE anything is written: a kind that
+// is neither handoff nor question, an over-long body, or an over-long notes blob.
+// The holder guard is race-safe in the repository's lease-conditional write: a
+// foreign active lease surfaces as *domain.ClaimConflictError{Holder, ExpiresAt}
+// and no active lease at all as domain.ErrNotClaimed — both with nothing mutated
+// (mirrors release/heartbeat). Unknown task → domain.ErrNotFound.
+func (s *Tasks) HandOff(ctx context.Context, actor domain.Actor, id domain.ID, in HandOffInput) (HandOffResult, error) {
+	a, err := normalizeActor(actor)
+	if err != nil {
+		return HandOffResult{}, err
+	}
+	// Kind: empty → default handoff; otherwise only handoff|question are legal.
+	kind := in.Kind
+	if kind == "" {
+		kind = domain.CommentHandoff
+	}
+	if kind != domain.CommentHandoff && kind != domain.CommentQuestion {
+		return HandOffResult{}, fmt.Errorf(
+			"%w: handoff comment kind must be %q or %q, got %q",
+			domain.ErrInvalid, domain.CommentHandoff, domain.CommentQuestion, kind)
+	}
+
+	// Assignee (mirrors Update's precedence: ClearAssignee wins over Assignee).
+	var newAssignee *domain.Actor
+	if !in.ClearAssignee && in.Assignee != nil {
+		norm, aerr := normalizeActor(*in.Assignee)
+		if aerr != nil {
+			return HandOffResult{}, aerr
+		}
+		newAssignee = &norm
+	}
+
+	// Body: synthesize a concise default when the caller left it empty. A bare
+	// clear with no receiver still hands off (the task just returns to unassigned).
+	body := strings.TrimSpace(in.Body)
+	if body == "" {
+		switch {
+		case in.ClearAssignee:
+			body = fmt.Sprintf("Lease released by %s (task unassigned)", a.Name)
+		case newAssignee != nil:
+			body = fmt.Sprintf("Handed off to %s by %s", newAssignee.Name, a.Name)
+		default:
+			body = fmt.Sprintf("Handed off by %s", a.Name)
+		}
+	}
+	if err := domain.ValidateCommentBody(body); err != nil {
+		return HandOffResult{}, err
+	}
+
+	// Notes: replace-on-write only when the incoming blob is non-empty after
+	// trimming; an empty/blank blob leaves the stored notes untouched (never a clear).
+	replaceNotes := strings.TrimSpace(in.Notes) != ""
+	if replaceNotes {
+		if nerr := domain.ValidateTaskNotes(in.Notes); nerr != nil {
+			return HandOffResult{}, nerr
+		}
+	}
+
+	now := s.clock.Now()
+	var res HandOffResult
+	var r Repos
+	err = s.uow.Run(ctx, &r, func() error {
+		cur, gerr := r.Tasks.Get(ctx, id) // pre-state for the events; read + guarded write share this one tx
+		if gerr != nil {
+			return gerr // ErrNotFound for unknown IDs
+		}
+
+		// Compose the next row from the current state. Only Notes/Assignee drive
+		// the repository's lease-conditional write; status→todo + the lease clear
+		// + the single version bump are applied by Handoff itself.
+		next := cur
+		notesChanged := false
+		if replaceNotes && in.Notes != cur.Notes {
+			next.Notes = in.Notes
+			notesChanged = true
+		}
+		assigneeChanged := false
+		switch {
+		case in.ClearAssignee:
+			if cur.Assignee != nil {
+				next.Assignee = nil
+				assigneeChanged = true
+			}
+		case newAssignee != nil && !actorEqual(cur.Assignee, newAssignee):
+			next.Assignee = newAssignee
+			assigneeChanged = true
+		}
+		next.Status = domain.StatusTodo
+		next.Claim = cur.Claim.Released() // all-or-nothing clear (mirrors Update)
+		next.Version = cur.Version
+		next.UpdatedAt = now
+		if verr := next.Validate(); verr != nil { // fail closed: an inconsistent row never reaches an adapter
+			return verr
+		}
+
+		st, herr := r.Tasks.Handoff(ctx, id, a, now, next)
+		if herr != nil {
+			return herr // *domain.ClaimConflictError / domain.ErrNotClaimed — propagate verbatim; nothing written
+		}
+
+		// The single comment appended during the handoff (always exactly one).
+		c := domain.Comment{
+			ID:        s.idgen.NewID(),
+			TaskID:    id,
+			Kind:      kind,
+			Body:      body,
+			Actor:     a,
+			CreatedAt: now,
+		}
+		if cerr := r.Comments.Add(ctx, c); cerr != nil {
+			return cerr
+		}
+
+		var evs []domain.Event
+		if notesChanged {
+			evs = append(evs, domain.Event{
+				ID:        s.idgen.NewID(),
+				ProjectID: &st.ProjectID,
+				TaskID:    &st.ID,
+				Actor:     a,
+				Kind:      domain.EventNoted,
+				Before:    compactJSON(map[string]string{"notes": cur.Notes}),
+				After:     compactJSON(map[string]string{"notes": in.Notes}),
+				At:        now,
+			})
+		}
+		if assigneeChanged {
+			evs = append(evs, domain.Event{
+				ID:        s.idgen.NewID(),
+				ProjectID: &st.ProjectID,
+				TaskID:    &st.ID,
+				Actor:     a,
+				Kind:      domain.EventAssigned,
+				Before:    compactJSON(map[string]any{"assignee": actorJSON(cur.Assignee)}),
+				After:     compactJSON(map[string]any{"assignee": actorJSON(st.Assignee)}),
+				At:        now,
+			})
+		}
+		evs = append(evs, domain.Event{ // the appended handoff/question comment (shape mirrors Comments.Add)
+			ID:        s.idgen.NewID(),
+			ProjectID: &st.ProjectID,
+			TaskID:    &st.ID,
+			Actor:     a,
+			Kind:      domain.EventCommented,
+			After:     compactJSON(map[string]any{
+				"kind": string(kind),
+				"body": truncateEventBody(body, eventBodyMax),
+			}),
+			At: now,
+		})
+		evs = append(evs, domain.Event{ // the doing→todo lease release (shape mirrors Release)
+			ID:        s.idgen.NewID(),
+			ProjectID: &st.ProjectID,
+			TaskID:    &st.ID,
+			Actor:     a,
+			Kind:      domain.EventReleased,
+			Before:    compactJSON(map[string]any{
+				"status":           string(cur.Status),
+				"holder":           actorJSON(cur.Claim.By()),
+				"claim_expires_at": dueAtJSON(claimExpiryPtr(cur)),
+			}),
+			After: compactJSON(map[string]any{
+				"status": string(st.Status),
+				"holder": nil, // the lease is cleared
+			}),
+			At: now,
+		})
+		for _, e := range evs {
+			if aerr := r.Events.Append(ctx, e); aerr != nil {
+				return aerr
+			}
+		}
+
+		res = HandOffResult{Task: st, Comment: c}
+		return nil
+	})
+	if err != nil {
+		return HandOffResult{}, err
+	}
+	return res, nil
+}
+
 // sameLeaseHolder reports whether actor holds cur's current lease.
 //
 // Lease-holder identity model — UNIFIED NAME IDENTITY (explicit, per

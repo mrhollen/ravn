@@ -254,6 +254,25 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 		data, _ := json.Marshal(row)
 		writeJSON(w, http.StatusOK, string(data))
 	})
+	mux.HandleFunc("POST /api/v1/tasks/{id}/handoff", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		id := r.PathValue("id")
+		if id == "HOLDING" {
+			writeJSON(w, http.StatusConflict, mockConflictBody) // foreign active lease → verbatim 409
+			return
+		}
+		var req apiclient.HandoffRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: POST /handoff body not JSON: %v (%s)", err, b)
+			return
+		}
+		out := map[string]any{
+			"task":    map[string]any{"id": id, "title": "Fix login bug", "status": "todo", "priority": 3, "version": 6, "created_at": "2026-09-25T18:02:11Z", "updated_at": "2026-09-26T16:20:00Z"},
+			"comment": map[string]any{"id": "CH", "kind": req.Kind, "body": req.Body, "actor": req.Actor, "created_at": "2026-09-26T15:50:00Z"},
+		}
+		data, _ := json.Marshal(out)
+		writeJSON(w, http.StatusOK, string(data))
+	})
 	mux.HandleFunc("POST /api/v1/tasks/{id}/comments", func(w http.ResponseWriter, r *http.Request) {
 		b := record(r)
 		var req apiclient.CommentRequest
@@ -384,7 +403,7 @@ func jsonString(s string) string {
 
 var wantToolNames = []string{
 	"list_projects", "create_project", "list_tasks", "get_task", "create_task",
-	"update_task", "claim_task", "release_task", "heartbeat_task", "add_comment",
+	"update_task", "claim_task", "release_task", "heartbeat_task", "handoff_task", "add_comment",
 	"update_notes", "complete_ac", "add_ac", "remove_ac", "edit_ac", "attach_artifact", "relate_tasks",
 }
 
@@ -497,7 +516,7 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 	c := dial(t, mcpSrv.URL, ctx)
 	defer func() { _ = c.Close() }()
 
-	// tools/list shows exactly the 17 ravn tools.
+	// tools/list shows exactly the 18 ravn tools.
 	list, err := c.ListTools(ctx, mcpgo.ListToolsRequest{})
 	if err != nil {
 		t.Fatalf("tools/list: %v", err)
@@ -1429,6 +1448,68 @@ func TestReleaseAndHeartbeatRoundTrip(t *testing.T) {
 	}
 	if hb.Actor.Name != "runner-2" || strings.Contains(ccHb.body, "note") {
 		t.Errorf("heartbeat upstream body = %s (want actor only)", ccHb.body)
+	}
+}
+
+// TestHandoffTaskRoundTrip proves handoff_task wiring at the tool level:
+// args decode into the correct apiclient.HandoffRequest and are forwarded verbatim
+// to POST /tasks/{id}/handoff; a success renders {task,comment}; a foreign active
+// lease returns the upstream 409 body VERBATIM (the isError text == mockConflictBody).
+func TestHandoffTaskRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// Success: full handoff with kind + body + to_assignee + notes. The tool must
+	// route these into the request body and render the {task, comment} result.
+	res := callTool(t, c, ctx, "handoff_task", map[string]any{
+		"id":           "T1",
+		"kind":         "handoff",
+		"body":         "Handing off to ada; migration finished, see notes.",
+		"notes":        "Next: verify the rollback script.",
+		"to_assignee":  map[string]any{"name": "ada", "type": "human"},
+		"actor":        map[string]any{"name": "runner-2", "type": "agent"},
+	})
+	if res.IsError {
+		t.Fatalf("handoff_task returned isError: %s", firstText(t, res))
+	}
+	out := asMap(t, firstText(t, res))
+	task, _ := out["task"].(map[string]any)
+	comment, _ := out["comment"].(map[string]any)
+	if task == nil || comment == nil {
+		t.Fatalf("handoff_task result missing task/comment: %s", firstText(t, res))
+	}
+	if task["status"] != "todo" || task["version"] != float64(6) {
+		t.Errorf("handoff task row = %v", task)
+	}
+	if comment["kind"] != "handoff" || comment["body"] != "Handing off to ada; migration finished, see notes." {
+		t.Errorf("handoff comment row = %v", comment)
+	}
+	cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/handoff")
+	var ho apiclient.HandoffRequest
+	if err := json.Unmarshal([]byte(cc.body), &ho); err != nil {
+		t.Fatalf("handoff upstream body not JSON: %v (%s)", err, cc.body)
+	}
+	if ho.Actor.Name != "runner-2" || ho.Kind != "handoff" || ho.Body == "" || ho.Notes == "" {
+		t.Errorf("handoff upstream body = %s", cc.body)
+	}
+	if ho.ToAssignee == nil || ho.ToAssignee.Name != "ada" || ho.ToAssignee.Type != "human" {
+		t.Errorf("handoff to_assignee not forwarded: %v", ho.ToAssignee)
+	}
+
+	// Foreign active lease: the tool must surface the 409 body byte-for-byte.
+	res = callTool(t, c, ctx, "handoff_task", map[string]any{
+		"id":    "HOLDING",
+		"actor": map[string]any{"name": "other-agent", "type": "agent"},
+	})
+	if !res.IsError {
+		t.Fatalf("handoff_task on foreign-held task did not error: %s", firstText(t, res))
+	}
+	if got := firstText(t, res); got != mockConflictBody {
+		t.Errorf("handoff_task conflict body not verbatim:\n got %s\nwant %s", got, mockConflictBody)
 	}
 }
 

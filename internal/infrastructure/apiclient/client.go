@@ -192,6 +192,19 @@ func (c *Client) HeartbeatTask(ctx context.Context, id string, actor Actor) (*Ta
 	return &out, nil
 }
 
+// HandoffTask → POST /tasks/{id}/handoff. The atomic lease-conditional handoff:
+// notes/assignee change + exactly one comment + the claim release land in a single
+// transaction (200 {task,comment}). A foreign active lease → 409 naming the real
+// holder+expiry; no active lease → 409 "not claimed"; bad kind/receiver → 400.
+func (c *Client) HandoffTask(ctx context.Context, id string, req HandoffRequest) (*HandoffResult, error) {
+	var out HandoffResult
+	path := "/tasks/" + url.PathEscape(id) + "/handoff"
+	if err := c.do(ctx, "HandoffTask", http.MethodPost, path, nil, &req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // AddComment → POST /tasks/{id}/comments. 201 with the fresh comment row.
 // Appends are NOT idempotent — a retry after a timeout may duplicate.
 func (c *Client) AddComment(ctx context.Context, id string, req CommentRequest) (*Comment, error) {

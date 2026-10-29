@@ -138,6 +138,50 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toSummary(fresh))
 }
 
+// handleHandoffTask → POST /api/v1/tasks/{id}/handoff. The atomic lease-conditional
+// handoff: the sender must hold the active claim lease; on success the use case, in
+// ONE transaction, optionally replaces notes, sets/clears the durable assignee,
+// appends exactly one comment (kind defaults to "handoff"; only "handoff"|"question"
+// — anything else → 400), clears the lease and moves status to todo, bumping the
+// version once. 200 {task, comment}; foreign active lease → 409 holder+expiry; no
+// active lease → 409 "not claimed"; invalid kind/receiver/over-long body → 400.
+func (a *App) handleHandoffTask(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req handoffReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	actor, err := req.Actor.toDomain()
+	if err != nil {
+		writeAppError(w, err, "task", id) // bad actor type / empty name → 400
+		return
+	}
+	in := application.HandOffInput{
+		Kind:          domain.CommentKind(req.Kind),
+		Body:          req.Body,
+		Notes:         req.Notes,
+		ClearAssignee: req.ClearAssignee, // precedence over ToAssignee (mirrors update_task)
+	}
+	if !req.ClearAssignee && req.ToAssignee != nil {
+		target, terr := req.ToAssignee.toDomain()
+		if terr != nil {
+			writeAppError(w, terr, "task", id) // invalid receiver → 400
+			return
+		}
+		in.Assignee = &target
+	}
+	res, err := a.Tasks.HandOff(ctx, actor, id, in)
+	if err != nil {
+		writeAppError(w, err, "task", id) // ClaimConflictError → 409 holder+expiry; ErrNotClaimed → 409 not claimed; bad kind/over-long body → 400
+		return
+	}
+	writeJSON(w, http.StatusOK, handoffResp{Task: toSummary(res.Task), Comment: toComment(res.Comment)})
+}
+
 // --- comments ----------------------------------------------------------------------
 
 // handleAddComment → POST /api/v1/tasks/{id}/comments. Typed kind + markdown
