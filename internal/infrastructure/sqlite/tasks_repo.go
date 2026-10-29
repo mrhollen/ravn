@@ -512,6 +512,16 @@ func (r *taskRepo) OpenTaskCounts(ctx context.Context) ([]application.TaskCountR
 
 // --- query building + scanning ----------------------------------------------------
 
+// escapeLikePattern escapes the LIKE metacharacters so a user-supplied search
+// term matches literally (verbatim). Backslash is escaped FIRST because it is
+// the escape character; strings.NewReplacer does a single left-to-right pass
+// over the input and never re-scans its own replacements, so one backslash in
+// yields two out ("a\b" → "a\\b", "100%" → "100\%", "s_1" → "s\_1") — safe to
+// pair with a LIKE ... ESCAPE '\' clause.
+func escapeLikePattern(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
 // taskListWhere renders TaskFilter's conditions as a WHERE clause fragment and
 // its positional args. Archived is always applied: false (zero value) = open
 // tasks only, the REST default; true = archived tasks only.
@@ -560,8 +570,12 @@ func taskListWhere(f application.TaskFilter) (string, []any) {
 	if f.Q != "" {
 		// Case-insensitive LIKE over title+description+notes. LIKE is already
 		// ASCII-case-insensitive; lower() makes it explicit and consistent.
-		pattern := "%" + strings.ToLower(f.Q) + "%"
-		conds = append(conds, "(lower(title) LIKE ? OR lower(description) LIKE ? OR lower(notes) LIKE ?)")
+		// escapeLikePattern turns % / _ / \ into literal matches, so a search
+		// term is matched VERBATIM; ESCAPE '\' tells SQLite which character
+		// performs that escaping.
+		pattern := "%" + escapeLikePattern(strings.ToLower(f.Q)) + "%"
+		conds = append(conds,
+			"(lower(title) LIKE ? ESCAPE '\\' OR lower(description) LIKE ? ESCAPE '\\' OR lower(notes) LIKE ? ESCAPE '\\')")
 		args = append(args, pattern, pattern, pattern)
 	}
 
