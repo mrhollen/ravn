@@ -49,6 +49,7 @@ import {
   formatClaimCountdown,
   isClaimExpired,
   isOverdue,
+  isStalledExpired,
   localCalendarToday,
   initials,
   priorityClass,
@@ -200,6 +201,8 @@ export interface BoardQueryParams {
   owner?: string;
   due?: string;
   unblocked?: boolean;
+  /** Expired/stalled filter active (client-side predicate, see isStalledExpired). */
+  stalled?: boolean;
   q?: string;
   sort?: SortKey;
   dir?: SortDir;
@@ -241,6 +244,11 @@ export function parseBoardQueryParams(search: string): BoardQueryParams {
     result.unblocked = true;
   }
 
+  const stalled = params.get("stalled");
+  if (stalled === "1" || stalled === "true") {
+    result.stalled = true;
+  }
+
   const q = params.get("q");
   if (q && q.trim() !== "") {
     result.q = q.trim();
@@ -276,6 +284,9 @@ export function buildBoardQueryString(params: BoardQueryParams): string {
   }
   if (params.unblocked) {
     q.set("unblocked", "1");
+  }
+  if (params.stalled) {
+    q.set("stalled", "1");
   }
   if (params.q && params.q.trim() !== "") {
     q.set("q", params.q.trim());
@@ -2060,6 +2071,11 @@ export function ravnApp() {
     filterPriority: "" as string,
     filterAssignee: "" as string,
     filterUnblocked: false,
+    /** True while the "Expired / stalled" filter is active: restricts the board
+     *  to doing tasks whose claim lease has lapsed or that have been idle for
+     *  more than 60 minutes (isStalledExpired). Purely client-side — the server
+     *  has no equivalent list parameter. */
+    filterStalled: false,
     filterDue: "" as string,
     filterSearch: "",
 
@@ -2161,6 +2177,7 @@ export function ravnApp() {
         this.filterPriority !== "" ||
         this.filterAssignee !== "" ||
         this.filterUnblocked ||
+        this.filterStalled ||
         this.filterDue !== "" ||
         this.filterSearch.trim() !== ""
       );
@@ -2170,12 +2187,43 @@ export function ravnApp() {
       this.filterPriority = "";
       this.filterAssignee = "";
       this.filterUnblocked = false;
+      this.filterStalled = false;
       this.filterDue = "";
       this.filterSearch = "";
       // Explicit clear (in addition to the filterSearch $watch that does the
       // same in-browser): cancel any pending debounced search, retire the
       // in-flight response, drop the desc/notes match set.
       this.scheduleFullTextSearch();
+      this.syncUrlState(true);
+    },
+
+    /** Number of `doing` tasks that are abandoned/stalled-expired — expired
+     *  claim lease OR no update for > 60 minutes (isStalledExpired). Reads
+     *  `this.nowTick` so the count re-evaluates live every second, exactly like
+     *  claimExpired(). Counts PRE-FILTER board rows by design: the alert
+     *  summarizes the whole project's doing column, not the filtered view. */
+    stalledExpiredCount(): number {
+      const b = this.board;
+      if (!b) return 0;
+      let n = 0;
+      for (const t of b.tasks.doing ?? []) {
+        if (isStalledExpired(t, this.nowTick)) n++;
+      }
+      return n;
+    },
+
+    /** Accessible title/label for the toolbar alert pill: "N abandoned/stalled
+     *  task(s)" — singular/plural aware. */
+    stalledAlertLabel(): string {
+      const n = this.stalledExpiredCount();
+      return `${n} abandoned/stalled ${n === 1 ? "task" : "tasks"}`;
+    },
+
+    /** Invert the Expired/stalled filter and sync the URL immediately (same
+     *  immediacy as every other filter control). The toolbar alert pill is a
+     *  button on this state; the checkbox in the filter bar binds it directly. */
+    toggleStalledFilter(): void {
+      this.filterStalled = !this.filterStalled;
       this.syncUrlState(true);
     },
 
@@ -2190,6 +2238,7 @@ export function ravnApp() {
         owner: this.filterAssignee,
         due: this.filterDue,
         unblocked: this.filterUnblocked,
+        stalled: this.filterStalled,
         q: this.filterSearch,
         sort: this.sortKey,
         dir: this.sortDir,
@@ -2246,6 +2295,9 @@ export function ravnApp() {
         }
         if (params.unblocked !== undefined || isPopState) {
           this.filterUnblocked = params.unblocked ?? false;
+        }
+        if (params.stalled !== undefined || isPopState) {
+          this.filterStalled = params.stalled ?? false;
         }
         if (params.q !== undefined || isPopState) {
           this.filterSearch = params.q ?? "";
@@ -2385,6 +2437,13 @@ export function ravnApp() {
         }
         if (this.filterUnblocked) {
           tasks = tasks.filter((t) => !this.isBlocked(t.id));
+        }
+        // Expired/stalled (epic 01M5XSNR8VWZTP66GT7ABNSJC1): restrict the board
+        // to doing tasks with a lapsed claim lease or no update in > 60 min.
+        // nowTick-driven, so the visible set re-evaluates live each second —
+        // exactly like the alert pill's count (stalledExpiredCount()).
+        if (this.filterStalled) {
+          tasks = tasks.filter((t) => isStalledExpired(t, this.nowTick));
         }
         // Calendar-day comparisons (due dates are days, not instants): "YYYY-MM-DD"
         // sorts lexicographically, so ranges are plain string compares. This keeps
@@ -5078,6 +5137,7 @@ export function ravnApp() {
           "filterAssignee",
           "filterDue",
           "filterUnblocked",
+          "filterStalled",
           "filterSearch",
           "sortKey",
           "sortDir",

@@ -11,6 +11,7 @@ import {
   formatClaimCountdown,
   isClaimExpired,
   isOverdue,
+  isStalledExpired,
   localCalendarToday,
   safeStorage,
 } from "../src/util.ts";
@@ -3186,6 +3187,131 @@ test("isClaimExpired mirrors claimHint's 'lease expired' branch", () => {
     isClaimExpired({ claimed_by: actor, claim_expires_at: "not-a-date" }, baseNow),
     false,
   );
+});
+
+test("isStalledExpired flags only doing tasks with a lapsed lease or >60min idle (01M5XSNR8VWZTP66GT7ABNSJC1)", () => {
+  const baseNow = 1_700_000_000_000;
+  const actor = { name: "a", type: "agent" };
+  const freshIso = new Date(baseNow - 5 * 60_000).toISOString(); // touched 5 min ago
+  const staleIso = new Date(baseNow - 61 * 60_000).toISOString(); // untouched for 61 min
+
+  // doing + expired lease → stalled regardless of how recent the update is.
+  assert.equal(
+    isStalledExpired(
+      { status: "doing", updated_at: freshIso, claimed_by: actor, claim_expires_at: new Date(baseNow - 60_000).toISOString() },
+      baseNow,
+    ),
+    true,
+  );
+
+  // doing + unclaimed + idle > 60 min → stalled.
+  assert.equal(isStalledExpired({ status: "doing", updated_at: staleIso }, baseNow), true);
+
+  // doing + active lease + recently touched → healthy.
+  assert.equal(
+    isStalledExpired(
+      { status: "doing", updated_at: freshIso, claimed_by: actor, claim_expires_at: new Date(baseNow + 800_000).toISOString() },
+      baseNow,
+    ),
+    false,
+  );
+
+  // doing + unclaimed + recently touched → healthy.
+  assert.equal(isStalledExpired({ status: "doing", updated_at: freshIso }, baseNow), false);
+
+  // todo/done are NEVER stalled — even with an expired lease or a stale update.
+  assert.equal(
+    isStalledExpired(
+      { status: "todo", updated_at: staleIso, claimed_by: actor, claim_expires_at: new Date(baseNow - 60_000).toISOString() },
+      baseNow,
+    ),
+    false,
+  );
+  assert.equal(isStalledExpired({ status: "done", updated_at: staleIso }, baseNow), false);
+
+  // Boundary: EXACTLY 60 min idle is not stalled (strictly-greater window).
+  const exactIso = new Date(baseNow - 60 * 60_000).toISOString();
+  assert.equal(isStalledExpired({ status: "doing", updated_at: exactIso }, baseNow), false);
+
+  // Unparseable updated_at with no expired lease → cannot establish idle age → not stalled.
+  assert.equal(isStalledExpired({ status: "doing", updated_at: "not-a-date" }, baseNow), false);
+});
+
+test("Stalled filter: pill count, columns() predicate, and filter wiring (01M5XSNR8VWZTP66GT7ABNSJC1)", () => {
+  const app = ravnApp() as any;
+  const now = 1_700_000_000_000;
+  app.nowTick = now;
+  const actor = { name: "runner", type: "agent" };
+  const freshIso = new Date(now - 2 * 60_000).toISOString();
+  const staleIso = new Date(now - 90 * 60_000).toISOString();
+  app.board = {
+    project_id: "p",
+    counts: { todo: 1, doing: 3, done: 0 },
+    tasks: {
+      todo: [{ id: "t1", title: "todo bystander", status: "todo", priority: 2, version: 1, created_at: freshIso, updated_at: staleIso }],
+      doing: [
+        // expired lease → stalled (updated recently, but the lease lapsed)
+        { id: "d1", title: "stalled-lease", status: "doing", priority: 2, version: 1, created_at: freshIso, updated_at: freshIso, claimed_by: actor, claim_expires_at: new Date(now - 60_000).toISOString() },
+        // unclaimed + idle > 60 min → stalled
+        { id: "d2", title: "stalled-idle", status: "doing", priority: 2, version: 1, created_at: freshIso, updated_at: staleIso },
+        // active lease + fresh update → healthy
+        { id: "d3", title: "healthy", status: "doing", priority: 2, version: 1, created_at: freshIso, updated_at: freshIso, claimed_by: actor, claim_expires_at: new Date(now + 600_000).toISOString() },
+      ],
+      done: [],
+    },
+  } as any;
+
+  // Pill count + accessible label.
+  assert.equal(app.stalledExpiredCount(), 2);
+  assert.equal(app.stalledAlertLabel(), "2 abandoned/stalled tasks");
+
+  // columns() with the filter ON keeps exactly the stalled set (composes like other filters).
+  app.filterStalled = true;
+  const cols = app.columns();
+  const doingCol = cols.find((c: any) => c.status === "doing");
+  assert.deepEqual(doingCol.tasks.map((t: any) => t.id).sort(), ["d1", "d2"], "only stalled doing tasks stay visible");
+  assert.equal(cols.find((c: any) => c.status === "todo")!.tasks.length, 0, "todo tasks can never match the stalled set");
+
+  // First-class filter semantics: counts as active; clearFilters resets it.
+  assert.equal(app.hasActiveFilters(), true);
+  app.clearFilters();
+  assert.equal(app.filterStalled, false);
+  assert.equal(app.hasActiveFilters(), false);
+  assert.equal(app.columns().find((c: any) => c.status === "doing")!.tasks.length, 3, "clearing restores the full board");
+
+  // toggleStalledFilter() inverts the state (the alert pill's click handler).
+  app.toggleStalledFilter();
+  assert.equal(app.filterStalled, true);
+  app.toggleStalledFilter();
+  assert.equal(app.filterStalled, false);
+});
+
+test("Stalled filter URL sync: stalled=1 parses, builds, and round-trips (01M5XSNR8VWZTP66GT7ABNSJC1)", () => {
+  // Parsing.
+  const parsed = parseBoardQueryParams("?project=p&unblocked=1&stalled=1");
+  assert.equal(parsed.stalled, true);
+  assert.equal(parsed.unblocked, true);
+  assert.equal(parseBoardQueryParams("?project=p&stalled=0").stalled, undefined, "only '1'/'true' activate the filter");
+
+  // Building + round-trip.
+  const built = buildBoardQueryString({ project: "p", stalled: true });
+  assert.equal(built, "?project=p&stalled=1");
+  assert.equal(parseBoardQueryParams(built).stalled, true);
+
+  // The app instance includes the flag only while active.
+  const app = ravnApp() as any;
+  app.selectedProjectId = "p";
+  app.filterStalled = false;
+  assert.ok(!app.buildBoardQueryString().includes("stalled="));
+  app.filterStalled = true;
+  assert.ok(app.buildBoardQueryString().includes("stalled=1"));
+
+  // applyQueryParams restores (and popstate clears) the toggle.
+  const fresh = ravnApp() as any;
+  fresh.applyQueryParams({ stalled: true }, false);
+  assert.equal(fresh.filterStalled, true);
+  fresh.applyQueryParams({}, true); // popstate with no stalled param → reset to off
+  assert.equal(fresh.filterStalled, false);
 });
 
 test("Countdown: ravnApp.claimExpired flips live with nowTick", () => {

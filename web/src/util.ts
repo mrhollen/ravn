@@ -145,6 +145,28 @@ export function isClaimExpired(
   return diff <= 0;
 }
 
+/** Idle threshold for stalled detection: a `doing` task whose last update is
+ *  OLDER than this window counts as abandoned even when its claim state alone
+ *  doesn't say so (e.g. never claimed, or lease long gone). */
+export const STALLED_IDLE_MS = 60 * 60 * 1000; // 60 minutes
+
+/** "Stalled-expired" predicate (epic 01M5XSNR8VWZTP66GT7ABNSJC1): a task is
+ *  stalled when it sits in `doing` AND its claim lease has lapsed
+ *  ({@link isClaimExpired}) OR it has not been touched for longer than
+ *  {@link STALLED_IDLE_MS} (idle, from `updated_at`). todo/done tasks are
+ *  NEVER stalled. `nowMs` is injectable so the live UI (app.nowTick) and tests
+ *  evaluate the same predicate deterministically — mirroring isClaimExpired(). */
+export function isStalledExpired(
+  t: Pick<TaskSummary, "status" | "updated_at" | "claimed_by" | "claim_expires_at">,
+  nowMs = Date.now(),
+): boolean {
+  if (t.status !== "doing") return false;
+  if (isClaimExpired(t, nowMs)) return true;
+  const updated = Date.parse(t.updated_at);
+  if (Number.isNaN(updated)) return false; // unparseable timestamp → can't establish idle age
+  return nowMs - updated > STALLED_IDLE_MS;
+}
+
 /** Real-time MM:SS countdown until lease expiry for the claim capsule. */
 export function formatClaimCountdown(claimExpiresAt?: string | null, nowMs = Date.now()): string {
   if (!claimExpiresAt) return "";
