@@ -37,6 +37,7 @@ type Client interface {
 	GetProject(ctx context.Context, id string) (*apiclient.Project, error)
 	ProjectReport(ctx context.Context, id string, stalledMinutes int, since string) (*apiclient.ProjectReport, error)
 	CreateProject(ctx context.Context, req apiclient.CreateProjectRequest) (*apiclient.Project, error)
+	UpdateProject(ctx context.Context, id string, req apiclient.UpdateProjectRequest) (*apiclient.Project, error)
 	ListTasks(ctx context.Context, f apiclient.TaskFilter) (*apiclient.TaskList, error)
 	GetTask(ctx context.Context, id string, commentLimit, eventLimit int) (*apiclient.TaskDetail, error)
 	CreateTask(ctx context.Context, req apiclient.CreateTaskRequest) (*apiclient.CreateTaskResponse, error)
@@ -70,13 +71,15 @@ func ServerOptions() []mcpsrv.ServerOption {
 	}
 }
 
-// RegisterTools wires every ravn MCP tool onto s (the full 19-tool surface,
+// RegisterTools wires every ravn MCP tool onto s (the full 21-tool surface,
 // docs/API.md route table). defaultActor is the container-default identity
 // (from RAVN_AGENT_NAME) used whenever a mutating call arrives without a
 // usable `actor` object.
 func RegisterTools(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	registerListProjects(s, c)
 	registerCreateProject(s, c, defaultActor)
+	registerGetProject(s, c)
+	registerUpdateProject(s, c, defaultActor)
 	registerListTasks(s, c)
 	registerGetTask(s, c)
 	registerProjectReport(s, c)
@@ -279,6 +282,77 @@ func registerCreateProject(s *mcpsrv.MCPServer, c Client, defaultActor apiclient
 			Name:        name,
 			Description: strings.TrimSpace(req.GetString("description", "")),
 		})
+		if err != nil {
+			return fail(c, err), nil
+		}
+		return textResult(row)
+	})
+}
+
+// registerGetProject → GET /projects/{id}: the single project row (id, name,
+// description, archived, timestamps). Read-only like list_projects/get_task —
+// no actor argument, there is no body or event to attribute. Unknown id → the
+// 404 body verbatim.
+func registerGetProject(s *mcpsrv.MCPServer, c Client) {
+	tool := mcpgo.NewTool("get_project",
+		mcpgo.WithDescription(
+			"Fetch one project by its ULID. Returns the single project row as compact JSON (id, name, description, archived flag, timestamps; per-status open task counts come from list_projects). Unknown id → isError with the 404 body verbatim."),
+		mcpgo.WithString("id", mcpgo.Required(),
+			mcpgo.Description("Project ULID to fetch (from list_projects).")),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id := strings.TrimSpace(req.GetString("id", ""))
+		if id == "" {
+			return invalidInput("get_project", "id"), nil
+		}
+		row, err := c.GetProject(ctx, id)
+		if err != nil {
+			return fail(c, err), nil
+		}
+		return textResult(row)
+	})
+}
+
+// registerUpdateProject → PUT /projects/{id}: partial rename and/or description
+// replace with the REST pointer semantics — omitted fields are unchanged, at
+// least one must be set (the use case 400s an empty update). name must be
+// non-empty after trimming (mirrored locally to save a round-trip); description
+// may be an empty string to clear it. Returns the updated project row.
+func registerUpdateProject(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+	tool := mcpgo.NewTool("update_project",
+		mcpgo.WithDescription(
+			"Partially update an existing project: set any of name (rename) or description (full markdown replace; an empty string clears it). Omitted fields are unchanged. At least one field is required — a call with neither fails as invalid input, exactly like the API's 400 for an empty update. Returns the updated project row as compact JSON."+actorHint),
+		mcpgo.WithString("id", mcpgo.Required(),
+			mcpgo.Description("Project ULID to update.")),
+		mcpgo.WithString("name",
+			mcpgo.Description("New project name (rename; must be non-empty after trimming, else an invalid-input error). Omit to keep the current name.")),
+		mcpgo.WithString("description",
+			mcpgo.Description("New markdown description (full replace; an empty string clears it). Omit to keep the current description.")),
+		actorProp(),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id := strings.TrimSpace(req.GetString("id", ""))
+		if id == "" {
+			return invalidInput("update_project", "id"), nil
+		}
+		args := req.GetArguments()
+		body := apiclient.UpdateProjectRequest{Actor: resolveActor(args, defaultActor)}
+		if v, ok := args["name"]; ok {
+			s, _ := v.(string)
+			s = strings.TrimSpace(s)
+			if s == "" {
+				return invalidInput("update_project", "name"), nil
+			}
+			body.Name = &s
+		}
+		if _, ok := args["description"]; ok {
+			s := strings.TrimSpace(req.GetString("description", ""))
+			body.Description = &s
+		}
+		if body.Name == nil && body.Description == nil {
+			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"update_project: set at least one of \"name\" or \"description\" — there is nothing to update"}`), nil
+		}
+		row, err := c.UpdateProject(ctx, id, body)
 		if err != nil {
 			return fail(c, err), nil
 		}

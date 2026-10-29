@@ -28,6 +28,10 @@ import (
 
 const mockProjectsBody = `{"projects":[{"id":"P1","name":"Website Redesign","description":"MVP landing page work","created_at":"2026-09-20T09:00:00Z","updated_at":"2026-09-20T09:00:00Z","task_counts":{"todo":3,"doing":1,"done":5}},{"id":"P2","name":"Agent Ops","created_at":"2026-09-19T09:00:00Z","updated_at":"2026-09-19T09:00:00Z","task_counts":{"todo":0,"doing":0,"done":0}}],"total":2}`
 
+// The single GET /api/v1/projects/P1 row: like every bare get/create response,
+// it carries NO task_counts (those ride only on list rows).
+const mockGetProjectBody = `{"id":"P1","name":"Website Redesign","description":"MVP landing page work","created_at":"2026-09-20T09:00:00Z","updated_at":"2026-09-20T09:00:00Z"}`
+
 const mockDetailBody = `{"id":"T1","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","assignee":{"type":"human","name":"ada"},"claimed_by":{"type":"agent","name":"runner-2"},"claim_expires_at":"2026-09-26T15:53:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z","project_id":"P1","description":"Users cannot log in after the password reset flow.","notes":"Last run: migration half-applied, rolled back.","archived":false,"blocked":true,"blockers":[{"id":"T2","title":"Fix DB migration","status":"doing"}],"claimed_at":"2026-09-26T15:48:03Z","claim_ttl_seconds":900,"acceptance_criteria":[{"seq":1,"text":"login works","done":true,"note":"manual test passed","completed_by":{"type":"human","name":"ada"},"completed_at":"2026-09-26T15:40:12Z"}],"comments":[{"id":"C1","kind":"progress","body":"ran the build — green","actor":{"type":"human","name":"ada"},"created_at":"2026-09-26T15:47:55Z"}],"artifacts":[],"relations":[{"task_id":"T1","other_task_id":"T2","kind":"blocked-by","created_at":"2026-09-26T15:49:30Z"}],"events":[{"id":"E1","kind":"claimed","actor":{"type":"agent","name":"runner-2"},"after":"{\"claim\":\"fresh\"}","at":"2026-09-26T15:48:03Z"}]}`
 
 // The exact 409 claim-conflict body a foreign active lease produces (API.md).
@@ -64,6 +68,9 @@ type capturedCall struct {
 
 // newMockUpstream stands up a fake ravn-server. Every route answers with
 // fixed data:
+//   - GET /api/v1/projects/{id} answers with the fixed P1 row for id "P1" and
+//     a 404 body verbatim for anything else; PUT /api/v1/projects/{id} applies
+//     the partial update (pointer fields) onto the base row.
 //   - POST /tasks/{id}/claim returns the conflict body verbatim for id "HOLDING"
 //     and echoes the requesting actor as claimed_by otherwise (and records every
 //     claim call).
@@ -147,6 +154,34 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 		}
 		data, _ := json.Marshal(row)
 		writeJSON(w, http.StatusCreated, string(data))
+	})
+	mux.HandleFunc("GET /api/v1/projects/{id}", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		if r.PathValue("id") != "P1" {
+			writeJSON(w, http.StatusNotFound, `{"error":"not found","resource":"project","id":`+jsonString(r.PathValue("id"))+`,"message":"unknown project"}`)
+			return
+		}
+		writeJSON(w, http.StatusOK, mockGetProjectBody)
+	})
+	mux.HandleFunc("PUT /api/v1/projects/{id}", func(w http.ResponseWriter, r *http.Request) {
+		b := record(r)
+		var req apiclient.UpdateProjectRequest
+		if err := json.Unmarshal([]byte(b), &req); err != nil {
+			t.Errorf("upstream: PUT /projects body not JSON: %v (%s)", err, b)
+			return
+		}
+		row := map[string]any{ // the partial update applied onto the stored P1 row
+			"id": r.PathValue("id"), "name": "Website Redesign",
+			"created_at": "2026-09-20T09:00:00Z", "updated_at": "2026-09-26T16:03:00Z",
+		}
+		if req.Name != nil {
+			row["name"] = *req.Name
+		}
+		if req.Description != nil {
+			row["description"] = *req.Description
+		}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusOK, string(data))
 	})
 	mux.HandleFunc("GET /api/v1/tasks", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
@@ -421,7 +456,7 @@ func jsonString(s string) string {
 // --- helpers ---------------------------------------------------------------------------
 
 var wantToolNames = []string{
-	"list_projects", "create_project", "list_tasks", "get_task", "project_report", "create_task",
+	"list_projects", "create_project", "get_project", "update_project", "list_tasks", "get_task", "project_report", "create_task",
 	"update_task", "claim_task", "release_task", "heartbeat_task", "handoff_task", "add_comment",
 	"update_notes", "complete_ac", "add_ac", "remove_ac", "edit_ac", "attach_artifact", "relate_tasks",
 }
@@ -535,7 +570,7 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 	c := dial(t, mcpSrv.URL, ctx)
 	defer func() { _ = c.Close() }()
 
-	// tools/list shows exactly the 18 ravn tools.
+	// tools/list shows exactly the ravn tools in wantToolNames (no extras).
 	list, err := c.ListTools(ctx, mcpgo.ListToolsRequest{})
 	if err != nil {
 		t.Fatalf("tools/list: %v", err)
@@ -742,6 +777,141 @@ func TestCreateProjectRoundTrip(t *testing.T) {
 	}
 	if sent.Actor.Name != "ada" || sent.Actor.Type != "human" || sent.Name != "Website Redesign" || sent.Description != "MVP landing page work" {
 		t.Errorf("create_project upstream body = %s", cc.body)
+	}
+}
+
+func TestGetProjectRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	res := callTool(t, c, ctx, "get_project", map[string]any{"id": "P1"})
+	if res.IsError {
+		t.Fatalf("get_project returned isError: %s", firstText(t, res))
+	}
+	row := asMap(t, firstText(t, res))
+	if row["id"] != "P1" || row["name"] != "Website Redesign" || row["description"] != "MVP landing page work" {
+		t.Errorf("get_project result = %s", firstText(t, res))
+	}
+	findCall(t, *calls, http.MethodGet, "/api/v1/projects/P1") // routing; record() enforces Bearer auth
+
+	// Unknown id → the 404 body arrives verbatim (its message IS the recovery hint).
+	res = callTool(t, c, ctx, "get_project", map[string]any{"id": "NOPE"})
+	if !res.IsError {
+		t.Fatalf("get_project (unknown id) expected isError, got: %s", firstText(t, res))
+	}
+	want404 := `{"error":"not found","resource":"project","id":"NOPE","message":"unknown project"}`
+	if text := firstText(t, res); text != want404 {
+		t.Errorf("404 body not verbatim:\n got  %s\n want %s", text, want404)
+	}
+
+	// Malformed args (id as a number) → input-schema validation surfaces the
+	// failure as an isError TOOL result (SEP-1303), not a protocol error.
+	res2, err := c.CallTool(ctx, mcpgo.CallToolRequest{Params: mcpgo.CallToolParams{
+		Name:      "get_project",
+		Arguments: map[string]any{"id": 42},
+	}})
+	if err != nil {
+		t.Fatalf("tools/call get_project (bad arg type): %v", err)
+	}
+	if !res2.IsError {
+		t.Errorf("expected input-schema validation failure as isError, got success: %s", firstText(t, res2))
+	}
+}
+
+func TestUpdateProjectRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// Full: rename + description replace in one call.
+	res := callTool(t, c, ctx, "update_project", map[string]any{
+		"actor":       map[string]any{"name": "ada", "type": "human"},
+		"id":          "P1",
+		"name":        "Website Redesign v2",
+		"description": "MVP landing page, second pass",
+	})
+	if res.IsError {
+		t.Fatalf("update_project returned isError: %s", firstText(t, res))
+	}
+	row := asMap(t, firstText(t, res))
+	if row["id"] != "P1" || row["name"] != "Website Redesign v2" || row["description"] != "MVP landing page, second pass" {
+		t.Errorf("update_project result = %s", firstText(t, res))
+	}
+
+	cc := findCall(t, *calls, http.MethodPut, "/api/v1/projects/P1")
+	var sent apiclient.UpdateProjectRequest
+	if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+		t.Fatalf("update_project upstream body not JSON: %v (%s)", err, cc.body)
+	}
+	if sent.Actor.Name != "ada" || sent.Actor.Type != "human" {
+		t.Errorf("update_project upstream actor = %+v", sent.Actor)
+	}
+	if sent.Name == nil || *sent.Name != "Website Redesign v2" {
+		t.Errorf("update_project upstream name = %v, want Website Redesign v2 (body %s)", sent.Name, cc.body)
+	}
+	if sent.Description == nil || *sent.Description != "MVP landing page, second pass" {
+		t.Errorf("update_project upstream description = %v (body %s)", sent.Description, cc.body)
+	}
+
+	// Partial: an EXPLICIT empty description is a valid clear — presence on the
+	// wire is the signal. The omitted name must stay nil (absent from the body).
+	res = callTool(t, c, ctx, "update_project", map[string]any{
+		"id":          "P1",
+		"description": "",
+	})
+	if res.IsError {
+		t.Fatalf("update_project (clear description) returned isError: %s", firstText(t, res))
+	}
+	cc = (*calls)[len(*calls)-1] // the LAST upstream call (same route as the full update)
+	if cc.method != http.MethodPut || cc.path != "/api/v1/projects/P1" {
+		t.Fatalf("last upstream call = %s %s, want PUT /api/v1/projects/P1", cc.method, cc.path)
+	}
+	var partial apiclient.UpdateProjectRequest
+	if err := json.Unmarshal([]byte(cc.body), &partial); err != nil {
+		t.Fatalf("update_project upstream body not JSON: %v (%s)", err, cc.body)
+	}
+	if partial.Name != nil {
+		t.Errorf("partial update sent name=%q, want omitted (body %s)", *partial.Name, cc.body)
+	}
+	if partial.Description == nil || *partial.Description != "" {
+		t.Errorf("partial update description = %v, want \"\" (body %s)", partial.Description, cc.body)
+	}
+
+	// A no-field update → rejected locally, no round-trip (the API 400s it).
+	res = callTool(t, c, ctx, "update_project", map[string]any{"id": "P1"})
+	if !res.IsError {
+		t.Fatalf("update_project (no fields) expected isError, got: %s", firstText(t, res))
+	}
+	if text := firstText(t, res); !strings.Contains(text, `set at least one of`) {
+		t.Errorf("no-field rejection = %s, want the invalid-input body", text)
+	}
+
+	// A whitespace name → same local rejection the API's 400 would be.
+	res = callTool(t, c, ctx, "update_project", map[string]any{"id": "P1", "name": "   "})
+	if !res.IsError {
+		t.Fatalf("update_project (empty name) expected isError, got: %s", firstText(t, res))
+	}
+	if text := firstText(t, res); !strings.Contains(text, `required argument "name"`) {
+		t.Errorf("empty-name rejection = %s, want the invalid-input body", text)
+	}
+
+	// Malformed args (id as a number) → input-schema validation failure.
+	res2, err := c.CallTool(ctx, mcpgo.CallToolRequest{Params: mcpgo.CallToolParams{
+		Name:      "update_project",
+		Arguments: map[string]any{"id": 42},
+	}})
+	if err != nil {
+		t.Fatalf("tools/call update_project (bad arg type): %v", err)
+	}
+	if !res2.IsError {
+		t.Errorf("expected input-schema validation failure as isError, got success: %s", firstText(t, res2))
 	}
 }
 

@@ -52,6 +52,10 @@ func (m *mockClient) CreateProject(ctx context.Context, req apiclient.CreateProj
 	return nil, errors.New("unimplemented")
 }
 
+func (m *mockClient) UpdateProject(ctx context.Context, id string, req apiclient.UpdateProjectRequest) (*apiclient.Project, error) {
+	return nil, errors.New("unimplemented")
+}
+
 func (m *mockClient) ListTasks(ctx context.Context, f apiclient.TaskFilter) (*apiclient.TaskList, error) {
 	if m.listTasksFunc != nil {
 		return m.listTasksFunc(ctx, f)

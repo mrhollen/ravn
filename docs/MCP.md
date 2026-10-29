@@ -91,6 +91,8 @@ All tools return **compact JSON text** on success. All failures come back as an
 |---|---|---|---|
 | `list_projects` | All projects newest-first with per-status open task counts. | *(none)* | `{"projects":[{id, name, description, …, task_counts}], "total":N}` |
 | `create_project` | Create a project. | `name` (required), `description?` (markdown), `actor?` | Fresh project row (`id`, `name`, …) |
+| `get_project` | One project by ULID: the single row (no task counts — those come from `list_projects`). Unknown id → 404 body verbatim. | `id` (required; ULID) | Project row (`id`, `name`, `description`, `archived`, timestamps) |
+| `update_project` | **Partial** update of one project: set any of `name` / `description`; omitted fields unchanged, at least one required (empty update → 400-like invalid input). An empty `description` clears it. | `id` (required), `name?` (non-empty after trim), `description?`, `actor?` | Updated project row |
 | `list_tasks` | **The "what should I work on?" call.** Filtered, canonically ordered (priority ↓ → due ↑, undated last → created ↑), paged summaries. | All optional: `project_id`, `status` (todo\|doing\|done), `assignee_name`, `assignee_type` (human\|agent), `archived` (bool; true = archived only, def false = open only), `unblocked` (bool), `search`, `priority` (0–5), `due_before`, `due_after`, `created_after`, `created_before`, `completed_since`, `completed_before`, `limit` (def 20, max 100), `offset` | `{"tasks":[summary rows], "total", "limit", "offset"}` |
 | `get_task` | One-call resume payload: every field incl. the current `version`, notes, acceptance criteria, comments tail, blockers/relations, artifacts, events. | `id` (required), `comment_limit?` (def 10, max 50), `event_limit?` (def 20, max 100) | Task detail row (see API.md) |
 | `create_task` | Create a task (+ initial ACs, one transaction). Response includes advisory `possible_duplicates` — **non-blocking**; don't create near-duplicates. | `title` (required), `project_id` (required), `description?`, `priority?` (0–5), `due_at?` (RFC3339), `assignee?` {name,type}, `acceptance_criteria?` (array of strings → seq 1..n), `actor?` | `{"task": summary row at version 1, "possible_duplicates":[…]}` |
@@ -144,6 +146,20 @@ never mutate state.
 ```
 
 Note the returned `version` (e.g. `4`) — you'll need it for `update_task`.
+
+**Project look-up and partial update — `get_project` / `update_project`:**
+
+```json
+{ "id": "01J2Q8XK5N3P6R4T7W9YB1D3F5" }
+```
+
+```json
+{
+  "id": "01J2Q8XK5N3P6R4T7W9YB1D3F5",
+  "actor": { "name": "runner-2", "type": "agent" },
+  "description": "Scope narrowed: landing page only; auth moves to Q2."
+}
+```
 
 **Claim it:**
 
