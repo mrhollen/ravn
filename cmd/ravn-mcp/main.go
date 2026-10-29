@@ -221,89 +221,144 @@ func maxMCPPayloadBytes() int64 {
 	return defaultMaxMCPPayloadBytes
 }
 
-// withModernMCPCompat ensures that incoming requests carrying Mcp-Protocol-Version
-// header have the corresponding _meta protocolVersion populated in params if missing,
+// withModernMCPCompat ensures that incoming requests carrying an Mcp-Protocol-Version
+// header have the corresponding _meta protocolVersion populated in params when missing,
 // so strict mark3labs/mcp-go modern validation does not reject client notifications
 // (such as notifications/roots/list_changed from modelcontextprotocol/go_sdk) with 400.
-// It also bounds memory consumption by enforcing maxMCPPayloadBytes on incoming bodies
-// using http.MaxBytesReader, rejecting oversized requests with HTTP 413 Payload Too Large.
+// It applies this backfill to a single JSON-RPC message and to every message in a
+// JSON-RPC 2.0 batch (a top-level array of messages).
+//
+// Hardening guarantees:
+//   - Bounded reads: the body is never buffered beyond maxMCPPayloadBytes()+1 bytes. We
+//     read through io.LimitReader capped at limit+1; landing on exactly limit+1 bytes means
+//     the body exceeded the cap and we reject with 413 instead of passing a truncated
+//     payload downstream. This is what prevents an unbounded/oversized body from exhausting
+//     memory — there is no io.ReadAll on the raw, uncapped request body.
+//   - Body always restored: after capturing the bytes we unconditionally re-set r.Body to a
+//     fresh in-memory reader (including for empty bodies), so the downstream mcp-go handler
+//     can always read the request again. Requests that carry no Mcp-Protocol-Version header
+//     are streamed through untouched behind http.MaxBytesReader (still capped, never buffered).
 func withModernMCPCompat(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			limit := maxMCPPayloadBytes()
-			if r.ContentLength > limit {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusRequestEntityTooLarge)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"error":   "payload_too_large",
-					"message": fmt.Sprintf("request payload exceeds limit of %d bytes", limit),
-				})
-				return
-			}
-
-			protoVer := r.Header.Get("Mcp-Protocol-Version")
-			if protoVer != "" && r.Body != nil {
-				r.Body = http.MaxBytesReader(w, r.Body, limit+1)
-				bodyBytes, err := io.ReadAll(r.Body)
-				if err != nil {
-					var tooLarge *http.MaxBytesError
-					if errors.As(err, &tooLarge) {
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusRequestEntityTooLarge)
-						_ = json.NewEncoder(w).Encode(map[string]any{
-							"error":   "payload_too_large",
-							"message": fmt.Sprintf("request payload exceeds limit of %d bytes", limit),
-						})
-						return
-					}
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusBadRequest)
-					_ = json.NewEncoder(w).Encode(map[string]any{
-						"error":   "bad_request",
-						"message": "failed to read request body",
-					})
-					return
-				}
-				if int64(len(bodyBytes)) > limit {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusRequestEntityTooLarge)
-					_ = json.NewEncoder(w).Encode(map[string]any{
-						"error":   "payload_too_large",
-						"message": fmt.Sprintf("request payload exceeds limit of %d bytes", limit),
-					})
-					return
-				}
-
-				if len(bodyBytes) > 0 {
-					var raw map[string]any
-					if err := json.Unmarshal(bodyBytes, &raw); err == nil {
-						params, _ := raw["params"].(map[string]any)
-						if params == nil {
-							params = make(map[string]any)
-							raw["params"] = params
-						}
-						meta, _ := params["_meta"].(map[string]any)
-						if meta == nil {
-							meta = make(map[string]any)
-							params["_meta"] = meta
-						}
-						if _, ok := meta["io.modelcontextprotocol/protocolVersion"]; !ok {
-							meta["io.modelcontextprotocol/protocolVersion"] = protoVer
-							if modified, err := json.Marshal(raw); err == nil {
-								bodyBytes = modified
-							}
-						}
-					}
-					r.ContentLength = int64(len(bodyBytes))
-					r.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
-				}
-				r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-			} else if r.Body != nil {
-				r.Body = http.MaxBytesReader(w, r.Body, limit)
-			}
+		if r.Method != http.MethodPost || r.Body == nil {
+			next.ServeHTTP(w, r)
+			return
 		}
+
+		limit := maxMCPPayloadBytes() // policy limit; drives 413 responses (env MCP_MAX_PAYLOAD_BYTES, default 4 MiB)
+
+		// Declared-oversize fast path: reject before allocating or reading anything.
+		if r.ContentLength > limit {
+			writeMCPError(w, http.StatusRequestEntityTooLarge, "payload_too_large",
+				fmt.Sprintf("request payload exceeds limit of %d bytes", limit))
+			return
+		}
+
+		protoVer := r.Header.Get("Mcp-Protocol-Version")
+		if protoVer == "" {
+			// Nothing to backfill. Cap downstream reads against an undeclared oversized body
+			// (streamed through, not buffered here) and pass the request on untouched.
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Bounded read: io.LimitReader caps the buffered allocation at limit+1 bytes no matter
+		// what the client declared or chunked. Reading exactly limit+1 bytes proves the body was
+		// larger than `limit` → 413 (we must not hand a truncated/corrupt payload downstream).
+		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+		if err != nil {
+			writeMCPError(w, http.StatusBadRequest, "bad_request", "failed to read request body")
+			return
+		}
+		if int64(len(bodyBytes)) > limit {
+			writeMCPError(w, http.StatusRequestEntityTooLarge, "payload_too_large",
+				fmt.Sprintf("request payload exceeds limit of %d bytes", limit))
+			return
+		}
+
+		// Backfill _meta.protocolVersion (single message, or each message of a JSON-RPC batch).
+		bodyBytes = applyProtocolCompat(bodyBytes, protoVer)
+
+		// Unconditionally restore a re-readable body for the downstream handler — including the
+		// empty-body case, where the read above already consumed r.Body to EOF.
+		r.ContentLength = int64(len(bodyBytes))
+		r.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
 		next.ServeHTTP(w, r)
 	})
+}
+
+// applyProtocolCompat backfills _meta["io.modelcontextprotocol/protocolVersion"] into params when
+// missing. It handles a single JSON-RPC message (top-level object) and a JSON-RPC 2.0 batch
+// (top-level array of messages), applying the same per-message logic to each element so the
+// middleware's intent is preserved for every request in a batch. Malformed JSON, or an array
+// whose elements are not objects, is returned unchanged (the downstream handler decides how to
+// reject it) — it never panics.
+func applyProtocolCompat(body []byte, protoVer string) []byte {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		// Single JSON-RPC message (or a non-JSON payload).
+		var msg map[string]any
+		if err := json.Unmarshal(body, &msg); err != nil {
+			return body // not a JSON object; leave untouched for downstream rejection
+		}
+		if backfillProtocolVersion(msg, protoVer) {
+			if modified, err := json.Marshal(msg); err == nil {
+				return modified
+			}
+		}
+		return body
+	}
+
+	// JSON-RPC 2.0 batch: top-level array of messages.
+	var msgs []map[string]any
+	if err := json.Unmarshal(body, &msgs); err != nil {
+		return body // malformed batch; leave untouched for downstream rejection
+	}
+	changed := false
+	for _, m := range msgs {
+		if backfillProtocolVersion(m, protoVer) {
+			changed = true
+		}
+	}
+	if changed {
+		if modified, err := json.Marshal(msgs); err == nil {
+			return modified
+		}
+	}
+	return body
+}
+
+// backfillProtocolVersion adds _meta["io.modelcontextprotocol/protocolVersion"] to a single
+// JSON-RPC message when it is missing. It returns true only when the message was actually
+// changed (i.e., the protocolVersion key was absent), so callers know they must re-marshal. It
+// never overrides an existing value, matching the prior single-message behavior.
+func backfillProtocolVersion(msg map[string]any, protoVer string) bool {
+	params, _ := msg["params"].(map[string]any)
+	if params == nil {
+		params = make(map[string]any)
+		msg["params"] = params
+	}
+	meta, _ := params["_meta"].(map[string]any)
+	if meta == nil {
+		meta = make(map[string]any)
+		params["_meta"] = meta
+	}
+	const key = "io.modelcontextprotocol/protocolVersion"
+	if _, ok := meta[key]; !ok {
+		meta[key] = protoVer
+		return true
+	}
+	return false
+}
+
+// writeMCPError writes a minimal JSON error response with a stable status and fixed keys.
+func writeMCPError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": code, "message": message})
 }
 
 // withAuth gates endpoints (/mcp, /sse, /message) with Bearer token authentication

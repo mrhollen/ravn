@@ -651,3 +651,226 @@ func TestUpstreamAndAgentDefaults(t *testing.T) {
 		t.Fatalf("expected overridden RAVN_API_URL %q, got %q", "http://custom-ravn-server:8080", got)
 	}
 }
+
+// TestWithModernMCPCompat_OversizedUndeclaredBodyRejected exercises the io.LimitReader read
+// path (not the declared-ContentLength fast path): an oversized body whose Content-Length is
+// hidden (-1) must be bounded by the cap, rejected with 413, never reach the inner handler,
+// and cause no panic or unbounded allocation.
+func TestWithModernMCPCompat_OversizedUndeclaredBodyRejected(t *testing.T) {
+	innerCalled := false
+	var captured []byte
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		innerCalled = true
+		if r.Body != nil {
+			captured, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := withModernMCPCompat(inner)
+
+	t.Setenv("MCP_MAX_PAYLOAD_BYTES", "64") // cap the read at 64+1 bytes
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(strings.Repeat("y", 128)))
+	req.ContentLength = -1 // hide declared length so the LimitReader path must bound it
+	req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for oversized undeclared body, got %d", rec.Code)
+	}
+	if innerCalled {
+		t.Fatal("inner handler must not be called on 413")
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode 413 body: %v", err)
+	}
+	if resp["error"] != "payload_too_large" {
+		t.Fatalf("expected error 'payload_too_large', got %v", resp["error"])
+	}
+	if len(captured) != 0 {
+		t.Fatalf("downstream must not receive a body on 413, got %d bytes", len(captured))
+	}
+}
+
+// TestWithModernMCPCompat_BatchArrayBackfilledPerMessage verifies that a JSON-RPC 2.0 batch
+// (top-level array) is detected and the protocolVersion backfill is applied to every element,
+// without overwriting an already-present value, and that a re-readable body is restored for
+// the downstream handler.
+func TestWithModernMCPCompat_BatchArrayBackfilledPerMessage(t *testing.T) {
+	serve := func(body string) []byte {
+		var captured []byte
+		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				captured, _ = io.ReadAll(r.Body)
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		handler := withModernMCPCompat(inner)
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+		req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for batch body, got %d (body=%q)", rec.Code, body)
+		}
+		return captured
+	}
+
+	t.Run("both messages backfilled", func(t *testing.T) {
+		captured := serve(`[{"jsonrpc":"2.0","method":"notifications/roots/list_changed"},{"jsonrpc":"2.0","id":7,"method":"tools/list"}]`)
+		var msgs []map[string]any
+		if err := json.Unmarshal(captured, &msgs); err != nil {
+			t.Fatalf("downstream body is not a JSON array: %v (body=%q)", err, string(captured))
+		}
+		if len(msgs) != 2 {
+			t.Fatalf("expected 2 messages preserved in the batch, got %d", len(msgs))
+		}
+		for i, m := range msgs {
+			params, _ := m["params"].(map[string]any)
+			meta, _ := params["_meta"].(map[string]any)
+			if meta == nil {
+				t.Fatalf("message %d: expected _meta to be present", i)
+			}
+			if v, ok := meta["io.modelcontextprotocol/protocolVersion"]; !ok || v != "2026-07-28" {
+				t.Fatalf("message %d: expected protocolVersion '2026-07-28', got %v (present=%v)", i, v, ok)
+			}
+		}
+	})
+
+	t.Run("existing value preserved, missing one filled", func(t *testing.T) {
+		captured := serve(`[{"jsonrpc":"2.0","method":"notifications/initialized","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-05"}}},{"jsonrpc":"2.0","id":9,"method":"prompts/list"}]`)
+		var msgs []map[string]any
+		if err := json.Unmarshal(captured, &msgs); err != nil {
+			t.Fatalf("downstream body is not a JSON array: %v (body=%q)", err, string(captured))
+		}
+		params0, _ := msgs[0]["params"].(map[string]any)
+		meta0, _ := params0["_meta"].(map[string]any)
+		if meta0["io.modelcontextprotocol/protocolVersion"] != "2025-11-05" {
+			t.Fatalf("message 0: pre-existing protocolVersion was overwritten, got %v", meta0["io.modelcontextprotocol/protocolVersion"])
+		}
+		params1, _ := msgs[1]["params"].(map[string]any)
+		meta1, _ := params1["_meta"].(map[string]any)
+		if v, ok := meta1["io.modelcontextprotocol/protocolVersion"]; !ok || v != "2026-07-28" {
+			t.Fatalf("message 1: expected protocolVersion '2026-07-28', got %v (present=%v)", v, ok)
+		}
+	})
+}
+
+// TestWithModernMCPCompat_MalformedArrayBodyDoesNotPanicAndRestores guards against a body that
+// is a top-level array but whose elements are not objects: the middleware must not panic and
+// must restore a re-readable, byte-identical body for the downstream handler to reject.
+func TestWithModernMCPCompat_MalformedArrayBodyDoesNotPanicAndRestores(t *testing.T) {
+	original := `[1,"not-an-object",3.5]`
+	var captured []byte
+	innerCalled := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		innerCalled = true
+		if r.Body != nil {
+			captured, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := withModernMCPCompat(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(original))
+	req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req) // must not panic
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (pass-through of an in-limit malformed body), got %d", rec.Code)
+	}
+	if !innerCalled {
+		t.Fatal("inner handler should be called for a malformed but in-limit body")
+	}
+	if string(captured) != original {
+		t.Fatalf("downstream body was altered:\n got  %q\n want %q", captured, original)
+	}
+}
+
+// TestWithModernMCPCompat_EmptyBodyRestoredReadable verifies the empty-body edge: after the
+// middleware reads (and consumes) the request body to EOF, it must unconditionally restore a
+// fresh, non-nil, re-readable reader so downstream can Read without error (clean EOF for an
+// empty payload).
+func TestWithModernMCPCompat_EmptyBodyRestoredReadable(t *testing.T) {
+	innerCalled := false
+	var readErr error
+	var gotLen int
+	var bodyNil bool
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		innerCalled = true
+		bodyNil = (r.Body == nil)
+		if !bodyNil {
+			got, err := io.ReadAll(r.Body)
+			readErr = err
+			gotLen = len(got)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := withModernMCPCompat(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(""))
+	req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for empty body, got %d", rec.Code)
+	}
+	if !innerCalled {
+		t.Fatal("inner handler should be called")
+	}
+	if bodyNil {
+		t.Fatal("r.Body must not be nil downstream after an empty-body pass through the middleware")
+	}
+	if readErr != nil {
+		t.Fatalf("downstream ReadAll of the restored empty body returned an error: %v", readErr)
+	}
+	if gotLen != 0 {
+		t.Fatalf("expected 0 bytes for an empty body, got %d", gotLen)
+	}
+}
+
+// TestWithModernMCPCompat_SingleObjectBodyRestoredAndBackfilled is a self-contained regression:
+// the normal single-object path must still backfill _meta.protocolVersion AND restore the full
+// re-readable body (original fields intact) for the downstream handler.
+func TestWithModernMCPCompat_SingleObjectBodyRestoredAndBackfilled(t *testing.T) {
+	var captured []byte
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			captured, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := withModernMCPCompat(inner)
+
+	payload := `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(payload))
+	req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for single object, got %d", rec.Code)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(captured, &parsed); err != nil {
+		t.Fatalf("downstream body is not a JSON object: %v (body=%q)", err, string(captured))
+	}
+	params, _ := parsed["params"].(map[string]any)
+	meta, _ := params["_meta"].(map[string]any)
+	if meta == nil {
+		t.Fatal("expected _meta to be present in the downstream body")
+	}
+	if meta["io.modelcontextprotocol/protocolVersion"] != "2026-07-28" {
+		t.Fatalf("expected protocolVersion '2026-07-28', got %v", meta["io.modelcontextprotocol/protocolVersion"])
+	}
+	if parsed["jsonrpc"] != "2.0" || parsed["method"] != "notifications/roots/list_changed" {
+		t.Fatalf("original message fields were corrupted downstream: %v", parsed)
+	}
+}
