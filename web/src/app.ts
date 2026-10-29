@@ -52,6 +52,7 @@ import {
   isStalledExpired,
   localCalendarToday,
   initials,
+  needsAttention,
   priorityClass,
   priorityName,
   relTime,
@@ -203,6 +204,8 @@ export interface BoardQueryParams {
   unblocked?: boolean;
   /** Expired/stalled filter active (client-side predicate, see isStalledExpired). */
   stalled?: boolean;
+  /** "Needs attention" filter active (client-side predicate, see needsAttention). */
+  attention?: boolean;
   q?: string;
   sort?: SortKey;
   dir?: SortDir;
@@ -249,6 +252,11 @@ export function parseBoardQueryParams(search: string): BoardQueryParams {
     result.stalled = true;
   }
 
+  const attention = params.get("attention");
+  if (attention === "1" || attention === "true") {
+    result.attention = true;
+  }
+
   const q = params.get("q");
   if (q && q.trim() !== "") {
     result.q = q.trim();
@@ -287,6 +295,9 @@ export function buildBoardQueryString(params: BoardQueryParams): string {
   }
   if (params.stalled) {
     q.set("stalled", "1");
+  }
+  if (params.attention) {
+    q.set("attention", "1");
   }
   if (params.q && params.q.trim() !== "") {
     q.set("q", params.q.trim());
@@ -2076,6 +2087,12 @@ export function ravnApp() {
      *  more than 60 minutes (isStalledExpired). Purely client-side — the server
      *  has no equivalent list parameter. */
     filterStalled: false,
+    /** True while the "Needs attention" filter is active: restricts the board
+     *  to OPEN tasks (todo/doing) whose newest comment's kind is `question` or
+     *  `handoff` (needsAttention). Purely client-side — done tasks are never
+     *  shown by this filter, and it AND-composes with every other active
+     *  filter exactly like stalled/unblocked. */
+    filterNeedsAttention: false,
     filterDue: "" as string,
     filterSearch: "",
 
@@ -2178,6 +2195,7 @@ export function ravnApp() {
         this.filterAssignee !== "" ||
         this.filterUnblocked ||
         this.filterStalled ||
+        this.filterNeedsAttention ||
         this.filterDue !== "" ||
         this.filterSearch.trim() !== ""
       );
@@ -2188,6 +2206,7 @@ export function ravnApp() {
       this.filterAssignee = "";
       this.filterUnblocked = false;
       this.filterStalled = false;
+      this.filterNeedsAttention = false;
       this.filterDue = "";
       this.filterSearch = "";
       // Explicit clear (in addition to the filterSearch $watch that does the
@@ -2227,6 +2246,16 @@ export function ravnApp() {
       this.syncUrlState(true);
     },
 
+    /** Which high-signal comment badge a card's meta cluster should show:
+     *  "question" or "handoff" when the task is OPEN (todo/doing) and its
+     *  newest comment has that kind (needsAttention), null otherwise — done
+     *  tasks, routine kinds (progress/note/decision) and no-comment threads
+     *  never badge. Drives the card-question-badge / card-handoff-badge spans. */
+    attentionBadgeKind(task: TaskSummary): "question" | "handoff" | null {
+      if (!needsAttention(task)) return null;
+      return task.last_comment_kind === "question" ? "question" : "handoff";
+    },
+
     // -------------------------------------------------------- URL query sync
     _urlSyncTimer: null as any,
     _restoringUrlState: false,
@@ -2239,6 +2268,7 @@ export function ravnApp() {
         due: this.filterDue,
         unblocked: this.filterUnblocked,
         stalled: this.filterStalled,
+        attention: this.filterNeedsAttention,
         q: this.filterSearch,
         sort: this.sortKey,
         dir: this.sortDir,
@@ -2298,6 +2328,9 @@ export function ravnApp() {
         }
         if (params.stalled !== undefined || isPopState) {
           this.filterStalled = params.stalled ?? false;
+        }
+        if (params.attention !== undefined || isPopState) {
+          this.filterNeedsAttention = params.attention ?? false;
         }
         if (params.q !== undefined || isPopState) {
           this.filterSearch = params.q ?? "";
@@ -2444,6 +2477,14 @@ export function ravnApp() {
         // exactly like the alert pill's count (stalledExpiredCount()).
         if (this.filterStalled) {
           tasks = tasks.filter((t) => isStalledExpired(t, this.nowTick));
+        }
+        // Needs attention (epic child 01M5XTAYKJGP878ZEZB7TJW4ZB): restrict the
+        // board to OPEN tasks whose newest comment is a `question` (awaiting a
+        // human answer) or `handoff` (awaiting review). AND-composed with every
+        // other active filter, exactly like stalled/unblocked — done tasks are
+        // never kept by this predicate.
+        if (this.filterNeedsAttention) {
+          tasks = tasks.filter((t) => needsAttention(t));
         }
         // Calendar-day comparisons (due dates are days, not instants): "YYYY-MM-DD"
         // sorts lexicographically, so ranges are plain string compares. This keeps
@@ -5138,6 +5179,7 @@ export function ravnApp() {
           "filterDue",
           "filterUnblocked",
           "filterStalled",
+          "filterNeedsAttention",
           "filterSearch",
           "sortKey",
           "sortDir",

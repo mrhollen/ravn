@@ -475,14 +475,26 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               <!-- Expired/stalled toggle (epic 01M5XSNR8VWZTP66GT7ABNSJC1): same
                    markup idiom as Unblocked — native checkbox + label, so the
                    accessible name and keyboard support come for free. -->
-              <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                     title="Show only doing tasks with an expired claim lease or no update for over 60 minutes">
-                <input type="checkbox" x-model="filterStalled" @change="syncUrlState(true)" data-testid="filter-stalled"
-                       class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
-                <span>Expired / stalled</span>
-              </label>
+               <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      title="Show only doing tasks with an expired claim lease or no update for over 60 minutes">
+                 <input type="checkbox" x-model="filterStalled" @change="syncUrlState(true)" data-testid="filter-stalled"
+                        class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
+                 <span>Expired / stalled</span>
+               </label>
 
-              <!-- Conditional Reset — same text/behavior as before -->
+               <!-- Needs attention toggle (epic child 01M5XTAYKJGP878ZEZB7TJW4ZB):
+                    same markup idiom as Unblocked/Expired — native checkbox +
+                    label, so the accessible name and keyboard support come for
+                    free. Restricts the board to OPEN tasks whose newest comment
+                    is a question or handoff; done tasks are never kept. -->
+               <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      title="Show only open tasks whose latest comment is a question or handoff">
+                 <input type="checkbox" x-model="filterNeedsAttention" @change="syncUrlState(true)" data-testid="filter-needs-attention"
+                        class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
+                 <span>Needs attention</span>
+               </label>
+
+               <!-- Conditional Reset — same text/behavior as before -->
               <button type="button" @click="clearFilters()" x-show="hasActiveFilters()" x-cloak
                       class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
                 Reset filters
@@ -782,14 +794,23 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
                   <!-- Expired/stalled toggle (epic 01M5XSNR8VWZTP66GT7ABNSJC1): mirrors the
                        desktop checkbox — native input + label markup idiom. -->
-                  <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                         title="Show only doing tasks with an expired claim lease or no update for over 60 minutes">
-                    <input type="checkbox" x-model="filterStalled" @change="syncUrlState(true)" data-testid="mobile-filter-stalled"
-                           class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
-                    <span>Expired / stalled</span>
-                  </label>
+                   <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          title="Show only doing tasks with an expired claim lease or no update for over 60 minutes">
+                     <input type="checkbox" x-model="filterStalled" @change="syncUrlState(true)" data-testid="mobile-filter-stalled"
+                            class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
+                     <span>Expired / stalled</span>
+                   </label>
 
-                  <!-- Conditional Reset — same text/behavior as before -->
+                   <!-- Needs attention toggle (epic child 01M5XTAYKJGP878ZEZB7TJW4ZB):
+                        mirrors the desktop checkbox — native input + label idiom. -->
+                   <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          title="Show only open tasks whose latest comment is a question or handoff">
+                     <input type="checkbox" x-model="filterNeedsAttention" @change="syncUrlState(true)" data-testid="mobile-filter-needs-attention"
+                            class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
+                     <span>Needs attention</span>
+                   </label>
+
+                   <!-- Conditional Reset — same text/behavior as before -->
                   <button type="button" @click="clearFilters()" x-show="hasActiveFilters()" x-cloak
                           class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
                     Reset filters
@@ -1326,9 +1347,32 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                            </span>
 
 
-                          <!-- Right cluster: AC progress and comment count badges aligned to the right. -->
-                          <div x-show="task.ac_total > 0 || (task.comment_count ?? 0) > 0" x-cloak
-                               class="ml-auto inline-flex items-center gap-1.5">
+                           <!-- Right cluster: attention badges + AC progress and comment count badges,
+                                aligned to the right. -->
+                           <div x-show="task.ac_total > 0 || (task.comment_count ?? 0) > 0 || attentionBadgeKind(task)" x-cloak
+                                class="ml-auto inline-flex items-center gap-1.5">
+                             <!-- Question badge (AC2, epic child 01M5XTAYKJGP878ZEZB7TJW4ZB): amber "? Question"
+                                  chip on OPEN tasks whose NEWEST comment is a `question` (awaiting a human
+                                  answer). attentionBadgeKind() gates it to todo/doing — done cards, routine
+                                  kinds and no-comment threads never show it. Distinct from the sky
+                                  comment-count badge next door. -->
+                             <span x-show="attentionBadgeKind(task) === 'question'" x-cloak data-testid="card-question-badge"
+                                   :title="'Latest comment is a question' + (task.last_comment_actor ? ' from ' + task.last_comment_actor.name : '')"
+                                   aria-label="Latest comment is an open question"
+                                   class="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200 dark:bg-amber-950/70 dark:text-amber-300 dark:ring-amber-800">
+                               <span aria-hidden="true">?</span>
+                               <span>Question</span>
+                             </span>
+                             <!-- Handoff badge (AC2): indigo "⇄ Handoff" chip on OPEN tasks whose NEWEST
+                                  comment is a `handoff` (phase complete, awaiting review) — visually
+                                  distinct from both the amber question badge and the sky comment count. -->
+                             <span x-show="attentionBadgeKind(task) === 'handoff'" x-cloak data-testid="card-handoff-badge"
+                                   :title="'Latest comment is a handoff' + (task.last_comment_actor ? ' from ' + task.last_comment_actor.name : '')"
+                                   aria-label="Latest comment is a handoff awaiting review"
+                                   class="inline-flex items-center gap-1 rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-semibold text-indigo-700 ring-1 ring-indigo-200 dark:bg-indigo-950/70 dark:text-indigo-300 dark:ring-indigo-800">
+                               <span aria-hidden="true">⇄</span>
+                               <span>Handoff</span>
+                             </span>
                             <!-- AC progress badge: only when the task has criteria; emerald once all are done. -->
                             <span x-show="task.ac_total > 0" x-cloak data-testid="card-ac-progress"
                                   :title="(task.ac_done ?? 0) + ' of ' + task.ac_total + ' acceptance criteria complete'"

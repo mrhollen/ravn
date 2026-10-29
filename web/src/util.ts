@@ -167,6 +167,18 @@ export function isStalledExpired(
   return nowMs - updated > STALLED_IDLE_MS;
 }
 
+/** "Needs attention" predicate (epic child 01M5XTAYKJGP878ZEZB7TJW4ZB): a task
+ *  needs attention when it is OPEN (`todo`/`doing` — done tasks are NEVER
+ *  attention) AND its newest comment's kind is `question` (awaiting a human
+ *  answer) or `handoff` (awaiting review). Routine kinds (progress/note/
+ *  decision) and threads with no comments at all (field omitted) never match. */
+export function needsAttention(
+  t: Pick<TaskSummary, "status" | "last_comment_kind">,
+): boolean {
+  if (t.status === "done") return false;
+  return t.last_comment_kind === "question" || t.last_comment_kind === "handoff";
+}
+
 /** Real-time MM:SS countdown until lease expiry for the claim capsule. */
 export function formatClaimCountdown(claimExpiresAt?: string | null, nowMs = Date.now()): string {
   if (!claimExpiresAt) return "";

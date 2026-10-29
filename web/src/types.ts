@@ -116,6 +116,8 @@ export interface TaskSummary {
   ac_total?: number; // acceptance-criteria count, omitted when none
   ac_done?: number; // how many of them are done
   comment_count?: number; // comment-thread length, omitted when zero
+  last_comment_kind?: string; // newest comment's kind ("question" | "handoff" | …), OMITTED entirely when the task has no comments
+  last_comment_actor?: ActorRef; // newest comment's actor, OMITTED entirely when the task has no comments
   subtask_total?: number; // subtask count, omitted when none
   subtask_done?: number; // how many of them are done
   blockers?: BlockerRef[]; // open blockers for this task (omitted when empty)

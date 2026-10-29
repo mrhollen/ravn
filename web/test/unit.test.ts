@@ -13,6 +13,7 @@ import {
   isOverdue,
   isStalledExpired,
   localCalendarToday,
+  needsAttention,
   safeStorage,
 } from "../src/util.ts";
 import { escapeHtml, isAllowedHref, renderMarkdown } from "../src/md.ts";
@@ -3312,6 +3313,112 @@ test("Stalled filter URL sync: stalled=1 parses, builds, and round-trips (01M5XS
   assert.equal(fresh.filterStalled, true);
   fresh.applyQueryParams({}, true); // popstate with no stalled param → reset to off
   assert.equal(fresh.filterStalled, false);
+});
+
+test("needsAttention flags only open tasks whose newest comment is a question/handoff (01M5XTAYKJGP878ZEZB7TJW4ZB)", () => {
+  // Open tasks with a question/handoff newest comment → true.
+  assert.equal(needsAttention({ status: "todo", last_comment_kind: "question" }), true);
+  assert.equal(needsAttention({ status: "doing", last_comment_kind: "handoff" }), true);
+
+  // Routine kinds never match, on any status.
+  for (const kind of ["progress", "note", "decision"]) {
+    assert.equal(needsAttention({ status: "todo", last_comment_kind: kind }), false, `${kind} is routine`);
+  }
+
+  // No comments at all (field omitted on the wire) → false.
+  assert.equal(needsAttention({ status: "todo" }), false);
+  assert.equal(needsAttention({ status: "doing" }), false);
+
+  // Done tasks are NEVER attention — even with a question/handoff newest comment.
+  assert.equal(needsAttention({ status: "done", last_comment_kind: "question" }), false);
+  assert.equal(needsAttention({ status: "done", last_comment_kind: "handoff" }), false);
+});
+
+test("Needs-attention filter: badge helper, columns() predicate, and filter wiring (01M5XTAYKJGP878ZEZB7TJW4ZB)", () => {
+  const app = ravnApp() as any;
+  const now = 1_700_000_000_000;
+  app.nowTick = now; // pinned clock for the stalled-predicate composition check below
+  const iso = new Date(now).toISOString();
+  const mk = (id: string, status: "todo" | "doing" | "done", last_comment_kind?: string) => ({
+    id,
+    title: id,
+    status,
+    priority: 2,
+    version: 1,
+    created_at: iso,
+    updated_at: iso,
+    last_comment_kind, // undefined = no comments (omitted on the wire)
+  });
+
+  app.board = {
+    project_id: "p",
+    counts: { todo: 3, doing: 2, done: 1 },
+    tasks: {
+      todo: [mk("q1", "todo", "question"), mk("r1", "todo", "progress"), mk("n1", "todo")],
+      doing: [mk("h1", "doing", "handoff"), mk("r2", "doing")],
+      done: [mk("d1", "done", "question")],
+    },
+  } as any;
+
+  // Badge helper: per-kind result, and null for routine/no-comment/DONE tasks.
+  assert.equal(app.attentionBadgeKind(mk("x", "todo", "question")), "question");
+  assert.equal(app.attentionBadgeKind(mk("x", "doing", "handoff")), "handoff");
+  assert.equal(app.attentionBadgeKind(mk("x", "todo", "progress")), null);
+  assert.equal(app.attentionBadgeKind(mk("x", "todo")), null);
+  assert.equal(app.attentionBadgeKind(mk("x", "done", "question")), null, "done tasks never badge");
+
+  // Filter ON → columns() keeps EXACTLY the open question+handoff set.
+  app.filterNeedsAttention = true;
+  let cols = app.columns();
+  assert.deepEqual(cols.find((c: any) => c.status === "todo")!.tasks.map((t: any) => t.id), ["q1"]);
+  assert.deepEqual(cols.find((c: any) => c.status === "doing")!.tasks.map((t: any) => t.id), ["h1"]);
+  assert.equal(cols.find((c: any) => c.status === "done")!.tasks.length, 0, "done tasks are never shown by this filter");
+
+  // AND-composition with the STALLED predicate: make both doing rows idle-stale
+  // (>60 min untouched vs nowTick), so a task survives only if it matches BOTH.
+  for (const t of app.board.tasks.doing as any[]) {
+    t.updated_at = new Date(now - 90 * 60_000).toISOString();
+  }
+  app.filterStalled = true;
+  cols = app.columns();
+  assert.deepEqual(cols.find((c: any) => c.status === "doing")!.tasks.map((t: any) => t.id), ["h1"], "stalled AND attention");
+  assert.equal(cols.find((c: any) => c.status === "todo")!.tasks.length, 0, "q1 is attention but todo — stalled keeps only doing");
+
+  // First-class filter semantics: counts as active; clearFilters resets it (and stalled).
+  assert.equal(app.hasActiveFilters(), true);
+  app.clearFilters();
+  assert.equal(app.filterNeedsAttention, false);
+  assert.equal(app.filterStalled, false);
+  assert.equal(app.hasActiveFilters(), false);
+  assert.equal(app.columns().find((c: any) => c.status === "doing")!.tasks.length, 2, "clearing restores the full board");
+});
+
+test("Needs-attention URL sync: attention=1 parses, builds, and round-trips (01M5XTAYKJGP878ZEZB7TJW4ZB)", () => {
+  // Parsing.
+  const parsed = parseBoardQueryParams("?project=p&stalled=1&attention=1");
+  assert.equal(parsed.attention, true);
+  assert.equal(parsed.stalled, true);
+  assert.equal(parseBoardQueryParams("?project=p&attention=0").attention, undefined, "only '1'/'true' activate the filter");
+
+  // Building + round-trip.
+  const built = buildBoardQueryString({ project: "p", attention: true });
+  assert.equal(built, "?project=p&attention=1");
+  assert.equal(parseBoardQueryParams(built).attention, true);
+
+  // The app instance includes the flag only while active (and never collides with stalled=).
+  const app = ravnApp() as any;
+  app.selectedProjectId = "p";
+  app.filterNeedsAttention = false;
+  assert.ok(!app.buildBoardQueryString().includes("attention="));
+  app.filterNeedsAttention = true;
+  assert.ok(app.buildBoardQueryString().includes("attention=1"));
+
+  // applyQueryParams restores (and popstate clears) the toggle.
+  const fresh = ravnApp() as any;
+  fresh.applyQueryParams({ attention: true }, false);
+  assert.equal(fresh.filterNeedsAttention, true);
+  fresh.applyQueryParams({}, true); // popstate with no attention param → reset to off
+  assert.equal(fresh.filterNeedsAttention, false);
 });
 
 test("Countdown: ravnApp.claimExpired flips live with nowTick", () => {

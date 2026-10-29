@@ -787,7 +787,7 @@ test.describe('Web E2E test suite', () => {
     // -------------------------------------------------------------------------
     // Verify Task 1 has distinct amber Owner chip on card
     const card1 = page.locator('article', { hasText: 'Alpha Critical Task' });
-    const ownerChip1 = card1.locator('span.bg-amber-50');
+    const ownerChip1 = card1.locator('span[title^="Owner:"]') // owner chip — scoped by title (the card also hosts the amber question badge);
     await expect(ownerChip1).toBeVisible();
     await expect(ownerChip1).toContainText('alice');
 
@@ -819,7 +819,7 @@ test.describe('Web E2E test suite', () => {
     const closeBtn = drawer.locator('button[aria-label="Close"]').first();
     await closeBtn.click();
     const card3Updated = page.locator('article', { hasText: 'Gamma Low Task' });
-    await expect(card3Updated.locator('span.bg-amber-50')).toContainText('charlie-human');
+    await expect(card3Updated.locator('span[title^="Owner:"]')).toContainText('charlie-human'); // owner chip (scoped by title)
 
     // Reopen drawer, clear assignee via owner popover
     await card3Updated.click();
@@ -828,7 +828,7 @@ test.describe('Web E2E test suite', () => {
     await expect(page.getByText('Assignee cleared')).toBeVisible();
     await expect(drawer.getByText('Unassigned')).toBeVisible();
     await closeBtn.click();
-    await expect(card3Updated.locator('span.bg-amber-50')).not.toBeVisible();
+    await expect(card3Updated.locator('span[title^="Owner:"]')).not.toBeVisible(); // owner chip (scoped by title)
 
     // -------------------------------------------------------------------------
     // AC 3: Board filters live filtering
@@ -894,7 +894,7 @@ test.describe('Web E2E test suite', () => {
 
     const deltaCard = page.locator('article', { hasText: 'Delta Assigned Task' });
     await expect(deltaCard).toBeVisible();
-    await expect(deltaCard.locator('span.bg-amber-50')).toContainText('diana-agent');
+    await expect(deltaCard.locator('span[title^="Owner:"]')).toContainText('diana-agent'); // owner chip (scoped by title)
 
     // Edit task assignee via drawer edit mode
     await deltaCard.click();
@@ -905,7 +905,7 @@ test.describe('Web E2E test suite', () => {
 
     await expect(drawer.getByText('elena-human').first()).toBeVisible();
     await closeBtn.click();
-    await expect(deltaCard.locator('span.bg-amber-50')).toContainText('elena-human');
+    await expect(deltaCard.locator('span[title^="Owner:"]')).toContainText('elena-human'); // owner chip (scoped by title)
   });
 
   test('priority filter dropdown labels are identical to creation modal labels (P0..P5)', async ({
