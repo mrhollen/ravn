@@ -109,6 +109,35 @@ type TaskFilter struct {
 	// filters for actionable open work.
 	UnblockedOnly bool
 
+	// ParentID restricts the listing to the CHILDREN of one task: only tasks
+	// with a stored 'child' edge pointing at this task (task_id = row, other_
+	// task_id = ParentID) match — the epic-decomposition "what's under X?"
+	// query. "" = any parent state; the relation join is adapter-side (the
+	// in-memory fake resolves it through its shared edge set).
+	ParentID domain.ID
+
+	// Claimed selects EPHEMERAL claim-lease state as a tri-state: nil (zero
+	// value) = any, &true = a lease row is present (live or stale "zombie"),
+	// &false = unclaimed. Plain bool cannot express this because false means
+	// "unclaimed", not "no constraint".
+	Claimed *bool
+
+	// ClaimedBy matches the EPHEMERAL claim-holder NAME exactly (name-only by
+	// design — the durable assignee has its own filters; actor type is not
+	// filtered). Note it does NOT imply claimed=true on its own; the two
+	// combine naturally because an unclaimed task has no holder name.
+	ClaimedBy string
+
+	// ExpiredClaim selects lease-LAPSE state as a tri-state: nil = any, &true
+	// = a lease row is present and strictly expired at ClaimExpiryNow (the
+	// stale-lease set — claimable by anyone), &false = unclaimed OR still
+	// active at ClaimExpiryNow. The reference instant ClaimExpiryNow is
+	// threaded by the use case from its clock (adapters stay clock-free, same
+	// injection style as TaskRepository.Claim); it is ignored unless this
+	// field is set.
+	ExpiredClaim   *bool
+	ClaimExpiryNow *time.Time
+
 	Q string // case-insensitive LIKE over title+description+notes
 
 	CreatedAfter    *time.Time

@@ -390,6 +390,58 @@ func TestListTasks_ZeroFilterSendsNoQuery(t *testing.T) {
 	}
 }
 
+func TestListTasks_ClaimAndParentFilterQueryBuilding(t *testing.T) {
+	bTrue, bFalse := true, false
+	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		want := map[string]string{
+			"project_id": "P1",
+			"parent_id":  "01JEPIC",
+			"claimed":    "true",
+			"claimed_by": "agent-a",
+		}
+		for k, v := range want {
+			if cap.query[k] != v {
+				t.Errorf("query %s = %q, want %q (all: %v)", k, cap.query[k], v, cap.query)
+			}
+		}
+		writeJSONTest(w, http.StatusOK, `{"tasks":[],"total":0,"limit":20,"offset":0}`)
+	}))
+	if _, err := c.ListTasks(context.Background(), TaskFilter{
+		ProjectID: "P1", ParentID: "01JEPIC", Claimed: &bTrue, ClaimedBy: "agent-a",
+	}); err != nil {
+		t.Fatalf("ListTasks (tri-state true): %v", err)
+	}
+
+	// expired_claim=false must still be SENT — the tri-state is presence-based,
+	// so a false pointer renders "false" rather than being omitted.
+	c2, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		if cap.query["expired_claim"] != "false" {
+			t.Errorf("query expired_claim = %q, want \"false\" (all: %v)", cap.query["expired_claim"], cap.query)
+		}
+		if cap.query["claimed"] != "" {
+			t.Errorf("unset Claimed rendered as %q, want key absent", cap.query["claimed"])
+		}
+		writeJSONTest(w, http.StatusOK, `{"tasks":[],"total":0,"limit":20,"offset":0}`)
+	}))
+	if _, err := c2.ListTasks(context.Background(), TaskFilter{ProjectID: "P1", ExpiredClaim: &bFalse}); err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+}
+
+func TestListTasks_UnsetTriStateSendsNothing(t *testing.T) {
+	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		for _, k := range []string{"claimed", "expired_claim", "parent_id", "claimed_by"} {
+			if v, ok := cap.query[k]; ok {
+				t.Errorf("query %s = %q, want key absent for zero TaskFilter fields", k, v)
+			}
+		}
+		writeJSONTest(w, http.StatusOK, `{"tasks":[],"total":0,"limit":20,"offset":0}`)
+	}))
+	if _, err := c.ListTasks(context.Background(), TaskFilter{ProjectID: "P1"}); err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+}
+
 // --- GetTask ----------------------------------------------------------------------------
 
 const detailBody = `{

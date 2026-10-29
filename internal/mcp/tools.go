@@ -297,6 +297,14 @@ func registerListTasks(s *mcpsrv.MCPServer, c Client) {
 			mcpgo.Description("true = list archived tasks; default false lists open (non-archived) tasks only.")),
 		mcpgo.WithBoolean("unblocked",
 			mcpgo.Description("true = keep only tasks with no open blocker — the ready-to-work set.")),
+		mcpgo.WithString("parent_id",
+			mcpgo.Description("Children of one task: only tasks filed under this parent (ULID) match.")),
+		mcpgo.WithBoolean("claimed",
+			mcpgo.Description("Tri-state on the EPHEMERAL claim lease: true = a lease row is present (live or stale), false = unclaimed, omitted = any.")),
+		mcpgo.WithString("claimed_by",
+			mcpgo.Description("Exact match on the EPHEMERAL claim-holder name (not the durable assignee).")),
+		mcpgo.WithBoolean("expired_claim",
+			mcpgo.Description("Tri-state lease lapse: true = stale lease (expiry in the past — anyone may claim), false = unclaimed or still active, omitted = any.")),
 		mcpgo.WithString("search",
 			mcpgo.Description("Case-insensitive substring over title+description+notes.")),
 		mcpgo.WithNumber("priority", mcpgo.Min(0), mcpgo.Max(5),
@@ -327,6 +335,24 @@ func registerListTasks(s *mcpsrv.MCPServer, c Client) {
 		f.AssigneeType = strings.TrimSpace(req.GetString("assignee_type", ""))
 		f.Archived = req.GetBool("archived", false)
 		f.Unblocked = req.GetBool("unblocked", false)
+		f.ParentID = strings.TrimSpace(req.GetString("parent_id", ""))
+		f.ClaimedBy = strings.TrimSpace(req.GetString("claimed_by", ""))
+		// Tri-state booleans need PRESENCE detection (false is a real
+		// constraint, unlike the GetBool default), so they read args directly.
+		if v, ok := args["claimed"]; ok {
+			b, isBool := v.(bool)
+			if !isBool {
+				return invalidInput("list_tasks", "claimed"), nil
+			}
+			f.Claimed = &b
+		}
+		if v, ok := args["expired_claim"]; ok {
+			b, isBool := v.(bool)
+			if !isBool {
+				return invalidInput("list_tasks", "expired_claim"), nil
+			}
+			f.ExpiredClaim = &b
+		}
 		f.Search = strings.TrimSpace(req.GetString("search", ""))
 		if v, ok := args["priority"]; ok {
 			p := toInt(v)
@@ -374,7 +400,7 @@ func registerGetTask(s *mcpsrv.MCPServer, c Client) {
 func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("create_task",
 		mcpgo.WithDescription(
-			"Create a task in a project, optionally with priority (0–5), RFC3339 due date, durable assignee, and initial acceptance criteria (an array of strings that become seq 1..n in one transaction with the task). Returns {\"task\": fresh summary row at version 1, \"possible_duplicates\": [...]}. possible_duplicates is ADVISORY only — never an error; if it lists a near-duplicate, do NOT create another task; work on or relate to the existing one instead. Unknown project_id → invalid-input error verbatim."+actorHint),
+			"Create a task in a project, optionally with priority (0–5), RFC3339 due date, durable assignee, an optional parent_id that files it as a subtask in the SAME transaction, and initial acceptance criteria (an array of strings that become seq 1..n in one transaction with the task). Returns {\"task\": fresh summary row at version 1, \"possible_duplicates\": [...]}. possible_duplicates is ADVISORY only — never an error; if it lists a near-duplicate, do NOT create another task; work on or relate to the existing one instead. Unknown project_id or parent_id → invalid-input error verbatim."+actorHint),
 		mcpgo.WithString("title", mcpgo.Required(),
 			mcpgo.Description("Task title (required, non-empty).")),
 		mcpgo.WithString("description",
@@ -388,6 +414,8 @@ func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		assigneeProp(),
 		mcpgo.WithArray("acceptance_criteria", mcpgo.WithStringItems(),
 			mcpgo.Description("Initial acceptance criteria as an array of strings; they become seq 1..n.")),
+		mcpgo.WithString("parent_id",
+			mcpgo.Description("Optional: file this task as a child of an existing task in the same call (ULID; must exist and live in the same project).")),
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -423,6 +451,7 @@ func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 				}
 			}
 		}
+		body.ParentID = strings.TrimSpace(req.GetString("parent_id", "")) // empty = no parent edge
 		resp, err := c.CreateTask(ctx, body)
 		if err != nil {
 			return fail(c, err), nil

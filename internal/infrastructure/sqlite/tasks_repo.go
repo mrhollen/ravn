@@ -604,6 +604,41 @@ func taskListWhere(f application.TaskFilter) (string, []any) {
 				`WHERE r.task_id = task.id AND r.kind = 'blocked-by' AND b.status <> 'done' AND b.archived = 0)`)
 	}
 
+	if f.ParentID != "" { // epic decomposition: children of one task — the stored
+		// canonical row is kind='child', task_id=CHILD, other_task_id=PARENT.
+		conds = append(conds,
+			`EXISTS (SELECT 1 FROM relation r `+
+				`WHERE r.task_id = task.id AND r.kind = 'child' AND r.other_task_id = ?)`)
+		args = append(args, string(f.ParentID))
+	}
+
+	if f.Claimed != nil { // tri-state on the EPHEMERAL lease: present (live or stale) vs absent
+		if *f.Claimed {
+			conds = append(conds, "claimed_by_name IS NOT NULL")
+		} else {
+			conds = append(conds, "claimed_by_name IS NULL")
+		}
+	}
+	if f.ClaimedBy != "" { // name-only exact match on the lease holder (durable assignee has its own filters)
+		conds = append(conds, "claimed_by_name = ?")
+		args = append(args, f.ClaimedBy)
+	}
+	if f.ExpiredClaim != nil && f.ClaimExpiryNow == nil {
+		// Programming invariant: Tasks.List always threads the clock now when
+		// ExpiredClaim is set. Fail loudly (empty WHERE → SQL error) rather
+		// than silently matching everything.
+		return "", nil
+	}
+	if f.ExpiredClaim != nil { // tri-state lapse at the use-case-threaded now;
+		// leases are all-or-nothing, so a present lease always has claim_expires_at.
+		if *f.ExpiredClaim {
+			conds = append(conds, "claim_expires_at IS NOT NULL AND claim_expires_at < ?")
+		} else { // unclaimed OR still active at now (at the instant of expiry the lease is over)
+			conds = append(conds, "(claim_expires_at IS NULL OR claim_expires_at >= ?)")
+		}
+		args = append(args, formatTS(*f.ClaimExpiryNow))
+	}
+
 	return strings.Join(conds, " AND "), args
 }
 

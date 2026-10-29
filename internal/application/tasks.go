@@ -86,6 +86,16 @@ type TaskInput struct {
 	DueAt       *time.Time      // optional deadline; nil = undated
 	Assignee    *domain.Actor   // optional durable owner; nil = unassigned
 
+	// ParentID optionally files the new task as a child of an existing one in
+	// the SAME transaction: the stored edge is kind='child', task_id=new task,
+	// other_task_id=ParentID — the canonical relation-table row that relate_tasks
+	// writes and SubtaskProgress / list parent_id read. Zero value = no edge.
+	// Validated inside the unit of work: the parent must exist, live in the
+	// same project as the new task, and not be archived (the RelateAdd guard) —
+	// otherwise domain.ErrInvalid naming the problem; nothing is written. A
+	// self-parent is structurally impossible (freshly minted ID).
+	ParentID domain.ID
+
 	// ACs holds the initial acceptance-criterion texts in display order. Each
 	// entry is trimmed; empty/whitespace entries are dropped, and the survivors
 	// become dense 1-based Seq values. Their IDs are minted here — callers must
@@ -135,11 +145,14 @@ type TaskUpdateInput struct {
 // domain.MaxTaskTitleLen runes, description > domain.MaxTaskDescriptionLen
 // bytes, AC text > domain.MaxACTextLen runes) → domain.ErrInvalid; nothing is
 // written on failure.
-// Duplicate-title candidates are surfaced as a non-blocking
+ // Duplicate-title candidates are surfaced as a non-blocking
 // `possible_duplicates` advisory on create (see FindDuplicateCandidates).
-// Parent / blocked-by / related edges are managed via the separate relations
-// use case (POST|DELETE /tasks/{id}/relations, `relate_tasks`) and are
-// intentionally not part of the create payload (docs/API.md).
+// blocked-by / related edges stay with the separate relations use case
+// (POST|DELETE /tasks/{id}/relations, `relate_tasks`); the one exception is
+// ParentID, which files the new task as a child in this same transaction so
+// epic decomposition needs a single call (the stored row is identical to
+// what relate_tasks would write — same kind, direction, event and ≤1-parent
+// index backstop).
 func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (domain.Task, error) {
 	// The acting actor is validated and normalized BEFORE anything else: an
 	// invalid principal (unknown type, empty/oversized/control-char name) must
@@ -225,6 +238,26 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 		} else if gerr != nil {
 			return gerr
 		}
+		if !in.ParentID.IsZero() {
+			// Parent validation runs BEFORE any row is written so an invalid
+			// parent_id costs nothing. A fresh task's ID was just minted, so it
+			// carries no edges: the ≤1-parent and cycle checks that relate_tasks
+			// applies to EXISTING tasks are structurally vacuous here, and the
+			// stored row is byte-identical to what addEdge would write.
+			parent, perr := r.Tasks.Get(ctx, in.ParentID)
+			if errors.Is(perr, domain.ErrNotFound) {
+				return fmt.Errorf("%w: parent task %s does not exist", domain.ErrInvalid, in.ParentID)
+			} else if perr != nil {
+				return perr
+			}
+			if parent.ProjectID != in.ProjectID {
+				return fmt.Errorf("%w: parent task %s belongs to project %s, not %s",
+					domain.ErrInvalid, in.ParentID, parent.ProjectID, in.ProjectID)
+			}
+			if parent.Archived { // the RelateAdd archived guard, applied at create
+				return fmt.Errorf("%w: cannot create a task under archived parent %s", domain.ErrInvalid, in.ParentID)
+			}
+		}
 		if err := r.Tasks.Create(ctx, task); err != nil {
 			return err
 		}
@@ -237,7 +270,36 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 				return err
 			}
 		}
-		return r.Events.Append(ctx, ev)
+		if err := r.Events.Append(ctx, ev); err != nil {
+			return err
+		}
+		if !in.ParentID.IsZero() {
+			rel := domain.Relation{
+				ID:          s.idgen.NewID(),
+				TaskID:      task.ID, // the new task is the CHILD
+				OtherTaskID: in.ParentID,
+				Kind:        domain.RelationChild,
+				CreatedAt:   now,
+			}
+			if err := r.Relations.Add(ctx, rel); err != nil {
+				return err // the ≤1-parent unique index backstops concurrent writers
+			}
+			relEv := domain.Event{
+				ID:        s.idgen.NewID(),
+				ProjectID: &task.ProjectID,
+				TaskID:    &task.ID, // the task whose outgoing edge set changed
+				Actor:     actor,
+				Kind:      domain.EventRelationChanged,
+				After: compactJSON(map[string]any{
+					"action":   string(RelateAdd),
+					"kind":     string(domain.RelationChild),
+					"other_id": in.ParentID,
+				}),
+				At: now,
+			}
+			return r.Events.Append(ctx, relEv)
+		}
+		return nil
 	})
 	if err != nil {
 		return domain.Task{}, err
@@ -521,6 +583,10 @@ func (s *Tasks) List(ctx context.Context, f TaskFilter) ([]domain.Task, int64, e
 	}
 	if f.Offset < 0 {
 		f.Offset = 0
+	}
+	if f.ExpiredClaim != nil { // thread the server now so adapters stay clock-free
+		n := s.clock.Now()
+		f.ClaimExpiryNow = &n
 	}
 	var out []domain.Task
 	var total int64

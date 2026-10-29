@@ -211,6 +211,9 @@ func (f *fakeTasks) List(_ context.Context, flt TaskFilter) ([]domain.Task, int6
 		if flt.UnblockedOnly && f.hasOpenBlocker(t) { // an unresolved blocker excludes it
 			continue
 		}
+		if flt.ParentID != "" && !f.hasParentEdge(t, flt.ParentID) { // children of one task only
+			continue
+		}
 		matched = append(matched, t)
 	}
 	sort.Slice(matched, func(i, j int) bool { return domain.CanonicalLess(matched[i], matched[j]) })
@@ -437,9 +440,39 @@ func taskMatches(t domain.Task, f TaskFilter) bool {
 	if f.CompletedBefore != nil && (t.CompletedAt == nil || !t.CompletedAt.Before(*f.CompletedBefore)) {
 		return false
 	}
-	// Note: f.UnblockedOnly is NOT checked here — it depends on relation edges,
-	// which only fakeTasks.List can see through its rel reference (slice 2D2b).
+	if f.Claimed != nil && t.Claim.Present() != *f.Claimed { // tri-state: live or stale lease vs unclaimed
+		return false
+	}
+	if f.ClaimedBy != "" { // name-only exact match on the EPHEMERAL holder (nil By = unclaimed)
+		if b := t.Claim.By(); b == nil || b.Name != f.ClaimedBy {
+			return false
+		}
+	}
+	if f.ExpiredClaim != nil && f.ClaimExpiryNow != nil { // tri-state lapse at the threaded now
+		expired := t.Claim.Present() && !t.Claim.Active(*f.ClaimExpiryNow) // active = strictly before expiry
+		if expired != *f.ExpiredClaim {
+			return false
+		}
+	}
+	// Note: f.UnblockedOnly and f.ParentID are NOT checked here — they depend on
+	// relation edges, which only fakeTasks.List can see through its rel reference.
 	return true
+}
+
+// hasParentEdge reports whether t carries a stored 'child' edge pointing at
+// parentID — the in-memory twin of SQLite's parent_id EXISTS guard (epic
+// decomposition). A standalone fake (rel == nil) reports no edges, like an empty
+// relation table.
+func (f *fakeTasks) hasParentEdge(t domain.Task, parentID domain.ID) bool {
+	if f.rel == nil {
+		return false
+	}
+	for _, e := range f.rel.edges {
+		if e.TaskID == t.ID && e.Kind == domain.RelationChild && e.OtherTaskID == parentID {
+			return true
+		}
+	}
+	return false
 }
 
 // fakeACs is an in-memory AcceptanceCriterionRepository: the creation/initial-

@@ -538,7 +538,8 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 			continue
 		}
 		props := tool.InputSchema.Properties
-		for _, key := range []string{"archived", "assignee_type", "created_after", "created_before", "completed_before"} {
+		for _, key := range []string{"archived", "assignee_type", "created_after", "created_before", "completed_before",
+			"parent_id", "claimed", "claimed_by", "expired_claim"} {
 			if _, ok := props[key]; !ok {
 				t.Errorf("list_tasks input schema missing property %q", key)
 			}
@@ -546,6 +547,12 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 		archived, _ := props["archived"].(map[string]any)
 		if archived == nil || archived["type"] != "boolean" {
 			t.Errorf("list_tasks \"archived\" property = %v, want type boolean", archived)
+		}
+		for _, key := range []string{"claimed", "expired_claim"} {
+			prop, _ := props[key].(map[string]any)
+			if prop == nil || prop["type"] != "boolean" {
+				t.Errorf("list_tasks %q property = %v, want type boolean", key, prop)
+			}
 		}
 		atType, _ := props["assignee_type"].(map[string]any)
 		enums, _ := atType["enum"].([]any)
@@ -762,6 +769,91 @@ func TestListTasksFilterPassthrough(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cc.query, wantQ) {
 		t.Errorf("filter query mismatch:\n got  %s\n want %s", cc.query.Encode(), wantQ.Encode())
+	}
+}
+
+func TestListTasks_ClaimAndParentFilterPassthrough(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// The epic pair: parent_id + claimed/claimed_by + the expired_claim tri-state.
+	// A "false" must still be transmitted — presence is the tri-state signal.
+	res := callTool(t, c, ctx, "list_tasks", map[string]any{
+		"project_id":    "P1",
+		"parent_id":     "PEP",
+		"claimed":       true,
+		"claimed_by":    "agent-a",
+		"expired_claim": false,
+	})
+	if res.IsError {
+		t.Fatalf("list_tasks returned isError: %s", firstText(t, res))
+	}
+	cc := findCall(t, *calls, http.MethodGet, "/api/v1/tasks")
+	wantQ := url.Values{
+		"project_id":    {"P1"},
+		"parent_id":     {"PEP"},
+		"claimed":       {"true"},
+		"claimed_by":    {"agent-a"},
+		"expired_claim": {"false"},
+	}
+	if !reflect.DeepEqual(cc.query, wantQ) {
+		t.Errorf("filter query mismatch:\n got  %s\n want %s", cc.query.Encode(), wantQ.Encode())
+	}
+}
+
+func TestListTasks_OmittedTriStateSendsNothing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// Omitted tri-state params send nothing — the REST layer must see them as
+	// unset (nil), not as "false".
+	res := callTool(t, c, ctx, "list_tasks", map[string]any{"project_id": "P1"})
+	if res.IsError {
+		t.Fatalf("list_tasks returned isError: %s", firstText(t, res))
+	}
+	cc := findCall(t, *calls, http.MethodGet, "/api/v1/tasks")
+	for _, k := range []string{"parent_id", "claimed", "claimed_by", "expired_claim"} {
+		if v, ok := cc.query[k]; ok {
+			t.Errorf("query %s = %q after plain list_tasks, want key absent", k, v)
+		}
+	}
+	if cc.query.Get("project_id") != "P1" {
+		t.Errorf("query project_id = %q, want P1 (all: %s)", cc.query.Get("project_id"), cc.query.Encode())
+	}
+}
+
+func TestCreateTask_ParentIDPassthrough(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	res := callTool(t, c, ctx, "create_task", map[string]any{
+		"actor":      map[string]any{"name": "eve", "type": "agent"},
+		"title":      "child of epic",
+		"project_id": "P1",
+		"parent_id":  "PEP",
+	})
+	if res.IsError {
+		t.Fatalf("create_task returned isError: %s", firstText(t, res))
+	}
+	cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks")
+	var sent apiclient.CreateTaskRequest
+	if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
+		t.Fatalf("create_task upstream body not JSON: %v (%s)", err, cc.body)
+	}
+	if sent.ParentID != "PEP" {
+		t.Errorf("parent_id = %q, want PEP (body %s)", sent.ParentID, cc.body)
 	}
 }
 

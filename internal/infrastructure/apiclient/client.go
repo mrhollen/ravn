@@ -477,6 +477,16 @@ func taskFilterQuery(f TaskFilter) url.Values {
 	if f.Priority != nil {
 		q.Set("priority", fmt.Sprintf("%d", *f.Priority))
 	}
+	set("parent_id", f.ParentID) // children of one task
+	set("claimed_by", f.ClaimedBy)
+	// Tri-state booleans render BOTH values (false is a real constraint, not
+	// "absent"); nil stays absent.
+	if f.Claimed != nil {
+		q.Set("claimed", fmt.Sprintf("%t", *f.Claimed))
+	}
+	if f.ExpiredClaim != nil {
+		q.Set("expired_claim", fmt.Sprintf("%t", *f.ExpiredClaim))
+	}
 	set("due_before", f.DueBefore)
 	set("due_after", f.DueAfter)
 	set("created_after", f.CreatedAfter)

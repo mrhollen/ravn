@@ -216,6 +216,10 @@ type TaskFilter struct {
 	Unblocked       bool   // keep only tasks with no open blocker
 	Search          string // substring over title+description+notes (param alias: q)
 	Priority        *int   // exact match 0-5
+	ParentID        string // ULID; children of one task (stored 'child' edge)
+	Claimed         *bool  // tri-state: nil = any, true = lease present, false = unclaimed
+	ClaimedBy       string // exact match on the EPHEMERAL claim-holder name
+	ExpiredClaim    *bool  // tri-state: nil = any, true = stale lease, false = unclaimed or active
 	DueBefore       string // RFC3339; due_at strictly before (undated never matches)
 	DueAfter        string // RFC3339; inclusive
 	CreatedAfter    string // RFC3339 window over creation time
@@ -229,7 +233,9 @@ type TaskFilter struct {
 
 // CreateTaskRequest is POST /tasks. Title and ProjectID are required; the rest
 // optional. Priority is 0-5 (default 0); DueAt is RFC3339. AcceptanceCriteria
-// become seq 1..n in one transaction with the task.
+// become seq 1..n in one transaction with the task. ParentID optionally files
+// the new task as a child of an existing one in the SAME transaction (400 when
+// the parent is missing or in another project).
 type CreateTaskRequest struct {
 	Actor              Actor    `json:"actor"`
 	Title              string   `json:"title"`
@@ -239,6 +245,7 @@ type CreateTaskRequest struct {
 	DueAt              *string  `json:"due_at,omitempty"`
 	Assignee           *Actor   `json:"assignee,omitempty"`
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
+	ParentID           string   `json:"parent_id,omitempty"`
 }
 
 // CreateTaskResponse is the 201 body of POST /tasks: the fresh summary row plus

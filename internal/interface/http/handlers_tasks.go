@@ -3,6 +3,7 @@ package httpapi
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/mrhollen/ravn/internal/application"
 	"github.com/mrhollen/ravn/internal/domain"
@@ -60,6 +61,7 @@ func (a *App) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		ProjectID:   domain.ID(req.ProjectID),
 		Priority:    domain.Priority(req.Priority),
 		ACs:         req.AcceptanceCriteria,
+		ParentID:    domain.ID(strings.TrimSpace(req.ParentID)), // "" = no parent edge
 	}
 	if req.DueAt != nil {
 		t, err := parseTimeParam(*req.DueAt, "due_at")

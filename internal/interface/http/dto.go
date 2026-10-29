@@ -401,7 +401,9 @@ type updateProjectReq struct {
 }
 
 // createTaskReq is POST /tasks. Zero/omitted optional fields take documented
-// defaults: priority 0, no deadline, unassigned. DueAt is RFC3339.
+// defaults: priority 0, no deadline, unassigned. DueAt is RFC3339. ParentID
+// optionally files the task as a child in the same transaction; missing/empty
+// = no parent.
 type createTaskReq struct {
 	Actor              actorInput  `json:"actor"`
 	Title              string      `json:"title"` // required; empty → 400
@@ -411,6 +413,7 @@ type createTaskReq struct {
 	DueAt              *string     `json:"due_at"`
 	Assignee           *actorInput `json:"assignee"`
 	AcceptanceCriteria []string    `json:"acceptance_criteria"`
+	ParentID           string      `json:"parent_id"` // optional; must exist, same project (else 400)
 }
 
 // updateTaskReq is PATCH /tasks/{id}. Version is the stored version the caller

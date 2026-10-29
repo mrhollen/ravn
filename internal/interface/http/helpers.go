@@ -202,6 +202,28 @@ func parseBoolFlag(q interface{ Get(key string) string }, name string) bool {
 	}
 }
 
+// parseTristateBool parses an OPTIONAL boolean filter that must distinguish
+// three states: absent (nil — unconstrained), explicit true, explicit false.
+// Only "true"/"1" and "false"/"0" are accepted; anything else is malformed →
+// domain.ErrInvalid (→ 400), per the list contract ("any malformed value →
+// 400"). parseBoolFlag cannot express this because its default conflates
+// absent with false.
+func parseTristateBool(q urlValues, name string) (*bool, error) {
+	v := q.Get(name)
+	switch v {
+	case "":
+		return nil, nil
+	case "true", "1":
+		t := true
+		return &t, nil
+	case "false", "0":
+		f := false
+		return &f, nil
+	default:
+		return nil, fmt.Errorf("%w: %s must be a boolean (\"true\" or \"false\"), got %q", domain.ErrInvalid, name, v)
+	}
+}
+
 // parseTaskFilter translates GET /tasks query parameters into a TaskFilter.
 // Any malformed value yields domain.ErrInvalid (→ 400 via writeAppError).
 func parseTaskFilter(q urlValues) (application.TaskFilter, error) {
@@ -234,6 +256,18 @@ func parseTaskFilter(q urlValues) (application.TaskFilter, error) {
 	f.Archived = parseBoolFlag(q, "archived")
 	f.UnblockedOnly = parseBoolFlag(q, "unblocked")
 
+	var err error
+	if v := q.Get("parent_id"); v != "" { // children of one task (stored 'child' edge)
+		f.ParentID = domain.ID(v)
+	}
+	if f.Claimed, err = parseTristateBool(q, "claimed"); err != nil {
+		return f, err
+	}
+	f.ClaimedBy = q.Get("claimed_by") // exact match on the EPHEMERAL holder name
+	if f.ExpiredClaim, err = parseTristateBool(q, "expired_claim"); err != nil {
+		return f, err
+	}
+
 	f.Q = q.Get("search")
 	if f.Q == "" {
 		f.Q = q.Get("q") // documented alias (ARCHITECTURE §5 spelling)
@@ -248,7 +282,6 @@ func parseTaskFilter(q urlValues) (application.TaskFilter, error) {
 		f.Priority = &pr
 	}
 
-	var err error
 	if f.DueBefore, err = parseTimeParam(q.Get("due_before"), "due_before"); err != nil {
 		return f, err
 	}
