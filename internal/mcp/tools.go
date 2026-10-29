@@ -400,7 +400,7 @@ func registerGetTask(s *mcpsrv.MCPServer, c Client) {
 func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("create_task",
 		mcpgo.WithDescription(
-			"Create a task in a project, optionally with priority (0–5), RFC3339 due date, durable assignee, an optional parent_id that files it as a subtask in the SAME transaction, and initial acceptance criteria (an array of strings that become seq 1..n in one transaction with the task). Returns {\"task\": fresh summary row at version 1, \"possible_duplicates\": [...]}. possible_duplicates is ADVISORY only — never an error; if it lists a near-duplicate, do NOT create another task; work on or relate to the existing one instead. Unknown project_id or parent_id → invalid-input error verbatim."+actorHint),
+			"Create a task in a project, optionally with priority (0–5), RFC3339 due date, durable assignee, an optional parent_id that files it as a subtask in the SAME transaction, an optional blocked_by array that creates the task ALREADY blocked by each named task (same transaction), and initial acceptance criteria (an array of strings that become seq 1..n in one transaction with the task). Returns {\"task\": fresh summary row at version 1, \"possible_duplicates\": [...]}. possible_duplicates is ADVISORY only — never an error; if it lists a near-duplicate, do NOT create another task; work on or relate to the existing one instead. Unknown project_id, parent_id or blocked_by ids → invalid-input error verbatim (nothing is created)."+actorHint),
 		mcpgo.WithString("title", mcpgo.Required(),
 			mcpgo.Description("Task title (required, non-empty).")),
 		mcpgo.WithString("description",
@@ -416,6 +416,8 @@ func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 			mcpgo.Description("Initial acceptance criteria as an array of strings; they become seq 1..n.")),
 		mcpgo.WithString("parent_id",
 			mcpgo.Description("Optional: file this task as a child of an existing task in the same call (ULID; must exist and live in the same project).")),
+		mcpgo.WithArray("blocked_by", mcpgo.WithStringItems(),
+			mcpgo.Description("Optional: array of task ULIDs — the new task is created ALREADY blocked by each one, in the same transaction as the task insert (repeats dedupe; every id must exist and live in the same project, else invalid-input error and nothing is written).")),
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -452,6 +454,17 @@ func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 			}
 		}
 		body.ParentID = strings.TrimSpace(req.GetString("parent_id", "")) // empty = no parent edge
+		if v, ok := args["blocked_by"]; ok {
+			if items, ok := v.([]any); ok {
+				// Forward verbatim (including blank entries) so the server's
+				// invalid-input rejection — not a silent skip — surfaces bad ids.
+				for _, it := range items {
+					if s, ok := it.(string); ok {
+						body.BlockedBy = append(body.BlockedBy, s)
+					}
+				}
+			}
+		}
 		resp, err := c.CreateTask(ctx, body)
 		if err != nil {
 			return fail(c, err), nil

@@ -564,6 +564,59 @@ func TestCreateTask_BodyAndDecode(t *testing.T) {
 	}
 }
 
+func TestCreateTask_BlockedByForwarding(t *testing.T) {
+	writeCreated := func(w http.ResponseWriter) {
+		writeJSONTest(w, http.StatusCreated, `{"task":{"id":"T9","title":"t","status":"todo","priority":0,"version":1,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-25T18:02:11Z"},"possible_duplicates":[]}`)
+	}
+
+	// Set: the array must appear on the wire VERBATIM (including blank entries,
+	// which the server rejects — the client never filters or skips).
+	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(cap.body, &raw); err != nil {
+			t.Fatalf("body not JSON: %v (%s)", err, cap.body)
+		}
+		bb, present := raw["blocked_by"]
+		if !present {
+			t.Fatalf("blocked_by missing from body: %s", cap.body)
+		}
+		var items []string
+		if err := json.Unmarshal(bb, &items); err != nil {
+			t.Fatalf("blocked_by not a string array: %v (%s)", err, bb)
+		}
+		want := []string{"B1", "B2", ""}
+		if len(items) != len(want) {
+			t.Fatalf("blocked_by = %v, want %v verbatim", items, want)
+		}
+		for i := range want {
+			if items[i] != want[i] {
+				t.Errorf("blocked_by[%d] = %q, want %q (order and blanks preserved)", i, items[i], want[i])
+			}
+		}
+		writeCreated(w)
+	}))
+	if _, err := c.CreateTask(context.Background(), CreateTaskRequest{
+		Actor: Actor{Name: "eve"}, Title: "t", ProjectID: "P1", BlockedBy: []string{"B1", "B2", ""},
+	}); err != nil {
+		t.Fatalf("CreateTask (blocked_by set): %v", err)
+	}
+
+	// Omitted: the key must not appear at all (omitempty).
+	c, _ = newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
+		var raw map[string]any
+		if err := json.Unmarshal(cap.body, &raw); err != nil {
+			t.Fatalf("body not JSON: %v (%s)", err, cap.body)
+		}
+		if _, present := raw["blocked_by"]; present {
+			t.Errorf("blocked_by must be omitted when unset (got %s)", cap.body)
+		}
+		writeCreated(w)
+	}))
+	if _, err := c.CreateTask(context.Background(), CreateTaskRequest{Actor: Actor{Name: "eve"}, Title: "t", ProjectID: "P1"}); err != nil {
+		t.Fatalf("CreateTask (blocked_by omitted): %v", err)
+	}
+}
+
 // --- UpdateTask -----------------------------------------------------------------------------
 
 func TestUpdateTask_PointerSemantics(t *testing.T) {

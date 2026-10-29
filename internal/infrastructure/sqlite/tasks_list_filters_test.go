@@ -232,3 +232,113 @@ func taskCount(t *testing.T, db *sql.DB) int64 {
 	}
 	return n
 }
+
+func TestSQLCreateWithBlockedBy_WritesRowsAndEventsAtomically(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openTestDB(t)
+	tasks, projects := newTaskUseCase(t, db)
+	p := mustCreateProject(t, ctx, projects)
+
+	b1 := mustCreateTaskIn(t, tasks, p, "Migration half-applied")
+	b2 := mustCreateTaskIn(t, tasks, p, "API contract frozen")
+	task, err := tasks.Create(ctx, testActor, application.TaskInput{
+		Title: "feature on top", ProjectID: p.ID, BlockedBy: []domain.ID{b1.ID, b2.ID},
+	})
+	if err != nil {
+		t.Fatalf("Create with BlockedBy: %v", err)
+	}
+
+	// One CANONICAL blocked-by row per blocker: task_id=new task, other_task_id=blocker.
+	rows, err := db.QueryContext(ctx,
+		`SELECT other_task_id FROM relation WHERE task_id = ? AND kind = 'blocked-by'`, string(task.ID))
+	if err != nil {
+		t.Fatalf("query blocked-by rows: %v", err)
+	}
+	var got []string
+	for rows.Next() {
+		var oid string
+		if err := rows.Scan(&oid); err != nil {
+			t.Fatalf("scan row: %v", err)
+		}
+		got = append(got, oid)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	want := map[string]bool{string(b1.ID): true, string(b2.ID): true}
+	if len(got) != 2 {
+		t.Fatalf("blocked-by rows = %v, want exactly one per blocker", got)
+	}
+	seen := map[string]bool{}
+	for _, oid := range got {
+		if !want[oid] {
+			t.Fatalf("unexpected blocked-by row to %s (rows %v)", oid, got)
+		}
+		if seen[oid] {
+			t.Fatalf("duplicate blocked-by row to %s (rows %v)", oid, got)
+		}
+		seen[oid] = true
+	}
+
+	// created + one relation-changed event PER blocker landed in the same tx.
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM event WHERE task_id = ? AND kind IN (?, ?)`,
+		string(task.ID), string(domain.EventCreated), string(domain.EventRelationChanged)).Scan(&n); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("events for new task = %d, want 3 (created + two relation-changed)", n)
+	}
+
+	// Dedupe: [A B A] stores exactly two rows.
+	dup, err := tasks.Create(ctx, testActor, application.TaskInput{
+		Title: "duplicate list", ProjectID: p.ID, BlockedBy: []domain.ID{b1.ID, b2.ID, b1.ID},
+	})
+	if err != nil {
+		t.Fatalf("Create with duplicate BlockedBy: %v", err)
+	}
+	var m int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM relation WHERE task_id = ? AND kind = 'blocked-by'`, string(dup.ID)).Scan(&m); err != nil {
+		t.Fatalf("count dup rows: %v", err)
+	}
+	if m != 2 {
+		t.Errorf("deduped rows = %d, want 2 (one per unique blocker)", m)
+	}
+
+	// Invalid blocker: NOTHING written — no task row, no partial edges.
+	tBefore, rBefore := taskCount(t, db), relationCount(t, db)
+	_, err = tasks.Create(ctx, testActor, application.TaskInput{
+		Title: "orphan blocked", ProjectID: p.ID, BlockedBy: []domain.ID{"01JMISSINGBLOCKER0000000000000"},
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("missing blocker: err = %v, want wrapped domain.ErrInvalid", err)
+	}
+	if tAfter, rAfter := taskCount(t, db), relationCount(t, db); tBefore != tAfter || rBefore != rAfter {
+		t.Errorf("rows changed on invalid blocker (tasks %d->%d, relations %d->%d)", tBefore, tAfter, rBefore, rAfter)
+	}
+
+	// Combined: valid parent + invalid blocker is atomic too.
+	parent := mustCreateTaskIn(t, tasks, p, "epic")
+	tBefore, rBefore = taskCount(t, db), relationCount(t, db)
+	_, err = tasks.Create(ctx, testActor, application.TaskInput{
+		Title: "partial", ProjectID: p.ID, ParentID: parent.ID, BlockedBy: []domain.ID{"01JMISSINGBLOCKER0000000000000"},
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("combined invalid: err = %v, want wrapped domain.ErrInvalid", err)
+	}
+	if tAfter, rAfter := taskCount(t, db), relationCount(t, db); tBefore != tAfter || rBefore != rAfter {
+		t.Errorf("rows changed on combined invalid (%d->%d tasks, %d->%d relations)", tBefore, tAfter, rBefore, rAfter)
+	}
+}
+
+func relationCount(t *testing.T, db *sql.DB) int64 {
+	t.Helper()
+	var n int64
+	if err := db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM relation`).Scan(&n); err != nil {
+		t.Fatalf("count relations: %v", err)
+	}
+	return n
+}

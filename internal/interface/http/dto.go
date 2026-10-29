@@ -403,7 +403,8 @@ type updateProjectReq struct {
 // createTaskReq is POST /tasks. Zero/omitted optional fields take documented
 // defaults: priority 0, no deadline, unassigned. DueAt is RFC3339. ParentID
 // optionally files the task as a child in the same transaction; missing/empty
-// = no parent.
+// = no parent. BlockedBy optionally files it behind each named blocker in the
+// same transaction (one blocked-by edge per unique id); omitted/empty = none.
 type createTaskReq struct {
 	Actor              actorInput  `json:"actor"`
 	Title              string      `json:"title"` // required; empty → 400
@@ -414,6 +415,7 @@ type createTaskReq struct {
 	Assignee           *actorInput `json:"assignee"`
 	AcceptanceCriteria []string    `json:"acceptance_criteria"`
 	ParentID           string      `json:"parent_id"` // optional; must exist, same project (else 400)
+	BlockedBy          []string    `json:"blocked_by,omitempty"` // optional task IDs; each must exist, same project, unarchived (else 400); repeats dedupe; empty entries → 400
 }
 
 // updateTaskReq is PATCH /tasks/{id}. Version is the stored version the caller

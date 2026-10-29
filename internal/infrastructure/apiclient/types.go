@@ -235,7 +235,10 @@ type TaskFilter struct {
 // optional. Priority is 0-5 (default 0); DueAt is RFC3339. AcceptanceCriteria
 // become seq 1..n in one transaction with the task. ParentID optionally files
 // the new task as a child of an existing one in the SAME transaction (400 when
-// the parent is missing or in another project).
+// the parent is missing or in another project). BlockedBy optionally files it
+// behind each named blocker in the same transaction (one blocked-by edge per
+// unique id; 400 on missing/cross-project/archived blockers or empty entries,
+// nothing written including no partial edges).
 type CreateTaskRequest struct {
 	Actor              Actor    `json:"actor"`
 	Title              string   `json:"title"`
@@ -246,6 +249,7 @@ type CreateTaskRequest struct {
 	Assignee           *Actor   `json:"assignee,omitempty"`
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
 	ParentID           string   `json:"parent_id,omitempty"`
+	BlockedBy          []string `json:"blocked_by,omitempty"`
 }
 
 // CreateTaskResponse is the 201 body of POST /tasks: the fresh summary row plus

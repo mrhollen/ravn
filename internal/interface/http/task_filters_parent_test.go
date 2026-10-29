@@ -243,3 +243,131 @@ func assertSameTaskIDs(t *testing.T, name string, got, want []string) {
 		}
 	}
 }
+
+func getTaskDetail(t *testing.T, stk stack, id string) taskDetailDTO {
+	t.Helper()
+	code, body := doReq(t, stk.Handler, "GET", "/api/v1/tasks/"+id, nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /tasks/%s = %d (body %s)", id, code, string(body))
+	}
+	return mustDecode[taskDetailDTO](t, body)
+}
+
+func blockedByEdgesOf(d taskDetailDTO, childID string) []relationDTO {
+	var out []relationDTO
+	for _, r := range d.Relations {
+		if r.TaskID == childID && r.Kind == "blocked-by" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestHTTPCreateTask_WithBlockedBy(t *testing.T) {
+	t.Parallel()
+	stk := newStack(t)
+	p := createProject(t, stk, "blocked project")
+
+	b1 := makeTask(t, stk, p.ID, "Migration half-applied", nil)
+	b2 := makeTask(t, stk, p.ID, "API contract frozen", nil)
+	child := makeTask(t, stk, p.ID, "feature on top", map[string]any{
+		"blocked_by": []string{b1.ID, b2.ID},
+	})
+
+	d := getTaskDetail(t, stk, string(child.ID))
+	edges := blockedByEdgesOf(d, string(child.ID))
+	if len(edges) != 2 {
+		t.Fatalf("detail relations = %+v, want exactly two blocked-by edges from %s", d.Relations, child.ID)
+	}
+	wantSet := map[string]bool{b1.ID: true, b2.ID: true}
+	for _, e := range edges {
+		if !wantSet[e.OtherTaskID] {
+			t.Fatalf("unexpected blocked-by target %s (edges %+v)", e.OtherTaskID, edges)
+		}
+		wantSet[e.OtherTaskID] = true
+	}
+	// The computed blocker gate reflects the freshly written edges end-to-end.
+	if !d.Blocked {
+		t.Errorf("detail.blocked = false, want true (two open blockers)")
+	}
+
+	// Duplicates dedupe to one edge per unique blocker.
+	dup := makeTask(t, stk, p.ID, "duplicate list", map[string]any{
+		"blocked_by": []string{b1.ID, b2.ID, b1.ID},
+	})
+	if edges := blockedByEdgesOf(getTaskDetail(t, stk, string(dup.ID)), string(dup.ID)); len(edges) != 2 {
+		t.Errorf("deduped edges = %+v, want one per unique blocker (2)", edges)
+	}
+
+	// parent_id + blocked_by compose: both edge kinds on the same task.
+	epic := makeTask(t, stk, p.ID, "epic", nil)
+	both := makeTask(t, stk, p.ID, "feature behind both", map[string]any{
+		"parent_id":  epic.ID,
+		"blocked_by": []string{b2.ID},
+	})
+	dBoth := getTaskDetail(t, stk, string(both.ID))
+	kinds := map[string]bool{}
+	for _, r := range dBoth.Relations {
+		if r.TaskID == both.ID {
+			kinds[r.Kind] = true
+		}
+	}
+	if !kinds["child"] || !kinds["blocked-by"] {
+		t.Errorf("combined relations = %+v, want BOTH child and blocked-by kinds", dBoth.Relations)
+	}
+}
+
+func TestHTTPCreateTask_InvalidBlockedBy(t *testing.T) {
+	t.Parallel()
+	stk := newStack(t)
+	p := createProject(t, stk, "strict project")
+	seeded := makeTask(t, stk, p.ID, "existing blocker", nil)
+
+	cases := []struct {
+		name    string
+		blocked map[string]any
+		wantSub string
+	}{
+		{"unknown blocker", map[string]any{"blocked_by": []string{"01JMISSINGBLOCKER0000000000000"}}, "does not exist"},
+		{"blank entry rejected", map[string]any{"blocked_by": []string{seeded.ID, ""}}, "empty task id"},
+	}
+	for _, tc := range cases {
+		body := map[string]any{"actor": actor("eve"), "title": "orphan blocked", "project_id": p.ID}
+		for k, v := range tc.blocked {
+			body[k] = v
+		}
+		code, resp := doReq(t, stk.Handler, "POST", "/api/v1/tasks", body)
+		if code != http.StatusBadRequest {
+			t.Fatalf("%s: POST /tasks = %d, want 400 (body %s)", tc.name, code, string(resp))
+		}
+		env := mustDecode[errResp](t, resp)
+		if env.Error != "invalid input" || !strings.Contains(env.Message, tc.wantSub) {
+			t.Errorf("%s: envelope = %+v, want invalid-input containing %q", tc.name, env, tc.wantSub)
+		}
+		// Nothing written on rejection (the original row only).
+		if rows, total := listTasks(t, stk, "?project_id="+url.QueryEscape(p.ID)); total != 1 || len(rows) != 1 {
+			t.Errorf("%s: after rejected create: total %d rows %d, want only the seeded task", tc.name, total, len(rows))
+		}
+	}
+
+	// Cross-project blocker: same 400 shape as the cross-project parent twin.
+	p2 := createProject(t, stk, "other project")
+	foreign := makeTask(t, stk, p2.ID, "blocker in p2", nil)
+	code, resp := doReq(t, stk.Handler, "POST", "/api/v1/tasks", map[string]any{
+		"actor": actor("eve"), "title": "straddler blocked", "project_id": p.ID,
+		"blocked_by": []string{foreign.ID},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("POST /tasks (cross-project blocker) = %d, want 400 (body %s)", code, string(resp))
+	}
+	env := mustDecode[errResp](t, resp)
+	if env.Error != "invalid input" || !strings.Contains(env.Message, "belongs to project") {
+		t.Errorf("cross-project envelope = %+v, want invalid-input naming the project mismatch", env)
+	}
+
+	// Omitted blocked_by keeps working: plain create stays unblocked.
+	plain := makeTask(t, stk, p.ID, "standalone", nil)
+	if d := getTaskDetail(t, stk, string(plain.ID)); d.Blocked || len(d.Relations) != 0 {
+		t.Errorf("standalone detail = (blocked %v, relations %+v), want false/none", d.Blocked, d.Relations)
+	}
+}

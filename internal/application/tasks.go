@@ -96,6 +96,20 @@ type TaskInput struct {
 	// self-parent is structurally impossible (freshly minted ID).
 	ParentID domain.ID
 
+	// BlockedBy optionally files the new task as blocked by each named task in
+	// the SAME transaction: per unique id, one stored edge kind='blocked-by',
+	// task_id=new task, other_task_id=blocker — byte-identical to what
+	// relate_tasks(kind="blocked-by") writes (row AND its relation-changed
+	// event). nil/empty = no edges. Each id must exist, live in the same
+	// project as the new task, and not be archived (the RelateAdd guard), else
+	// domain.ErrInvalid naming it and NOTHING is written — including no partial
+	// edges. Repeats collapse to one edge per unique blocker (first-seen order
+	// preserved). An empty/whitespace-only id is REJECTED as invalid input
+	// rather than skipped: a silent skip could mask an upstream wiring bug. A
+	// self-block is structurally impossible (freshly minted ID). ParentID and
+	// BlockedBy may both be provided; every edge lands in one transaction.
+	BlockedBy []domain.ID
+
 	// ACs holds the initial acceptance-criterion texts in display order. Each
 	// entry is trimmed; empty/whitespace entries are dropped, and the survivors
 	// become dense 1-based Seq values. Their IDs are minted here — callers must
@@ -147,12 +161,12 @@ type TaskUpdateInput struct {
 // written on failure.
  // Duplicate-title candidates are surfaced as a non-blocking
 // `possible_duplicates` advisory on create (see FindDuplicateCandidates).
-// blocked-by / related edges stay with the separate relations use case
-// (POST|DELETE /tasks/{id}/relations, `relate_tasks`); the one exception is
-// ParentID, which files the new task as a child in this same transaction so
-// epic decomposition needs a single call (the stored row is identical to
-// what relate_tasks would write — same kind, direction, event and ≤1-parent
-// index backstop).
+ // blocked-by / related edges stay with the separate relations use case
+ // (POST|DELETE /tasks/{id}/relations, `relate_tasks`); the exceptions are
+ // ParentID and BlockedBy, which file the new task as a child and/or behind
+ // each named blocker in this same transaction so epic decomposition needs a
+ // single call (each stored row is identical to what relate_tasks would write
+ // — same kind, direction, event, and the ≤1-parent index backstop).
 func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (domain.Task, error) {
 	// The acting actor is validated and normalized BEFORE anything else: an
 	// invalid principal (unknown type, empty/oversized/control-char name) must
@@ -258,6 +272,39 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 				return fmt.Errorf("%w: cannot create a task under archived parent %s", domain.ErrInvalid, in.ParentID)
 			}
 		}
+		// Blocked-by validation mirrors the parent edge above (same guards,
+		// same pre-write position): every id must exist, share the project, and
+		// not be archived — else domain.ErrInvalid naming it, nothing written.
+		// Empty ids are rejected (not skipped: a silent skip could mask an
+		// upstream wiring bug). Repeats dedupe to one edge each, first-seen
+		// order preserved. A self-block is structurally impossible here.
+		var uniqueBlockers []domain.ID
+		if len(in.BlockedBy) > 0 {
+			seen := make(map[domain.ID]bool, len(in.BlockedBy))
+			for _, bid := range in.BlockedBy {
+				if bid.IsZero() {
+					return fmt.Errorf("%w: blocked_by must not contain an empty task id", domain.ErrInvalid)
+				}
+				if seen[bid] {
+					continue
+				}
+				seen[bid] = true
+				blocker, berr := r.Tasks.Get(ctx, bid)
+				if errors.Is(berr, domain.ErrNotFound) {
+					return fmt.Errorf("%w: blocker task %s does not exist", domain.ErrInvalid, bid)
+				} else if berr != nil {
+					return berr
+				}
+				if blocker.ProjectID != in.ProjectID {
+					return fmt.Errorf("%w: blocker task %s belongs to project %s, not %s",
+						domain.ErrInvalid, bid, blocker.ProjectID, in.ProjectID)
+				}
+				if blocker.Archived { // the RelateAdd archived guard, applied at create
+					return fmt.Errorf("%w: cannot create a task blocked by archived task %s", domain.ErrInvalid, bid)
+				}
+				uniqueBlockers = append(uniqueBlockers, bid)
+			}
+		}
 		if err := r.Tasks.Create(ctx, task); err != nil {
 			return err
 		}
@@ -297,7 +344,37 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 				}),
 				At: now,
 			}
-			return r.Events.Append(ctx, relEv)
+			if err := r.Events.Append(ctx, relEv); err != nil {
+				return err
+			}
+		}
+		for _, bid := range uniqueBlockers { // one row + event per unique blocker
+			rel := domain.Relation{
+				ID:          s.idgen.NewID(),
+				TaskID:      task.ID, // the new task is the BLOCKED one
+				OtherTaskID: bid,
+				Kind:        domain.RelationBlockedBy,
+				CreatedAt:   now,
+			}
+			if err := r.Relations.Add(ctx, rel); err != nil {
+				return err
+			}
+			relEv := domain.Event{
+				ID:        s.idgen.NewID(),
+				ProjectID: &task.ProjectID,
+				TaskID:    &task.ID, // the task whose outgoing edge set changed
+				Actor:     actor,
+				Kind:      domain.EventRelationChanged,
+				After: compactJSON(map[string]any{
+					"action":   string(RelateAdd),
+					"kind":     string(domain.RelationBlockedBy),
+					"other_id": bid,
+				}),
+				At: now,
+			}
+			if err := r.Events.Append(ctx, relEv); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

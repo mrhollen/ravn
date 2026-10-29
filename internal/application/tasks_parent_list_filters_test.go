@@ -377,3 +377,199 @@ func sameIDSet(a, b map[domain.ID]bool) bool {
 	}
 	return true
 }
+
+func TestTasksCreate_WithBlockedBy_WritesEdgesAndEvents(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+
+	b1 := mustCreateTask(t, svc, "Migration half-applied", 4, nil)
+	b2 := mustCreateTask(t, svc, "API contract frozen", 3, nil)
+	task, err := svc.Create(ctx, testAgent, TaskInput{
+		Title:     "New feature on top",
+		ProjectID: testProjectID,
+		BlockedBy: []domain.ID{b1.ID, b2.ID},
+	})
+	if err != nil {
+		t.Fatalf("Create with BlockedBy: %v", err)
+	}
+
+	// N ids in => N CANONICAL blocked-by rows (task_id=new task, other_task_id=blocker),
+	// in given order.
+	var found []domain.Relation
+	for _, e := range uow.relations.edges {
+		if e.TaskID == task.ID && e.Kind == domain.RelationBlockedBy {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 2 || found[0].OtherTaskID != b1.ID || found[1].OtherTaskID != b2.ID {
+		t.Fatalf("stored edges = %+v, want (task -> %s), (task -> %s) in order", uow.relations.edges, b1.ID, b2.ID)
+	}
+	for _, e := range found {
+		if !e.CreatedAt.Equal(fc.now) {
+			t.Errorf("edge CreatedAt = %s, want the create instant %s", e.CreatedAt, fc.now)
+		}
+	}
+
+	// One relation-changed event PER blocker (add), on the new task.
+	var relEvents []domain.Event
+	for _, ev := range uow.events.events {
+		if ev.TaskID != nil && *ev.TaskID == task.ID && ev.Kind == domain.EventRelationChanged {
+			relEvents = append(relEvents, ev)
+		}
+	}
+	if len(relEvents) != 2 {
+		t.Fatalf("relation-changed events for new task = %d, want one per blocker (2)", len(relEvents))
+	}
+	for _, ev := range relEvents {
+		if !strings.Contains(ev.After, `"kind":"blocked-by"`) ||
+			(!strings.Contains(ev.After, string(b1.ID)) && !strings.Contains(ev.After, string(b2.ID))) {
+			t.Errorf("event payload %s not a blocked-by add", ev.After)
+		}
+	}
+}
+
+func TestTasksCreate_WithBlockedBy_RejectsInvalid(t *testing.T) {
+	ctx := context.Background()
+	svc, _, uow := newTaskTestEnv(t)
+	seeded := mustCreateTask(t, svc, "existing blocker", 4, nil)
+
+	cases := []struct {
+		name    string
+		in      TaskInput
+		wantSub string
+	}{
+		{"missing blocker", TaskInput{Title: "orphan blocked", ProjectID: testProjectID, BlockedBy: []domain.ID{"01JMISSINGBLOCKER0000000000000"}}, "does not exist"},
+		{"empty id rejected (not skipped)", TaskInput{Title: "blank blocker", ProjectID: testProjectID, BlockedBy: []domain.ID{seeded.ID, ""}}, "must not contain an empty task id"},
+	}
+	for _, tc := range cases {
+		before := len(uow.tasks.byID)
+		_, err := svc.Create(ctx, testAgent, tc.in)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("%s: err = %v, want wrapped domain.ErrInvalid", tc.name, err)
+		}
+		if !strings.Contains(err.Error(), tc.wantSub) {
+			t.Errorf("%s: err = %q, want it to name the problem (%q)", tc.name, err, tc.wantSub)
+		}
+		if len(uow.tasks.byID) != before || len(uow.relations.edges) != 0 {
+			t.Errorf("%s: nothing may be written (tasks %d->%d edges=%d)", tc.name, before, len(uow.tasks.byID), len(uow.relations.edges))
+		}
+	}
+
+	// Cross-project blocker (fixture surgery, same as the parent twin).
+	fc2 := newFakeClock(mustTime(t, testStart))
+	fp := newFakeProjects()
+	fp.byID[testProjectID] = domain.Project{ID: testProjectID, Name: "Demo", CreatedAt: fc2.now, UpdatedAt: fc2.now}
+	otherProj := domain.ID("proj-2")
+	fp.byID[otherProj] = domain.Project{ID: otherProj, Name: "Other", CreatedAt: fc2.now, UpdatedAt: fc2.now}
+	uow2 := newFakeUoW(fp, &fakeEvents{})
+	svc2 := NewTasks(uow2, fc2, &fakeIDGen{})
+	foreign := mustCreateTask(t, svc2, "foreign blocker", 0, nil)
+	stored := uow2.tasks.byID[foreign.ID]
+	stored.ProjectID = otherProj
+	uow2.tasks.byID[foreign.ID] = stored
+	_, err := svc2.Create(ctx, testAgent, TaskInput{Title: "cross-project blocked", ProjectID: testProjectID, BlockedBy: []domain.ID{foreign.ID}})
+	if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), string(otherProj)) {
+		t.Errorf("cross-project blocker: err = %v, want ErrInvalid naming project %s", err, otherProj)
+	}
+
+	// Archived blocker.
+	svc3, _, uow3 := newTaskTestEnv(t)
+	stale := mustCreateTask(t, svc3, "done-and-filed blocker", 4, nil)
+	if err := archiveTask(t, svc3, stale.ID); err != nil {
+		t.Fatalf("archive blocker: %v", err)
+	}
+	before := len(uow3.tasks.byID)
+	_, err = svc3.Create(ctx, testAgent, TaskInput{Title: "blocked by archived", ProjectID: testProjectID, BlockedBy: []domain.ID{stale.ID}})
+	if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "archived") {
+		t.Errorf("archived blocker: err = %v, want ErrInvalid naming archived task", err)
+	}
+	if len(uow3.tasks.byID) != before || len(uow3.relations.edges) != 0 {
+		t.Errorf("archived blocker: nothing may be written (tasks %d->%d edges=%d)", before, len(uow3.tasks.byID), len(uow3.relations.edges))
+	}
+}
+
+func TestTasksCreate_WithBlockedBy_DedupesPreservingOrder(t *testing.T) {
+	ctx := context.Background()
+	svc, _, uow := newTaskTestEnv(t)
+	a := mustCreateTask(t, svc, "blocker A", 4, nil)
+	b := mustCreateTask(t, svc, "blocker B", 3, nil)
+	task, err := svc.Create(ctx, testAgent, TaskInput{
+		Title:     "duplicated list",
+		ProjectID: testProjectID,
+		BlockedBy: []domain.ID{a.ID, b.ID, a.ID, b.ID},
+	})
+	if err != nil {
+		t.Fatalf("Create with duplicate BlockedBy: %v", err)
+	}
+	var got []domain.ID
+	for _, e := range uow.relations.edges {
+		if e.TaskID == task.ID && e.Kind == domain.RelationBlockedBy {
+			got = append(got, e.OtherTaskID)
+		}
+	}
+	if len(got) != 2 || got[0] != a.ID || got[1] != b.ID {
+		t.Errorf("deduped edges = %v, want exactly [A B] in first-seen order", got)
+	}
+	var relEvents int
+	for _, ev := range uow.events.events {
+		if ev.TaskID != nil && *ev.TaskID == task.ID && ev.Kind == domain.EventRelationChanged {
+			relEvents++
+		}
+	}
+	if relEvents != 2 {
+		t.Errorf("relation events = %d, want one per unique blocker", relEvents)
+	}
+}
+
+func TestTasksCreate_WithParentAndBlockedBy_CombinedAtomic(t *testing.T) {
+	ctx := context.Background()
+	svc, _, uow := newTaskTestEnv(t)
+	parent := mustCreateTask(t, svc, "epic", 5, nil)
+	blocker := mustCreateTask(t, svc, "foundation migration", 4, nil)
+
+	task, err := svc.Create(ctx, testAgent, TaskInput{
+		Title:     "feature behind both",
+		ProjectID: testProjectID,
+		ParentID:  parent.ID,
+		BlockedBy: []domain.ID{blocker.ID},
+	})
+	if err != nil {
+		t.Fatalf("Create with ParentID + BlockedBy: %v", err)
+	}
+
+	kindSeen := map[domain.RelationKind]bool{}
+	for _, e := range uow.relations.edges {
+		if e.TaskID == task.ID && (e.Kind == domain.RelationChild || e.Kind == domain.RelationBlockedBy) {
+			kindSeen[e.Kind] = true
+		}
+	}
+	if !kindSeen[domain.RelationChild] || !kindSeen[domain.RelationBlockedBy] {
+		t.Errorf("edges = %+v, want BOTH the child and blocked-by rows", uow.relations.edges)
+	}
+	var relEvents int
+	for _, ev := range uow.events.events {
+		if ev.TaskID != nil && *ev.TaskID == task.ID && ev.Kind == domain.EventRelationChanged {
+			relEvents++
+		}
+	}
+	if relEvents != 2 {
+		t.Errorf("relation events = %d, want one per edge (child + blocked-by)", relEvents)
+	}
+
+	// Atomicity: a valid parent with an INVALID blocker writes nothing.
+	beforeTasks := len(uow.tasks.byID)
+	beforeEdges := len(uow.relations.edges)
+	_, err = svc.Create(ctx, testAgent, TaskInput{
+		Title: "partial attempt", ProjectID: testProjectID, ParentID: parent.ID,
+		BlockedBy: []domain.ID{"01JMISSINGBLOCKER0000000000000"},
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("err = %v, want wrapped domain.ErrInvalid", err)
+	}
+	if len(uow.tasks.byID) != beforeTasks {
+		t.Errorf("task rows changed on invalid blocker (%d -> %d) — nothing may be written", beforeTasks, len(uow.tasks.byID))
+	}
+	if len(uow.relations.edges) != beforeEdges {
+		t.Errorf("edges changed on invalid blocker (%d -> %d) — no partial edges", beforeEdges, len(uow.relations.edges))
+	}
+}

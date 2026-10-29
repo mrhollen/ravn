@@ -857,6 +857,63 @@ func TestCreateTask_ParentIDPassthrough(t *testing.T) {
 	}
 }
 
+func TestCreateTask_BlockedByPassthrough(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	res := callTool(t, c, ctx, "create_task", map[string]any{
+		"actor":      map[string]any{"name": "eve", "type": "agent"},
+		"title":      "behind two blockers",
+		"project_id": "P1",
+		"blocked_by": []any{"B1", "B2"},
+	})
+	if res.IsError {
+		t.Fatalf("create_task returned isError: %s", firstText(t, res))
+	}
+	cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks")
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(cc.body), &raw); err != nil {
+		t.Fatalf("create_task upstream body not JSON: %v (%s)", err, cc.body)
+	}
+	bb, present := raw["blocked_by"]
+	if !present {
+		t.Fatalf("blocked_by missing from upstream body: %s", cc.body)
+	}
+	var items []string
+	if err := json.Unmarshal(bb, &items); err != nil {
+		t.Fatalf("blocked_by not a string array: %v (%s)", err, bb)
+	}
+	if len(items) != 2 || items[0] != "B1" || items[1] != "B2" {
+		t.Errorf("blocked_by = %v, want [B1 B2] forwarded verbatim in order (body %s)", items, cc.body)
+	}
+
+	// Omitted → the key must not appear upstream at all. A fresh stack keeps
+	// findCall's first-match semantics unambiguous.
+	upstream2, _, calls2 := newMockUpstream(t)
+	c2 := dial(t, startMCPStack(t, upstream2.URL).URL, ctx)
+	defer func() { _ = c2.Close() }()
+	res = callTool(t, c2, ctx, "create_task", map[string]any{
+		"actor":      map[string]any{"name": "eve", "type": "agent"},
+		"title":      "plain task",
+		"project_id": "P1",
+	})
+	if res.IsError {
+		t.Fatalf("create_task (no blocked_by) returned isError: %s", firstText(t, res))
+	}
+	cc2 := findCall(t, *calls2, http.MethodPost, "/api/v1/tasks")
+	var raw2 map[string]any
+	if err := json.Unmarshal([]byte(cc2.body), &raw2); err != nil {
+		t.Fatalf("upstream body not JSON: %v (%s)", err, cc2.body)
+	}
+	if _, present := raw2["blocked_by"]; present {
+		t.Errorf("blocked_by must be omitted when unset (body %s)", cc2.body)
+	}
+}
+
 func TestCreateTaskRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

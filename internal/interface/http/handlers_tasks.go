@@ -63,6 +63,9 @@ func (a *App) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		ACs:         req.AcceptanceCriteria,
 		ParentID:    domain.ID(strings.TrimSpace(req.ParentID)), // "" = no parent edge
 	}
+	for _, b := range req.BlockedBy {
+		in.BlockedBy = append(in.BlockedBy, domain.ID(strings.TrimSpace(b))) // whitespace-only → rejected upstream (invalid input)
+	}
 	if req.DueAt != nil {
 		t, err := parseTimeParam(*req.DueAt, "due_at")
 		if err != nil {
