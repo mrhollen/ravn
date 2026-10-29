@@ -68,10 +68,12 @@ test.describe('Blocked-state cache never leaks across a project switch', () => {
 
   let projA: any;
   let projB: any;
+  let projC: any;
   let blockedTaskA: any; // has an open blocked-by relation
   let blockerTaskA: any;
   let plainTaskB1: any;
   let plainTaskB2: any;
+  let blockedTaskC104: any;
 
   test.beforeAll(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-blocked-cache-'));
@@ -126,6 +128,25 @@ test.describe('Blocked-state cache never leaks across a project switch', () => {
       priority: 2,
       actor: ACTOR,
     })).task;
+
+    // Project C: >100 tasks (105 tasks) where task 104 is blocked by task 0.
+    projC = await postJson(`${serverUrl}/api/v1/projects`, { name: 'Blocked Scale Gamma', actor: ACTOR });
+    const cTasks: any[] = [];
+    for (let i = 0; i < 105; i++) {
+      const created = (await postJson(`${serverUrl}/api/v1/tasks`, {
+        project_id: projC.id,
+        title: i === 0 ? 'Gamma Blocker Root' : i === 104 ? 'Gamma Blocked High Index' : i === 5 ? 'Gamma Target Five' : `Gamma Task ${i}`,
+        priority: 3,
+        actor: ACTOR,
+      })).task;
+      cTasks.push(created);
+    }
+    blockedTaskC104 = cTasks[104];
+    await postJson(`${serverUrl}/api/v1/tasks/${cTasks[104].id}/relations`, {
+      other_id: cTasks[0].id,
+      kind: 'blocked-by',
+      actor: ACTOR,
+    });
   });
 
   test.afterAll(async () => {
@@ -190,5 +211,46 @@ test.describe('Blocked-state cache never leaks across a project switch', () => {
     const drawerA = page.locator('#cb-detail-drawer');
     await expect(drawerA).toBeVisible();
     await expect(drawerA.getByText('Blocked by:')).toBeVisible();
+  });
+
+  test('board load fires zero list_tasks requests and >100 task project accurately renders blocked badges and filters (AC1-AC3)', async ({ page }, testInfo) => {
+    const listTaskRequests: string[] = [];
+    page.on('request', (req) => {
+      const url = req.url();
+      if (url.includes('/api/v1/tasks?') && !url.includes('/tasks/')) {
+        listTaskRequests.push(url);
+      }
+    });
+
+    await page.goto(serverUrl);
+
+    // Switch to Project C (>100 tasks)
+    await selectProjectViaDropdown(page, projC.id);
+    await expectProjectSelected(page, 'Blocked Scale Gamma');
+
+    // AC1: loadBoard fires zero list_tasks queries (no redundant 2x listTasks polling)
+    expect(listTaskRequests.length, 'zero listTasks requests on board load').toBe(0);
+
+    // AC2/AC3: Blocked task 104 accurately renders the blocked badge even on >100 task board
+    const blockedCard = page.locator('article', { hasText: 'Gamma Blocked High Index' });
+    await expect(blockedCard).toBeVisible();
+    await expect(blockedCard.getByText('blocked', { exact: true })).toBeVisible();
+
+    // Verify unblocked card is visible
+    const unblockedCard = page.locator('article', { hasText: 'Gamma Target Five' });
+    await expect(unblockedCard).toBeVisible();
+
+    // Take screenshot evidence of the blocked card on the >100 task board
+    await page.screenshot({ path: path.join(testInfo.outputDir, 'blocked-over-100-tasks.png') });
+
+    // AC3: Click "Unblocked only" filter: blocked task 104 is hidden, unblocked task 5 remains visible
+    const unblockedFilter = page.getByTestId('filter-unblocked');
+    await unblockedFilter.check();
+    await expect(blockedCard).not.toBeVisible();
+    await expect(unblockedCard).toBeVisible();
+
+    // Uncheck filter: blocked task 104 returns
+    await unblockedFilter.uncheck();
+    await expect(blockedCard).toBeVisible();
   });
 });

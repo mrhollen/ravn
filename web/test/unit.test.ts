@@ -2383,11 +2383,14 @@ test("BlockedCache: isBlocked fails closed when the cache belongs to another pro
   assert.equal(app.isBlocked("x2"), true);
 });
 
-test("BlockedCache: a >100-task board never retains a previous project's set (AC2)", async () => {
+test("BlockedCache: a >100-task board populates blockedIds directly from blockers and re-scopes the cache (AC2/AC3)", async () => {
+  let listTasksCalled = false;
   const origListTasks = api.listTasks;
   try {
-    // Both listTasks calls report the project is too big to diff cheaply.
-    (api as any).listTasks = async () => ({ tasks: [], total: 150, limit: 100, offset: 0 });
+    (api as any).listTasks = async () => {
+      listTasksCalled = true;
+      return { tasks: [], total: 150, limit: 100, offset: 0 };
+    };
 
     const app = ravnApp() as any;
     app.selectedProjectId = "B";
@@ -2396,62 +2399,85 @@ test("BlockedCache: a >100-task board never retains a previous project's set (AC
     app.knownBlocked = { a2: true };
     app.blockedCacheProjectId = "A";
 
-    // Non-empty buckets so the board is treated as a real (large) project:
-    // listTasks' totals (150) drive the too-big path.
+    // Board with >100 tasks where some tasks carry open blockers:
+    const tasks150 = Array.from({ length: 150 }, (_, i) => ({
+      id: `b${i}`,
+      title: `Task ${i}`,
+      status: "todo",
+      priority: 3,
+      version: 1,
+      created_at: "",
+      updated_at: "",
+      blockers: i === 2 || i === 120 ? [{ id: "blk1", title: "Blocker", status: "todo" }] : undefined,
+    }));
+
     const bigBoard = {
       project_id: "B",
-      counts: {},
-      tasks: { todo: [{ id: "b7" }, { id: "b8" }], doing: [], done: [] },
+      counts: { todo: 150, doing: 0, done: 0 },
+      tasks: { todo: tasks150, doing: [], done: [] },
     };
     await app.refreshBlockedSet(bigBoard);
 
-    assert.equal(app.blockedIds.size, 0, "the >100 path clears instead of inheriting");
-    assert.deepEqual(app.knownBlocked, {});
-    assert.equal(app.blockedCacheProjectId, "B", "cache now belongs to the big project");
+    assert.equal(listTasksCalled, false, "zero listTasks calls fired");
+    assert.deepEqual(app.knownBlocked, {}, "stale knownBlocked cleared on project switch");
+    assert.equal(app.blockedCacheProjectId, "B", "cache now belongs to project B");
     assert.equal(app.isBlocked("a1"), false, "project A's ids can't surface in B");
+    assert.equal(app.isBlocked("a2"), false, "project A's knownBlocked can't surface in B");
+    assert.equal(app.isBlocked("b2"), true, "blocked task b2 is recognized even on >100 task board");
+    assert.equal(app.isBlocked("b120"), true, "blocked task b120 (>100) is recognized");
+    assert.equal(app.isBlocked("b0"), false, "unblocked task b0 returns false");
 
-    // Repeated loads of the SAME large board don't thrash: entries learned
-    // under it survive its own big-board reload.
-    (app.blockedIds as Set<string>).add("b9"); // e.g. learned from a detail fetch
+    // Repeated loads of the SAME board don't thrash entries learned from detail:
+    app.knownBlocked["b99"] = true;
     await app.refreshBlockedSet(bigBoard);
     assert.equal(app.blockedCacheProjectId, "B");
-    assert.ok((app.blockedIds as Set<string>).has("b9"), "same-project entries survive its own reload");
+    assert.equal(app.isBlocked("b99"), true, "same-project detail entries survive reload");
   } finally {
     (api as any).listTasks = origListTasks;
   }
 });
 
-test("BlockedCache: a successful diff re-scopes the cache to the payload's project", async () => {
+test("BlockedCache: loadBoard derives blocked state directly from board snapshot without api.listTasks (AC1/AC2)", async () => {
+  let listTasksCount = 0;
   const origListTasks = api.listTasks;
+  const origGetBoard = api.getBoard;
   try {
-    (api as any).listTasks = async (params: any) => ({
-      tasks: params?.unblocked ? [{ id: "b1" }] : [{ id: "b1" }, { id: "b2" }],
-      total: params?.unblocked ? 1 : 2,
-      limit: 100,
-      offset: 0,
+    (api as any).listTasks = async () => {
+      listTasksCount++;
+      return { tasks: [], total: 0, limit: 100, offset: 0 };
+    };
+    (api as any).getBoard = async () => ({
+      project_id: "B",
+      counts: { todo: 2, doing: 0, done: 0 },
+      tasks: {
+        todo: [
+          { id: "b1", title: "Task 1", blockers: [{ id: "blk1", title: "Blk", status: "todo" }] },
+          { id: "b2", title: "Task 2" },
+        ],
+        doing: [],
+        done: [],
+      },
     });
 
     const app = ravnApp() as any;
     app.selectedProjectId = "B";
     app.blockedCacheProjectId = ""; // fresh boot
-    await app.refreshBlockedSet({
-      project_id: "B",
-      counts: {},
-      tasks: { todo: [{ id: "b1" }, { id: "b2" }], doing: [], done: [] },
-    });
+    await app.loadBoard();
 
+    assert.equal(listTasksCount, 0, "loadBoard must never call api.listTasks");
     assert.equal(app.blockedCacheProjectId, "B");
-    assert.ok((app.blockedIds as Set<string>).has("b2"), "diff marks b2 blocked (in all, not in unblocked)");
-    assert.ok(!(app.blockedIds as Set<string>).has("b1"));
+    assert.equal(app.isBlocked("b1"), true, "b1 is blocked via board snapshot blockers");
+    assert.equal(app.isBlocked("b2"), false, "b2 is unblocked");
   } finally {
     (api as any).listTasks = origListTasks;
+    (api as any).getBoard = origGetBoard;
   }
 });
 
-test("BlockedCache: a failed refresh keeps the current project's last good set (catch-branch decision)", async () => {
-  const origListTasks = api.listTasks;
+test("BlockedCache: a failed board load keeps the current project's last good set (catch-branch decision)", async () => {
+  const origGetBoard = api.getBoard;
   try {
-    (api as any).listTasks = async () => {
+    (api as any).getBoard = async () => {
       throw new Error("network down");
     };
 
@@ -2462,13 +2488,13 @@ test("BlockedCache: a failed refresh keeps the current project's last good set (
     app.knownBlocked = {};
     app.blockedCacheProjectId = "B";
 
-    const boardB = { project_id: "B", counts: {}, tasks: { todo: [{ id: "b0" }], doing: [], done: [] } };
-    await app.refreshBlockedSet(boardB); // listTasks rejects → catch branch
+    await app.loadBoard();
 
     assert.ok((app.blockedIds as Set<string>).has("b1"), "transient failure keeps the last good set");
     assert.equal(app.blockedCacheProjectId, "B");
+    assert.equal(app.loadError, "network down");
   } finally {
-    (api as any).listTasks = origListTasks;
+    (api as any).getBoard = origGetBoard;
   }
 });
 

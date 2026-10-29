@@ -1128,9 +1128,9 @@ export function ravnApp() {
     selectedProjectId: safeStorage.getItem(LS_PROJECT) ?? "",
     board: null as Board | null,
 
-    /** IDs of tasks known to be blocked right now — summary rows don't carry
-     *  the flag, so it is derived (see refreshBlockedSet) plus learned from
-     *  detail fetches (knownBlocked). BOTH structures are scoped to
+    /** IDs of tasks known to be blocked right now — derived directly from the
+     *  board snapshot's `blockers` arrays (see syncBlockedFromBoard) plus
+     *  learned from detail fetches (knownBlocked). BOTH structures are scoped to
      *  `blockedCacheProjectId`, the project they were derived/learned under:
      *  readers (isBlocked → card badges + the "Unblocked only" filter) see an
      *  empty cache whenever the scope differs from the selected project, so a
@@ -1157,6 +1157,24 @@ export function ravnApp() {
         }
       }
       return false;
+    },
+
+    /** Sync blockedIds directly from a board snapshot's blockers arrays (ticket 01M5XSNHZJ22E3RS7Z4PY4N274).
+     *  Synchronous, zero extra HTTP requests, and works for any task volume (>100 tasks). */
+    syncBlockedFromBoard(b: Board): void {
+      if (this.blockedCacheProjectId !== b.project_id) {
+        this.resetBlockedCache(b.project_id);
+      }
+      const blocked = new Set<string>();
+      for (const s of STATUSES) {
+        for (const t of b.tasks[s] ?? []) {
+          if (t.blockers && t.blockers.length > 0) {
+            blocked.add(t.id);
+          }
+        }
+      }
+      this.blockedIds = blocked;
+      this.blockedCacheProjectId = b.project_id;
     },
 
     /** Drop every derived/learned blocked entry and re-scope the cache to
@@ -1548,12 +1566,8 @@ export function ravnApp() {
           });
         if (!mayApply()) return; // stale (newer load started) or foreign project — never overwrite
         this.board = b;
+        this.syncBlockedFromBoard(b);
         if (!silent) this.loadError = "";
-        await this.refreshBlockedSet(b, () =>
-          // The 2×listTasks diff must not write results that belong to a
-          // superseded load (project switched or newer load in flight).
-          mayApply(),
-        );
       } catch (e) {
         if (!silent) this.loadError = errMsg(e);
         if (ApiError.isUnauthorized(e)) {
@@ -1562,56 +1576,13 @@ export function ravnApp() {
       }
     },
 
-    /** Derive which open tasks are blocked without N extra calls: one
-     *  list_tasks plus the same call with unblocked=true, then diff by id.
-     *  Writes are ownership-gated via `isStillCurrent`, so a superseded load
-     *  (project switched or a newer board load in flight) never lands its
-     *  diff — and everything written is re-scoped to the payload's project
-     *  (blockedCacheProjectId), so another project's set can never survive a
-     *  switch. Projects with more than `limit` open tasks can't be diffed
-     *  cheaply: for those the cache is re-scoped to that project and left
-     *  EMPTY for it instead of inheriting whatever was derived before;
-     *  per-task detail loads (applyDetail → knownBlocked) still fill in
-     *  individual badges. */
+    /** Derive which open tasks are blocked directly from the board snapshot's
+     *  blockers arrays (ticket 01M5XSNHZJ22E3RS7Z4PY4N274).
+     *  Kept as an async method for backward compatibility with callers/tests,
+     *  delegating to synchronous syncBlockedFromBoard without any extra HTTP requests. */
     async refreshBlockedSet(b: Board, isStillCurrent?: () => boolean): Promise<void> {
-      const stillCurrent = (): boolean => (isStillCurrent ? isStillCurrent() : true);
-      const total = STATUSES.reduce((n, s) => n + (b.tasks[s]?.length ?? 0), 0);
-      if (total === 0) {
-        // An empty board owns an EMPTY cache — anything derived under a
-        // different project is stale by definition.
-        if (stillCurrent()) this.resetBlockedCache(b.project_id);
-        return;
-      }
-      const limit = 100;
-      try {
-        const [all, un] = await Promise.all([
-          api.listTasks({ project_id: b.project_id, limit }),
-          api.listTasks({ project_id: b.project_id, unblocked: true, limit }),
-        ]);
-        if (!stillCurrent()) return; // superseded — keep whatever we had
-        if (all.total > limit || un.total > limit) {
-          // Too big to diff cheaply. A DIFFERENT project's set must never be
-          // retained here — that is exactly the cross-project leak this cache
-          // guards against: re-scope to this project and start empty. If the
-          // cache already belongs to THIS project (repeated loads of the same
-          // large board), its entries stay valid and are kept.
-          if (this.blockedCacheProjectId !== b.project_id) {
-            this.resetBlockedCache(b.project_id);
-          }
-          return;
-        }
-        const unIds = new Set(un.tasks.map((t) => t.id));
-        this.blockedIds = new Set(
-          all.tasks.filter((t) => !unIds.has(t.id)).map((t) => t.id),
-        );
-        this.blockedCacheProjectId = b.project_id;
-      } catch {
-        // Transient network failure: keep whatever we had (deliberate — an
-        // advisory feature should not lose good data on a blip). Safe, because
-        // the cache is project-scoped and isBlocked() only serves entries
-        // owned by the CURRENTLY selected project: this can never surface a
-        // different project's blocked state.
-      }
+      if (isStillCurrent && !isStillCurrent()) return;
+      this.syncBlockedFromBoard(b);
     },
 
     // ------------------------------------------------------------ realtime SSE
