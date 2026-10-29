@@ -188,6 +188,20 @@ type TaskSubtaskProgress struct {
 	Done  int64
 }
 
+// TaskCommentStats is one (task, comment count, most-recent comment) aggregate
+// produced by CommentRepository.CommentStatsByTasks. It is a port-level result
+// shape, not a domain entity: nothing persists it — the board snapshot folds
+// it into summary-row comment_count / last_comment_kind / last_comment_actor
+// fields so cards can render question/handoff badges without loading every
+// task's full comment thread. "Most recent" = max created_at; same-timestamp
+// ties break by insertion order (the newest-inserted row wins), matching
+// ListByTask's ordering.
+type TaskCommentStats struct {
+	Count     int64
+	LastKind  domain.CommentKind
+	LastActor domain.Actor
+}
+
 // TaskRepository persists tasks and their ephemeral claim leases. Concurrency
 // notes:
 //
@@ -347,12 +361,15 @@ type CommentRepository interface {
 	// paging — the `total` of the paged GET /tasks/{id}/comments envelope.
 	CountByTask(ctx context.Context, taskID domain.ID) (int64, error)
 
-	// CountsByTasks returns the total comment count for EACH given task,
-	// computed by ONE grouped query over all the passed ids (no N+1). Tasks
-	// with zero comments are omitted from the map; callers treat a missing key
-	// as zero. Empty input returns an empty map without querying. This is the
-	// batch read behind the board snapshot's per-card comment-count badge.
-	CountsByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]int64, error)
+	// CommentStatsByTasks returns the total comment count for EACH given task
+	// PLUS the kind and actor of its most-recent comment (max created_at;
+	// same-timestamp ties break by insertion order — the newest-inserted row
+	// wins, the same ordering ListByTask uses), computed by ONE grouped query
+	// over all the passed ids (no N+1). Tasks with zero comments are omitted
+	// from the map; callers treat a missing key as no badge data. Empty input
+	// returns an empty map without querying. This is the batch read behind the
+	// board snapshot's per-card comment-count and latest-comment badges.
+	CommentStatsByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]TaskCommentStats, error)
 }
 
 // ArtifactRepository appends and reads a task's evidence attachments

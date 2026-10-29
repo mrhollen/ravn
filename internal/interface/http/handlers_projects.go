@@ -115,8 +115,9 @@ func (a *App) handleBoard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Per-card progress badges: (total, done) acceptance-criterion aggregates
-	// and comment counts for EVERY board row in ONE grouped query per child
-	// table — no N+1. Missing map key = zero rows; the DTO fields stay omitted.
+	// and per-task comment stats (count + most-recent kind/actor) for EVERY
+	// board row in ONE grouped query per child table — no N+1. Missing map key
+	// = zero rows; the DTO fields stay omitted.
 	ids := make([]domain.ID, 0, len(tasks))
 	for _, t := range tasks {
 		ids = append(ids, t.ID)
@@ -126,7 +127,7 @@ func (a *App) handleBoard(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", pid)
 		return
 	}
-	commentCounts, err := a.Comments.Counts(ctx, ids)
+	commentStats, err := a.Comments.Stats(ctx, ids)
 	if err != nil {
 		writeAppError(w, err, "task", pid)
 		return
@@ -156,8 +157,10 @@ func (a *App) handleBoard(w http.ResponseWriter, r *http.Request) {
 			s.AcTotal = int(p.Total)
 			s.AcDone = int(p.Done)
 		}
-		if n, ok := commentCounts[t.ID]; ok {
-			s.CommentCount = int(n)
+		if st, ok := commentStats[t.ID]; ok {
+			s.CommentCount = int(st.Count)
+			s.LastCommentKind = string(st.LastKind)
+			s.LastCommentActor = toActor(&st.LastActor)
 		}
 		if sp, ok := subtaskProgress[t.ID]; ok && sp.Total > 0 {
 			s.SubtaskTotal = int(sp.Total)

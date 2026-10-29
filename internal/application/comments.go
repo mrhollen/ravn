@@ -139,26 +139,27 @@ func (s *Comments) List(ctx context.Context, taskID domain.ID, limit, offset int
 	return rows, total, nil
 }
 
-// Counts returns the total comment count for each of the given tasks — the
-// batch form of List's CountByTask — in ONE grouped read (no N+1). It backs
-// the board snapshot's per-card comment-count badge: counts only, no bodies.
-// Tasks with zero comments are omitted from the result map; empty input
-// returns an empty map without querying. The read runs through the unit of
-// work for uniformity and is read-only: it appends no events and touches
-// nothing. (Task existence is not checked — counts of unknown tasks simply
-// stay absent.)
-func (s *Comments) Counts(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]int64, error) {
+// Stats returns each of the given tasks' total comment count plus the kind and
+// actor of its most-recent comment (max created_at; same-timestamp ties break
+// by insertion order) — the batch form of List's CountByTask + latest row — in
+// ONE grouped read (no N+1). It backs the board snapshot's per-card comment-
+// count badge and question/handoff badges: metadata only, no bodies. Tasks with
+// zero comments are omitted from the result map; empty input returns an empty
+// map without querying. The read runs through the unit of work for uniformity
+// and is read-only: it appends no events and touches nothing. (Task existence
+// is not checked — stats of unknown tasks simply stay absent.)
+func (s *Comments) Stats(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]TaskCommentStats, error) {
 	if len(taskIDs) == 0 {
-		return map[domain.ID]int64{}, nil
+		return map[domain.ID]TaskCommentStats{}, nil
 	}
-	var out map[domain.ID]int64
+	var out map[domain.ID]TaskCommentStats
 	var r Repos
 	err := s.uow.Run(ctx, &r, func() error {
-		counts, cerr := r.Comments.CountsByTasks(ctx, taskIDs)
-		if cerr != nil {
-			return cerr
+		stats, serr := r.Comments.CommentStatsByTasks(ctx, taskIDs)
+		if serr != nil {
+			return serr
 		}
-		out = counts
+		out = stats
 		return nil
 	})
 	if err != nil {

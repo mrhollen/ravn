@@ -676,15 +676,24 @@ func (f *fakeComments) CountByTask(_ context.Context, taskID domain.ID) (int64, 
 	return int64(len(f.byTask[taskID])), nil
 }
 
-// CountsByTasks mirrors the SQLite adapter's grouped count in memory: one
-// entry per requested task with at least one comment; tasks with none are
-// omitted.
-func (f *fakeComments) CountsByTasks(_ context.Context, taskIDs []domain.ID) (map[domain.ID]int64, error) {
-	out := make(map[domain.ID]int64, len(taskIDs))
+// CommentStatsByTasks mirrors the SQLite adapter's window aggregation in
+// memory: one entry per requested task with at least one comment carrying its
+// count and most-recent comment (created_at DESC, insertion order as the
+// tie-break — later-inserted rows win ties); tasks with none are omitted.
+func (f *fakeComments) CommentStatsByTasks(_ context.Context, taskIDs []domain.ID) (map[domain.ID]TaskCommentStats, error) {
+	out := make(map[domain.ID]TaskCommentStats, len(taskIDs))
 	for _, id := range taskIDs {
-		if n := len(f.byTask[id]); n > 0 {
-			out[id] = int64(n)
+		cs := f.byTask[id]
+		if len(cs) == 0 {
+			continue
 		}
+		last := cs[0]
+		for i := 1; i < len(cs); i++ {
+			if !cs[i].CreatedAt.Before(last.CreatedAt) { // ties: later insertion wins
+				last = cs[i]
+			}
+		}
+		out[id] = TaskCommentStats{Count: int64(len(cs)), LastKind: last.Kind, LastActor: last.Actor}
 	}
 	return out, nil
 }

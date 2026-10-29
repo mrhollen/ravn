@@ -245,6 +245,15 @@ badges and are **omitted entirely** when zero — list/create/update/claim and
 the detail rows never carry them, keeping those payloads compact. They are
 computed with one grouped query per child table (no N+1).
 
+Two more board-only fields — `last_comment_kind` (string, e.g. `"question"` or
+`"handoff"`) and `last_comment_actor` (`{"type","name"}`) — identify the kind
+and poster of the task's **most recent comment** (max `created_at`; same-
+timestamp ties break by insertion order). They let board cards render
+question/handoff badges without fetching the thread, and are omitted entirely
+when the task has no comments. Like the other badge fields they appear only on
+board-snapshot rows and come from the same single grouped comment-table query
+that fills `comment_count`.
+
 **Task detail row** — `GET /tasks/{id}` only: the summary fields (flattened),
 plus:
 
@@ -403,7 +412,7 @@ inside each column.
   "counts": { "todo": 2, "doing": 1, "done": 1 },
   "tasks": {
     "todo":  [ /* summary rows */ ],
-    "doing": [ /* summary rows, incl. ac_total / ac_done / comment_count */ ],
+    "doing": [ /* summary rows, incl. ac_total / ac_done / comment_count / last_comment_kind / last_comment_actor */ ],
     "done":  [ /* summary rows */ ]
   }
 }
@@ -411,7 +420,7 @@ inside each column.
 
 All three columns always present (`[]` when empty). `404` for unknown project.
 Each summary row here additionally carries the card-badge fields — e.g. a task
-with 3 criteria (1 done) and 2 comments renders:
+with 3 criteria (1 done) and 2 comments whose most recent is a question renders:
 
 ```json
 {
@@ -422,13 +431,15 @@ with 3 criteria (1 done) and 2 comments renders:
   "ac_total": 3,
   "ac_done": 1,
   "comment_count": 2,
+  "last_comment_kind": "question",
+  "last_comment_actor": { "type": "agent", "name": "runner-2" },
   "version": 4,
   "created_at": "2026-09-25T18:02:11Z",
   "updated_at": "2026-09-26T15:48:03Z"
 }
 ```
 
-A row with no criteria and no comments omits all three badge keys.
+A row with no criteria and no comments omits all five badge keys.
 
 ### GET /projects/{id}/events · GET /events — realtime SSE streams
 

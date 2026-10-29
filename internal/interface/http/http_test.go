@@ -1748,13 +1748,21 @@ func TestBoardSnapshot(t *testing.T) {
 	if lowRow.CommentCount != 2 {
 		t.Fatalf("low comment badge = %d, want 2", lowRow.CommentCount)
 	}
+	// Both of "low"'s comments are kind note → the most-recent badge is note/eve.
+	if lowRow.LastCommentKind != "note" {
+		t.Fatalf("low last_comment_kind = %q, want note", lowRow.LastCommentKind)
+	}
+	if lowRow.LastCommentActor == nil || lowRow.LastCommentActor.Type != "human" || lowRow.LastCommentActor.Name != "eve" {
+		t.Fatalf("low last_comment_actor = %+v, want human/eve", lowRow.LastCommentActor)
+	}
 	for _, col := range [][]taskSummaryDTO{b.Tasks.Todo, b.Tasks.Doing, b.Tasks.Done} {
 		for i := range col {
 			row := &col[i]
 			if row.ID == low.ID {
 				continue
 			}
-			if row.AcTotal != 0 || row.AcDone != 0 || row.CommentCount != 0 {
+			if row.AcTotal != 0 || row.AcDone != 0 || row.CommentCount != 0 ||
+				row.LastCommentKind != "" || row.LastCommentActor != nil {
 				t.Fatalf("task %s badge fields = %+v, want all zero (omitted)", row.ID, *row)
 			}
 		}
@@ -1779,6 +1787,141 @@ func TestBoardSnapshot(t *testing.T) {
 	e := mustDecode[errResp](t, body)
 	if e.Error != "not found" || e.Resource != "project" {
 		t.Fatalf("board 404 = %+v, want not found / project", e)
+	}
+}
+
+// addComment posts one typed comment; the board's last_comment_* badges derive
+// from whichever of these ends up most recent.
+func addComment(t testing.TB, stk stack, taskID string, kind, body, name string) {
+	t.Helper()
+	code, b := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskID+"/comments", map[string]any{
+		"actor": actor(name), "kind": kind, "body": body,
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("POST /tasks/%s/comments (kind %s) = %d, want 201 (body %s)", taskID, kind, code, string(b))
+	}
+}
+
+func TestBoard_LastCommentBadges(t *testing.T) {
+	t.Parallel()
+	stk := newStack(t)
+	p := createProject(t, stk, "Last Comment Badges")
+
+	questionOnly := makeTask(t, stk, p.ID, "has a question", nil)
+	multi := makeTask(t, stk, p.ID, "note then question then progress", nil)
+	handoffLatest := makeTask(t, stk, p.ID, "ends in a handoff", nil)
+	none := makeTask(t, stk, p.ID, "no comments at all", nil)
+
+	addComment(t, stk, questionOnly.ID, "question", "Who owns this?", "eve")
+	addComment(t, stk, multi.ID, "note", "first: a note", "eve")
+	addComment(t, stk, multi.ID, "question", "second: a question", "eve")
+	addComment(t, stk, multi.ID, "progress", "third: progress update", "eve")
+	addComment(t, stk, handoffLatest.ID, "progress", "working on it", "eve")
+	addComment(t, stk, handoffLatest.ID, "handoff", "stepping away for now", "eve")
+
+	code, body := doReq(t, stk.Handler, "GET", "/api/v1/projects/"+p.ID+"/board", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET board = %d, want 200 (body %s)", code, string(body))
+	}
+	b := mustDecode[boardResponse](t, body)
+
+	findRow := func(id string) *taskSummaryDTO {
+		for _, col := range [][]taskSummaryDTO{b.Tasks.Todo, b.Tasks.Doing, b.Tasks.Done} {
+			for i := range col {
+				if col[i].ID == id {
+					return &col[i]
+				}
+			}
+		}
+		t.Fatalf("task %s missing from board", id)
+		return nil
+	}
+
+	check := func(id, wantKind string, wantCount int) *taskSummaryDTO {
+		row := findRow(id)
+		if row.CommentCount != wantCount {
+			t.Errorf("task %s comment_count = %d, want %d", id, row.CommentCount, wantCount)
+		}
+		if row.LastCommentKind != wantKind {
+			t.Errorf("task %s last_comment_kind = %q, want %q", id, row.LastCommentKind, wantKind)
+		}
+		if row.LastCommentActor == nil || row.LastCommentActor.Type != "human" || row.LastCommentActor.Name != "eve" {
+			t.Errorf("task %s last_comment_actor = %+v, want human/eve", id, row.LastCommentActor)
+		}
+		return row
+	}
+
+	check(questionOnly.ID, "question", 1)
+	check(multi.ID, "progress", 3) // latest of note→question→progress wins
+	check(handoffLatest.ID, "handoff", 2)
+
+	// No comments → no badge data at all: after decode the fields are zero/nil,
+	// and on the WIRE the keys are absent (omitempty must omit, not zero-fill).
+	noneRow := findRow(none.ID)
+	if noneRow.CommentCount != 0 || noneRow.LastCommentKind != "" || noneRow.LastCommentActor != nil {
+		t.Errorf("no-comment row = %+v, want all badge fields omitted", *noneRow)
+	}
+	var rawBoard struct {
+		Tasks struct {
+			Todo []map[string]json.RawMessage `json:"todo"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(body, &rawBoard); err != nil {
+		t.Fatalf("decode raw board: %v", err)
+	}
+	for _, row := range rawBoard.Tasks.Todo {
+		var id string
+		if err := json.Unmarshal(row["id"], &id); err != nil || id != none.ID {
+			continue
+		}
+		for _, key := range []string{"comment_count", "last_comment_kind", "last_comment_actor"} {
+			if _, present := row[key]; present {
+				t.Errorf("no-comment row still carries %q on the wire", key)
+			}
+		}
+	}
+}
+
+// TestBoard_LastComment_TieBreak verifies that "most recent" is max created_at
+// with same-timestamp ties broken by insertion order (newest-inserted row wins
+// — rowid DESC, ListByTask's ordering), using a frozen clock for exact ties.
+func TestBoard_LastComment_TieBreak(t *testing.T) {
+	t.Parallel()
+	c := &fakeClock{now: time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)}
+	stk := newStackWithClock(t, c)
+	p := createProject(t, stk, "Tie Break")
+	task := makeTask(t, stk, p.ID, "tie break task", nil)
+
+	// Two comments stamped with the SAME instant: note first, question second.
+	addComment(t, stk, task.ID, "note", "inserted first at t0", "eve")
+	addComment(t, stk, task.ID, "question", "inserted second at t0", "eve")
+
+	grab := func() *taskSummaryDTO {
+		code, body := doReq(t, stk.Handler, "GET", "/api/v1/projects/"+p.ID+"/board", nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET board = %d, want 200 (body %s)", code, string(body))
+		}
+		b := mustDecode[boardResponse](t, body)
+		for i := range b.Tasks.Todo {
+			if b.Tasks.Todo[i].ID == task.ID {
+				return &b.Tasks.Todo[i]
+			}
+		}
+		t.Fatalf("task %s missing from board todo column", task.ID)
+		return nil
+	}
+
+	if got := grab(); got.LastCommentKind != "question" || got.CommentCount != 2 {
+		t.Fatalf("tie row = kind %q count %d, want question/2 (insertion order breaks the tie)",
+			got.LastCommentKind, got.CommentCount)
+	}
+
+	// A genuinely later comment always beats both tied ones.
+	c.now = c.now.Add(time.Second)
+	addComment(t, stk, task.ID, "progress", "inserted at t0+1s", "eve")
+	if got := grab(); got.LastCommentKind != "progress" || got.CommentCount != 3 {
+		t.Fatalf("after later comment row = kind %q count %d, want progress/3",
+			got.LastCommentKind, got.CommentCount)
 	}
 }
 

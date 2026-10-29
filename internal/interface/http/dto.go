@@ -46,14 +46,18 @@ type taskSummaryDTO struct {
 	// Per-card progress badges, populated by the board snapshot only; omitted
 	// (zero) on list/create/update rows so other consumers keep the compact
 	// shape. AcTotal = acceptance-criteria count, AcDone = how many are done,
-	// CommentCount = comment-thread length. The board fills them via one
-	// grouped query per child table — no N+1.
-	AcTotal      int          `json:"ac_total,omitempty"`
-	AcDone       int          `json:"ac_done,omitempty"`
-	CommentCount int          `json:"comment_count,omitempty"`
-	SubtaskTotal int          `json:"subtask_total,omitempty"`
-	SubtaskDone  int          `json:"subtask_done,omitempty"`
-	Blockers     []blockerDTO `json:"blockers,omitempty"`
+	// CommentCount = comment-thread length, LastCommentKind/LastCommentActor =
+	// the kind and poster of the task's most-recent comment (empty when the
+	// thread is empty — the board renders question/handoff badges from it).
+	// The board fills them via one grouped query per child table — no N+1.
+	AcTotal          int          `json:"ac_total,omitempty"`
+	AcDone           int          `json:"ac_done,omitempty"`
+	CommentCount     int          `json:"comment_count,omitempty"`
+	LastCommentKind  string       `json:"last_comment_kind,omitempty"`
+	LastCommentActor *actorDTO    `json:"last_comment_actor,omitempty"`
+	SubtaskTotal     int          `json:"subtask_total,omitempty"`
+	SubtaskDone      int          `json:"subtask_done,omitempty"`
+	Blockers         []blockerDTO `json:"blockers,omitempty"`
 }
 
 func toSummary(t domain.Task) taskSummaryDTO {
