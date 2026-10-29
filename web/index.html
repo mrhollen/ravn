@@ -984,28 +984,36 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         @touchend.passive="onCardTouchEnd($event, task)"
                         @touchcancel="onCardTouchCancel($event)"
                         :style="swiping(task.id) ? 'transform: translateX(' + swipeState.dx + 'px); transition: none;' : 'transform: translateX(0px); transition: transform 0.25s cubic-bezier(0.2, 0.9, 0.3, 1);'"
-                        @click="handleCardClick(task.id)"
+                         @click="handleCardClick(task.id, $event)"
                         @keydown.enter.self="openTask(task.id)"
                         @keydown.space.self.prevent="openTask(task.id)"
                         :data-card-density="cardDensity"
-                         class="relative w-full rounded-lg border p-3 text-left shadow-sm transition select-none focus:outline-none focus:ring-2 focus:ring-zinc-400"
-                          :class="[
-                            cardDensity === 'compact' ? 'card-compact' : '',
-                            draggedTaskId === task.id
-                              ? 'opacity-40 border-dashed border-zinc-400 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900'
-                              : [
-                                   // Uniform 1px FULL-PERIMETER border tinted by state
-                                   // (no thick side accents): claimed → indigo,
-                                   // blocked → red, else the standard neutral. An
-                                   // EXPIRED lease is inert — it keeps the neutral
-                                   // border, never the active indigo tint.
-                                   task.claimed_by && !claimExpired(task)
-                                     ? 'border-indigo-200/80 hover:border-indigo-300 dark:border-indigo-800 dark:hover:border-indigo-700'
-                                    : isBlocked(task.id)
-                                      ? 'border-red-200 hover:border-red-300 dark:border-red-800 dark:hover:border-red-700'
-                                      : 'border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600',
-                                  'bg-white hover:shadow dark:bg-zinc-800'
-                                ],
+                          class="relative w-full rounded-lg border p-3 text-left shadow-sm transition select-none focus:outline-none focus:ring-2 focus:ring-zinc-400"
+                           :class="[
+                             cardDensity === 'compact' ? 'card-compact' : '',
+                             // AC1: selection marker class — drives the checkbox
+                             // visibility rule in style.css (stays visible while selected).
+                             isTaskSelected(task.id) ? 'has-selection' : '',
+                             draggedTaskId === task.id
+                               ? 'opacity-40 border-dashed border-zinc-400 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900'
+                               : [
+                                    // Uniform 1px FULL-PERIMETER border tinted by state
+                                    // (no thick side accents): SELECTED → indigo ring +
+                                    // fill (wins over every other tint), claimed →
+                                    // indigo, blocked → red, else the standard neutral.
+                                    // An EXPIRED lease is inert — it keeps the neutral
+                                    // border, never the active indigo tint.
+                                    isTaskSelected(task.id)
+                                      ? 'border-indigo-400 ring-2 ring-indigo-300/70 dark:border-indigo-500 dark:ring-indigo-500/40'
+                                     : task.claimed_by && !claimExpired(task)
+                                      ? 'border-indigo-200/80 hover:border-indigo-300 dark:border-indigo-800 dark:hover:border-indigo-700'
+                                     : isBlocked(task.id)
+                                       ? 'border-red-200 hover:border-red-300 dark:border-red-800 dark:hover:border-red-700'
+                                       : 'border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600',
+                                   isTaskSelected(task.id)
+                                     ? 'bg-indigo-50/80 hover:shadow dark:bg-indigo-950/40'
+                                     : 'bg-white hover:shadow dark:bg-zinc-800'
+                                 ],
                             // Done cards recede slightly (only when not also dragged/busy,
                             // so those stronger opacity states still win).
                             col.status === 'done' && draggedTaskId !== task.id && !isTaskBusy(task.id)
@@ -1017,8 +1025,21 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                          ]"
                       >
                         <div class="flex items-start justify-between gap-2">
+                          <!-- AC1: multi-select checkbox. Space is ALWAYS reserved
+                               (opacity toggle, never display) so revealing it on
+                               hover/selection never reflows the title row; hidden in
+                               the archived view (no selection there). Visibility rule
+                               lives in style.css (.card-select-checkbox): hover,
+                               focus-within, selected cards, compact density, mobile. -->
+                          <input type="checkbox"
+                                 data-testid="card-select-checkbox"
+                                 x-show="!showArchived"
+                                 :aria-label="'Select ' + task.title"
+                                 :checked="isTaskSelected(task.id)"
+                                 @click.stop="toggleSelectTask(task.id)"
+                                 class="card-select-checkbox mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-indigo-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400" />
                           <h3 :id="'card-title-' + task.id"
-                              class="card-title min-w-0 break-words text-sm font-medium leading-snug"
+                              class="card-title min-w-0 flex-1 break-words text-sm font-medium leading-snug"
                               :class="col.status === 'done' ? 'line-through' : ''"
                               x-text="task.title"></h3>
                            <!-- Right-aligned control group: priority badge FIRST, then the ⋮ move-menu
@@ -1357,17 +1378,113 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         class="px-1 py-3 text-center text-xs italic text-zinc-600 dark:text-zinc-400">No tasks</p>
                       <!-- Hidden in the archived view: creating a task into an archive-only column is
                            meaningless (it would land back on the live board anyway). -->
-                      <button type="button" x-show="!showArchived" @click="openNewTask(col.status)"
-                               class="mt-0.5 rounded-md border border-dashed border-zinc-300 px-2 py-1.5 text-xs font-medium text-zinc-600 transition hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500 dark:hover:text-zinc-200">
-                       + Add task to <span x-text="col.label"></span>
-                     </button>
-                  </div>
-                </section>
-              </template>
-            </div>
-          </div>
-        </template>
-      </main>
+                       <button type="button" x-show="!showArchived" @click="openNewTask(col.status)"
+                                class="mt-0.5 rounded-md border border-dashed border-zinc-300 px-2 py-1.5 text-xs font-medium text-zinc-600 transition hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500 dark:hover:text-zinc-200">
+                        + Add task to <span x-text="col.label"></span>
+                      </button>
+                   </div>
+                 </section>
+               </template>
+             </div>
+
+             <!-- ================================================== batch bar -->
+             <!-- AC2/AC3: floating multi-select action bar. Appears only when ≥1
+                  LIVE card is selected (never in the archived view). Fixed to the
+                  viewport bottom so it stays reachable while the board scrolls;
+                  z-30 keeps it under header dropdowns/toasts and the task drawer
+                  but above cards. Its dropdowns open UPWARD (bar sits at the
+                  screen's bottom edge) and close on outside click, like the card
+                  move menu. All actions run through _runBatch(): per-task
+                  version-guarded PATCHes with one 409 re-read + retry, optimistic
+                  local mutations, a single settling reload, and ONE consolidated
+                  summary toast ("Moved N tasks to Done · M failed"). Buttons are
+                  h-11 (44px) on phones for the tap-target minimum; compact from md. -->
+             <div x-show="selectedCount() > 0 && !showArchived" x-cloak
+                  data-testid="batch-action-bar"
+                  role="toolbar" aria-label="Batch actions for the selected tasks"
+                  class="fixed bottom-3 left-1/2 z-30 flex max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-zinc-300 bg-white px-2.5 py-2 shadow-lg dark:border-zinc-600 dark:bg-zinc-800">
+               <span data-testid="batch-count" aria-live="polite"
+                     class="shrink-0 pr-1 text-sm font-semibold tabular-nums text-indigo-700 dark:text-indigo-300"
+                     x-text="selectedCount() + ' selected'"></span>
+               <span class="mx-0.5 h-6 w-px shrink-0 bg-zinc-200 dark:bg-zinc-600" aria-hidden="true"></span>
+               <button type="button" data-testid="batch-select-all" @click="selectAllVisible()" :disabled="batchBusy"
+                       class="h-11 shrink-0 rounded-md px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50 md:h-9 dark:text-zinc-200 dark:hover:bg-zinc-700">
+                 Select all visible
+               </button>
+               <button type="button" data-testid="batch-clear" @click="clearSelection()" :disabled="batchBusy"
+                       class="h-11 shrink-0 rounded-md px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50 md:h-9 dark:text-zinc-200 dark:hover:bg-zinc-700">
+                 Clear
+               </button>
+               <!-- Move to — three explicit status targets (AC3) -->
+               <div class="relative shrink-0" @click.outside="batchMoveMenuOpen = false">
+                 <button type="button" data-testid="batch-move" aria-haspopup="menu" :aria-expanded="batchMoveMenuOpen"
+                         @click="toggleBatchMoveMenu()" :disabled="batchBusy"
+                         class="flex h-11 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50 md:h-9 dark:text-zinc-200 dark:hover:bg-zinc-700">
+                   Move to <span aria-hidden="true" x-text="batchMoveMenuOpen ? '▴' : '▾'"></span>
+                 </button>
+                 <div x-show="batchMoveMenuOpen" x-cloak role="menu" aria-label="Move selected tasks to"
+                      class="absolute bottom-full left-0 z-40 mb-1.5 w-32 overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-md dark:border-zinc-600 dark:bg-zinc-800">
+                   <template x-for="s in STATUSES" :key="s">
+                      <button type="button" role="menuitem" :data-testid="'batch-move-' + s" @click="batchMoveTo(s)"
+                             class="block w-full px-3 py-1.5 text-left text-xs font-medium text-zinc-700 hover:bg-indigo-50 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                             x-text="STATUS_LABEL[s]"></button>
+                   </template>
+                 </div>
+               </div>
+               <!-- Set priority — P0..P5 (AC2) -->
+               <div class="relative shrink-0" @click.outside="batchPriorityMenuOpen = false">
+                 <button type="button" data-testid="batch-priority" aria-haspopup="menu" :aria-expanded="batchPriorityMenuOpen"
+                         @click="toggleBatchPriorityMenu()" :disabled="batchBusy"
+                         class="flex h-11 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50 md:h-9 dark:text-zinc-200 dark:hover:bg-zinc-700">
+                   Priority <span aria-hidden="true" x-text="batchPriorityMenuOpen ? '▴' : '▾'"></span>
+                 </button>
+                 <div x-show="batchPriorityMenuOpen" x-cloak role="menu" aria-label="Set priority for selected tasks"
+                      class="absolute bottom-full left-0 z-40 mb-1.5 w-28 overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-md dark:border-zinc-600 dark:bg-zinc-800">
+                   <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
+                      <button type="button" role="menuitem" :data-testid="'batch-priority-' + p" @click="batchSetPriority(p)"
+                             class="block w-full px-3 py-1.5 text-left text-xs font-medium text-zinc-700 hover:bg-indigo-50 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                             x-text="'P' + p"></button>
+                   </template>
+                 </div>
+               </div>
+               <!-- Assign owner — existing project assignees first (AC2); when the
+                    project has none, a free-text input replaces the list -->
+               <div class="relative shrink-0" @click.outside="batchAssignMenuOpen = false">
+                 <button type="button" data-testid="batch-assign" aria-haspopup="menu" :aria-expanded="batchAssignMenuOpen"
+                         @click="toggleBatchAssignMenu()" :disabled="batchBusy"
+                         class="flex h-11 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50 md:h-9 dark:text-zinc-200 dark:hover:bg-zinc-700">
+                   Owner <span aria-hidden="true" x-text="batchAssignMenuOpen ? '▴' : '▾'"></span>
+                 </button>
+                 <div x-show="batchAssignMenuOpen" x-cloak role="menu" aria-label="Set owner for selected tasks"
+                      class="absolute bottom-full left-0 z-40 mb-1.5 w-56 overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-md dark:border-zinc-600 dark:bg-zinc-800">
+                   <form x-show="batchAssigneeOptions().length === 0" @submit.prevent="batchAssignOwner(batchCustomOwner)"
+                         class="flex items-center gap-1 p-2">
+                     <input data-testid="batch-custom-owner" x-model="batchCustomOwner" type="text" autocomplete="off"
+                            placeholder="Owner name…"
+                            class="field h-9 flex-1 text-xs" />
+                     <button type="submit" data-testid="batch-apply-custom-owner" :disabled="!batchCustomOwner.trim()"
+                             class="btn-primary h-9 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-50">Apply</button>
+                   </form>
+                   <template x-for="name in batchAssigneeOptions()" :key="name">
+                     <button type="button" role="menuitem" data-testid="batch-assign-owner" @click="batchAssignOwner(name)"
+                             class="block w-full truncate px-3 py-1.5 text-left text-xs font-medium text-zinc-700 hover:bg-indigo-50 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                             x-text="name"></button>
+                   </template>
+                   <button type="button" role="menuitem" data-testid="batch-clear-owner" @click="batchAssignOwner(null)"
+                           class="block w-full border-t border-zinc-100 px-3 py-1.5 text-left text-xs font-medium text-zinc-500 hover:bg-indigo-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-700">
+                     Clear owner
+                   </button>
+                 </div>
+               </div>
+               <!-- Archive — direct action, mirrors the single-card archive flow (AC2) -->
+               <button type="button" data-testid="batch-archive" @click="batchArchiveSelected()" :disabled="batchBusy"
+                       class="h-11 shrink-0 rounded-md border border-red-300 bg-white px-2.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:cursor-not-allowed disabled:opacity-50 md:h-9 dark:border-red-800 dark:bg-zinc-800 dark:text-red-400 dark:hover:bg-zinc-700">
+                 <span x-text="batchBusy ? 'Working…' : 'Archive'"></span>
+               </button>
+             </div>
+           </div>
+         </template>
+       </main>
 
       <!-- ================================================== project settings modal -->
       <div id="cb-project-settings" role="dialog" aria-modal="true" aria-labelledby="project-settings-title" x-show="showProjectSettings" x-cloak class="fixed inset-0 z-40 overflow-y-auto modal-backdrop p-4" @click.self="requestCloseProjectSettings()">

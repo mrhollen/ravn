@@ -189,6 +189,30 @@ html.dark {
   font-size: 0.6875rem;
 }
 
+/* --- multi-select card checkbox (task 01M5XTB04A8ZX1TX8ARYFG5D9F) ----------
+   AC1: the checkbox is ALWAYS in the title row (space reserved — opacity, never
+   display, so revealing it can't reflow the row) but only becomes visible and
+   operable when the card is hovered, keyboard-focused, already selected, the
+   board is in compact density, or on phones (where hover doesn't exist). */
+.card-select-checkbox {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+article:hover .card-select-checkbox,
+article:focus-within .card-select-checkbox,
+article.has-selection .card-select-checkbox,
+article[data-card-density="compact"] .card-select-checkbox {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (max-width: 767px) {
+  .card-select-checkbox {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 /* --- mobile tap targets ------------------------------------------------------
    44x44px minimum touch-target guideline (WCAG 2.5.8 / Apple HIG) applied on
    small screens only, so the desktop UI keeps its denser layout. Checkboxes are

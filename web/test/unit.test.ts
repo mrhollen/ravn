@@ -4179,6 +4179,353 @@ test("ArchiveMgmt: index.html wires every archive testid the E2E suite depends o
   assert.match(html, /data-testid="card-menu-anchor"[^>]*x-show="!showArchived"/);
 });
 
+// ===========================================================================
+// Board multi-select + floating batch-action bar
+// (Rävn task 01M5XTB04A8ZX1TX8ARYFG5D9F)
+// Checkbox/modifier selection, anchor-range semantics, select-all-visible under
+// filters/caps, the robust per-task batch engine (version guard + one 409
+// retry, optimistic mutation, summary toast), and the Escape contract.
+// ===========================================================================
+
+test("MultiSelect: checkbox toggle adds/removes and re-anchors range selection", () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("t-1", "todo"), archTask("t-2", "todo")] });
+  assert.equal(app.selectedCount(), 0);
+  app.toggleSelectTask("t-1");
+  assert.deepEqual([...app.selectedTaskIds], ["t-1"]);
+  assert.equal(app._selectionAnchorId, "t-1", "the toggled card becomes the anchor");
+  app.toggleSelectTask("t-2");
+  assert.deepEqual([...app.selectedTaskIds].sort(), ["t-1", "t-2"]);
+  app.toggleSelectTask("t-1"); // untoggle
+  assert.deepEqual([...app.selectedTaskIds], ["t-2"], "toggle removes without touching the rest");
+  app.clearSelection();
+  assert.equal(app.selectedCount(), 0);
+  assert.equal(app._selectionAnchorId, null, "clearing also drops the anchor");
+});
+
+test("MultiSelect: plain card click still opens the drawer; Ctrl toggles; Shift ranges from the anchor", async () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("t-1", "todo"), archTask("t-2", "todo"), archTask("t-3", "todo")] });
+  const opened: string[] = [];
+  (app as any).openTask = async (id: string) => { opened.push(id); };
+  app.handleCardClick("t-1");
+  assert.deepEqual(opened, ["t-1"], "no modifier → the drawer opens exactly as before");
+  assert.equal(app.selectedCount(), 0);
+
+  app.handleCardClick("t-2", { ctrlKey: true } as MouseEvent);
+  assert.deepEqual([...app.selectedTaskIds], ["t-2"], "Ctrl+Click selects just that card");
+  assert.equal(opened.length, 1, "…and never opens the drawer");
+
+  app.handleCardClick("t-3", { shiftKey: true } as MouseEvent);
+  assert.deepEqual([...app.selectedTaskIds], ["t-2", "t-3"], "Shift+Click spans from the anchor to the clicked card");
+  assert.equal(opened.length, 1, "range selection never opens the drawer either");
+});
+
+test("MultiSelect: Shift+Click with no anchor yet falls back to a single toggle", () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("a", "todo"), archTask("b", "todo")] });
+  app.rangeSelectInColumn("a");
+  assert.deepEqual([...app.selectedTaskIds], ["a"]);
+  assert.equal(app._selectionAnchorId, "a", "…and sets the anchor for the next range click");
+});
+
+test("MultiSelect: cross-column Shift+Click degrades to a single toggle and re-anchors", () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("a", "todo")], doing: [archTask("b", "doing")] });
+  app.toggleSelectTask("a"); // anchor in the Todo column
+  app.rangeSelectInColumn("b"); // shift-click a Doing card — no range is defined
+  assert.deepEqual([...app.selectedTaskIds], ["a", "b"], "other-column selections stay; clicked card toggles in");
+  assert.equal(app._selectionAnchorId, "b", "anchor moves to the clicked card");
+});
+
+test("MultiSelect: range select spans visible order (either direction) and is additive", () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", {
+    todo: [archTask("t-1", "todo"), archTask("t-2", "todo"), archTask("t-3", "todo"), archTask("t-4", "todo")],
+  });
+  app.toggleSelectTask("t-1"); // anchor t-1
+  app.rangeSelectInColumn("t-3"); // span t-1..t-3
+  assert.deepEqual([...app.selectedTaskIds].sort(), ["t-1", "t-2", "t-3"]);
+  assert.equal(app._selectionAnchorId, "t-1", "the anchor deliberately stays put after a range select");
+
+  app.toggleSelectTask("t-4"); // re-anchor at t-4
+  app.rangeSelectInColumn("t-2"); // span t-2..t-4 additively
+  assert.deepEqual([...app.selectedTaskIds].sort(), ["t-1", "t-2", "t-3", "t-4"]);
+});
+
+test("MultiSelect: Select-all-visible honors active filters and the Done render cap", () => {
+  const app = archApp();
+  const todos = [archTask("t-1", "todo"), archTask("t-2", "todo")];
+  const dones: any[] = [];
+  for (let i = 0; i < 30; i++) dones.push(archTask(`d-${i}`, "done"));
+  app.board = archBoard("proj-1", { todo: todos, done: dones });
+
+  assert.equal(app.doneLimit, DEFAULT_DONE_LIMIT);
+  app.selectAllVisible();
+  assert.equal(app.selectedCount(), 2 + DEFAULT_DONE_LIMIT, "collapsed: only the first N rendered done cards are visible");
+  const selectedIds = [...app.selectedTaskIds];
+  assert.ok(!selectedIds.includes("d-29"), "beyond-cap card is NOT selected while collapsed");
+
+  app.showAllDone(); // user expanded the column → those cards are now rendered
+  app.selectAllVisible();
+  assert.equal(app.selectedCount(), 2 + 30, "expanded: every done card joins the selection");
+
+  app.clearSelection();
+  app.filterPriority = "0"; // all seeded rows are P0 — use a filter that HIDEs some instead
+  const pri: any[] = [];
+  for (let i = 0; i < 4; i++) pri.push({ ...archTask(`p-${i}`, "todo"), priority: i % 2 });
+  app.board = archBoard("proj-1", { todo: pri });
+  app.filterPriority = "1"; // only the odd-priority rows are visible
+  app.selectAllVisible();
+  assert.deepEqual([...app.selectedTaskIds].sort(), ["p-1", "p-3"], "filtered select-all picks ONLY what is rendered");
+});
+
+test("MultiSelect: batch move updates every row, moves buckets/counts locally, toasts a summary, clears the selection", async () => {
+  const app = archApp();
+  const t1 = archTask("t-1", "todo"), t2 = archTask("t-2", "todo");
+  app.board = archBoard("proj-1", { todo: [t1, t2], doing: [archTask("d-x", "doing")] });
+  app.toggleSelectTask("t-1");
+  app.toggleSelectTask("t-2");
+
+  const origUpdateTask = api.updateTask;
+  const patches: any[] = [];
+  try {
+    (api as any).updateTask = async (id: string, req: any) => {
+      patches.push({ id, req });
+      return { ...app.board.tasks.todo.find((t: any) => t.id === id), status: "done", version: req.version + 1 };
+    };
+    await app.batchMoveTo("done");
+    assert.equal(patches.length, 2);
+    assert.ok(patches.every((p: any) => p.req.status === "done"), "each row patched with the target status");
+    assert.ok(patches.every((p: any) => typeof p.req.version === "number" && p.req.version >= 1), "version-guarded PATCHes");
+    // Optimistic bucket surgery happened before (and independently of) the reload.
+    assert.deepEqual(app.board.tasks.todo.map((t: any) => t.id), [], "both rows left Todo");
+    assert.equal(app.board.counts.done, 2);
+    assert.equal(app.loadBoardCalls, 1, "one settling reload at the end");
+    assert.match(lastToast(app).msg, /^Moved 2 tasks to Done$/, "consolidated summary toast");
+    assert.equal(app.selectedCount(), 0, "full success clears the selection");
+    assert.equal(app.batchBusy, false, "busy flag released");
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+  }
+});
+
+test("MultiSelect: batch set-priority patches each selected row and updates it in place", async () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("t-1", "todo"), archTask("t-2", "todo")] });
+  app.toggleSelectTask("t-1");
+  app.toggleSelectTask("t-2");
+
+  const origUpdateTask = api.updateTask;
+  const seen: any[] = [];
+  try {
+    (api as any).updateTask = async (id: string, req: any) => {
+      seen.push({ id, priority: req.priority });
+      return { ...app.board.tasks.todo.find((t: any) => t.id === id), priority: req.priority, version: req.version + 1 };
+    };
+    await app.batchSetPriority(3);
+    assert.deepEqual(seen.map((s: any) => s.priority).sort(), [3, 3], "every row patched to P3");
+    assert.ok(app.board.tasks.todo.every((t: any) => t.priority === 3), "board rows reflect the new priority immediately");
+    assert.match(lastToast(app).msg, /priority P3/);
+    assert.equal(app.selectedCount(), 0);
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+  }
+});
+
+test("MultiSelect: batch assign offers the row's owner type and can clear ownership", async () => {
+  const app = archApp();
+  // One existing agent-owned row so _assigneeTypeFor() can learn "agent" for it.
+  const agentRow = { ...archTask("t-agent", "todo"), assignee: { name: "bot-1", type: "agent" } };
+  const plainRow = archTask("t-plain", "todo");
+  app.board = archBoard("proj-1", { todo: [agentRow, plainRow] });
+
+  const origUpdateTask = api.updateTask;
+  const seen: any[] = [];
+  try {
+    (api as any).updateTask = async (id: string, req: any) => {
+      seen.push({ id, assignee: req.assignee, clear: !!req.clear_assignee });
+      return { ...app.board.tasks.todo.find((t: any) => t.id === id), version: req.version + 1 };
+    };
+
+    app.toggleSelectTask("t-agent");
+    await app.batchAssignOwner("bot-1");
+    assert.equal(seen.length, 1);
+    assert.deepEqual(seen[0].assignee, { name: "bot-1", type: "agent" }, "reusing an existing agent keeps its type");
+
+    app.toggleSelectTask("t-plain");
+    await app.batchAssignOwner(null);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[1].clear, true, "Clear owner sends clear_assignee");
+    assert.match(lastToast(app).msg, /Cleared owner/);
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+  }
+});
+
+test("MultiSelect: batch engine retries a 409 version conflict exactly once per task", async () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("t-ok", "todo"), archTask("t-stale", "todo")] });
+  app.toggleSelectTask("t-ok");
+  app.toggleSelectTask("t-stale");
+
+  const origUpdateTask = api.updateTask;
+  const origGetTask = api.getTask;
+  const attempts: Record<string, number> = {};
+  try {
+    (api as any).updateTask = async (id: string, req: any) => {
+      attempts[id] = (attempts[id] ?? 0) + 1;
+      if (id === "t-stale" && attempts[id] === 1) {
+        throw new ApiError(409, { error: "version_conflict", message: "stale", current_version: 5 } as any);
+      }
+      return { ...app.board.tasks.todo.find((t: any) => t.id === id), priority: 2, version: req.version + 1 };
+    };
+    (api as any).getTask = async (id: string) => ({ id, status: "todo", version: 5 });
+
+    await app.batchSetPriority(2);
+    assert.equal(attempts["t-ok"], 1, "unconflicted task patched exactly once");
+    assert.equal(attempts["t-stale"], 2, "stale task got its single re-read + retry");
+    assert.match(lastToast(app).msg, /^Updated 2 tasks to priority P2$/, "no failure reported — the retry succeeded");
+    assert.equal(app.selectedCount(), 0);
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+    (api as any).getTask = origGetTask;
+  }
+});
+
+test("MultiSelect: partial batch failure toasts an error and keeps ONLY the failed ids selected", async () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("t-ok", "todo"), archTask("t-bad", "todo")] });
+  app.toggleSelectTask("t-ok");
+  app.toggleSelectTask("t-bad");
+
+  const origUpdateTask = api.updateTask;
+  try {
+    (api as any).updateTask = async (id: string) => {
+      if (id === "t-bad") throw new ApiError(500, { error: "boom", message: "upstream exploded" } as any);
+      return { id, status: "doing", version: 2 };
+    };
+    await app.batchMoveTo("doing");
+    assert.match(lastToast(app).msg, /^Moved 1 task to Doing · 1 failed$/, "partial failure is reported precisely");
+    assert.equal(lastToast(app).kind, "error", "a partial failure reads as an error");
+    assert.deepEqual([...app.selectedTaskIds], ["t-bad"], "only the failed card stays selected for a re-run");
+    // The optimistic move applied for the one that succeeded.
+    assert.equal(app.board.tasks.doing.length, 1);
+    assert.equal(app.board.tasks.todo.length, 1);
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+  }
+});
+
+test("MultiSelect: batch archive removes rows optimistically and skips a re-patch when someone already archived it", async () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("t-a", "todo"), archTask("t-race", "todo")] });
+  app.toggleSelectTask("t-a");
+  app.toggleSelectTask("t-race");
+
+  const origUpdateTask = api.updateTask;
+  const origGetTask = api.getTask;
+  const attempts: Record<string, number> = {};
+  try {
+    (api as any).updateTask = async (id: string) => {
+      attempts[id] = (attempts[id] ?? 0) + 1;
+      if (id === "t-race" && attempts[id] === 1) {
+        throw new ApiError(409, { error: "version_conflict", message: "stale", current_version: 2 } as any);
+      }
+      return { id, version: 2 };
+    };
+    // The re-read reveals a CONCURRENT archive already landed — the batch must
+    // NOT re-patch and must count it as success.
+    (api as any).getTask = async () => ({ id: "t-race", status: "todo", archived: true, version: 2 });
+
+    await app.batchArchiveSelected();
+    assert.equal(attempts["t-a"], 1);
+    assert.equal(attempts["t-race"], 1, "no second PATCH once the re-read shows archived=true");
+    assert.match(lastToast(app).msg, /^Archived 2 selected tasks$/);
+    assert.equal(app.board.tasks.todo.length, 0, "both rows removed locally");
+    assert.equal(app.board.counts.todo, 0, "counts decremented per removal");
+    assert.equal(app.selectedCount(), 0);
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+    (api as any).getTask = origGetTask;
+  }
+});
+
+test("MultiSelect: Escape contract — batch menus close first, drawer beats selection, last-resort clears", () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("t-1", "todo")] });
+  app.toggleSelectTask("t-1");
+
+  // 1) A batch menu open (with the selection behind it) closes JUST the menu.
+  app.batchMoveMenuOpen = true;
+  app.dismissTop();
+  assert.equal(app.batchMoveMenuOpen, false, "first Escape closes the open batch menu");
+  assert.equal(app.selectedCount(), 1, "…without touching the selection or any other surface");
+
+  // 2) With a detail drawer open, Escape must NOT clear the selection.
+  app.detailOpen = true;
+  const origRequestCloseDetail = app.requestCloseDetail;
+  let closeDetailCalls = 0;
+  app.requestCloseDetail = () => { closeDetailCalls++; };
+  try {
+    app.dismissTop();
+    assert.equal(closeDetailCalls, 1, "the drawer is the topmost surface — it gets the Escape");
+    assert.equal(app.selectedCount(), 1, "selection survives while a drawer is open (AC4)");
+  } finally {
+    app.requestCloseDetail = origRequestCloseDetail;
+  }
+
+  // 3) Drawer closed and nothing else on top → last-resort Escape clears.
+  app.detailOpen = false;
+  app.dismissTop();
+  assert.equal(app.selectedCount(), 0, "bare-board Escape clears the selection (AC4)");
+});
+
+test("MultiSelect: entering the archived view clears a live-card selection", async () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("t-1", "todo")] });
+  app.toggleSelectTask("t-1");
+
+  const origListTasks = api.listTasks;
+  try {
+    (api as any).listTasks = async () => ({ tasks: [], total: 0 });
+    await app.toggleShowArchived();
+    assert.equal(app.showArchived, true);
+    assert.equal(app.selectedCount(), 0, "selection belongs to the live board — it never leaks into the archive view");
+  } finally {
+    (api as any).listTasks = origListTasks;
+  }
+});
+
+test("MultiSelect: index.html wires every batch-bar testid the E2E suite depends on", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  // AC1 — per-card checkbox bound to the selection state, and modifier-clicks
+  // passed through to handleCardClick.
+  assert.match(html, /data-testid="card-select-checkbox"/);
+  assert.ok(html.includes('@click.stop="toggleSelectTask(task.id)"'), "checkbox click stops propagation (no drawer)");
+  assert.ok(html.includes(':checked="isTaskSelected(task.id)"'));
+  assert.ok(html.includes('@click="handleCardClick(task.id, $event)"'), "the event is forwarded for Ctrl/Shift dispatch");
+  // AC2 — the floating bar + its actions.
+  assert.ok(html.includes('data-testid="batch-action-bar"'));
+  assert.ok(html.includes('x-show="selectedCount() > 0 && !showArchived"'));
+  assert.ok(html.includes('data-testid="batch-count"'));
+  assert.ok(html.includes('@click="selectAllVisible()"'));
+  assert.ok(html.includes('@click="clearSelection()"'));
+  // x-bind (":") form — a PLAIN data-testid attribute is never evaluated by Alpine,
+  // so the rendered DOM would carry the literal "'batch-move-' + s" string and every
+  // e2e getByTestId('batch-move-…') locator would match nothing.
+  assert.ok(html.includes("x-bind:data-testid=\"'batch-move-' + s\"") || html.includes(":data-testid=\"'batch-move-' + s\""), "move-menu items use a BOUND data-testid");
+  assert.ok(html.includes("x-bind:data-testid=\"'batch-priority-' + p\"") || html.includes(":data-testid=\"'batch-priority-' + p\""), "priority-menu items use a BOUND data-testid");
+  assert.ok(html.includes('data-testid="batch-assign-owner"'));
+  assert.ok(html.includes('data-testid="batch-custom-owner"'));
+  assert.ok(html.includes('data-testid="batch-clear-owner"'));
+  assert.ok(html.includes('@click="batchArchiveSelected()"'));
+  // Selection styling hooks + the CSS visibility rule.
+  assert.ok(html.includes("isTaskSelected(task.id) ? 'has-selection' : ''"));
+  const css = fs.readFileSync(path.resolve(__dirname, "../src/style.css"), "utf-8");
+  assert.match(css, /\.card-select-checkbox\s*{[^}]*opacity:\s*0/);
+});
+
 
 
 
