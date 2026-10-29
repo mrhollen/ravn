@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/mrhollen/ravn/internal/application"
 	"github.com/mrhollen/ravn/internal/domain"
@@ -187,4 +189,47 @@ func (a *App) handleBoard(w http.ResponseWriter, r *http.Request) {
 		Done:  len(resp.Tasks.Done),
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleProjectReport → GET /api/v1/projects/{id}/report (UI + supervisor
+// extra): the single-call project health digest — status/priority counts, live
+// and expired claim leases, stalled doing-tasks, bottleneck blockers (both
+// directions), recently completed tasks, and per-assignee workload. Optional
+// query parameters tune the windows; each is omitted by default:
+//
+//	stalled_minutes  non-negative integer; a doing task with NO activity for
+//	                 MORE than this many minutes counts as stalled
+//	                 (default 60 when omitted or zero)
+//	since            RFC3339 instant; recently_completed shows tasks finished at
+//	                 or after it (default now−24h)
+//
+// Everything is computed by the use case in ONE unit of work, so the digest is
+// a consistent snapshot. Unknown project → 404; malformed parameter → 400.
+func (a *App) handleProjectReport(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pid, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	stalledMinutes, err := parseTailLimit(q.Get("stalled_minutes"), "stalled_minutes")
+	if err != nil {
+		writeAppError(w, err, "project", pid)
+		return
+	}
+	var since *time.Time
+	if v := q.Get("since"); v != "" {
+		t, perr := time.Parse(time.RFC3339, v)
+		if perr != nil {
+			writeAppError(w, fmt.Errorf("%w: since must be an RFC3339 timestamp, got %q", domain.ErrInvalid, v), "project", pid)
+			return
+		}
+		since = &t
+	}
+	rep, err := a.Projects.Report(ctx, pid, application.ReportOptions{StalledMinutes: stalledMinutes, Since: since})
+	if err != nil {
+		writeAppError(w, err, "project", pid)
+		return
+	}
+	writeJSON(w, http.StatusOK, toProjectReport(rep))
 }

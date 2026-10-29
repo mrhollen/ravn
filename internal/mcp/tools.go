@@ -35,6 +35,7 @@ type Client interface {
 	BaseURL() string
 	ListProjects(ctx context.Context) (*apiclient.ProjectList, error)
 	GetProject(ctx context.Context, id string) (*apiclient.Project, error)
+	ProjectReport(ctx context.Context, id string, stalledMinutes int, since string) (*apiclient.ProjectReport, error)
 	CreateProject(ctx context.Context, req apiclient.CreateProjectRequest) (*apiclient.Project, error)
 	ListTasks(ctx context.Context, f apiclient.TaskFilter) (*apiclient.TaskList, error)
 	GetTask(ctx context.Context, id string, commentLimit, eventLimit int) (*apiclient.TaskDetail, error)
@@ -69,7 +70,7 @@ func ServerOptions() []mcpsrv.ServerOption {
 	}
 }
 
-// RegisterTools wires every ravn MCP tool onto s (the full 18-tool surface,
+// RegisterTools wires every ravn MCP tool onto s (the full 19-tool surface,
 // docs/API.md route table). defaultActor is the container-default identity
 // (from RAVN_AGENT_NAME) used whenever a mutating call arrives without a
 // usable `actor` object.
@@ -78,6 +79,7 @@ func RegisterTools(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) 
 	registerCreateProject(s, c, defaultActor)
 	registerListTasks(s, c)
 	registerGetTask(s, c)
+	registerProjectReport(s, c)
 	registerCreateTask(s, c, defaultActor)
 	registerUpdateTask(s, c, defaultActor)
 	registerClaimTask(s, c, defaultActor)
@@ -396,6 +398,35 @@ func registerGetTask(s *mcpsrv.MCPServer, c Client) {
 			return fail(c, err), nil
 		}
 		return textResult(detail)
+	})
+}
+
+func registerProjectReport(s *mcpsrv.MCPServer, c Client) {
+	tool := mcpgo.NewTool("project_report",
+		mcpgo.WithDescription(
+			"The single-call project health digest — use this instead of combining list_tasks + get_task per task. Returns compact JSON: counts by status (todo/doing/done) and priority (0-5), active claim leases with remaining seconds, expired claims (zombies), stalled doing-tasks (no activity for MORE than the window; heartbeats never count as activity), bottleneck blockers in BOTH directions (bottlenecks = who blocks what; open_blocked_by = who is blocked by whom), recently completed tasks inside the since window, and per-assignee workload (unassigned under \"\"). Both windows default when omitted: stalled_minutes=60, since=now-24h. Unknown project → isError not-found verbatim."),
+		mcpgo.WithString("project_id", mcpgo.Required(),
+			mcpgo.Description("Project ULID the report covers (from list_projects; must exist).")),
+		mcpgo.WithNumber("stalled_minutes", mcpgo.Min(0),
+			mcpgo.Description("Idle window in minutes: a doing task with NO activity for MORE than this many minutes is stalled (default 60 when omitted or zero).")),
+		mcpgo.WithString("since",
+			mcpgo.Description("RFC3339 timestamp: recently_completed shows tasks finished at or after it (default now-24h when omitted, e.g. 2026-10-01T00:00:00Z).")),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		projectID := strings.TrimSpace(req.GetString("project_id", ""))
+		if projectID == "" {
+			return invalidInput("project_report", "project_id"), nil
+		}
+		since := strings.TrimSpace(req.GetString("since", "")) // empty = server default now-24h
+		stalledMinutes := req.GetInt("stalled_minutes", 0)   // <= 0 = server default 60
+		if stalledMinutes < 0 {
+			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"project_report: \"stalled_minutes\" must be a non-negative integer"}`), nil
+		}
+		report, err := c.ProjectReport(ctx, projectID, stalledMinutes, since)
+		if err != nil {
+			return fail(c, err), nil
+		}
+		return textResult(report)
 	})
 }
 

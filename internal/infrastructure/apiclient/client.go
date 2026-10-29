@@ -99,6 +99,27 @@ func (c *Client) UpdateProject(ctx context.Context, id string, req UpdateProject
 	return &out, nil
 }
 
+// ProjectReport → GET /projects/{id}/report: the single-call project health
+// digest (counts, live+expired claims, stalled doing-tasks, bottleneck
+// blockers both directions, recently completed, per-assignee workload).
+// stalledMinutes <= 0 omits the param (server default 60); since == "" omits it
+// (server default now−24h; pass RFC3339 text when set).
+func (c *Client) ProjectReport(ctx context.Context, id string, stalledMinutes int, since string) (*ProjectReport, error) {
+	q := url.Values{}
+	if stalledMinutes > 0 {
+		q.Set("stalled_minutes", fmt.Sprintf("%d", stalledMinutes))
+	}
+	if since != "" {
+		q.Set("since", since)
+	}
+	var out ProjectReport
+	path := "/projects/" + url.PathEscape(id) + "/report"
+	if err := c.do(ctx, "ProjectReport", http.MethodGet, path, orNil(q), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ListTasks → GET /tasks. Canonical order (priority DESC → due ASC with undated
 // last → created ASC) inside the offset/limit envelope. Zero filter fields add
 // no query params; the server applies its own defaults (limit 20).

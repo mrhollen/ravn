@@ -406,6 +406,13 @@ type EventStore interface {
 	// exactly what it missed since its last delivered event id. Events with
 	// no project never match. limit <= 0 means unbounded.
 	ListAfterProject(ctx context.Context, projectID domain.ID, after domain.ID, limit int) ([]domain.Event, error)
+
+	// MaxAtByTasks returns each task's most recent event timestamp (MAX of the
+	// stored ts) for the given ids, omitting tasks with no events at all. ONE
+	// grouped scan — no per-task round trips. It backs the project report's
+	// stalled detection: "last activity" is the newest event timestamp when a
+	// task has any events, falling back to the task row's updated_at otherwise.
+	MaxAtByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]time.Time, error)
 }
 
 // EventPublisher receives committed domain events for fan-out.

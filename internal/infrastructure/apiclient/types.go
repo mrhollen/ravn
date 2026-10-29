@@ -398,3 +398,74 @@ type RelationRequest struct {
 type UnrelateTaskRequest struct {
 	Actor Actor `json:"actor"`
 }
+
+// ProjectReport is the response of GET /projects/{id}/report — the single-call
+// project health digest. Wire shape mirrors httpapi.projectReportDTO: every
+// list field is non-nil ([] when empty), counts.by_status always carries
+// todo/doing/done, counts.by_priority all six "0".."5", and workload maps
+// assignee name → active (todo+doing) count with unassigned under "".
+type ProjectReport struct {
+	ProjectID         string                   `json:"project_id"`
+	Counts            ReportCounts             `json:"counts"`
+	ActiveClaims      []ReportClaim            `json:"active_claims"`
+	ExpiredClaims     []ReportTaskRef          `json:"expired_claims"`
+	StalledTasks      []ReportStalledTask      `json:"stalled_tasks"`
+	Bottlenecks       []ReportBottleneck       `json:"bottlenecks"`
+	OpenBlockedBy     []ReportBlockedGroup     `json:"open_blocked_by"`
+	RecentlyCompleted []ReportRecentlyCompleted `json:"recently_completed"`
+	Workload          map[string]int           `json:"workload"`
+}
+
+// ReportCounts is the digest's tally: every non-archived task in the project
+// (open AND done), grouped by canonical status and all six priorities.
+type ReportCounts struct {
+	ByStatus   map[string]int `json:"by_status"`
+	ByPriority map[string]int `json:"by_priority"`
+}
+
+// ReportTaskRef is the minimal {id,title} task pointer used across digest sections.
+type ReportTaskRef struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// ReportClaim is one live lease: remaining_sec = max(0, expiry − now) in whole seconds.
+type ReportClaim struct {
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	ClaimedBy      *Actor `json:"claimed_by,omitempty"`
+	ClaimExpiresAt string `json:"claim_expires_at"`
+	RemainingSec   int64  `json:"remaining_sec"`
+}
+
+// ReportStalledTask is a doing task idle strictly past the window. LastActivityAt
+// is the newest event timestamp when events exist, else updated_at; heartbeats
+// never count as activity (no event, no row bump).
+type ReportStalledTask struct {
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	LastActivityAt string `json:"last_activity_at"`
+	IdleMinutes    int    `json:"idle_minutes"`
+}
+
+// ReportBottleneck is an open task blocking >= 1 other open task (blocks desc).
+type ReportBottleneck struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Blocks int    `json:"blocks"`
+}
+
+// ReportBlockedGroup is the inverse bottleneck view: one blocker with the open
+// tasks it blocks, same order as bottlenecks.
+type ReportBlockedGroup struct {
+	Blocker ReportTaskRef   `json:"blocker"`
+	Blocked []ReportTaskRef `json:"blocked"`
+}
+
+// ReportRecentlyCompleted is a done task finished at/after the since window.
+type ReportRecentlyCompleted struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	CompletedAt string `json:"completed_at"`
+	Assignee    *Actor `json:"assignee,omitempty"`
+}

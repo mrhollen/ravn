@@ -15,6 +15,7 @@ const apiPrefix = "/api/v1"
 //	PUT   /api/v1/projects/{id}         update name/description
 //	GET   /api/v1/projects/{id}/opencode/options  list reachable OpenCode agents and models for project
 //	GET   /api/v1/projects/{id}/board   whole-project board snapshot (UI extra)
+//	GET   /api/v1/projects/{id}/report  single-call project health digest: status/priority counts, live+expired claims, stalled doing-tasks, bottleneck blockers both directions, recently completed, per-assignee workload; ?stalled_minutes= & ?since= tune the windows (defaults 60 / now−24h)
 //	GET   /api/v1/projects/{id}/events  realtime SSE stream for the project; replays events missed since Last-Event-ID (header or ?last_event_id) on reconnect
 //	GET   /api/v1/events                same stream scoped by ?project_id= (+ the same replay cursor)
 //	GET   /api/v1/tasks                 list task summaries: filters + offset/limit pagination + total
@@ -42,6 +43,7 @@ func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("PUT "+apiPrefix+"/projects/{id}", app.handleUpdateProject)
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/opencode/options", app.handleOpenCodeOptions)
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/board", app.handleBoard)
+	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/report", app.handleProjectReport)
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/events", app.handleProjectEvents)
 	mux.HandleFunc("GET "+apiPrefix+"/events", app.handleEvents)
 

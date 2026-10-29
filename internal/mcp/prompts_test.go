@@ -44,6 +44,10 @@ func (m *mockClient) GetProject(ctx context.Context, id string) (*apiclient.Proj
 	return nil, errors.New("unimplemented")
 }
 
+func (m *mockClient) ProjectReport(ctx context.Context, id string, stalledMinutes int, since string) (*apiclient.ProjectReport, error) {
+	return nil, errors.New("unimplemented")
+}
+
 func (m *mockClient) CreateProject(ctx context.Context, req apiclient.CreateProjectRequest) (*apiclient.Project, error) {
 	return nil, errors.New("unimplemented")
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/mrhollen/ravn/internal/application"
 	"github.com/mrhollen/ravn/internal/domain"
@@ -127,6 +129,46 @@ func (s *eventStore) list(ctx context.Context, column, value string, limit, offs
 			return nil, fmt.Errorf("scan event row: %w", err)
 		}
 		out = append(out, ev)
+	}
+	return out, rows.Err()
+}
+
+// MaxAtByTasks returns each task's most recent event timestamp (MAX(ts)) for the
+// given ids, omitting tasks with no events. ONE grouped scan — no per-task round
+// trips. ts is stored in formatTS's fixed-width zero-padded UTC form, so SQLite's
+// multi-argument MAX over TEXT is chronological (same property lastActivityExpr
+// relies on). Backs the project report's stalled detection.
+func (s *eventStore) MaxAtByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]time.Time, error) {
+	out := make(map[domain.ID]time.Time, len(taskIDs))
+	if len(taskIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(taskIDs))
+	args := make([]any, len(taskIDs))
+	for i, id := range taskIDs {
+		placeholders[i] = "?"
+		args[i] = string(id)
+	}
+	rows, err := s.q.QueryContext(ctx,
+		`SELECT task_id, MAX(ts) FROM event WHERE task_id IN (`+strings.Join(placeholders, ", ")+`) GROUP BY task_id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("max event ts for %d tasks: %w", len(taskIDs), err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			taskID string
+			ts     string
+		)
+		if err := rows.Scan(&taskID, &ts); err != nil {
+			return nil, fmt.Errorf("scan max event ts row: %w", err)
+		}
+		at, err := parseTS(ts)
+		if err != nil {
+			return nil, fmt.Errorf("parse max event ts %q: %w", ts, err)
+		}
+		out[domain.ID(taskID)] = at
 	}
 	return out, rows.Err()
 }

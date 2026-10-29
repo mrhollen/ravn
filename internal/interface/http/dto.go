@@ -672,3 +672,138 @@ type openCodeOptionsResponse struct {
 	Agents          []openCodeAgentOptionDTO `json:"agents"`
 	Models          []openCodeModelOptionDTO `json:"models"`
 }
+
+// --- project report (single-call health digest) ---------------------------------
+
+// projectReportDTO is the wire form of application.ProjectReport — the whole
+// project health snapshot in ONE response. Every list field is non-nil: an
+// empty digest section is [] / {}, never null, so clients can iterate without
+// nil checks. by_status always carries exactly todo/doing/done; by_priority
+// always carries all six priorities "0".."5"; workload maps assignee NAME to
+// the active (todo+doing) task count, unassigned tasks bucket under "".
+type projectReportDTO struct {
+	ProjectID         string                   `json:"project_id"`
+	Counts            reportCountsDTO          `json:"counts"`
+	ActiveClaims      []activeClaimDTO         `json:"active_claims"`
+	ExpiredClaims     []taskRefDTO             `json:"expired_claims"`
+	StalledTasks      []stalledTaskDTO         `json:"stalled_tasks"`
+	Bottlenecks       []bottleneckDTO          `json:"bottlenecks"`
+	OpenBlockedBy     []blockedGroupDTO        `json:"open_blocked_by"`
+	RecentlyCompleted []recentlyCompletedDTO   `json:"recently_completed"`
+	Workload          map[string]int           `json:"workload"`
+}
+
+type reportCountsDTO struct {
+	ByStatus   map[string]int `json:"by_status"`
+	ByPriority map[string]int `json:"by_priority"`
+}
+
+// taskRefDTO is the minimal {id,title} pointer shared by several digest sections.
+type taskRefDTO struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// activeClaimDTO is one live lease; remaining_sec = max(0, expiry − now) in whole
+// seconds (0 at the exact expiry instant — a lapsed lease moves to expired_claims).
+type activeClaimDTO struct {
+	ID             string    `json:"id"`
+	Title          string    `json:"title"`
+	ClaimedBy      *actorDTO `json:"claimed_by,omitempty"`
+	ClaimExpiresAt string    `json:"claim_expires_at"`
+	RemainingSec   int64     `json:"remaining_sec"`
+}
+
+// stalledTaskDTO is a doing task idle strictly past the window. last_activity_at
+// is the newest event timestamp when the task has any events, else updated_at;
+// heartbeats (no event, no row bump) never count as activity.
+type stalledTaskDTO struct {
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	LastActivityAt string `json:"last_activity_at"`
+	IdleMinutes    int    `json:"idle_minutes"`
+}
+
+// bottleneckDTO is an open task blocking >= 1 other open task (blocks desc, title asc).
+type bottleneckDTO struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Blocks int    `json:"blocks"`
+}
+
+// blockedGroupDTO is the inverse view: one blocker and the open tasks it blocks;
+// same order as bottlenecks, a task with several blockers appears under each.
+type blockedGroupDTO struct {
+	Blocker taskRefDTO   `json:"blocker"`
+	Blocked []taskRefDTO `json:"blocked"`
+}
+
+// recentlyCompletedDTO is a done task finished at/after the since window (newest first).
+type recentlyCompletedDTO struct {
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	CompletedAt string    `json:"completed_at"`
+	Assignee    *actorDTO `json:"assignee,omitempty"`
+}
+
+func toProjectReport(rep application.ProjectReport) projectReportDTO {
+	out := projectReportDTO{
+		ProjectID:         rep.ProjectID.String(),
+		Counts: reportCountsDTO{
+			ByStatus:   make(map[string]int, len(rep.Counts.ByStatus)),
+			ByPriority: make(map[string]int, len(rep.Counts.ByPriority)),
+		},
+		ActiveClaims:      make([]activeClaimDTO, 0, len(rep.ActiveClaims)),
+		ExpiredClaims:     make([]taskRefDTO, 0, len(rep.ExpiredClaims)),
+		StalledTasks:      make([]stalledTaskDTO, 0, len(rep.StalledTasks)),
+		Bottlenecks:       make([]bottleneckDTO, 0, len(rep.Bottlenecks)),
+		OpenBlockedBy:     make([]blockedGroupDTO, 0, len(rep.OpenBlockedBy)),
+		RecentlyCompleted: make([]recentlyCompletedDTO, 0, len(rep.RecentlyCompleted)),
+		Workload:          make(map[string]int, len(rep.Workload)),
+	}
+	for st, n := range rep.Counts.ByStatus {
+		out.Counts.ByStatus[string(st)] = n
+	}
+	for p, n := range rep.Counts.ByPriority {
+		out.Counts.ByPriority[fmt.Sprint(p)] = n
+	}
+	for _, c := range rep.ActiveClaims {
+		out.ActiveClaims = append(out.ActiveClaims, activeClaimDTO{
+			ID:             c.ID.String(),
+			Title:          c.Title,
+			ClaimedBy:      toActor(c.ClaimedBy),
+			ClaimExpiresAt: rfc3339(c.ClaimExpiresAt),
+			RemainingSec:   c.RemainingSec,
+		})
+	}
+	for _, t := range rep.ExpiredClaims {
+		out.ExpiredClaims = append(out.ExpiredClaims, taskRefDTO{ID: t.ID.String(), Title: t.Title})
+	}
+	for _, t := range rep.StalledTasks {
+		out.StalledTasks = append(out.StalledTasks, stalledTaskDTO{
+			ID: t.ID.String(), Title: t.Title, LastActivityAt: rfc3339(t.LastActivityAt), IdleMinutes: t.IdleMinutes,
+		})
+	}
+	for _, b := range rep.Bottlenecks {
+		out.Bottlenecks = append(out.Bottlenecks, bottleneckDTO{ID: b.ID.String(), Title: b.Title, Blocks: b.Blocks})
+	}
+	for _, g := range rep.OpenBlockedBy {
+		blocked := make([]taskRefDTO, 0, len(g.Blocked))
+		for _, t := range g.Blocked {
+			blocked = append(blocked, taskRefDTO{ID: t.ID.String(), Title: t.Title})
+		}
+		out.OpenBlockedBy = append(out.OpenBlockedBy, blockedGroupDTO{
+			Blocker: taskRefDTO{ID: g.Blocker.ID.String(), Title: g.Blocker.Title},
+			Blocked: blocked,
+		})
+	}
+	for _, c := range rep.RecentlyCompleted {
+		out.RecentlyCompleted = append(out.RecentlyCompleted, recentlyCompletedDTO{
+			ID: c.ID.String(), Title: c.Title, CompletedAt: rfc3339(c.CompletedAt), Assignee: toActor(c.Assignee),
+		})
+	}
+	for name, n := range rep.Workload {
+		out.Workload[name] = n
+	}
+	return out
+}

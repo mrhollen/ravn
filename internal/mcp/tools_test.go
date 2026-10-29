@@ -113,6 +113,25 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 		record(r)
 		writeJSON(w, http.StatusOK, mockProjectsBody)
 	})
+	// GET /api/v1/projects/{id}/report returns a fixed digest; the forwarded
+	// query params are asserted from the captured call (the apiclient only
+	// sends non-defaults, so their ABSENCE is what a defaults call must show).
+	mux.HandleFunc("GET /api/v1/projects/{id}/report", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		row := map[string]any{
+			"project_id":      r.PathValue("id"),
+			"counts":          map[string]any{"by_status": map[string]int{"todo": 1, "doing": 1, "done": 1}, "by_priority": map[string]int{"0": 3}},
+			"active_claims":   []map[string]any{{"id": "T1", "title": "Live", "claimed_by": map[string]string{"type": "agent", "name": "a"}, "claim_expires_at": "2026-09-26T17:48:03Z", "remaining_sec": 600}},
+			"expired_claims":  []map[string]any{{"id": "T2", "title": "Zombie"}},
+			"stalled_tasks":   []map[string]any{{"id": "T3", "title": "Stuck", "last_activity_at": "2026-09-26T14:48:03Z", "idle_minutes": 180}},
+			"bottlenecks":     []map[string]any{{"id": "T2", "title": "Zombie", "blocks": 1}},
+			"open_blocked_by": []map[string]any{{"blocker": map[string]string{"id": "T2", "title": "Zombie"}, "blocked": []map[string]any{{"id": "T3", "title": "Stuck"}}}},
+			"recently_completed": []map[string]any{{"id": "T4", "title": "Shipped", "completed_at": "2026-09-26T15:48:03Z"}},
+			"workload":          map[string]int{"a": 1, "": 2},
+		}
+		data, _ := json.Marshal(row)
+		writeJSON(w, http.StatusOK, string(data))
+	})
 	mux.HandleFunc("POST /api/v1/projects", func(w http.ResponseWriter, r *http.Request) {
 		b := record(r)
 		var req apiclient.CreateProjectRequest
@@ -402,7 +421,7 @@ func jsonString(s string) string {
 // --- helpers ---------------------------------------------------------------------------
 
 var wantToolNames = []string{
-	"list_projects", "create_project", "list_tasks", "get_task", "create_task",
+	"list_projects", "create_project", "list_tasks", "get_task", "project_report", "create_task",
 	"update_task", "claim_task", "release_task", "heartbeat_task", "handoff_task", "add_comment",
 	"update_notes", "complete_ac", "add_ac", "remove_ac", "edit_ac", "attach_artifact", "relate_tasks",
 }
@@ -846,6 +865,64 @@ func TestListTasks_OmittedTriStateSendsNothing(t *testing.T) {
 	}
 	if cc.query.Get("project_id") != "P1" {
 		t.Errorf("query project_id = %q, want P1 (all: %s)", cc.query.Get("project_id"), cc.query.Encode())
+	}
+}
+
+// TestProjectReportRoundTrip verifies the project_report tool: all tuning args
+// reach the upstream as query params, and OMITTING them sends NONE (the server
+// applies its own defaults — a 0/explicit value must not masquerade as one).
+func TestProjectReportRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	res := callTool(t, c, ctx, "project_report", map[string]any{
+		"project_id":      "P1",
+		"stalled_minutes": 90,
+		"since":           "2026-10-01T00:00:00Z",
+	})
+	if res.IsError {
+		t.Fatalf("project_report returned isError: %s", firstText(t, res))
+	}
+	env := asMap(t, firstText(t, res))
+	if env["project_id"] != "P1" {
+		t.Errorf("report project_id = %v, want P1 (%s)", env["project_id"], firstText(t, res))
+	}
+	cc := findCall(t, *calls, http.MethodGet, "/api/v1/projects/P1/report")
+	if got := cc.query.Get("stalled_minutes"); got != "90" {
+		t.Errorf("forwarded stalled_minutes = %q, want 90", got)
+	}
+	if got := cc.query.Get("since"); got != "2026-10-01T00:00:00Z" {
+		t.Errorf("forwarded since = %q, want 2026-10-01T00:00:00Z", got)
+	}
+
+	// Omitted tuning args (and stalled_minutes=0) send NO query params at all.
+	res = callTool(t, c, ctx, "project_report", map[string]any{
+		"project_id":      "P1",
+		"stalled_minutes": 0,
+	})
+	if res.IsError {
+		t.Fatalf("project_report (defaults) returned isError: %s", firstText(t, res))
+	}
+	last := (*calls)[len(*calls)-1] // the defaults call is the most recent upstream hit
+	if last.method != http.MethodGet || last.path != "/api/v1/projects/P1/report" {
+		t.Fatalf("defaults call upstream = %s %s, want GET /api/v1/projects/P1/report", last.method, last.path)
+	}
+	if len(last.query) != 0 {
+		t.Errorf("omitted tuning args still forwarded query %s, want none (server applies its own defaults)", last.query.Encode())
+	}
+
+	// Empty project_id is rejected locally — no round-trip.
+	before := len(*calls)
+	res = callTool(t, c, ctx, "project_report", map[string]any{"project_id": "  "})
+	if !res.IsError || !strings.Contains(firstText(t, res), "invalid input") {
+		t.Errorf("empty project_id: want invalid-input isError, got %s", firstText(t, res))
+	}
+	if len(*calls) != before {
+		t.Errorf("empty project_id still hit the upstream (%d calls, want none new)", len(*calls)-before)
 	}
 }
 

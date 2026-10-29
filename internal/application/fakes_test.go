@@ -856,6 +856,25 @@ func (f *fakeEvents) ListAfterProject(_ context.Context, projectID domain.ID, af
 	return out, nil
 }
 
+// MaxAtByTasks returns each requested task's most recent event At, omitting
+// tasks with no events — the in-memory twin of the adapter's grouped MAX(ts).
+func (f *fakeEvents) MaxAtByTasks(_ context.Context, taskIDs []domain.ID) (map[domain.ID]time.Time, error) {
+	want := make(map[domain.ID]bool, len(taskIDs))
+	for _, id := range taskIDs {
+		want[id] = true
+	}
+	out := make(map[domain.ID]time.Time, len(taskIDs))
+	for _, e := range f.events {
+		if e.TaskID == nil || !want[*e.TaskID] {
+			continue
+		}
+		if cur, ok := out[*e.TaskID]; !ok || e.At.After(cur) {
+			out[*e.TaskID] = e.At
+		}
+	}
+	return out, nil
+}
+
 func tailBy(match func(domain.Event) bool, events []domain.Event, limit, offset int) ([]domain.Event, error) {
 	matched := make([]domain.Event, 0, len(events))
 	for i := len(events) - 1; i >= 0; i-- { // newest first
