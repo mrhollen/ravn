@@ -67,10 +67,20 @@
               <span class="font-semibold" x-text="t.kind === 'error' && !t.hideErrorPrefix ? 'Error: ' : ''"></span>
               <span x-text="t.msg"></span>
               <template x-if="t.action">
-                <a :href="t.action.href" target="_blank" rel="noreferrer noopener"
-                   data-testid="toast-action-link"
-                   class="ml-1.5 inline-flex items-center gap-0.5 font-semibold text-indigo-600 underline decoration-indigo-300 hover:text-indigo-800 dark:text-indigo-400 dark:decoration-indigo-700 dark:hover:text-indigo-200"
-                   x-text="t.action.label + ' ↗'"></a>
+                <!-- href → external link (OpenCode sessions); onAction → local JS
+                     action button (Undo). Exactly one branch renders per toast.
+                     NOTE: Alpine's x-if clones only the FIRST element child of a
+                     template — both branches must share this single wrapper span. -->
+                <span class="inline-flex items-center">
+                  <a x-show="!!t.action.href" x-cloak :href="t.action.href" target="_blank" rel="noreferrer noopener"
+                     data-testid="toast-action-link"
+                     class="ml-1.5 inline-flex items-center gap-0.5 font-semibold text-indigo-600 underline decoration-indigo-300 hover:text-indigo-800 dark:text-indigo-400 dark:decoration-indigo-700 dark:hover:text-indigo-200"
+                     x-text="t.action.label + ' ↗'"></a>
+                  <button type="button" x-show="!t.action.href && !!t.action.onAction" x-cloak @click="runToastAction(t)"
+                          data-testid="toast-action-btn"
+                          class="ml-1.5 inline-flex items-center gap-0.5 rounded px-1 font-semibold text-indigo-600 underline decoration-indigo-300 hover:text-indigo-800 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:text-indigo-400 dark:decoration-indigo-700 dark:hover:text-indigo-200"
+                          x-text="t.action.label"></button>
+                </span>
               </template>
             </span>
             <button type="button" @click="dismissToast(t.id)" aria-label="Dismiss notification"
@@ -194,9 +204,34 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
                   </svg>
                 </button>
-              </template>
-              <div class="my-1 border-t border-zinc-200 dark:border-zinc-700"></div>
-              <button type="button" role="menuitem" data-testid="new-project-item" @click="openNewProject()"
+               </template>
+               <!-- Archived section (AC4): GET /projects?archived=true returns ONLY archived
+                    projects, so they render as a separate labeled group with one action each —
+                    "Restore". No data-project-id on these rows: the e2e helper and the selected
+                    lookup target [data-project-id], and an archived row must never be pickable
+                    as the active project from here. -->
+                <!-- NOTE: Alpine's x-if clones only the FIRST element child of a
+                     template — the whole archived section shares one wrapper div. -->
+                <template x-if="archivedProjects.length > 0">
+                  <div class="flex w-full flex-col">
+                    <div class="my-1 border-t border-zinc-200 dark:border-zinc-700"></div>
+                    <span class="block px-3 pb-0.5 pt-1 text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Archived</span>
+                    <template x-for="p in archivedProjects" :key="p.id">
+                      <button type="button" role="menuitem" data-testid="project-restore" :data-restore-project-id="p.id"
+                              :disabled="projectSettingsBusy"
+                              @click="restoreProject(p.id)"
+                              class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-zinc-500 hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-400 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                              :title="'Restore ' + p.name">
+                        <svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h4l3-9 4 18 3-9h4" />
+                        </svg>
+                        <span class="min-w-0 flex-1 truncate" x-text="'Restore · ' + p.name"></span>
+                      </button>
+                    </template>
+                  </div>
+                </template>
+               <div class="my-1 border-t border-zinc-200 dark:border-zinc-700"></div>
+               <button type="button" role="menuitem" data-testid="new-project-item" @click="openNewProject()"
                       class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm font-medium hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:hover:bg-zinc-800">
                 + New project…
               </button>
@@ -484,6 +519,15 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       :title="'Switch to ' + (cardDensity === 'comfortable' ? 'compact' : 'comfortable') + ' card density'">
                 <span x-text="'Density: ' + (cardDensity === 'compact' ? 'Compact' : 'Comfortable')"></span>
               </button>
+
+              <!-- "Show archived" board view (AC3): swaps the columns' data source to the
+                   separately-fetched archived set; OFF restores the untouched live board. -->
+              <button type="button" @click="toggleShowArchived()" :aria-pressed="showArchived"
+                      data-testid="show-archived-toggle" aria-label="Show or hide archived tasks on the board"
+                      class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      :title="showArchived ? 'Hide archived tasks' : 'Show archived tasks'">
+                <span x-text="'Archived ' + (showArchived ? '(on)' : '(off)')"></span>
+              </button>
           </div>
         </div>
         </template>
@@ -739,6 +783,15 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                           :title="'Switch to ' + (cardDensity === 'comfortable' ? 'compact' : 'comfortable') + ' card density'">
                     <span x-text="'Density: ' + (cardDensity === 'compact' ? 'Compact' : 'Comfortable')"></span>
                   </button>
+
+                  <!-- "Show archived" board view (AC3) — mobile twin of the desktop toggle;
+                       only ONE exists in the DOM per viewport (x-if isMobile / !isMobile). -->
+                  <button type="button" @click="toggleShowArchived()" :aria-pressed="showArchived"
+                          data-testid="show-archived-toggle" aria-label="Show or hide archived tasks on the board"
+                          class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          :title="showArchived ? 'Hide archived tasks' : 'Show archived tasks'">
+                    <span x-text="'Archived ' + (showArchived ? '(on)' : '(off)')"></span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -920,11 +973,11 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                            for AT, so priority/assignee/due/blocker/claim badges were never announced. With
                            labelledby the name is just the title and every metadata badge stays real,
                            traversable DOM content; column status comes from the section heading. -->
-                      <article
-                        tabindex="0"
-                        :aria-labelledby="'card-title-' + task.id"
-                        draggable="true"
-                        @dragstart="onDragStart($event, task, col.status)"
+                       <article
+                         tabindex="0"
+                         :aria-labelledby="'card-title-' + task.id"
+                         :draggable="!showArchived"
+                         @dragstart="onDragStart($event, task, col.status)"
                         @dragend="onDragEnd()"
                         @touchstart.passive="onCardTouchStart($event, task)"
                         @touchmove="onCardTouchMove($event)"
@@ -972,15 +1025,22 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                                 anchor. Grouping them in one flex unit keeps justify-between pinning both
                                 to the card's right edge (previously the ⋮ sat alone mid-card between the
                                 title and the badge). -->
-                           <div class="flex shrink-0 items-center gap-1">
-                           <!-- explicit touch alternative to drag-and-drop: pick a target status.
-                                The ⋮ trigger and its dropdown share ONE relative wrapper: any click that
-                                misses both dismisses the menu (@click.outside → AC1), and the dropdown is
-                                absolutely positioned OUT of the card's flow, so opening it never reflows
-                                the card or pushes the cards below it down (AC2/AC3). -->
-                           <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1"
-                                 :class="priorityClass(task.priority)" x-text="'P' + task.priority"></span>
-                           <div class="relative shrink-0" data-testid="card-menu-anchor" @click.outside="cardMenuTaskId = null">
+                            <div class="flex shrink-0 items-center gap-1">
+                            <!-- AC3: in the archived view each card's ⋮ menu is replaced by a single
+                                 Unarchive action (the move menu is meaningless for archived rows). -->
+                            <button type="button" x-show="showArchived" x-cloak @click.stop="setTaskArchived(task.id, false)"
+                                    data-testid="unarchive-action" aria-label="Restore this task from the archive"
+                                    class="shrink-0 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:border-zinc-600 dark:bg-zinc-900 dark:text-indigo-400 dark:hover:bg-zinc-800">
+                              Unarchive
+                            </button>
+                            <!-- explicit touch alternative to drag-and-drop: pick a target status.
+                                 The ⋮ trigger and its dropdown share ONE relative wrapper: any click that
+                                 misses both dismisses the menu (@click.outside → AC1), and the dropdown is
+                                 absolutely positioned OUT of the card's flow, so opening it never reflows
+                                 the card or pushes the cards below it down (AC2/AC3). -->
+                            <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1"
+                                  :class="priorityClass(task.priority)" x-text="'P' + task.priority"></span>
+                            <div class="relative shrink-0" data-testid="card-menu-anchor" x-show="!showArchived" @click.outside="cardMenuTaskId = null">
                             <button type="button" @click.stop="toggleCardMenu(task.id)"
                                     data-testid="card-menu-toggle" aria-label="Move task to another status"
                                     :aria-expanded="cardMenuTaskId === task.id ? 'true' : 'false'"
@@ -1009,13 +1069,32 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                                         :class="st === col.status || !canMove(col.status, st)
                                           ? 'cursor-default border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400'
                                           : 'border-zinc-300 bg-white text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-zinc-500 dark:hover:bg-zinc-700'">
-                                  <span x-text="statusLabel(st)"></span>
-                                </button>
-                              </template>
+                                   <span x-text="statusLabel(st)"></span>
+                                 </button>
+                               </template>
+                                <!-- AC1: archive from the ⋮ menu — visually separated at the bottom,
+                                     below the status list. The whole anchor is hidden in the archived
+                                     view (x-show above); these extra guards only guard stale state. -->
+                                <!-- NOTE: Alpine's x-if clones only the FIRST element child of a
+                                     template — separator + button share one wrapper (matches the
+                                     menu's own flex-col gap-1 layout). -->
+                                <template x-if="!showArchived">
+                                  <div class="flex flex-col gap-1">
+                                    <div class="my-0.5 border-t border-zinc-200 dark:border-zinc-700"></div>
+                                    <button type="button" @click.stop="cardMenuTaskId = null; setTaskArchived(task.id, true)"
+                                            data-testid="card-menu-archive"
+                                            class="flex w-full items-center gap-1.5 rounded-md border border-red-200 bg-white px-2 py-1 text-left text-xs font-medium text-red-600 hover:border-red-300 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:border-red-900/60 dark:bg-zinc-800 dark:text-red-400 dark:hover:bg-zinc-700">
+                                      <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m14 0H3" />
+                                      </svg>
+                                      <span x-text="'Archive'"></span>
+                                    </button>
+                                  </div>
+                                </template>
+                             </div>
                             </div>
-                           </div>
-                           </div>
-                         </div>
+                            </div>
+                          </div>
                         <!-- swipe-to-status hint: shown while the card is being swiped on touch -->
                         <div x-show="swiping(task.id)" x-cloak class="pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-md bg-zinc-900/85 px-2 py-1 text-xs font-medium text-white shadow"
                              :class="swipeDirection(task.id) === 'right' ? 'right-1.5' : 'left-1.5'"
@@ -1226,17 +1305,49 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                                 class="flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700">
                           <span x-text="'Show all (' + (col.totalCount ?? col.tasks.length) + ')'"></span>
                         </button>
-                        <button type="button" x-show="doneLimit > 20"
-                                @click="collapseDone()"
-                                data-testid="done-collapse"
-                                class="rounded-md border border-zinc-300 bg-zinc-50 px-2.5 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                                :class="col.tasks.length >= (col.totalCount ?? col.tasks.length) ? 'w-full' : ''">
-                          Collapse
-                        </button>
-                      </div>
-                    </div>
-                    <div
-                      x-show="dragOverStatus === col.status && draggedFromStatus !== col.status"
+                         <button type="button" x-show="doneLimit > 20"
+                                 @click="collapseDone()"
+                                 data-testid="done-collapse"
+                                 class="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                                 :class="col.tasks.length >= (col.totalCount ?? col.tasks.length) ? 'w-full' : ''">
+                           Collapse
+                         </button>
+                       </div>
+                     </div>
+                      <!-- AC2: bulk "Archive all Done" — a SIBLING of the pagination footer with its own
+                           x-show: appears whenever the done column has ANY tasks (col.totalCount is the
+                           UNCAPED count, so older hidden cards are included too), never during search,
+                           and never in the archived view. Two-step inline confirm prevents accidental
+                           mass archival; busy state disables both steps while the sequential run goes. -->
+                      <div x-show="col.status === 'done' && (col.totalCount ?? col.tasks.length) > 0 && filterSearch.trim() === '' && !showArchived" x-cloak
+                           class="pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                       <button type="button" x-show="!archiveAllDoneConfirmOpen" x-cloak
+                               @click="openArchiveAllDoneConfirm()"
+                               :disabled="archiveAllDoneBusy"
+                               data-testid="archive-all-done"
+                               class="w-full rounded-md border border-red-200 bg-white px-2 py-1.5 text-xs font-medium text-red-600 transition hover:border-red-300 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-zinc-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900/60 dark:bg-zinc-800 dark:text-red-400 dark:hover:bg-zinc-700">
+                         <span x-text="'Archive all done (' + (col.totalCount ?? col.tasks.length) + ')'"></span>
+                       </button>
+                       <div x-show="archiveAllDoneConfirmOpen" x-cloak data-testid="archive-all-done-confirm-row"
+                            class="flex items-center justify-between gap-2 rounded-md bg-red-50 px-2 py-1.5 dark:bg-zinc-800">
+                         <span class="text-xs font-medium text-red-700 dark:text-red-300"
+                               x-text="'Archive all ' + (col.totalCount ?? col.tasks.length) + ' done tasks?'"></span>
+                         <span class="flex shrink-0 items-center gap-1.5">
+                           <button type="button" @click="cancelArchiveAllDoneConfirm()" :disabled="archiveAllDoneBusy"
+                                   data-testid="archive-all-done-cancel"
+                                   class="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800">
+                             Cancel
+                           </button>
+                           <button type="button" @click="confirmArchiveAllDone()" :disabled="archiveAllDoneBusy"
+                                   data-testid="archive-all-done-confirm"
+                                   class="rounded-md border border-red-600 bg-red-600 px-2 py-1 text-xs font-medium text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">
+                             <span x-text="archiveAllDoneBusy ? 'Archiving…' : 'Archive all'"></span>
+                           </button>
+                         </span>
+                       </div>
+                     </div>
+                     <div
+                       x-show="dragOverStatus === col.status && draggedFromStatus !== col.status"
                       x-cloak
                        class="pointer-events-none rounded-lg border-2 border-dashed border-indigo-300 bg-indigo-50/70 p-3 text-center text-xs font-medium text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300"
                      >
@@ -1244,10 +1355,12 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     </div>
                     <p x-show="col.tasks.length === 0 && !(dragOverStatus === col.status && draggedFromStatus !== col.status)" x-cloak
                         class="px-1 py-3 text-center text-xs italic text-zinc-600 dark:text-zinc-400">No tasks</p>
-                     <button type="button" @click="openNewTask(col.status)"
-                              class="mt-0.5 rounded-md border border-dashed border-zinc-300 px-2 py-1.5 text-xs font-medium text-zinc-600 transition hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500 dark:hover:text-zinc-200">
-                      + Add task to <span x-text="col.label"></span>
-                    </button>
+                      <!-- Hidden in the archived view: creating a task into an archive-only column is
+                           meaningless (it would land back on the live board anyway). -->
+                      <button type="button" x-show="!showArchived" @click="openNewTask(col.status)"
+                               class="mt-0.5 rounded-md border border-dashed border-zinc-300 px-2 py-1.5 text-xs font-medium text-zinc-600 transition hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500 dark:hover:text-zinc-200">
+                       + Add task to <span x-text="col.label"></span>
+                     </button>
                   </div>
                 </section>
               </template>
@@ -1711,15 +1824,27 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       </button>
                     </div>
                     <!-- Drawer mode: entry point to the /tasks/<id> full-page view. -->
-                     <button type="button" x-show="!fullPageOpen" x-cloak @click="openFullPage()"
-                             data-testid="open-fullpage-btn" title="Open this task as a full page (shareable /tasks/&lt;id&gt; URL)"
-                             aria-label="Open full page"
-                             class="btn-ghost flex shrink-0 items-center px-2.5 py-1">
-                       <svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 9V6a2 2 0 012-2h3M20 15v3a2 2 0 01-2 2h-3" />
-                       </svg>
-                     </button>
-                     <button type="button" @click="startEditing()" aria-label="Edit" title="Edit task details"
+                      <button type="button" x-show="!fullPageOpen" x-cloak @click="openFullPage()"
+                              data-testid="open-fullpage-btn" title="Open this task as a full page (shareable /tasks/&lt;id&gt; URL)"
+                              aria-label="Open full page"
+                              class="btn-ghost flex shrink-0 items-center px-2.5 py-1">
+                        <svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 9V6a2 2 0 012-2h3M20 15v3a2 2 0 01-2 2h-3" />
+                        </svg>
+                      </button>
+                      <!-- AC1: archive / unarchive from the detail header. The label follows the
+                           loaded row's `archived` flag (set by setTaskArchived and kept fresh by
+                           refreshDetail), so opening an archived task shows "Unarchive". -->
+                      <button type="button" @click="setTaskArchived(detail.id, !detail.archived)"
+                              data-testid="task-detail-archive"
+                              :title="detail.archived ? 'Restore this task from the archive' : 'Archive this task (Undo available briefly)'"
+                              class="btn-ghost flex shrink-0 items-center gap-1.5 px-2.5 py-1 text-xs font-medium">
+                        <svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m14 0H3" />
+                        </svg>
+                        <span x-text="detail.archived ? 'Unarchive' : 'Archive'"></span>
+                      </button>
+                      <button type="button" @click="startEditing()" aria-label="Edit" title="Edit task details"
                              class="btn-ghost flex shrink-0 items-center px-2.5 py-1">
                        <svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z" />

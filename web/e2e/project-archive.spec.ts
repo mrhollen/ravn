@@ -253,10 +253,18 @@ test.describe('Project Archive in Settings Menu (01M4YTXWRBC4Q0FEDJPYBERWPJ)', (
     // Project selection automatically falls back to an active project (not Project B)
     await expect(trigger).not.toContainText(projectNameB);
 
-    // Open dropdown: Project B must NO LONGER appear in the projects dropdown
+    // Open dropdown: Project B must NO LONGER appear among the PICKABLE project
+    // options. Scope to [data-testid="project-option"]: the name now also appears
+    // below in the menu's Archived section ("Restore · <name>", a row carrying
+    // data-restore-project-id, not data-project-id), which an unscoped text match
+    // would falsely count.
     await trigger.click();
-    await expect(menu.getByText(projectNameA)).toBeVisible();
-    await expect(menu.getByText(projectNameB)).toHaveCount(0);
+    await expect(menu.getByTestId('project-option').getByText(projectNameA)).toBeVisible();
+    await expect(menu.getByTestId('project-option').getByText(projectNameB)).toHaveCount(0);
+    // The archived section is where B now lives, with its dedicated Restore action.
+    const restoreRow = menu.getByTestId('project-restore');
+    await expect(restoreRow).toHaveCount(1);
+    await expect(restoreRow).toContainText(projectNameB);
     await page.screenshot({ path: path.join(testInfo.outputDir, 'ac4-project-archived-removed-from-dropdown.png') });
 
     await page.keyboard.press('Escape');

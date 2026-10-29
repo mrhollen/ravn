@@ -414,7 +414,9 @@ export interface Toast {
   id: number;
   msg: string;
   kind: "error" | "info";
-  action?: { label: string; href: string };
+  /** `href` renders an external <a>; `onAction` renders a <button> that runs a
+   *  local JS callback (e.g. Undo) instead — exactly one of the two is set. */
+  action?: { label: string; href?: string; onAction?: () => void };
   /** Optional border class to override or customize the border. */
   borderClass?: string;
   /** When true, the toast will NOT auto-dismiss after 6.5s. */
@@ -505,7 +507,7 @@ export function ravnApp() {
     toast(
       msg: string,
       kind: "error" | "info" = "info",
-      action?: { label: string; href: string },
+      action?: { label: string; href?: string; onAction?: () => void },
       options?: {
         persistent?: boolean;
         borderClass?: string;
@@ -543,6 +545,24 @@ export function ravnApp() {
       setTimeout(() => {
         this.toasts = this.toasts.filter((t) => t.id !== id);
       }, 280); // leave transition is duration-200; keep the margin generous
+    },
+
+    /** Runs a toast's local JS action (the Undo button — `action.onAction`) and
+     *  dismisses the toast. Async callbacks are allowed: the toast leaves either
+     *  way, and the action reports its own result with follow-up toasts. */
+    runToastAction(t: Toast): void {
+      if (!t.action?.onAction) return;
+      try {
+        // `() => void` accepts promise-returning callbacks too; detect at runtime
+        // so async failures still surface as an error toast.
+        const r = t.action.onAction() as unknown;
+        if (r && typeof (r as Promise<void>).catch === "function") {
+          (r as Promise<void>).catch((e) => this.toast(errMsg(e), "error"));
+        }
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      }
+      this.dismissToast(t.id);
     },
 
     // ------------------------------------------------------------------ auth token
@@ -622,6 +642,10 @@ export function ravnApp() {
 
     // ---------------------------------------------------------------- projects
     projects: [] as ProjectWithCounts[],
+    /** Archived projects (GET /projects?archived=true returns ONLY archived
+     *  rows, so the UI keeps a SEPARATE list from `projects`). Rendered under an
+     *  "Archived" section in the project menu with a one-button restore action. */
+    archivedProjects: [] as ProjectWithCounts[],
     loadError: "",
     /** Boot-error screen (ticket 01M3MMYP938G972KY8NF7RGMQR): the initial
      *  projects fetch failed. The stored selection is kept EXACTLY as it is —
@@ -660,11 +684,23 @@ export function ravnApp() {
     async loadProjectsCore(silent: boolean): Promise<void> {
       const token = this._projectSeq.next(); // newest initiated list-projects wins
       try {
-        const res = await api.listProjects();
+        // Two SEPARATE fetches: the endpoint never combines open + archived in
+        // one response (archived=true is a strict filter), so each list gets its
+        // own call. They run in parallel — total latency stays ~1 RTT. A failed
+        // ARCHIVED fetch degrades gracefully: the restore section simply keeps
+        // showing the last known list instead of erroring the boot path.
+        const [res, archivedRes] = await Promise.all([
+          api.listProjects(),
+          api.listProjects(true).catch((e) => {
+            if (!ApiError.isUnauthorized(e)) console.warn("archived projects fetch failed:", e);
+            return null; // keep the previous archivedProjects on failure
+          }),
+        ]);
         // A slower EARLIER request must never overwrite counts a newer request
         // already delivered (out-of-order network responses).
         if (!this._projectSeq.isFresh(token)) return;
         this.projects = res.projects;
+        if (archivedRes) this.archivedProjects = archivedRes.projects;
         if (!silent) this.loadError = "";
       } catch (e) {
         if (!silent) this.loadError = errMsg(e);
@@ -1197,6 +1233,25 @@ export function ravnApp() {
       }
     },
 
+    /** Restore an ARCHIVED project from the project menu's "Archived" section:
+     *  PUT {archived:false}, then refresh BOTH project lists. The menu stays
+     *  open — the row just disappears (it left `archivedProjects`) and the
+     *  project reappears as a normal option. No board work is needed unless the
+     *  user picks it next (pickProject → selectProject handles that). */
+    async restoreProject(projectId: string): Promise<void> {
+      if (!projectId || this.projectSettingsBusy) return;
+      this.projectSettingsBusy = true; // shared busy flag — prevents a double-fire on the same row
+      try {
+        await api.updateProject(projectId, { actor: this.actor(), archived: false });
+        await this.loadProjects();
+        this.toast("Project restored");
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.projectSettingsBusy = false;
+      }
+    },
+
     async saveProjectSettings(): Promise<void> {
       const name = this.projectSettingsForm.name.trim();
       if (!this.selectedProjectId || !name || this.projectSettingsBusy) return;
@@ -1400,6 +1455,298 @@ export function ravnApp() {
 
     toggleCardDensity(): void {
       this.setCardDensity(this.cardDensity === "comfortable" ? "compact" : "comfortable");
+    },
+
+    // ---------------------------------------------------------- archive mgmt
+    // Board-level archive support (task 01M5XSNN2KA876TR0QGE79YFPT): single-task
+    // archive/unarchive with Undo, bulk "Archive all Done", and the "Show
+    // archived" view mode. Archived rows live in a SEPARATE data source from
+    // `board` — the board endpoint (allOpenTasks) only ever returns NON-archived
+    // tasks, so the two can never mix; toggling OFF restores the previous board
+    // EXACTLY because `board` was never mutated by this feature (bulk archive
+    // removes rows, which is the correct post-archive state anyway).
+    showArchived: false,
+    /** Per-status groups of ARCHIVED tasks, fetched with listTasks({archived:true}).
+     *  null = not loaded yet. Kept after toggling OFF so re-enabling is instant;
+     *  refreshed by any archive/unarchive that changes the archived set. */
+    archivedBoardTasks: null as Record<Status, TaskSummary[]> | null,
+    /** Guards the archived-view fetch: rapid toggle-off/toggle-on must let only
+     *  the NEWEST fetch land (mirrors _boardSeq / _searchSeq). */
+    _archivedSeq: createSequenceGuard(),
+    /** Done-column bulk archive confirmation step (two-click confirm inline in
+     *  the column footer). Distinct from the PROJECT archive's showArchiveConfirm. */
+    archiveAllDoneConfirmOpen: false,
+    archiveAllDoneBusy: false,
+
+    /** True when the columns should render the ARCHIVED data source instead of
+     *  the live board (and the done cap is bypassed — archived sets are small
+     *  and there is no "show more" affordance in that mode). */
+    archivedColumns(): Record<Status, TaskSummary[]> | null {
+      return this.showArchived ? this.archivedBoardTasks : null;
+    },
+
+    /** Fetch the selected project's full archived set (paged at 100/page — the
+     *  API max) grouped by status. Returns null when superseded by a newer load
+     *  or a project switch mid-flight, so callers know NOT to apply. */
+    async _fetchArchivedTasks(projectId: string): Promise<Record<Status, TaskSummary[]> | null> {
+      const token = this._archivedSeq.next();
+      const out: TaskSummary[] = [];
+      let offset = 0;
+      for (;;) {
+        const res = await api.listTasks({ project_id: projectId, archived: true, limit: 100, offset });
+        const page = res.tasks ?? [];
+        out.push(...page);
+        offset += page.length;
+        if (offset >= (res.total ?? 0) || page.length === 0) break;
+      }
+      // Superseded by a newer load (or the user switched projects mid-flight):
+      // applying this response would show the wrong project's rows.
+      if (!this._archivedSeq.isFresh(token) || projectId !== this.selectedProjectId) return null;
+      const tasks: Record<Status, TaskSummary[]> = { todo: [], doing: [], done: [] };
+      for (const t of out) tasks[t.status].push(t);
+      return tasks;
+    },
+
+    /** Toggle the "Show archived" board view. OFF is a pure flag flip — the
+     *  untouched `board` renders again, byte-for-byte (AC3's exact-restore
+     *  guarantee). ON fetches the full archived set for the selected project and
+     *  groups it by status. Failure reverts the flag and toasts. */
+    async toggleShowArchived(): Promise<void> {
+      if (this.showArchived) {
+        this.showArchived = false; // instant restore of the previous board
+        return;
+      }
+      const projectId = this.selectedProjectId;
+      if (!projectId) return;
+      try {
+        const tasks = await this._fetchArchivedTasks(projectId);
+        if (tasks === null) return; // superseded — do not flip, do not apply
+        this.archivedBoardTasks = tasks;
+        this.showArchived = true;
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      }
+    },
+
+    /** Re-fetch the archived view after a mutation that changed its contents
+     *  (unarchiving from within it, or an archive we just performed). Only runs
+     *  while the mode is ON; failures are silent — the toasts on the mutations
+     *  themselves already told the user what happened. */
+    async refreshArchivedView(): Promise<void> {
+      if (!this.showArchived || !this.selectedProjectId) return;
+      try {
+        const tasks = await this._fetchArchivedTasks(this.selectedProjectId);
+        if (tasks !== null) this.archivedBoardTasks = tasks;
+      } catch {
+        /* keep the last known view */
+      }
+    },
+
+    /** AC1: archive or unarchive ONE task — from the card ⋮ menu / the archived
+     *  view's per-card Unarchive, or from the task detail header. Reuses the
+     *  move flow's concurrency primitives (busyTaskIds lock) and its 409
+     *  re-read + retry-once discipline. Archive is optimistic (the card leaves
+     *  its column immediately) with rollback on failure and a ~5s Undo toast;
+     *  unarchive relies on the post-PATCH board reload for the card's return. */
+    async setTaskArchived(taskId: string, archived: boolean): Promise<void> {
+      // Locate the row: live board card, ARCHIVED-view card (when that mode is
+      // ON the cards come from a different array), or the open detail payload.
+      let summary: TaskSummary | null = null;
+      let inBoardStatus: Status | null = null;
+      if (this.board) {
+        for (const s of STATUSES) {
+          const found = this.board.tasks[s]?.find((t) => t.id === taskId);
+          if (found) {
+            summary = found;
+            inBoardStatus = s;
+            break;
+          }
+        }
+      }
+      let inArchivedStatus: Status | null = null;
+      if (!summary && this.showArchived && this.archivedBoardTasks) {
+        for (const s of STATUSES) {
+          const found = this.archivedBoardTasks[s]?.find((t) => t.id === taskId);
+          if (found) {
+            summary = found;
+            inArchivedStatus = s;
+            break;
+          }
+        }
+      }
+      const detailOpen = !!this.detail && this.detail.id === taskId;
+      if (!summary && !detailOpen) return;
+
+      // Per-task in-flight lock (shared with the move flow): the same id never
+      // double-fires; every OTHER card stays interactive meanwhile.
+      if (!beginMove(this.busyTaskIds, taskId)) {
+        this.toast("That task is still busy — one moment.", "info");
+        return;
+      }
+
+      const versionToUse = summary?.version ?? (this.detail ? this.detail.version : 0);
+      const patch = (version: number): Promise<TaskSummary> =>
+        api.updateTask(taskId, { actor: this.actor(), version, archived });
+
+      // Optimistic removal for ARCHIVE: the card leaves its column now. Failure
+      // rolls this back; success re-syncs with loadBoard regardless. Unarchive
+      // removes from the archived view instead (the card "returns" to the live
+      // board on the reload — we don't guess its post-refresh position).
+      type Snap = { where: "board" | "archived"; status: Status; task: TaskSummary };
+      let snap: Snap | null = null;
+      if (archived && summary && inBoardStatus && this.board) {
+        snap = { where: "board", status: inBoardStatus, task: summary };
+        this.board.tasks[inBoardStatus] = this.board.tasks[inBoardStatus].filter((t) => t.id !== taskId);
+        if ((this.board.counts[inBoardStatus] ?? 0) > 0) this.board.counts[inBoardStatus]--;
+      } else if (!archived && summary && inArchivedStatus && this.archivedBoardTasks) {
+        snap = { where: "archived", status: inArchivedStatus, task: summary };
+        this.archivedBoardTasks[inArchivedStatus] = this.archivedBoardTasks[inArchivedStatus].filter((t) => t.id !== taskId);
+      }
+      const rollbackSnap = (): void => {
+        if (!snap) return;
+        if (snap.where === "board" && this.board) {
+          this.board.tasks[snap.status] = [...this.board.tasks[snap.status], snap.task];
+          this.board.counts[snap.status] = (this.board.counts[snap.status] ?? 0) + 1;
+        } else if (snap.where === "archived" && this.archivedBoardTasks) {
+          this.archivedBoardTasks[snap.status] = [...this.archivedBoardTasks[snap.status], snap.task];
+        }
+      };
+
+      const resync = (): Promise<void> =>
+        (async () => {
+          await Promise.all([
+            detailOpen ? this.refreshDetail(true) : undefined,
+            this.loadBoard(true),
+            this.showArchived ? this.refreshArchivedView() : undefined,
+          ]);
+        })();
+
+      try {
+        const updated = await patch(versionToUse);
+        if (detailOpen && this.detail) this.detail.archived = archived;
+        await resync();
+        if (archived) {
+          // Undo window = the toast's default auto-expiry (~6.5s). Undo re-applies
+          // with the FRESH version returned by THIS patch, then re-syncs everything.
+          const undoVersion = updated.version;
+          this.toast("Task archived", "info", {
+            label: "Undo",
+            onAction: () => this._undoArchive(taskId, undoVersion),
+          });
+        } else {
+          this.toast("Task restored from archive");
+        }
+      } catch (e) {
+        if (ApiError.isVersionConflict(e)) {
+          // Concurrent edit elsewhere — re-read the fresh row and retry ONCE.
+          try {
+            const fresh = await api.getTask(taskId, { commentLimit: 1 });
+            if (detailOpen && this.detail) this.applyDetail(fresh);
+            if (fresh.archived !== archived) {
+              await patch(fresh.version);
+            }
+            await resync();
+            this.toast("Changed elsewhere — retried with the fresh version.", "info");
+          } catch (e2) {
+            rollbackSnap();
+            await Promise.all([
+              detailOpen ? this.refreshDetail(true).catch(() => undefined) : Promise.resolve(),
+              this.loadBoard(true).catch(() => undefined),
+            ]);
+            if (ApiError.isVersionConflict(e2)) {
+              this.toast("Changed elsewhere — refreshed (your change was not applied).", "info");
+            } else {
+              this.toast(errMsg(e2), "error");
+            }
+          }
+        } else {
+          rollbackSnap();
+          await Promise.all([
+            detailOpen ? this.refreshDetail(true).catch(() => undefined) : Promise.resolve(),
+            this.loadBoard(true).catch(() => undefined),
+          ]);
+          this.toast(errMsg(e), "error");
+        }
+      } finally {
+        endMove(this.busyTaskIds, taskId);
+      }
+    },
+
+    /** The Undo action behind the archive toast: re-apply archived:false with
+     *  the fresh version from the original patch. Throws on failure so
+     *  runToastAction surfaces an error toast (the board reloads to reality). */
+    async _undoArchive(taskId: string, version: number): Promise<void> {
+      try {
+        await api.updateTask(taskId, { actor: this.actor(), version, archived: false });
+        await Promise.all([
+          this.loadBoard(true),
+          this.showArchived ? this.refreshArchivedView() : Promise.resolve(),
+        ]);
+      } catch (e) {
+        await this.loadBoard(true).catch(() => undefined);
+        throw e;
+      }
+    },
+
+    // ------------------------------------------------- "Archive all Done" (bulk)
+    openArchiveAllDoneConfirm(): void {
+      this.archiveAllDoneConfirmOpen = true;
+    },
+
+    cancelArchiveAllDoneConfirm(): void {
+      this.archiveAllDoneConfirmOpen = false;
+    },
+
+    /** AC2: sequentially archive EVERY done task of the project (the full
+     *  board.tasks.done list — the cap only limits RENDERING, so hidden older
+     *  cards are archived too). Each row is a version-guarded PATCH; a 409
+     *  re-reads that ONE task and retries it once. Optimistic removal happens
+     *  per success; a final silent reload settles counts/blocked state. */
+    async confirmArchiveAllDone(): Promise<void> {
+      if (this.archiveAllDoneBusy || !this.board) return;
+      const done = [...(this.board.tasks.done ?? [])];
+      this.archiveAllDoneConfirmOpen = false;
+      if (done.length === 0) return;
+      this.archiveAllDoneBusy = true;
+      let ok = 0;
+      let failed = 0;
+      try {
+        for (const t of done) {
+          const removeLocal = (): void => {
+            if (!this.board) return;
+            this.board.tasks.done = this.board.tasks.done.filter((x) => x.id !== t.id);
+            if ((this.board.counts.done ?? 0) > 0) this.board.counts.done--;
+          };
+          try {
+            await api.updateTask(t.id, { actor: this.actor(), version: t.version, archived: true });
+            ok++;
+            removeLocal();
+          } catch (e) {
+            if (ApiError.isVersionConflict(e)) {
+              // Stale version: re-read board state for THIS task and retry once.
+              try {
+                const fresh = await api.getTask(t.id, { commentLimit: 1 });
+                if (!fresh.archived) {
+                  await api.updateTask(t.id, { actor: this.actor(), version: fresh.version, archived: true });
+                }
+                ok++;
+                removeLocal();
+              } catch {
+                failed++;
+              }
+            } else {
+              failed++;
+            }
+          }
+        }
+      } finally {
+        this.archiveAllDoneBusy = false;
+      }
+      await this.loadBoard(true).catch(() => undefined);
+      if (this.showArchived) await this.refreshArchivedView();
+      const n = ok === 1 ? "task" : "tasks";
+      if (failed === 0) this.toast(`Archived ${ok} done ${n}`);
+      else this.toast(`Archived ${ok} done ${n} · ${failed} failed`, "error");
     },
 
     // ---------------------------------------------------- done column pagination
@@ -1701,6 +2048,9 @@ export function ravnApp() {
      *  column renders zero of them. A truly empty project keeps its plain
      *  empty look (no banner) so the two states stay distinguishable. */
     showFilteredEmptyState(): boolean {
+      // In the archived view the banner's premise (filters hid the LIVE board's
+      // tasks) is false — a zero-count archived set is just an empty archive.
+      if (this.showArchived) return false;
       if (!this.hasActiveFilters() || !this.board) return false;
       return this.totalTaskCount() > 0 && this.visibleTaskCount() === 0;
     },
@@ -1725,8 +2075,12 @@ export function ravnApp() {
 
     columns(): { status: Status; label: string; tasks: TaskSummary[]; totalCount: number }[] {
       const b = this.board;
+      // "Show archived" swaps the DATA SOURCE only (same client filters, same
+      // sort): live board rows vs the separately-fetched archived rows. The two
+      // sets are disjoint server-side, so no per-row archival check is needed.
+      const archived = this.archivedColumns();
       return STATUSES.map((s) => {
-        let tasks = b ? b.tasks[s] ?? [] : [];
+        let tasks = archived ? archived[s] : (b ? b.tasks[s] ?? [] : []);
         if (this.filterPriority !== "") {
           const p = Number(this.filterPriority);
           tasks = tasks.filter((t) => t.priority === p);
@@ -1810,10 +2164,12 @@ export function ravnApp() {
         // expanded it to beforehand). The header count pill reads totalCount —
         // the FULL post-filter count either way — so it stays accurate.
         const totalCount = tasks.length;
-        // Bypassed while a search is active: see comment above.
+        // Bypassed while a search is active: see comment above. ALSO bypassed in
+        // the archived view: archived sets are small, that mode has no
+        // "show more" affordance, and capping would silently hide rows.
         const searching = q !== "";
         const renderedTasks =
-          s === "done" && !searching && totalCount > this.doneLimit
+          s === "done" && !searching && !this.showArchived && totalCount > this.doneLimit
             ? tasks.slice(0, this.doneLimit)
             : tasks;
 
@@ -1832,6 +2188,13 @@ export function ravnApp() {
       } catch { /* ignore */ }
       this.board = null;
       this.doneLimit = DEFAULT_DONE_LIMIT;
+      // Archived view belongs to the project being LEFT: exit the mode, drop its
+      // data, and retire any in-flight archived fetch (its rows describe the
+      // previous project). Mirrors how selectProject invalidates board/search.
+      this.showArchived = false;
+      this.archivedBoardTasks = null;
+      this.archiveAllDoneConfirmOpen = false;
+      this._archivedSeq.next();
       this.openCodeOptions = null;
       this.openCodeOptionsProjectId = "";
       // The blocked-state cache belongs to the project being LEFT: reset it,
@@ -3088,6 +3451,13 @@ export function ravnApp() {
     },
 
     onDragStart(e: DragEvent, task: TaskSummary, fromStatus: Status): void {
+      // The archived view is read-only for positioning: its cards live in a
+      // separate array the optimistic move code doesn't own, so drag/swipe is
+      // disabled there (Unarchive is the only action available).
+      if (this.showArchived) {
+        e.preventDefault();
+        return;
+      }
       // Only the card's OWN in-flight move blocks it (per-task lock); tell the
       // user instead of silently refusing the drag.
       if (this.isTaskBusy(task.id)) {
@@ -3209,6 +3579,8 @@ export function ravnApp() {
     },
 
     onCardTouchStart(e: TouchEvent, task: TaskSummary): void {
+      // Archived view disables swipe-to-move (see onDragStart).
+      if (this.showArchived) return;
       if (e.touches.length !== 1) return;
       const t = e.touches[0];
       this.swipeState = {

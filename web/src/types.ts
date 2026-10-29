@@ -360,6 +360,7 @@ export interface ListTasksParams {
   priority?: number;
   due_before?: string;
   created_after?: string;
+  archived?: boolean; // true = ONLY archived tasks (default lists open ones)
   limit?: number; // default 20, max 100 (clamped)
   offset?: number; // default 0
 }

@@ -284,8 +284,11 @@ function put<T>(path: string, payload: unknown): Promise<T> {
 
 export const api = {
   // --- projects -------------------------------------------------------------
-  listProjects(): Promise<ListProjectsResponse> {
-    return request<ListProjectsResponse>("/projects");
+  /** Project list. `includeArchived` flips the endpoint filter: without it the
+   *  server returns only OPEN projects; with it, ONLY archived ones — they are
+   *  never combined in one response, so the UI keeps two separate lists. */
+  listProjects(includeArchived?: boolean): Promise<ListProjectsResponse> {
+    return request<ListProjectsResponse>(includeArchived ? "/projects?archived=true" : "/projects");
   },
 
   createProject(req: CreateProjectReq): Promise<Project> {

@@ -2135,7 +2135,10 @@ test("InitIdempotence: concurrent double init() shares ONE boot — fetch, ticke
     assert.equal(p1, p2, "both calls return the SAME memoized boot promise");
 
     assert.equal(app.appBooted, true, "boot completed and marked booted");
-    assert.equal(listCalls, 1, "list-projects fetched exactly once");
+    // ONE shared boot fetches the projects list TWICE by design (the open list
+    // plus ?archived=true for the Archived section); the memo means a doubled
+    // init() still causes exactly this single pair of calls.
+    assert.equal(listCalls, 2, "list-projects fetched exactly twice (open + archived) across both calls");
     assert.equal(boardCalls, 1, "board loaded exactly once");
     assert.equal(h.getEsConstructed(), 1, "EventSource constructed exactly once");
     assert.equal(sseTelemetry.opened, 1, "SSE telemetry: one stream opened");
@@ -2151,7 +2154,7 @@ test("InitIdempotence: concurrent double init() shares ONE boot — fetch, ticke
     // A third call (any future directive double-run) still no-ops.
     const p3 = await app.init();
     assert.equal(p3, p1, "a later init() keeps returning the first boot's promise");
-    assert.equal(listCalls, 1);
+    assert.equal(listCalls, 2); // still just the ONE shared boot's open + archived pair
     assert.equal(boardCalls, 1);
     assert.equal(h.getEsConstructed(), 1);
     assert.equal(h.intervalCalls.length, 1);
@@ -2185,7 +2188,10 @@ test("InitIdempotence: sequential double init() also shares ONE boot", async () 
     const p2 = await app.init();
     assert.equal(p2, p1, "the second call returns the SAME (completed) boot promise");
 
-    assert.equal(listCalls, 1, "list-projects fetched exactly once across both calls");
+    // ONE shared boot fetches the projects list TWICE by design (the open list
+    // plus ?archived=true for the project menu's Archived section); a second
+    // init() adds no further fetch because it reuses the memoized boot.
+    assert.equal(listCalls, 2, "list-projects fetched exactly twice across both calls (open + archived)");
     assert.equal(h.getEsConstructed(), 1, "EventSource constructed exactly once");
     assert.equal(sseTelemetry.openCount(), 1, "exactly one open stream at steady state");
     assert.equal(h.intervalCalls.length, 1, "ticker created exactly once");
@@ -2222,7 +2228,10 @@ test("InitIdempotence: a failed boot keeps the memo — repeated init() no-ops a
     // exclusively retryBoot()'s job — the memo survives a failed boot.
     const p2 = await app.init();
     assert.equal(p2, p1, "a repeat init() returns the first (failed) boot's promise");
-    assert.equal(listCalls, 1, "no duplicate projects fetch from the repeated init()");
+    // Each boot performs TWO projects-list fetches by design: the open list plus
+    // the archived list (?archived=true, feeding the project menu's Archived
+    // section). The memo means the repeated init() adds NONE of those.
+    assert.equal(listCalls, 2, "no duplicate projects fetch from the repeated init()");
 
     // And Retry recovers with the same continuation as a normal boot.
     (api as any).listProjects = async () => ({
@@ -3772,6 +3781,402 @@ test("FullTextSearch: index.html renders the match-source chip and hides done pa
   // listTasksParams (the board's own fetch) must NOT leak the search term —
   // the board stays unfiltered; only the debounced api.listTasks call searches.
   assert.equal(FULLTEXT_SEARCH_LIMIT >= 100, true, "full-text page requests a full server page");
+});
+
+// ===========================================================================
+// Archive management (Rävn task 01M5XSNN2KA876TR0QGE79YFPT)
+// Task archive/unarchive (+Undo), bulk "Archive all Done", the "Show archived"
+// board view, and the project menu's Archived/Restore section.
+// ===========================================================================
+
+function archTask(id: string, status: "todo" | "doing" | "done", version = 1): any {
+  return {
+    id, title: "T-" + id, description: null, status, priority: 0, due_at: null,
+    claimed_by: null, claim_expires_at: null, assigned_to: null,
+    ac_total: 0, comment_count: 0, blocked_by: [], archived: false, version,
+  };
+}
+
+function archBoard(projectId: string, byStatus: Record<string, any[]> = {}): any {
+  return {
+    project_id: projectId,
+    tasks: { todo: byStatus.todo ?? [], doing: byStatus.doing ?? [], done: byStatus.done ?? [] },
+    counts: {
+      todo: (byStatus.todo ?? []).length,
+      doing: (byStatus.doing ?? []).length,
+      done: (byStatus.done ?? []).length,
+    },
+  };
+}
+
+/** Hermetic app instance with archive-relevant collaborators stubbed. */
+function archApp() {
+  const app = ravnApp() as any;
+  app.selectedProjectId = "proj-1";
+  app.detail = null;
+  app.toasts = [];
+  // Keep resync hermetic: record board reloads instead of hitting the network.
+  app.loadBoardCalls = 0;
+  app.loadBoard = async () => { app.loadBoardCalls++; };
+  app.refreshArchivedViewCalls = 0;
+  app.refreshArchivedView = async () => { app.refreshArchivedViewCalls++; };
+  return app;
+}
+
+function lastToast(app: any, needle?: string): any {
+  const t = [...app.toasts].reverse().find((x: any) => (needle ? x.msg.includes(needle) : true));
+  assert.ok(t, `expected a toast${needle ? ` matching "${needle}"` : ""}; got ${JSON.stringify(app.toasts.map((x: any) => x.msg))}`);
+  return t;
+}
+
+test("ArchiveMgmt: api.listProjects(true) targets /projects?archived=true; listTasks serializes archived=true", async () => {
+  const origFetch = (globalThis as any).fetch;
+  const urls: string[] = [];
+  try {
+    (globalThis as any).fetch = async (url: string | URL, init?: any) => {
+      urls.push(String(url));
+      if (String(url).includes("/projects")) {
+        return new Response(JSON.stringify({ projects: [], total: 0 }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ tasks: [], total: 0 }), { status: 200 });
+    };
+    await api.listProjects(true);
+    await api.listTasks({ project_id: "proj-1", archived: true, limit: 100, offset: 0 });
+  } finally {
+    if (origFetch === undefined) delete (globalThis as any).fetch;
+    else (globalThis as any).fetch = origFetch;
+  }
+  assert.match(urls[0], /\/projects\?archived=true$/, "includeArchived flips the query filter");
+  const taskUrl = urls[1];
+  assert.match(taskUrl, /archived=true/, "listTasks passes archived=true");
+  assert.match(taskUrl, /project_id=proj-1/, "project scoping rides along");
+});
+
+test("ArchiveMgmt: loadProjects fills BOTH open and archived lists; an archived-side failure degrades gracefully", async () => {
+  const app = archApp();
+  const origListProjects = api.listProjects;
+  try {
+    let call = 0;
+    (api as any).listProjects = async (includeArchived?: boolean) => {
+      call++;
+      if (includeArchived) {
+        return { projects: [{ id: "p-old", name: "Old", archived: true, task_counts: { todo: 0, doing: 0, done: 0 } }], total: 1 };
+      }
+      return { projects: [{ id: "p-live", name: "Live", task_counts: { todo: 1, doing: 0, done: 0 } }], total: 1 };
+    };
+    await app.loadProjects();
+    assert.equal(call, 2, "one boot performs exactly the open + archived pair");
+    assert.deepEqual(app.projects.map((p: any) => p.id), ["p-live"]);
+    assert.deepEqual(app.archivedProjects.map((p: any) => p.id), ["p-old"], "Archived section gets its own list");
+
+    // Archived-side failure must NOT surface as a boot error — the previous
+    // list simply stays in place.
+    app.toasts = [];
+    (api as any).listProjects = async (includeArchived?: boolean) => {
+      if (includeArchived) throw new TypeError("fetch failed");
+      return { projects: [{ id: "p-live", name: "Live", task_counts: { todo: 1, doing: 0, done: 0 } }], total: 1 };
+    };
+    await app.loadProjects();
+    assert.equal(app.loadError, "", "archived-side failure does not error the boot path");
+    assert.deepEqual(app.archivedProjects.map((p: any) => p.id), ["p-old"], "previous archived list retained on failure");
+  } finally {
+    (api as any).listProjects = origListProjects;
+  }
+});
+
+test("ArchiveMgmt: restoreProject PUTs {archived:false}, refreshes both lists, and toasts", async () => {
+  const app = archApp();
+  const origUpdateProject = api.updateProject;
+  const seen: any[] = [];
+  try {
+    (api as any).updateProject = async (id: string, req: any) => {
+      seen.push({ id, req });
+      return { id };
+    };
+    let loads = 0;
+    app.loadProjects = async () => {
+      loads++;
+      app.archivedProjects = []; // simulate the row leaving the archived list
+    };
+    await app.restoreProject("p-old");
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].id, "p-old");
+    assert.equal(seen[0].req.archived, false, "restore clears the archive flag");
+    assert.ok(!("title" in seen[0].req), "no unrelated fields ride along");
+    assert.equal(loads, 1, "both lists refresh after restore");
+    assert.equal(app.archivedProjects.length, 0);
+    assert.match(lastToast(app, "restored").msg, /Project restored/);
+  } finally {
+    (api as any).updateProject = origUpdateProject;
+  }
+});
+
+test("ArchiveMgmt: toggleShowArchived pages the full archived set, groups by status, and swaps the columns source", async () => {
+  const app = archApp();
+  // Live board: one todo card that MUST keep showing when OFF.
+  app.board = archBoard("proj-1", { todo: [archTask("live-todo", "todo")] });
+
+  const origListTasks = api.listTasks;
+  try {
+    // 150 archived tasks across 3 statuses → two pages (100 + 50).
+    const archivedRows: any[] = [];
+    for (let i = 0; i < 60; i++) archivedRows.push(archTask(`a-todo-${i}`, "todo"));
+    for (let i = 0; i < 40; i++) archivedRows.push(archTask(`a-doing-${i}`, "doing"));
+    for (let i = 0; i < 50; i++) archivedRows.push(archTask(`a-done-${i}`, "done"));
+    let calls = 0;
+    (api as any).listTasks = async (params: any) => {
+      assert.equal(params.archived, true, "the view fetch is scoped to archived rows");
+      calls++;
+      const offset = params.offset ?? 0;
+      return { tasks: archivedRows.slice(offset, offset + 100), total: archivedRows.length };
+    };
+
+    await app.toggleShowArchived();
+    assert.equal(calls, 2, "paged at the API max (100/page) until the set is exhausted");
+    assert.equal(app.showArchived, true);
+    assert.equal(app.archivedBoardTasks!.todo.length, 60);
+    assert.equal(app.archivedBoardTasks!.doing.length, 40);
+    assert.equal(app.archivedBoardTasks!.done.length, 50);
+
+    // columns() must now render the ARCHIVED source (and bypass the 20-card
+    // done cap: all 50 archived done rows render).
+    const cols = app.columns();
+    assert.equal(cols[0].tasks.length, 60, "todo column shows the archived set");
+    assert.equal(cols[2].tasks.length, 50, "archived done rows are NOT capped by doneLimit");
+
+    // OFF is an instant flag flip: the untouched live board renders again.
+    await app.toggleShowArchived();
+    assert.equal(app.showArchived, false);
+    const back = app.columns();
+    assert.equal(back[0].tasks.length, 1, "live board restored exactly (previous data was never mutated)");
+    assert.equal(back[0].tasks[0].id, "live-todo");
+  } finally {
+    (api as any).listTasks = origListTasks;
+  }
+});
+
+test("ArchiveMgmt: toggleShowArchived failure keeps the live board and toasts", async () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("live-todo", "todo")] });
+  const origListTasks = api.listTasks;
+  try {
+    (api as any).listTasks = async () => { throw new TypeError("fetch failed"); };
+    await app.toggleShowArchived();
+    assert.equal(app.showArchived, false, "a failed fetch never strands the flag ON with stale data");
+    const cols = app.columns();
+    assert.equal(cols[0].tasks.length, 1, "live board untouched");
+    assert.ok(app.toasts.some((t: any) => t.kind === "error"), "failure surfaces as an error toast");
+  } finally {
+    (api as any).listTasks = origListTasks;
+  }
+});
+
+test("ArchiveMgmt: setTaskArchived archives a card optimistically and the Undo action restores it", async () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("t-1", "todo"), archTask("t-2", "todo")] });
+
+  const origUpdateTask = api.updateTask;
+  const patches: any[] = [];
+  try {
+    (api as any).updateTask = async (id: string, req: any) => {
+      patches.push({ id, req });
+      return { id, version: req.version + 1 };
+    };
+
+    await app.setTaskArchived("t-1", true);
+    assert.equal(patches.length, 1);
+    assert.equal(patches[0].id, "t-1");
+    assert.equal(patches[0].req.archived, true);
+    assert.equal(patches[0].req.version, 1, "version-guarded with the row's known version");
+    // Optimistic removal: gone from the column immediately; other cards intact.
+    const cols = app.columns();
+    assert.deepEqual(cols[0].tasks.map((t: any) => t.id), ["t-2"]);
+    assert.equal(app.loadBoardCalls, 1, "a silent board reload settles the view");
+
+    // The toast carries a JS Undo action (not an external link).
+    const t = lastToast(app, "archived");
+    assert.equal(t.action.label, "Undo");
+    assert.ok(typeof t.action.onAction === "function", "action is a local callback");
+    assert.ok(!t.action.href);
+
+    // Clicking Undo re-applies archived:false with the FRESH version from the
+    // original patch and reloads.
+    await t.action.onAction();
+    assert.equal(patches.length, 2);
+    assert.equal(patches[1].req.archived, false);
+    assert.equal(patches[1].req.version, 2, "undo uses the fresh version, not the stale one");
+    assert.equal(app.loadBoardCalls, 2);
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+  }
+});
+
+test("ArchiveMgmt: setTaskArchived rolls back the optimistic removal on a non-409 failure", async () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { doing: [archTask("t-busy", "doing")] });
+  const origUpdateTask = api.updateTask;
+  try {
+    (api as any).updateTask = async () => { throw new ApiError(500, { error: "boom", message: "upstream exploded" } as any); };
+    await app.setTaskArchived("t-busy", true);
+    const cols = app.columns();
+    assert.equal(cols[1].tasks.length, 1, "snapshot rollback restored the card");
+    assert.equal(cols[1].tasks[0].id, "t-busy");
+    assert.match(lastToast(app, "upstream exploded").msg, /upstream exploded/, "failure toasts the real error");
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+  }
+});
+
+test("ArchiveMgmt: setTaskArchived retries once on a 409 version conflict", async () => {
+  const app = archApp();
+  app.board = archBoard("proj-1", { todo: [archTask("t-c", "todo")] });
+  const origUpdateTask = api.updateTask;
+  const origGetTask = api.getTask;
+  let attempts = 0;
+  try {
+    (api as any).updateTask = async (id: string, req: any) => {
+      attempts++;
+      if (attempts === 1 && req.version === 1) {
+        throw new ApiError(409, { error: "version_conflict", message: "stale", current_version: 2 } as any);
+      }
+      return { id, version: req.version + 1 };
+    };
+    (api as any).getTask = async () => ({ id: "t-c", status: "todo", archived: false, version: 2 });
+
+    await app.setTaskArchived("t-c", true);
+    assert.equal(attempts, 2, "exactly one re-read + retry");
+    assert.equal(app.toasts.some((x: any) => /fresh version/.test(x.msg)), true, "conflict-retry is told to the user");
+    // The optimistic removal stays (the retried patch succeeded) and a reload settles.
+    assert.equal(app.columns()[0].tasks.length, 0);
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+    (api as any).getTask = origGetTask;
+  }
+});
+
+test("ArchiveMgmt: unarchive from the archived view removes it there and refreshes board + archived lists", async () => {
+  const app = archApp();
+  // Empty live board; the card lives ONLY in the (currently-shown) archived set.
+  app.board = archBoard("proj-1");
+  app.showArchived = true;
+  app.archivedBoardTasks = { todo: [archTask("t-a", "todo")], doing: [], done: [] };
+
+  const origUpdateTask = api.updateTask;
+  let reqSeen: any = null;
+  try {
+    (api as any).updateTask = async (id: string, req: any) => {
+      reqSeen = req;
+      return { id, version: 2 };
+    };
+    await app.setTaskArchived("t-a", false);
+    assert.equal(reqSeen.archived, false);
+    // Optimistically gone from the archived column immediately…
+    assert.equal(app.columns()[0].tasks.length, 0, "columns() reflects the removed archived row");
+    // …and both refresh paths fired (the card returns to the live board via loadBoard).
+    assert.equal(app.loadBoardCalls, 1);
+    assert.equal(app.refreshArchivedViewCalls, 1);
+    assert.match(lastToast(app, "restored").msg, /Task restored from archive/);
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+  }
+});
+
+test("ArchiveMgmt: confirmArchiveAllDone archives EVERY done task (incl. hidden beyond the cap), retries 409 per task, toasts a summary", async () => {
+  const app = archApp();
+  // 25 done tasks — 5 are hidden behind the 20-card render cap, and the bulk
+  // action must still reach them (it iterates board.tasks.done, not columns()).
+  const doneTasks: any[] = [];
+  for (let i = 0; i < 25; i++) doneTasks.push(archTask(`d-${i}`, "done"));
+  app.board = archBoard("proj-1", { done: doneTasks });
+
+  const origUpdateTask = api.updateTask;
+  const origGetTask = api.getTask;
+  let conflictFor = 0; // the one task that 409s on its first attempt
+  const attemptsById: Record<string, number> = {};
+  try {
+    conflictFor = 7;
+    (api as any).updateTask = async (id: string, req: any) => {
+      attemptsById[id] = (attemptsById[id] ?? 0) + 1;
+      if (Number(id.split("-")[1]) === conflictFor && attemptsById[id] === 1 && req.version === 1) {
+        throw new ApiError(409, { error: "version_conflict", message: "stale", current_version: 2 } as any);
+      }
+      return { id, version: 2 };
+    };
+    (api as any).getTask = async (id: string) => ({ id, status: "done", archived: false, version: 2 });
+
+    app.archiveAllDoneConfirmOpen = true;
+    await app.confirmArchiveAllDone();
+    assert.equal(app.archiveAllDoneBusy, false, "busy flag cleared");
+    assert.equal(app.archiveAllDoneConfirmOpen, false, "confirm step closed after the run");
+    assert.equal(Object.keys(attemptsById).length, 25, "all 25 done tasks (not just the 20 rendered) were archived");
+    assert.equal(attemptsById["d-7"], 2, "the conflicting task got its one re-read + retry");
+    // Optimistic removals left the column empty…
+    assert.equal(app.board.tasks.done.length, 0);
+    assert.equal(app.loadBoardCalls, 1, "…and a final silent reload settles counts/blocked state");
+    assert.match(lastToast(app).msg, /^Archived 25 done tasks$/, "summary toast names the exact count");
+    assert.ok(!lastToast(app).kind || lastToast(app).kind !== "error", "an all-success run is not an error toast");
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+    (api as any).getTask = origGetTask;
+  }
+});
+
+test("ArchiveMgmt: confirmArchiveAllDone reports partial failure in the toast", async () => {
+  const app = archApp();
+  const doneTasks = [archTask("ok-1", "done"), archTask("bad-2", "done")];
+  app.board = archBoard("proj-1", { done: doneTasks });
+  const origUpdateTask = api.updateTask;
+  try {
+    (api as any).updateTask = async (id: string, _req: any) => {
+      if (id === "bad-2") throw new ApiError(500, { error: "boom", message: "upstream exploded" } as any);
+      return { id, version: 2 };
+    };
+    await app.confirmArchiveAllDone();
+    assert.match(lastToast(app).msg, /^Archived 1 done task · 1 failed$/, "partial failure is reported precisely");
+    assert.equal(lastToast(app).kind, "error", "a partial failure reads as an error");
+  } finally {
+    (api as any).updateTask = origUpdateTask;
+  }
+});
+
+test("ArchiveMgmt: index.html wires every archive testid the E2E suite depends on", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+
+  // AC4 — archived projects section: restore buttons carry data-restore-project-id
+  // (never data-project-id) and are bound to restoreProject().
+  assert.match(html, /data-testid="project-restore"[^>]*:data-restore-project-id="p\.id"/);
+  assert.match(html, /@click="restoreProject\(p\.id\)"/);
+  const restoreIdx = html.indexOf('data-testid="project-restore"');
+  const restoreTag = html.slice(restoreIdx - 200, html.indexOf(">", restoreIdx));
+  assert.ok(!restoreTag.includes("data-project-id"), "restore rows are NOT pickable as the active project");
+
+  // AC3 — ONE toggle testid per viewport (desktop strip + mobile panel).
+  assert.equal((html.match(/data-testid="show-archived-toggle"/g) ?? []).length, 2, "desktop + mobile twins");
+  assert.ok(html.includes('@click="toggleShowArchived()"'));
+
+  // AC1 — card menu Archive item, per-card Unarchive in the archived view, and
+  // the detail-header button (label follows detail.archived).
+  assert.match(html, /data-testid="card-menu-archive"/);
+  assert.ok(html.includes("setTaskArchived(task.id, true)"), "menu item archives");
+  assert.ok(html.includes('data-testid="unarchive-action"'), "per-card unarchive button exists");
+  assert.ok(html.includes('@click.stop="setTaskArchived(task.id, false)"'), "unarchive click wired (stop so the card doesn't open)");
+  assert.ok(html.includes('data-testid="task-detail-archive"'), "detail-header archive button exists");
+  assert.ok(html.includes("setTaskArchived(detail.id, !detail.archived)"), "detail button toggles on detail.archived");
+
+  // AC2 — bulk action + two-step inline confirm in the Done column.
+  assert.match(html, /data-testid="archive-all-done"/);
+  assert.match(html, /data-testid="archive-all-done-confirm-row"/);
+  assert.ok(html.includes('data-testid="archive-all-done-cancel"'));
+  assert.ok(html.includes('data-testid="archive-all-done-confirm"'));
+
+  // The Undo path renders a local action button (href → link branch is separate).
+  assert.ok(html.includes('data-testid="toast-action-btn"'), "local toast action button exists");
+  assert.ok(html.includes('@click="runToastAction(t)"'), "action button runs the JS callback");
+
+  // Archived view: cards are not draggable, the move menu anchor hides, and the
+  // per-column "+ Add task" button is suppressed.
+  assert.ok(html.includes(':draggable="!showArchived"'));
+  assert.match(html, /data-testid="card-menu-anchor"[^>]*x-show="!showArchived"/);
 });
 
 
