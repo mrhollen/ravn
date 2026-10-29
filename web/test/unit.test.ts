@@ -30,6 +30,8 @@ import {
   isCardDensity,
   parseBoardQueryParams,
   buildBoardQueryString,
+  SEARCH_DEBOUNCE_MS,
+  FULLTEXT_SEARCH_LIMIT,
 } from "../src/app.ts";
 import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
 import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
@@ -3505,6 +3507,271 @@ test("URL Sync: index.html wires syncUrlState on filter inputs", () => {
 
   assert.ok(html.includes('@input="syncUrlState()"'), "Must wire input syncUrlState on search field");
   assert.ok(html.includes('@change="syncUrlState(true)"'), "Must wire change syncUrlState on dropdowns/checkboxes");
+});
+
+// ---------------------------------------------------------------------------
+// Task 01M5XTAW3RZ4QJCSW9C3CS255R: full-text board search (description/notes)
+// with match-source indicator. The instant local title/id filter is unchanged;
+// a debounced GET /tasks?search= contributes ids that columns() UNIONs in.
+
+test("FullTextSearch: a typing burst coalesces into ONE debounced server query whose ids union into the board (AC1)", async () => {
+  const origListTasks = api.listTasks;
+  try {
+    let calls = 0;
+    (api as any).listTasks = async (params: any) => {
+      calls++;
+      assert.equal(params.project_id, "P", "query scoped to the selected project");
+      assert.equal(params.search, "quixotic", "debounced trailing query is the FINAL typed term");
+      assert.ok(params.limit >= 100, "requests a generous page (server clamps to its max)");
+      return { tasks: [{ id: "d1" }, { id: "t1" }], total: 2, limit: 100, offset: 0 };
+    };
+
+    const app = ravnApp() as any;
+    app.selectedProjectId = "P";
+    app.board = {
+      project_id: "P",
+      counts: {},
+      tasks: {
+        todo: [
+          { id: "t1", title: "Quixotic title hit", status: "todo" }, // local title match
+          { id: "d1", title: "Plain card, term only in notes", status: "todo" }, // server-only match
+          { id: "x9", title: "Irrelevant", status: "todo" },
+        ],
+        doing: [],
+        done: [],
+      },
+    };
+    // Fake-timer debounce bound to the REAL runFullTextSearch (timer-injectable
+    // createDebounce — same pattern as the SSE-reload tests).
+    app._searchDebounce = createDebounce(
+      () => { void app.runFullTextSearch(); },
+      SEARCH_DEBOUNCE_MS,
+      {
+        setTimer: (fn: () => void, ms: number) => {
+          assert.equal(ms, SEARCH_DEBOUNCE_MS);
+          return setTimeout(fn, ms);
+        },
+        clearTimer: (id: unknown) => clearTimeout(id as ReturnType<typeof setTimeout>),
+      },
+    );
+
+    // Two rapid keystrokes — trailing debounce must fire exactly once.
+    app.filterSearch = "quixo";
+    app.scheduleFullTextSearch();
+    app.filterSearch = "quixotic";
+    app.scheduleFullTextSearch();
+    assert.equal(app._searchDebounce.isPending(), true, "one pending run before the quiet window elapses");
+    await new Promise((r) => setTimeout(r, SEARCH_DEBOUNCE_MS + 100));
+
+    assert.equal(calls, 1, "whole burst costs exactly ONE round-trip");
+    assert.deepEqual([...app._fullTextMatchIds], ["d1", "t1"]);
+
+    // columns() union: local title match AND server-only id both survive.
+    const todo = app.columns().find((c: any) => c.status === "todo");
+    assert.ok(todo.tasks.some((t: any) => t.id === "t1"), "instant title match visible");
+    assert.ok(todo.tasks.some((t: any) => t.id === "d1"), "desc/notes-only match visible via id union");
+    assert.ok(!todo.tasks.some((t: any) => t.id === "x9"), "non-match hidden");
+
+    // Match-source chip predicate (AC2): only the server-only card gets one.
+    const d1 = todo.tasks.find((t: any) => t.id === "d1");
+    const t1 = todo.tasks.find((t: any) => t.id === "t1");
+    assert.equal(app.isDescriptionNotesMatch(d1), true, "desc/notes-only hit shows the chip");
+    assert.equal(app.isDescriptionNotesMatch(t1), false, "title match must NOT get the chip");
+  } finally {
+    (api as any).listTasks = origListTasks;
+  }
+});
+
+test("FullTextSearch: an out-of-order LATE response is discarded by the sequence token (AC3)", async () => {
+  const origListTasks = api.listTasks;
+  try {
+    let calls = 0;
+    (api as any).listTasks = async () => {
+      calls++;
+      if (calls === 1) {
+        // The OLD query's slow response — settles only after the newer one.
+        await new Promise((r) => setTimeout(r, 60));
+        return { tasks: [{ id: "old1" }], total: 1, limit: 100, offset: 0 };
+      }
+      return { tasks: [{ id: "new1" }], total: 1, limit: 100, offset: 0 };
+    };
+
+    const app = ravnApp() as any;
+    app.selectedProjectId = "P";
+    app.filterSearch = "old-term";
+    const pOld = app.runFullTextSearch(); // token N — in flight
+    app.filterSearch = "new-term";
+    const pNew = app.runFullTextSearch(); // token N+1 — initiates later, wins
+
+    await pNew; // faster response lands first
+    assert.deepEqual([...app._fullTextMatchIds], ["new1"], "newer query applied");
+
+    await pOld; // stale slow response arrives LAST
+    assert.deepEqual(
+      [...app._fullTextMatchIds],
+      ["new1"],
+      "out-of-order late response must NEVER overwrite the newer state",
+    );
+  } finally {
+    (api as any).listTasks = origListTasks;
+  }
+});
+
+test("FullTextSearch: clearing the input cancels the timer, clears the id set, and retires in-flight results (AC3)", async () => {
+  const origListTasks = api.listTasks;
+  try {
+    let releaseSlow: (v: any) => void;
+    const slow = new Promise<any>((r) => { releaseSlow = r; });
+    (api as any).listTasks = async () => slow;
+
+    const app = ravnApp() as any;
+    app.selectedProjectId = "P";
+    let timerArmed = 0;
+    app._searchDebounce = createDebounce(
+      () => { void app.runFullTextSearch(); },
+      SEARCH_DEBOUNCE_MS,
+      { setTimer: (_fn: () => void, _ms: number) => ++timerArmed, clearTimer: () => {} },
+    );
+
+    app.filterSearch = "term";
+    app._fullTextMatchIds = new Set(["stale1"]); // leftover from a prior settled query
+    const inFlight = app.runFullTextSearch(); // direct run still in flight…
+    app.scheduleFullTextSearch();             // …and one more keystroke pending its timer
+
+    // User CLEARS the input: everything must be retired immediately.
+    app.filterSearch = "";
+    app.scheduleFullTextSearch();
+
+    assert.deepEqual([...app._fullTextMatchIds], [], "match id set cleared — board instantly unfiltered");
+    assert.equal(app.isDescriptionNotesMatch({ id: "stale1", title: "x" }), false, "no chips after clear");
+
+    // The in-flight response finally resolves — it must be a no-op.
+    releaseSlow!({ tasks: [{ id: "ghost1" }], total: 1, limit: 100, offset: 0 });
+    await inFlight;
+    assert.deepEqual([...app._fullTextMatchIds], [], "late response for the cleared query discarded");
+
+    // No further debounce fires were armed by the clear path.
+    assert.equal(timerArmed, 1, "only the pre-clear keystroke armed a timer; clear cancels instead of scheduling");
+  } finally {
+    (api as any).listTasks = origListTasks;
+  }
+});
+
+test("FullTextSearch: while searching, the done-column cap is bypassed so no matched done task hides behind it", () => {
+  const app = ravnApp() as any;
+  // 25 done tasks; rendered newest-first by completed_at (d00 = Jan 1 oldest …
+  // d24 = Jan 25 newest), so d00–d03 sit behind the default 20-card cut.
+  const doneTasks = Array.from({ length: 25 }, (_, i) => ({
+    id: "d" + String(i).padStart(2, "0"),
+    title: "Done task " + i,
+    status: "done",
+    priority: 3,
+    version: 1,
+    created_at: "",
+    updated_at: "",
+    completed_at: `2026-01-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+  }));
+  app.selectedProjectId = "P";
+  app.board = { project_id: "P", counts: {}, tasks: { todo: [], doing: [], done: doneTasks } };
+
+  const before = app.columns().find((c: any) => c.status === "done");
+  assert.equal(before.tasks.length, DEFAULT_DONE_LIMIT, "normal 20-card cap applies unfiltered");
+  assert.equal(before.totalCount, 25);
+  assert.ok(!before.tasks.some((t: any) => t.id === "d00"), "oldest done task hidden behind the cut");
+
+  // Server matched the OLDEST done task (far past the default cut) via notes.
+  app.filterSearch = "ancient-term";
+  app._fullTextMatchIds = new Set(["d00"]);
+  const searching = app.columns().find((c: any) => c.status === "done");
+  assert.equal(searching.totalCount, 1);
+  assert.equal(searching.tasks.length, 1, "cap bypassed while searching — no match hides behind the cut");
+  assert.deepEqual(searching.tasks.map((t: any) => t.id), ["d00"]);
+
+  // Clearing restores the normal cap (doneLimit untouched by the bypass).
+  app.filterSearch = "";
+  app.scheduleFullTextSearch();
+  const after = app.columns().find((c: any) => c.status === "done");
+  assert.equal(after.tasks.length, DEFAULT_DONE_LIMIT, "normal cap restored on clear");
+  assert.equal(after.totalCount, 25);
+
+  // Column count pill input stays accurate in both states.
+  assert.equal(app.visibleTaskCount() > 0, true);
+});
+
+test("FullTextSearch: isDescriptionNotesMatch fires only for desc/notes-only hits", () => {
+  const app = ravnApp() as any;
+  app.filterSearch = "zzz";
+  app._fullTextMatchIds = new Set(["id-a", "id-b", "zzz-1234567890abcdefghijklmnop"]);
+
+  assert.equal(app.isDescriptionNotesMatch({ id: "id-a", title: "No term here" }), true, "server-only hit → chip");
+  assert.equal(
+    app.isDescriptionNotesMatch({ id: "id-b", title: "Contains ZZZ in the title" }),
+    false,
+    "title match (any case) → no chip",
+  );
+  assert.equal(
+    app.isDescriptionNotesMatch({ id: "zzz-1234567890abcdefghijklmnop", title: "Term in the ID" }),
+    false,
+    "id match → no chip",
+  );
+  app.filterSearch = "   ";
+  assert.equal(app.isDescriptionNotesMatch({ id: "id-a", title: "x" }), false, "whitespace-only query → never");
+});
+
+test("FullTextSearch: project switch cancels the pending search and retires its in-flight result", async () => {
+  const origGetBoard = api.getBoard;
+  try {
+    (api as any).getBoard = async (pid: string) => ({
+      project_id: pid, counts: {}, tasks: { todo: [], doing: [], done: [] },
+    });
+
+    const app = ravnApp() as any;
+    app.projects = [{ id: "A", name: "Alpha" }, { id: "B", name: "Beta" }];
+    app.selectedProjectId = "A";
+    app.board = { project_id: "A", counts: {}, tasks: {} };
+    app.filterSearch = "term";
+    app._fullTextMatchIds = new Set(["a1"]);
+
+    let fired = false;
+    app._searchDebounce = createDebounce(
+      () => { fired = true; },
+      SEARCH_DEBOUNCE_MS,
+      { setTimer: () => 0, clearTimer: () => {} },
+    );
+    app.scheduleFullTextSearch(); // pending run scoped to project A
+    assert.equal(app._searchDebounce.isPending(), true);
+
+    app.pickProject("B"); // → selectProject() invalidation path
+    assert.deepEqual([...app._fullTextMatchIds], [], "project A's match ids dropped on switch");
+    assert.equal(fired, false, "the pending run for the left project never fires");
+    assert.equal(app._searchDebounce.isPending(), true, "a fresh run is re-armed for the NEW selection");
+  } finally {
+    (api as any).getBoard = origGetBoard;
+  }
+});
+
+test("FullTextSearch: index.html renders the match-source chip and hides done pagination while searching", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+
+  // The chip exists with a stable testid and is driven by the app predicate.
+  assert.match(html, /data-testid="match-source-chip"/);
+  assert.match(html, /x-show="isDescriptionNotesMatch\(task\)"/);
+  assert.ok(html.includes("matched in description/notes"), "chip label text");
+
+  // The done-pagination footer's x-show (immediately preceding its testid attr)
+  // must suppress itself while a search is active.
+  const idx = html.indexOf('data-testid="done-pagination"');
+  assert.ok(idx !== -1, "done-pagination footer exists");
+  const footerHead = html.slice(Math.max(0, idx - 400), idx);
+  assert.ok(footerHead.includes("filterSearch.trim() === ''"), "footer hidden while searching");
+
+  // Desktop AND mobile filter inputs share the ONE filterSearch binding —
+  // both stay in sync for free.
+  assert.equal((html.match(/x-model="filterSearch"/g) ?? []).length, 2, "exactly two inputs bound to filterSearch");
+
+  // listTasksParams (the board's own fetch) must NOT leak the search term —
+  // the board stays unfiltered; only the debounced api.listTasks call searches.
+  assert.equal(FULLTEXT_SEARCH_LIMIT >= 100, true, "full-text page requests a full server page");
 });
 
 

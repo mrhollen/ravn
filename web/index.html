@@ -1154,11 +1154,25 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                             </svg>
                             <span x-text="dueLabel(task.due_at)"></span>
                           </span>
-                          <span x-show="task.assignee" x-cloak class="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800"
-                                :title="'Owner: ' + (task.assignee ? task.assignee.name + ' (' + task.assignee.type + ')' : '')">
-                            <span class="font-semibold text-amber-700 dark:text-amber-400">Owner:</span>
-                            <span x-text="task.assignee ? task.assignee.name : ''"></span>
-                          </span>
+                           <span x-show="task.assignee" x-cloak class="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800"
+                                 :title="'Owner: ' + (task.assignee ? task.assignee.name + ' (' + task.assignee.type + ')' : '')">
+                             <span class="font-semibold text-amber-700 dark:text-amber-400">Owner:</span>
+                             <span x-text="task.assignee ? task.assignee.name : ''"></span>
+                           </span>
+
+                           <!-- Match-source chip (AC2, task 01M5XTAW3RZ4QJCSW9C3CS255R): shown ONLY when the
+                                active search matched this card via description/notes — its title and id do NOT
+                                contain the term. Same badge grammar (ring + tinted bg, 11px) as the other meta
+                                chips so it reads subtle in both comfortable and compact density (the row wraps). -->
+                           <span x-show="isDescriptionNotesMatch(task)" x-cloak data-testid="match-source-chip"
+                                 title="Matched in task description or notes — not in the title"
+                                 class="inline-flex items-center gap-1 rounded bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium text-violet-700 ring-1 ring-violet-200 dark:bg-violet-950/60 dark:text-violet-300 dark:ring-violet-800">
+                             <svg class="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+                             </svg>
+                             <span>matched in description/notes</span>
+                           </span>
+
 
                           <!-- Right cluster: AC progress and comment count badges aligned to the right. -->
                           <div x-show="task.ac_total > 0 || (task.comment_count ?? 0) > 0" x-cloak
@@ -1188,9 +1202,12 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         </div>
                       </article>
                     </template>
-                    <!-- Done column pagination / expansion controls (AC1) -->
-                    <div x-show="col.status === 'done' && ((col.totalCount ?? col.tasks.length) > 20 || doneLimit > 20)" x-cloak
-                         data-testid="done-pagination"
+                     <!-- Done column pagination / expansion controls (AC1). Hidden while a search is
+                          active: the 20-card cap is bypassed in columns() so every MATCHED done card is
+                          rendered — nothing to expand/collapse. Clearing the search restores this footer
+                          with the user's previous doneLimit intact. -->
+                     <div x-show="col.status === 'done' && ((col.totalCount ?? col.tasks.length) > 20 || doneLimit > 20) && filterSearch.trim() === ''" x-cloak
+                          data-testid="done-pagination"
                          class="flex flex-col gap-1.5 pt-1 border-t border-zinc-100 dark:border-zinc-800">
                       <div class="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 px-1">
                         <span x-text="'Showing ' + col.tasks.length + ' of ' + (col.totalCount ?? col.tasks.length) + ' done tasks'"></span>

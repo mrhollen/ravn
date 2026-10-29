@@ -68,6 +68,14 @@ export const LS_CARD_DENSITY = "ravn.card_density";
 export const LS_THEME = "ravn_theme";
 export { LS_TOKEN };
 export const DEFAULT_DONE_LIMIT = 20;
+/** Debounce window for the server-side description/notes board search. Local
+ *  title/id matching stays instant; this only gates the extra round-trip, so
+ *  ~250ms keeps typing latency unperceived (same order as SSE_RELOAD_DEBOUNCE_MS). */
+export const SEARCH_DEBOUNCE_MS = 250;
+/** Page size requested for the full-text query. The server clamps to its max
+ *  (100), so this is "as many matches as one page can carry" — matches beyond
+ *  a full page simply never surface in the union (documented caveat). */
+export const FULLTEXT_SEARCH_LIMIT = 200;
 const POLL_MS = 15_000;
 const MD_CACHE_MAX = 500;
 // Max visual card offset (px) while swiping. Commit/slop thresholds still use
@@ -1416,6 +1424,85 @@ export function ravnApp() {
     filterDue: "" as string,
     filterSearch: "",
 
+    // -------------------------------------------- full-text (desc/notes) search
+    // Task 01M5XTAW3RZ4QJCSW9C3CS255R. The board is fetched UNFILTERED and the
+    // title/id substring match stays an instant client-side filter; on top of
+    // it a debounced GET /tasks?search= (which matches title+description+notes
+    // server-side) contributes its task ids to the filtered set in columns().
+    // _fullTextMatchIds = ids the SERVER matched for the last settled query.
+    // _searchSeq retires out-of-order responses (clearing the input bumps it,
+    // so a late response can never repopulate a cleared board filter).
+    _fullTextMatchIds: new Set<string>(),
+    _searchSeq: createSequenceGuard(),
+    _searchDebounce: null as any,
+
+    /** Lazy trailing debounce (250ms) over runFullTextSearch. Created on first
+     *  need so plain ravnApp() instances (unit tests, SSR-ish envs) work
+     *  without init(); init() simply lets the first keystroke build it. */
+    ensureSearchDebounce(): { schedule(): void; cancel(): void; isPending(): boolean } {
+      if (!this._searchDebounce) {
+        this._searchDebounce = createDebounce(() => {
+          void this.runFullTextSearch();
+        }, SEARCH_DEBOUNCE_MS);
+      }
+      return this._searchDebounce;
+    },
+
+    /** (Re)arm the description/notes search from ANY filterSearch or project
+     *  change. Non-empty query → trailing-debounced server query. Empty query
+     *  (cleared input / reset filters) → cancel the pending timer, retire any
+     *  in-flight response via the sequence guard, and drop the match id set —
+     *  so the instant local filter alone restores the unfiltered board. */
+    scheduleFullTextSearch(): void {
+      const q = (this.filterSearch ?? "").trim();
+      if (!q || !this.selectedProjectId) {
+        this._searchDebounce?.cancel();
+        this._searchSeq.next(); // invalidate any in-flight response
+        this._fullTextMatchIds = new Set<string>();
+        return;
+      }
+      this.ensureSearchDebounce().schedule();
+    },
+
+    /** The debounced server query itself. Runs ~SEARCH_DEBOUNCE_MS after the
+     *  LAST keystroke (trailing), so a whole typing burst costs one round-
+     *  trip. Stale-response protection: capture the sequence token at START;
+     *  on resolve, apply only if no newer search was initiated AND the query
+     *  and selected project are unchanged (a late response for an older query
+     *  or a different project must never overwrite current state). */
+    async runFullTextSearch(): Promise<void> {
+      const q = (this.filterSearch ?? "").trim();
+      const projectId = this.selectedProjectId;
+      if (!q || !projectId) return;
+      const token = this._searchSeq.next();
+      try {
+        const res = await api.listTasks({ project_id: projectId, search: q, limit: FULLTEXT_SEARCH_LIMIT });
+        if (!this._searchSeq.isFresh(token)) return; // newer search or clear superseded us
+        if (projectId !== this.selectedProjectId) return; // project switched mid-flight
+        if ((this.filterSearch ?? "").trim() !== q) return; // query changed without a new run
+        const ids = new Set<string>();
+        for (const t of res.tasks ?? []) ids.add(t.id);
+        this._fullTextMatchIds = ids;
+      } catch {
+        // Best-effort enrichment: on failure the board simply degrades to the
+        // instant local title/id filter (no toast, no broken state). A FAILED
+        // search that is still the newest clears stale ids so old matches of a
+        // superseded query can't linger.
+        if (this._searchSeq.isFresh(token)) this._fullTextMatchIds = new Set<string>();
+      }
+    },
+
+    /** AC2's match-source indicator: true when the active search matched this
+     *  card ONLY via description/notes — its title and id do NOT contain the
+     *  substring (cards whose title/id already match show no chip). */
+    isDescriptionNotesMatch(task: TaskSummary): boolean {
+      const q = (this.filterSearch ?? "").trim().toLowerCase();
+      if (!q) return false;
+      if (task.title.toLowerCase().includes(q)) return false;
+      if (task.id.toLowerCase().includes(q)) return false;
+      return this._fullTextMatchIds.has(task.id);
+    },
+
     availableAssignees(): string[] {
       const b = this.board;
       if (!b) return [];
@@ -1446,6 +1533,10 @@ export function ravnApp() {
       this.filterUnblocked = false;
       this.filterDue = "";
       this.filterSearch = "";
+      // Explicit clear (in addition to the filterSearch $watch that does the
+      // same in-browser): cancel any pending debounced search, retire the
+      // in-flight response, drop the desc/notes match set.
+      this.scheduleFullTextSearch();
       this.syncUrlState(true);
     },
 
@@ -1667,10 +1758,18 @@ export function ravnApp() {
             return due >= today && due < endExclusive;
           });
         }
+        // Search: instant local title/id substring match UNION the debounced
+        // server-side full-text matches (_fullTextMatchIds — description/notes
+        // hits, which the client never sees in the board snapshot). The union
+        // is what keeps a card whose TITLE doesn't contain the term but whose
+        // description or notes do visible while typing (AC1).
         const q = this.filterSearch.trim().toLowerCase();
         if (q) {
           tasks = tasks.filter(
-            (t) => t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q),
+            (t) =>
+              t.title.toLowerCase().includes(q) ||
+              t.id.toLowerCase().includes(q) ||
+              this._fullTextMatchIds.has(t.id),
           );
         }
         // Client-side sort: re-applied on every render, so SSE/poll refreshes
@@ -1704,9 +1803,17 @@ export function ravnApp() {
           tasks = [...tasks].sort(cmpDone);
         }
 
+        // Done-column pagination cap — BYPASSED while a search is active so a
+        // matched done task can never hide behind the "20 most recent" cut
+        // (AC integration requirement). doneLimit itself is untouched: clearing
+        // the search naturally restores the normal cap (whatever the user had
+        // expanded it to beforehand). The header count pill reads totalCount —
+        // the FULL post-filter count either way — so it stays accurate.
         const totalCount = tasks.length;
+        // Bypassed while a search is active: see comment above.
+        const searching = q !== "";
         const renderedTasks =
-          s === "done" && totalCount > this.doneLimit
+          s === "done" && !searching && totalCount > this.doneLimit
             ? tasks.slice(0, this.doneLimit)
             : tasks;
 
@@ -1738,8 +1845,16 @@ export function ravnApp() {
       // project-ownership check too — this makes the switch explicit.)
       this.sseReloadDebounce?.cancel();
       this._boardSeq.next();
+      // Full-text search results belong to the project being LEFT: cancel the
+      // pending debounced query, retire any in-flight response, and drop the
+      // match id set — then re-arm for the new selection if a term is active
+      // (mirrors how selectProject invalidates pending board loads above).
+      this._searchDebounce?.cancel();
+      this._searchSeq.next();
+      this._fullTextMatchIds = new Set<string>();
       this.connectSse();
       void this.loadBoard();
+      this.scheduleFullTextSearch();
       this.syncUrlState(true);
     },
 
@@ -4278,6 +4393,16 @@ export function ravnApp() {
             }
           });
         }
+        // Full-text search (01M5XTAW3RZ4QJCSW9C3CS255R): EVERY path that mutates
+        // the query or the project re-arms the debounced desc/notes search —
+        // typed input (both desktop and mobile bind filterSearch), Reset
+        // filters, boot restore from ?q=... (applyQueryParams runs with
+        // _restoringUrlState set, hence these are SEPARATE watchers that
+        // deliberately do NOT gate on it), browser back/forward, and project
+        // switches. Clearing the query lands in scheduleFullTextSearch's empty
+        // branch: timer cancelled, in-flight retired, match set dropped.
+        (this as any).$watch("filterSearch", () => this.scheduleFullTextSearch());
+        (this as any).$watch("selectedProjectId", () => this.scheduleFullTextSearch());
       }
       this.applyTheme();
       if (typeof document !== "undefined") {
@@ -4337,6 +4462,12 @@ export function ravnApp() {
         } catch { /* ignore */ }
         await this.loadBoard();
         this.connectSse();
+        // Boot with a restored search query (?q=…): initFromUrl() applied the
+        // query BEFORE the $watch handlers were registered (init order), so those
+        // initial mutations never fired scheduleFullTextSearch — kick the
+        // debounced desc/notes search here so a shared board-search URL actually
+        // surfaces its matches (empty query is a harmless no-op branch).
+        this.scheduleFullTextSearch();
       } else {
         // No projects yet — invite creating one.
         this.showNewProject = true;
