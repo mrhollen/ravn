@@ -418,4 +418,3 @@ func TestOpenAppliesSynchronousNormalPragma(t *testing.T) {
 		t.Errorf("PRAGMA synchronous on pool.Reader = %d, want 1 (NORMAL)", readerSync)
 	}
 }
-

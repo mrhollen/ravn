@@ -159,14 +159,14 @@ type TaskUpdateInput struct {
 // domain.MaxTaskTitleLen runes, description > domain.MaxTaskDescriptionLen
 // bytes, AC text > domain.MaxACTextLen runes) → domain.ErrInvalid; nothing is
 // written on failure.
- // Duplicate-title candidates are surfaced as a non-blocking
+// Duplicate-title candidates are surfaced as a non-blocking
 // `possible_duplicates` advisory on create (see FindDuplicateCandidates).
- // blocked-by / related edges stay with the separate relations use case
- // (POST|DELETE /tasks/{id}/relations, `relate_tasks`); the exceptions are
- // ParentID and BlockedBy, which file the new task as a child and/or behind
- // each named blocker in this same transaction so epic decomposition needs a
- // single call (each stored row is identical to what relate_tasks would write
- // — same kind, direction, event, and the ≤1-parent index backstop).
+// blocked-by / related edges stay with the separate relations use case
+// (POST|DELETE /tasks/{id}/relations, `relate_tasks`); the exceptions are
+// ParentID and BlockedBy, which file the new task as a child and/or behind
+// each named blocker in this same transaction so epic decomposition needs a
+// single call (each stored row is identical to what relate_tasks would write
+// — same kind, direction, event, and the ≤1-parent index backstop).
 func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (domain.Task, error) {
 	// The acting actor is validated and normalized BEFORE anything else: an
 	// invalid principal (unknown type, empty/oversized/control-char name) must
@@ -1179,11 +1179,11 @@ func (s *Tasks) Heartbeat(ctx context.Context, actor domain.Actor, id domain.ID)
 // resume blob when non-empty after trimming; Assignee / ClearAssignee move
 // durable ownership exactly like Update (ClearAssignee wins over Assignee).
 type HandOffInput struct {
-	Kind  domain.CommentKind // CommentHandoff|CommentQuestion; empty → CommentHandoff
-	Body  string             // optional; empty after trimming → a synthesized default
-	Notes string             // optional; non-empty after trimming → replace notes
-	Assignee *domain.Actor   // optional; set the durable assignee to the receiver
-	ClearAssignee bool       // takes precedence over Assignee when true (mirrors Update)
+	Kind          domain.CommentKind // CommentHandoff|CommentQuestion; empty → CommentHandoff
+	Body          string             // optional; empty after trimming → a synthesized default
+	Notes         string             // optional; non-empty after trimming → replace notes
+	Assignee      *domain.Actor      // optional; set the durable assignee to the receiver
+	ClearAssignee bool               // takes precedence over Assignee when true (mirrors Update)
 }
 
 // HandOffResult is the atomic handoff outcome: the fresh task row (version
@@ -1348,7 +1348,7 @@ func (s *Tasks) HandOff(ctx context.Context, actor domain.Actor, id domain.ID, i
 			TaskID:    &st.ID,
 			Actor:     a,
 			Kind:      domain.EventCommented,
-			After:     compactJSON(map[string]any{
+			After: compactJSON(map[string]any{
 				"kind": string(kind),
 				"body": truncateEventBody(body, eventBodyMax),
 			}),
@@ -1360,7 +1360,7 @@ func (s *Tasks) HandOff(ctx context.Context, actor domain.Actor, id domain.ID, i
 			TaskID:    &st.ID,
 			Actor:     a,
 			Kind:      domain.EventReleased,
-			Before:    compactJSON(map[string]any{
+			Before: compactJSON(map[string]any{
 				"status":           string(cur.Status),
 				"holder":           actorJSON(cur.Claim.By()),
 				"claim_expires_at": dueAtJSON(claimExpiryPtr(cur)),

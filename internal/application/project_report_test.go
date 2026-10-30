@@ -62,7 +62,7 @@ func newReportEnv(t *testing.T) (*Projects, *fakeClock, *fakeUoW) {
 	with("t-zombie", func(tk *domain.Task) { tk.Claim = domain.NewClaim(b, now.Add(-2*time.Hour), 60) }) // expired an hour and fifty-nine ago
 	seed("t-done-in", "Done In Window", domain.StatusDone, 0, &a, now.Add(-5*time.Hour))
 	with("t-done-in", func(tk *domain.Task) { tk.CompletedAt = ptrTime(now.Add(-5 * time.Hour)) })
-	seed("t-done-out", "Done Old", domain.StatusDone, 2, &b, now.Add(-30 * time.Hour))
+	seed("t-done-out", "Done Old", domain.StatusDone, 2, &b, now.Add(-30*time.Hour))
 	with("t-done-out", func(tk *domain.Task) { tk.CompletedAt = ptrTime(now.Add(-30 * time.Hour)) })
 	seed("t-blocked1", "Blocked One", domain.StatusTodo, 5, nil, now.Add(-time.Minute))
 	seed("t-blocked2", "Blocked Two", domain.StatusTodo, 5, &b, now.Add(-time.Minute))
@@ -76,7 +76,7 @@ func newReportEnv(t *testing.T) (*Projects, *fakeClock, *fakeUoW) {
 			Actor: a, Kind: domain.EventCommented, At: at,
 		})
 	}
-	evAt("t-live", now.Add(-30*time.Minute))  // claimed event (same instant as the lease)
+	evAt("t-live", now.Add(-30*time.Minute))     // claimed event (same instant as the lease)
 	evAt("t-boundary", now.Add(-60*time.Minute)) // exactly on the default stalled threshold
 	evAt("t-evtpref", now.Add(-90*time.Minute))  // OLDER than the row's updated_at — precedence still applies
 
@@ -200,7 +200,7 @@ func TestReport_FullDigest(t *testing.T) {
 		t.Fatalf("recently_completed = %v, want [t-done-in]", rep.RecentlyCompleted)
 	}
 	rc := rep.RecentlyCompleted[0]
-	if !rc.CompletedAt.Equal(now.Add(-5 * time.Hour)) || rc.Assignee == nil || rc.Assignee.Name != "agent-a" {
+	if !rc.CompletedAt.Equal(now.Add(-5*time.Hour)) || rc.Assignee == nil || rc.Assignee.Name != "agent-a" {
 		t.Errorf("recently_completed[0] = %+v, want completed_at now-5h assignee agent-a", rc)
 	}
 
@@ -302,7 +302,7 @@ func TestReport_HeartbeatsNeverCount(t *testing.T) {
 	uow.tasks.byID["t-keeper"] = domain.Task{
 		ID: "t-keeper", Title: "Keeper", ProjectID: reportProjectID, Status: domain.StatusDoing,
 		Version: 1, CreatedAt: now.Add(-4 * time.Hour), UpdatedAt: now.Add(-4 * time.Hour), // last REAL activity 4h ago
-		Claim: domain.NewClaim(keeper, now.Add(-2*time.Hour), 14400),                       // lease taken now-2h, 4h TTL → live until now+2h (heartbeats kept it alive)
+		Claim: domain.NewClaim(keeper, now.Add(-2*time.Hour), 14400), // lease taken now-2h, 4h TTL → live until now+2h (heartbeats kept it alive)
 	}
 	uow.tasks.byID["t-silent"] = domain.Task{
 		ID: "t-silent", Title: "Silent", ProjectID: reportProjectID, Status: domain.StatusDoing,

@@ -20,7 +20,7 @@ const (
 // ReportOptions tunes one project report. Zero values select the defaults
 // above — callers may pass the zero struct for a fully-defaulted digest.
 type ReportOptions struct {
-	StalledMinutes int      // idle window for stalled_tasks; <= 0 → DefaultStalledMinutes
+	StalledMinutes int        // idle window for stalled_tasks; <= 0 → DefaultStalledMinutes
 	Since          *time.Time // lower bound for recently_completed (completed_at >= Since); nil → now - DefaultSinceWindow
 }
 
@@ -32,11 +32,11 @@ type ProjectReport struct {
 
 	Counts ReportCounts // open+done (non-archived) tasks
 
-	ActiveClaims   []ActiveClaim // leases present AND not yet expired, most urgent first
-	ExpiredClaims  []ReportTaskRef // doing + lapsed lease (zombie claims), id ASC
-	StalledTasks   []StalledTask // doing + idle strictly past StalledMinutes, most idle first
-	Bottlenecks    []Bottleneck // open tasks blocking >=1 open task, blocks DESC
-	OpenBlockedBy  []BlockedGroup // inverse of Bottlenecks: same order; each group = one blocker with the open tasks it blocks
+	ActiveClaims      []ActiveClaim       // leases present AND not yet expired, most urgent first
+	ExpiredClaims     []ReportTaskRef     // doing + lapsed lease (zombie claims), id ASC
+	StalledTasks      []StalledTask       // doing + idle strictly past StalledMinutes, most idle first
+	Bottlenecks       []Bottleneck        // open tasks blocking >=1 open task, blocks DESC
+	OpenBlockedBy     []BlockedGroup      // inverse of Bottlenecks: same order; each group = one blocker with the open tasks it blocks
 	RecentlyCompleted []RecentlyCompleted // done + completed_at >= Since, newest first
 
 	Workload map[string]int // durable assignee NAME → active (todo+doing) count; unassigned tasks bucket under "" (documented convention)

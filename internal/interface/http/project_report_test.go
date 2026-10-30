@@ -31,8 +31,8 @@ func TestProjectReport_EndToEnd(t *testing.T) {
 
 	// --- seed (clock advances chronologically; all stamps land where claimed) --------
 	p := createProject(t, stk, "Digest")
-	doneOut := makeTask(t, stk, p.ID, "Old Done", nil)        // p0, unassigned
-	zombie := makeTask(t, stk, p.ID, "Zombie Lease", nil)     // p0, unassigned
+	doneOut := makeTask(t, stk, p.ID, "Old Done", nil)    // p0, unassigned
+	zombie := makeTask(t, stk, p.ID, "Zombie Lease", nil) // p0, unassigned
 	stalled := makeTask(t, stk, p.ID, "Silent Worker", map[string]any{"priority": 1})
 	beating := makeTask(t, stk, p.ID, "Beating Heart", map[string]any{
 		"priority": 2, "assignee": actor("agent-h"),
@@ -41,7 +41,7 @@ func TestProjectReport_EndToEnd(t *testing.T) {
 		"priority": 3, "assignee": actor("agent-a"),
 	})
 	blocker := makeTask(t, stk, p.ID, "Foundation", map[string]any{"priority": 4}) // open (todo) blocker
-	dep := makeTask(t, stk, p.ID, "Dependent", nil)                               // p0, unassigned
+	dep := makeTask(t, stk, p.ID, "Dependent", nil)                                // p0, unassigned
 	doneIn := makeTask(t, stk, p.ID, "Fresh Done", nil)                            // p0, unassigned
 
 	if _, _, err := stk.App.Relations.Relate(context.Background(),
@@ -62,7 +62,7 @@ func TestProjectReport_EndToEnd(t *testing.T) {
 
 	setAgo(300) // N−5h
 	patchTask(t, stk, doneIn.ID, 1, map[string]any{"status": "doing"})
-	fc.now = N.Add(-299*time.Minute) // completed_at = N−4h59m → INSIDE the default window
+	fc.now = N.Add(-299 * time.Minute) // completed_at = N−4h59m → INSIDE the default window
 	patchTask(t, stk, doneIn.ID, 2, map[string]any{"status": "done"})
 
 	setAgo(130) // last real activity of Silent Worker
@@ -122,12 +122,12 @@ func TestProjectReport_EndToEnd(t *testing.T) {
 		t.Fatalf("active_claims = %v, want exactly the two live leases", rep.ActiveClaims)
 	}
 	wantClaims := []struct {
-		id       string
-		holder   string
-		expires  time.Time
+		id        string
+		holder    string
+		expires   time.Time
 		remaining int64
 	}{
-		{beating.ID, "agent-h", N.Add(10 * time.Minute), 600},  // heartbeat re-stamped it to now+storedTTL
+		{beating.ID, "agent-h", N.Add(10 * time.Minute), 600}, // heartbeat re-stamped it to now+storedTTL
 		{live.ID, "agent-a", N.Add(30 * time.Minute), 1800},
 	}
 	for i, want := range wantClaims {
@@ -152,9 +152,9 @@ func TestProjectReport_EndToEnd(t *testing.T) {
 	// (status event N−130m — the SQLite MaxAtByTasks must pick it over the older
 	// created event), Beating (claim N−70m — the N−50m HEARTBEAT must NOT count).
 	wantStalled := []struct {
-		id        string
-		lastAt    time.Time
-		idleMin   int
+		id      string
+		lastAt  time.Time
+		idleMin int
 	}{
 		{zombie.ID, base, 1800},
 		{stalled.ID, N.Add(-130 * time.Minute), 130},

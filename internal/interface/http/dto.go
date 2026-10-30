@@ -418,7 +418,7 @@ type createTaskReq struct {
 	DueAt              *string     `json:"due_at"`
 	Assignee           *actorInput `json:"assignee"`
 	AcceptanceCriteria []string    `json:"acceptance_criteria"`
-	ParentID           string      `json:"parent_id"` // optional; must exist, same project (else 400)
+	ParentID           string      `json:"parent_id"`            // optional; must exist, same project (else 400)
 	BlockedBy          []string    `json:"blocked_by,omitempty"` // optional task IDs; each must exist, same project, unarchived (else 400); repeats dedupe; empty entries → 400
 }
 
@@ -480,12 +480,12 @@ type heartbeatReq struct {
 // 409 claim-conflict names the real holder+expiry; 409 "not claimed" = no active
 // lease.
 type handoffReq struct {
-	Actor         actorInput `json:"actor"`
-	Kind          string     `json:"kind"`
-	Body          string     `json:"body"`
-	Notes         string     `json:"notes"`
+	Actor         actorInput  `json:"actor"`
+	Kind          string      `json:"kind"`
+	Body          string      `json:"body"`
+	Notes         string      `json:"notes"`
 	ToAssignee    *actorInput `json:"to_assignee"`
-	ClearAssignee bool       `json:"clear_assignee"`
+	ClearAssignee bool        `json:"clear_assignee"`
 }
 
 // handoffResp is the 200 body of POST /tasks/{id}/handoff: the fresh task row
@@ -686,15 +686,15 @@ type openCodeOptionsResponse struct {
 // always carries all six priorities "0".."5"; workload maps assignee NAME to
 // the active (todo+doing) task count, unassigned tasks bucket under "".
 type projectReportDTO struct {
-	ProjectID         string                   `json:"project_id"`
-	Counts            reportCountsDTO          `json:"counts"`
-	ActiveClaims      []activeClaimDTO         `json:"active_claims"`
-	ExpiredClaims     []taskRefDTO             `json:"expired_claims"`
-	StalledTasks      []stalledTaskDTO         `json:"stalled_tasks"`
-	Bottlenecks       []bottleneckDTO          `json:"bottlenecks"`
-	OpenBlockedBy     []blockedGroupDTO        `json:"open_blocked_by"`
-	RecentlyCompleted []recentlyCompletedDTO   `json:"recently_completed"`
-	Workload          map[string]int           `json:"workload"`
+	ProjectID         string                 `json:"project_id"`
+	Counts            reportCountsDTO        `json:"counts"`
+	ActiveClaims      []activeClaimDTO       `json:"active_claims"`
+	ExpiredClaims     []taskRefDTO           `json:"expired_claims"`
+	StalledTasks      []stalledTaskDTO       `json:"stalled_tasks"`
+	Bottlenecks       []bottleneckDTO        `json:"bottlenecks"`
+	OpenBlockedBy     []blockedGroupDTO      `json:"open_blocked_by"`
+	RecentlyCompleted []recentlyCompletedDTO `json:"recently_completed"`
+	Workload          map[string]int         `json:"workload"`
 }
 
 type reportCountsDTO struct {
@@ -752,7 +752,7 @@ type recentlyCompletedDTO struct {
 
 func toProjectReport(rep application.ProjectReport) projectReportDTO {
 	out := projectReportDTO{
-		ProjectID:         rep.ProjectID.String(),
+		ProjectID: rep.ProjectID.String(),
 		Counts: reportCountsDTO{
 			ByStatus:   make(map[string]int, len(rep.Counts.ByStatus)),
 			ByPriority: make(map[string]int, len(rep.Counts.ByPriority)),

@@ -96,14 +96,14 @@ func (f *fakeProjects) Update(_ context.Context, p domain.Project) error {
 // order + Limit/Offset and reports the pre-pagination total.
 type fakeTasks struct {
 	byID map[domain.ID]domain.Task
-    // failUpdate, when non-nil, is invoked by Update before the version check;
-    // a non-nil result replaces the normal outcome (simulates a concurrent
-    // writer racing between the use case's Get and Update).
-    failUpdate func(t domain.Task) error
-    // failHandoff, when non-nil, is invoked by Handoff BEFORE any mutation so a
-    // test can force the atomic handoff write to fail mid-transaction and assert
-    // nothing (task row, comment, events) was persisted.
-    failHandoff func(t domain.Task) error
+	// failUpdate, when non-nil, is invoked by Update before the version check;
+	// a non-nil result replaces the normal outcome (simulates a concurrent
+	// writer racing between the use case's Get and Update).
+	failUpdate func(t domain.Task) error
+	// failHandoff, when non-nil, is invoked by Handoff BEFORE any mutation so a
+	// test can force the atomic handoff write to fail mid-transaction and assert
+	// nothing (task row, comment, events) was persisted.
+	failHandoff func(t domain.Task) error
 	// lastFilter records the most recent List filter so tests can assert the
 	// use case's clamping of Limit/Offset.
 	lastFilter TaskFilter

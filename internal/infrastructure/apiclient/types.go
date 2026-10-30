@@ -405,15 +405,15 @@ type UnrelateTaskRequest struct {
 // todo/doing/done, counts.by_priority all six "0".."5", and workload maps
 // assignee name → active (todo+doing) count with unassigned under "".
 type ProjectReport struct {
-	ProjectID         string                   `json:"project_id"`
-	Counts            ReportCounts             `json:"counts"`
-	ActiveClaims      []ReportClaim            `json:"active_claims"`
-	ExpiredClaims     []ReportTaskRef          `json:"expired_claims"`
-	StalledTasks      []ReportStalledTask      `json:"stalled_tasks"`
-	Bottlenecks       []ReportBottleneck       `json:"bottlenecks"`
-	OpenBlockedBy     []ReportBlockedGroup     `json:"open_blocked_by"`
+	ProjectID         string                    `json:"project_id"`
+	Counts            ReportCounts              `json:"counts"`
+	ActiveClaims      []ReportClaim             `json:"active_claims"`
+	ExpiredClaims     []ReportTaskRef           `json:"expired_claims"`
+	StalledTasks      []ReportStalledTask       `json:"stalled_tasks"`
+	Bottlenecks       []ReportBottleneck        `json:"bottlenecks"`
+	OpenBlockedBy     []ReportBlockedGroup      `json:"open_blocked_by"`
 	RecentlyCompleted []ReportRecentlyCompleted `json:"recently_completed"`
-	Workload          map[string]int           `json:"workload"`
+	Workload          map[string]int            `json:"workload"`
 }
 
 // ReportCounts is the digest's tally: every non-archived task in the project
