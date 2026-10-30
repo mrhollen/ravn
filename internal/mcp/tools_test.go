@@ -34,6 +34,13 @@ const mockGetProjectBody = `{"id":"P1","name":"Website Redesign","description":"
 
 const mockDetailBody = `{"id":"T1","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","assignee":{"type":"human","name":"ada"},"claimed_by":{"type":"agent","name":"runner-2"},"claim_expires_at":"2026-09-26T15:53:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z","project_id":"P1","description":"Users cannot log in after the password reset flow.","notes":"Last run: migration half-applied, rolled back.","archived":false,"blocked":true,"blockers":[{"id":"T2","title":"Fix DB migration","status":"doing"}],"claimed_at":"2026-09-26T15:48:03Z","claim_ttl_seconds":900,"acceptance_criteria":[{"seq":1,"text":"login works","done":true,"note":"manual test passed","completed_by":{"type":"human","name":"ada"},"completed_at":"2026-09-26T15:40:12Z"}],"comments":[{"id":"C1","kind":"progress","body":"ran the build — green","actor":{"type":"human","name":"ada"},"created_at":"2026-09-26T15:47:55Z"}],"artifacts":[],"relations":[{"task_id":"T1","other_task_id":"T2","kind":"blocked-by","created_at":"2026-09-26T15:49:30Z"}],"events":[{"id":"E1","kind":"claimed","actor":{"type":"agent","name":"runner-2"},"after":"{\"claim\":\"fresh\"}","at":"2026-09-26T15:48:03Z"}]}`
 
+// A second full task detail, used by get_task_brief. Its comments are newest-first
+// and interleave THREE handoff comments with non-handoff kinds, so the brief must
+// surface exactly the two most-recent handoffs (CH3, CH2) and drop the older one
+// (CH1) plus every non-handoff body. The description carries surrounding
+// whitespace to prove trimming; notes is the verbatim resume blob.
+const mockBriefBody = `{"id":"TBRIEF","title":"Handoff resume brief task","status":"doing","priority":2,"assignee":{"type":"agent","name":"runner-9"},"version":7,"created_at":"2026-09-25T10:00:00Z","updated_at":"2026-09-26T18:00:00Z","project_id":"P1","description":"   Trim the leading and trailing whitespace on this description.   ","notes":"RESUME BLOB (verbatim): step 4 done, flaky test in internal/application/claim_test.go; next: add a repro at line 120 and re-run ./...","archived":false,"blocked":false,"blockers":[],"acceptance_criteria":[{"seq":1,"text":"brief works","done":true,"note":"verified"}],"comments":[{"id":"CN4","kind":"progress","body":"newest progress note that is NOT a handoff","actor":{"type":"agent","name":"runner-9"},"created_at":"2026-09-26T18:00:00Z"},{"id":"CH3","kind":"handoff","body":"H3 — most recent handoff: wrapped up the sqlite migration work","actor":{"type":"agent","name":"runner-8"},"created_at":"2026-09-26T17:40:00Z"},{"id":"CN5","kind":"note","body":"a non-handoff note in between","actor":{"type":"human","name":"ada"},"created_at":"2026-09-26T17:30:00Z"},{"id":"CH2","kind":"handoff","body":"H2 — second most recent handoff: notes on the claim race","actor":{"type":"agent","name":"runner-7"},"created_at":"2026-09-26T17:10:00Z"},{"id":"CN6","kind":"decision","body":"a non-handoff decision comment","actor":{"type":"human","name":"ada"},"created_at":"2026-09-26T16:50:00Z"},{"id":"CH1","kind":"handoff","body":"H1 — oldest handoff of the three, must be dropped by the two-cap","actor":{"type":"agent","name":"runner-6"},"created_at":"2026-09-26T16:30:00Z"}],"artifacts":[{"id":"A1","kind":"log","ref":"/artifacts/A1","summary":"a log artifact that must be omitted"}],"relations":[],"events":[{"id":"E1","kind":"claimed","actor":{"type":"agent","name":"runner-9"},"at":"2026-09-26T18:00:00Z"}]}`
+
 // The exact 409 claim-conflict body a foreign active lease produces (API.md).
 // Compared byte-for-byte against the isError text to prove VERBATIM propagation.
 const mockConflictBody = `{"error":"claim conflict","resource":"task","id":"HOLDING","holder":{"type":"agent","name":"runner-2"},"expires_at":"2026-09-26T15:53:00Z","message":"\"HOLDING\" is held by agent (runner-2) until 2026-09-26T15:53:00Z — wait for the lease to expire or work another task"}`
@@ -126,15 +133,15 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 	mux.HandleFunc("GET /api/v1/projects/{id}/report", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 		row := map[string]any{
-			"project_id":      r.PathValue("id"),
-			"counts":          map[string]any{"by_status": map[string]int{"todo": 1, "doing": 1, "done": 1}, "by_priority": map[string]int{"0": 3}},
-			"active_claims":   []map[string]any{{"id": "T1", "title": "Live", "claimed_by": map[string]string{"type": "agent", "name": "a"}, "claim_expires_at": "2026-09-26T17:48:03Z", "remaining_sec": 600}},
-			"expired_claims":  []map[string]any{{"id": "T2", "title": "Zombie"}},
-			"stalled_tasks":   []map[string]any{{"id": "T3", "title": "Stuck", "last_activity_at": "2026-09-26T14:48:03Z", "idle_minutes": 180}},
-			"bottlenecks":     []map[string]any{{"id": "T2", "title": "Zombie", "blocks": 1}},
-			"open_blocked_by": []map[string]any{{"blocker": map[string]string{"id": "T2", "title": "Zombie"}, "blocked": []map[string]any{{"id": "T3", "title": "Stuck"}}}},
+			"project_id":         r.PathValue("id"),
+			"counts":             map[string]any{"by_status": map[string]int{"todo": 1, "doing": 1, "done": 1}, "by_priority": map[string]int{"0": 3}},
+			"active_claims":      []map[string]any{{"id": "T1", "title": "Live", "claimed_by": map[string]string{"type": "agent", "name": "a"}, "claim_expires_at": "2026-09-26T17:48:03Z", "remaining_sec": 600}},
+			"expired_claims":     []map[string]any{{"id": "T2", "title": "Zombie"}},
+			"stalled_tasks":      []map[string]any{{"id": "T3", "title": "Stuck", "last_activity_at": "2026-09-26T14:48:03Z", "idle_minutes": 180}},
+			"bottlenecks":        []map[string]any{{"id": "T2", "title": "Zombie", "blocks": 1}},
+			"open_blocked_by":    []map[string]any{{"blocker": map[string]string{"id": "T2", "title": "Zombie"}, "blocked": []map[string]any{{"id": "T3", "title": "Stuck"}}}},
 			"recently_completed": []map[string]any{{"id": "T4", "title": "Shipped", "completed_at": "2026-09-26T15:48:03Z"}},
-			"workload":          map[string]int{"a": 1, "": 2},
+			"workload":           map[string]int{"a": 1, "": 2},
 		}
 		data, _ := json.Marshal(row)
 		writeJSON(w, http.StatusOK, string(data))
@@ -225,14 +232,20 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 	})
 	mux.HandleFunc("GET /api/v1/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
-		if r.PathValue("id") != "T1" {
+		switch r.PathValue("id") {
+		case "T1":
+			if q := r.URL.Query().Get("comment_limit"); q != "" && q != "5" {
+				t.Errorf("upstream: comment_limit = %q, want 5", q)
+			}
+			writeJSON(w, http.StatusOK, mockDetailBody)
+		case "TBRIEF": // get_task_brief must request a generous recent tail (server max 50)
+			if q := r.URL.Query().Get("comment_limit"); q != "50" {
+				t.Errorf("upstream: TBRIEF comment_limit = %q, want 50", q)
+			}
+			writeJSON(w, http.StatusOK, mockBriefBody)
+		default:
 			writeJSON(w, http.StatusNotFound, `{"error":"not found","resource":"task","id":`+jsonString(r.PathValue("id"))+`,"message":"unknown task"}`)
-			return
 		}
-		if q := r.URL.Query().Get("comment_limit"); q != "" && q != "5" {
-			t.Errorf("upstream: comment_limit = %q, want 5", q)
-		}
-		writeJSON(w, http.StatusOK, mockDetailBody)
 	})
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		b := record(r)
@@ -456,7 +469,7 @@ func jsonString(s string) string {
 // --- helpers ---------------------------------------------------------------------------
 
 var wantToolNames = []string{
-	"list_projects", "create_project", "get_project", "update_project", "list_tasks", "get_task", "project_report", "create_task",
+	"list_projects", "create_project", "get_project", "update_project", "list_tasks", "get_task", "get_task_brief", "project_report", "create_task",
 	"update_task", "claim_task", "release_task", "heartbeat_task", "handoff_task", "add_comment",
 	"update_notes", "complete_ac", "add_ac", "remove_ac", "edit_ac", "attach_artifact", "relate_tasks",
 }
@@ -556,6 +569,112 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatalf("marshal: %v", err)
 	}
 	return string(data)
+}
+
+// TestGetTaskBrief proves AC1: the tool returns a compact brief (title + trimmed
+// description + verbatim notes + the two most-recent handoff comments) that is
+// materially smaller than get_task and drops every full-only field.
+func TestGetTaskBrief(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	upstream, _, calls := newMockUpstream(t)
+	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
+	defer func() { _ = c.Close() }()
+
+	// (a) The brief carries title + verbatim notes + the two most-recent handoffs.
+	res := callTool(t, c, ctx, "get_task_brief", map[string]any{"id": "TBRIEF"})
+	if res.IsError {
+		t.Fatalf("get_task_brief returned isError: %s", firstText(t, res))
+	}
+	text := firstText(t, res)
+	brief := asMap(t, text)
+
+	if got, want := brief["title"], "Handoff resume brief task"; got != want {
+		t.Errorf("brief.title = %v, want %q", got, want)
+	}
+	const wantNotes = "RESUME BLOB (verbatim): step 4 done, flaky test in internal/application/claim_test.go; next: add a repro at line 120 and re-run ./..."
+	if got, want := brief["notes"], wantNotes; got != want {
+		t.Errorf("brief.notes not verbatim:\n got  %v\n want %q", got, want)
+	}
+	const wantDesc = "Trim the leading and trailing whitespace on this description."
+	if got, want := brief["description"], wantDesc; got != want {
+		t.Errorf("brief.description = %v, want trimmed %q", got, want)
+	}
+
+	handoffs, _ := brief["handoff_comments"].([]any)
+	if len(handoffs) != 2 {
+		t.Fatalf("brief.handoff_comments has %d entries, want exactly 2 (got %s)", len(handoffs), text)
+	}
+	first, _ := handoffs[0].(map[string]any)
+	second, _ := handoffs[1].(map[string]any)
+	if b, _ := first["body"].(string); !strings.Contains(b, "H3 —") {
+		t.Errorf("handoff_comments[0] = %v, want the most-recent handoff H3", first)
+	}
+	if b, _ := second["body"].(string); !strings.Contains(b, "H2 —") {
+		t.Errorf("handoff_comments[1] = %v, want the second-most-recent handoff H2", second)
+	}
+
+	// (b) Non-handoff comment bodies must NOT appear anywhere in the brief.
+	for _, leak := range []string{
+		"newest progress note that is NOT a handoff",
+		"a non-handoff note in between",
+		"a non-handoff decision comment",
+	} {
+		if strings.Contains(text, leak) {
+			t.Errorf("brief leaks non-handoff comment body %q:\n%s", leak, text)
+		}
+	}
+
+	// (c) At most two handoffs: the oldest of the three (H1) must be dropped.
+	if strings.Contains(text, "H1 —") {
+		t.Errorf("brief exceeds the two-handoff cap (includes oldest H1):\n%s", text)
+	}
+
+	// (d) The payload is materially smaller than a full get_task response and omits
+	// every full-only field (events, artifacts, ACs, blockers, relations, ...).
+	for _, key := range []string{
+		"events", "artifacts", "acceptance_criteria", "blockers", "relations",
+		"version", "status", "priority", "created_at", "updated_at",
+	} {
+		if _, present := brief[key]; present {
+			t.Errorf("brief must omit full-only key %q, but it is present:\n%s", key, text)
+		}
+	}
+	if len(text) >= len(mockBriefBody) {
+		t.Errorf("brief payload (%d bytes) is not smaller than the full detail body (%d bytes)", len(text), len(mockBriefBody))
+	}
+
+	// Routing: the tool reused apiclient GetTask (no new endpoint) via GET /tasks/TBRIEF.
+	findCall(t, *calls, http.MethodGet, "/api/v1/tasks/TBRIEF")
+
+	// An explicit actor is accepted for interface parity (the read does not attribute it).
+	if res := callTool(t, c, ctx, "get_task_brief", map[string]any{
+		"id":    "TBRIEF",
+		"actor": map[string]any{"name": "eve", "type": "agent"},
+	}); res.IsError {
+		t.Errorf("get_task_brief with explicit actor returned isError: %s", firstText(t, res))
+	}
+
+	// Unknown id → the 404 body arrives verbatim (same recovery-hint contract as get_task).
+	res = callTool(t, c, ctx, "get_task_brief", map[string]any{"id": "NOPE"})
+	if !res.IsError {
+		t.Fatalf("get_task_brief (unknown id) expected isError, got: %s", firstText(t, res))
+	}
+	want404 := `{"error":"not found","resource":"task","id":"NOPE","message":"unknown task"}`
+	if text := firstText(t, res); text != want404 {
+		t.Errorf("404 body not verbatim:\n got  %s\n want %s", text, want404)
+	}
+
+	// Empty id is rejected locally — no round-trip.
+	before := len(*calls)
+	res = callTool(t, c, ctx, "get_task_brief", map[string]any{"id": "   "})
+	if !res.IsError || !strings.Contains(firstText(t, res), `required argument "id"`) {
+		t.Errorf("empty id: want invalid-input isError, got %s", firstText(t, res))
+	}
+	if len(*calls) != before {
+		t.Errorf("empty id still hit the upstream (%d new calls)", len(*calls)-before)
+	}
 }
 
 // --- the round trip ----------------------------------------------------------------------
@@ -1713,12 +1832,12 @@ func TestHandoffTaskRoundTrip(t *testing.T) {
 	// Success: full handoff with kind + body + to_assignee + notes. The tool must
 	// route these into the request body and render the {task, comment} result.
 	res := callTool(t, c, ctx, "handoff_task", map[string]any{
-		"id":           "T1",
-		"kind":         "handoff",
-		"body":         "Handing off to ada; migration finished, see notes.",
-		"notes":        "Next: verify the rollback script.",
-		"to_assignee":  map[string]any{"name": "ada", "type": "human"},
-		"actor":        map[string]any{"name": "runner-2", "type": "agent"},
+		"id":          "T1",
+		"kind":        "handoff",
+		"body":        "Handing off to ada; migration finished, see notes.",
+		"notes":       "Next: verify the rollback script.",
+		"to_assignee": map[string]any{"name": "ada", "type": "human"},
+		"actor":       map[string]any{"name": "runner-2", "type": "agent"},
 	})
 	if res.IsError {
 		t.Fatalf("handoff_task returned isError: %s", firstText(t, res))
@@ -2357,4 +2476,3 @@ func TestNumericParamSchemasAreIntegerWithBounds(t *testing.T) {
 		t.Errorf("update_task version=0.5: want schema-validation error, got success: %s", firstText(t, res))
 	}
 }
-

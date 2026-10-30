@@ -71,7 +71,7 @@ func ServerOptions() []mcpsrv.ServerOption {
 	}
 }
 
-// RegisterTools wires every ravn MCP tool onto s (the full 21-tool surface,
+// RegisterTools wires every ravn MCP tool onto s (the full 22-tool surface,
 // docs/API.md route table). defaultActor is the container-default identity
 // (from RAVN_AGENT_NAME) used whenever a mutating call arrives without a
 // usable `actor` object.
@@ -82,6 +82,7 @@ func RegisterTools(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) 
 	registerUpdateProject(s, c, defaultActor)
 	registerListTasks(s, c)
 	registerGetTask(s, c)
+	registerGetTaskBrief(s, c, defaultActor)
 	registerProjectReport(s, c)
 	registerCreateTask(s, c, defaultActor)
 	registerUpdateTask(s, c, defaultActor)
@@ -475,6 +476,85 @@ func registerGetTask(s *mcpsrv.MCPServer, c Client) {
 	})
 }
 
+// TaskBrief is the compact, token-optimized resume/handoff payload returned by
+// get_task_brief: just enough to pick up where a previous agent stopped, without
+// the full get_task weight. Everything not listed here — events, artifacts,
+// acceptance criteria, blockers, relations, and the full comment list — is
+// deliberately omitted to keep the model context small.
+type TaskBrief struct {
+	Title       string           `json:"title"`
+	Description string           `json:"description,omitempty"`
+	Notes       string           `json:"notes"`
+	Handoffs    []HandoffComment `json:"handoff_comments,omitempty"`
+}
+
+// HandoffComment is one handoff comment in a brief: its markdown body plus who
+// posted it and when (attribution only — no id, to stay lean).
+type HandoffComment struct {
+	Body      string `json:"body"`
+	By        string `json:"by,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+// buildBrief reduces a full resume payload to the compact brief: the trimmed
+// description, the durable notes blob verbatim (this IS the resume context), and
+// the two most-recent handoff comments.
+func buildBrief(d *apiclient.TaskDetail) TaskBrief {
+	return TaskBrief{
+		Title:       d.Title,
+		Description: strings.TrimSpace(d.Description),
+		Notes:       d.Notes,
+		Handoffs:    recentHandoffs(d.Comments, 2),
+	}
+}
+
+// recentHandoffs returns up to n of the most-recent handoff comments. Comments
+// arrive newest-first from get_task, so the first n "handoff" entries encountered
+// are exactly the two most recent ones; older handoffs and every non-handoff kind
+// are dropped. When fewer than n exist, all that do are returned.
+func recentHandoffs(comments []apiclient.Comment, n int) []HandoffComment {
+	out := make([]HandoffComment, 0, n)
+	for _, cm := range comments {
+		if cm.Kind != "handoff" {
+			continue
+		}
+		out = append(out, HandoffComment{Body: cm.Body, By: cm.Actor.Name, CreatedAt: cm.CreatedAt})
+		if len(out) >= n {
+			break
+		}
+	}
+	return out
+}
+
+// registerGetTaskBrief → GET /tasks/{id}, reduced to a compact TaskBrief. It
+// reuses the EXISTING apiclient GetTask (no new REST endpoint is added): we fetch
+// a generous recent tail (50 = the server maximum) so the two most-recent handoff
+// comments are within reach, then strip the payload down to the resume blob + that
+// thread. Read-only like get_task; the optional actor is accepted for interface
+// parity with the other tools, but GET /tasks/{id} does not attribute it.
+func registerGetTaskBrief(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+	tool := mcpgo.NewTool("get_task_brief",
+		mcpgo.WithDescription(
+			"A COMPACT, token-optimized handoff/resume brief for one task — the lightweight alternative to get_task when you only need to pick up where a previous agent stopped. Returns exactly: title; description (trimmed); the durable notes blob VERBATIM (this is the resume context); and the LAST 2 comments whose kind is \"handoff\" (fewer if fewer exist). Everything else — events, artifacts, acceptance criteria, blockers, relations, and the full comment list — is omitted to stay small. Unknown id → isError not-found naming the id; re-check ids with list_projects/list_tasks."+actorHint),
+		mcpgo.WithString("id", mcpgo.Required(),
+			mcpgo.Description("Task ULID whose compact brief to fetch.")),
+		actorProp(),
+	)
+	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id := strings.TrimSpace(req.GetString("id", ""))
+		if id == "" {
+			return invalidInput("get_task_brief", "id"), nil
+		}
+		// Fetch a generous recent tail (50 = server max) so the two most-recent
+		// handoff comments are within reach; events are unused and left default.
+		detail, err := c.GetTask(ctx, id, 50, 0)
+		if err != nil {
+			return fail(c, err), nil
+		}
+		return textResult(buildBrief(detail))
+	})
+}
+
 func registerProjectReport(s *mcpsrv.MCPServer, c Client) {
 	tool := mcpgo.NewTool("project_report",
 		mcpgo.WithDescription(
@@ -492,7 +572,7 @@ func registerProjectReport(s *mcpsrv.MCPServer, c Client) {
 			return invalidInput("project_report", "project_id"), nil
 		}
 		since := strings.TrimSpace(req.GetString("since", "")) // empty = server default now-24h
-		stalledMinutes := req.GetInt("stalled_minutes", 0)   // <= 0 = server default 60
+		stalledMinutes := req.GetInt("stalled_minutes", 0)     // <= 0 = server default 60
 		if stalledMinutes < 0 {
 			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"project_report: \"stalled_minutes\" must be a non-negative integer"}`), nil
 		}
