@@ -3471,9 +3471,12 @@ test("OperationalBar: index.html markup contains unified card, split-capsules, a
   assert.match(html, /data-testid="status-dropdown-trigger"/);
   assert.match(html, /role="group" aria-label="Status"/);
 
-  // Owner popover trigger
+  // Owner popover trigger — accessible name is a dynamic sr-only prefix
+  // ("Durable owner: <name>") rather than a static aria-label.
   assert.match(html, /data-testid="owner-popover-trigger"/);
-  assert.match(html, /aria-label="Durable Owner"/);
+  assert.match(html, /<span class="sr-only">Durable owner:<\/span>/);
+  // A static aria-label would clobber the dynamic owner word — it must be gone.
+  assert.doesNotMatch(html, /aria-label="Durable Owner"/);
 
   // Claim controls
   assert.match(html, /role="group" aria-label="Claim Controls"/);
