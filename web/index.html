@@ -673,12 +673,27 @@ DOM-placed after the collapsible strip: on md+ it renders flush
           <div data-testid="mobile-group-status" class="px-4 pb-3 pt-2">
             <h3 class="section-title">Status &amp; Refresh</h3>
             <!-- Rendered as a semantic <button>: native keyboard focus +
-                 Enter/Space activation for free. aria-live (a global ARIA
-                 attribute) keeps announcing state changes politely; the old
-                 role="status" was dropped because an explicit role on a button
-                 overrides its implicit interactive semantics. hover/active/
-                 focus-visible classes make the interactivity visually evident. -->
-            <button type="button" data-testid="mobile-sse-status" aria-live="polite" @click="connectSse()"
+                 Enter/Space activation for free (no @keydown wiring needed).
+                 aria-live (a global ARIA attribute) keeps announcing state
+                 changes politely; the old role="status" was dropped because an
+                 explicit role on a button overrides its implicit interactive
+                 semantics. hover/active/focus-visible classes make the
+                 interactivity visually evident. The dynamic aria-label states
+                 BOTH the function and the current state (the visible text alone
+                 only shows the state), adapted to sseStatus
+                 ('connected'|'connecting'|'disconnected') + the polling flag:
+                 a screen reader hears "Realtime status: disconnected, syncing
+                 via polling every 15 seconds. Activate to reconnect.", never a
+                 dead-end bare "Offline". (01M3MMXANW2BJ4V55GGB3GK8QN,
+                 01M3MMTXVXVH4CBJR7KK5B6XF4) -->
+             <button type="button" data-testid="mobile-sse-status" aria-live="polite" @click="connectSse()"
+                     :aria-label="sseStatus === 'connecting'
+                       ? 'Reconnecting to the realtime stream…'
+                       : sseStatus === 'connected'
+                         ? 'Realtime status: connected. Activate to reconnect.'
+                         : (polling
+                           ? 'Realtime status: disconnected, syncing via polling every 15 seconds. Activate to reconnect.'
+                           : 'Realtime status: disconnected. Activate to reconnect.')"
                     class="flex w-full cursor-pointer select-none items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium transition-colors hover:bg-zinc-100 active:bg-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
                     :class="sseStatus === 'connected'
                        ? 'text-emerald-700 dark:text-emerald-400'

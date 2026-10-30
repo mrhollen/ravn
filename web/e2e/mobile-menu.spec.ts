@@ -378,6 +378,45 @@ test.describe('Mobile slide-down menu panel (360px)', () => {
     await context.close();
   });
 
+  test('Task B (01M3MMTXVXVH4CBJR7KK5B6XF4): accessible name states function and current state', async ({ browser }) => {
+    const { context, page } = await openMobileMenuBoard(browser);
+    await waitSseConnected(page);
+
+    await page.getByRole('button', { name: 'Board menu' }).click();
+    const panel = page.getByTestId('mobile-menu-panel');
+    await expect(panel).toBeVisible();
+
+    const status = panel.getByTestId('mobile-sse-status');
+    // Connected — the accessible name names the state AND what activating does.
+    await expect(status).toHaveAttribute(
+      'aria-label',
+      /Realtime status: connected\. Activate to reconnect\./i,
+    );
+
+    // Task B(a) — a NATIVE button needs no @keydown wiring: Space (like Enter,
+    // covered by the AC1/AC2 test above) activates connectSse() for free.
+    const openedBefore = await sseOpenedCount(page);
+    await status.press('Space');
+    await expect.poll(async () => sseOpenedCount(page), { timeout: 5000 }).toBe(openedBefore + 1);
+    await waitSseConnected(page);
+    // …and the label tracks the state back to connected (dynamic binding).
+    await expect(status).toHaveAttribute('aria-label', /Realtime status: connected\./i);
+
+    // Force disconnected+polling (auto-refresh is on by default) — the name
+    // now reflects the active polling fallback, not a dead "offline" reading.
+    await page.evaluate(() => {
+      const root = document.querySelector('[x-data]');
+      if (!root || !(window as any).Alpine) throw new Error('Alpine not started');
+      (window as any).Alpine.$data(root).disconnectSse(true);
+    });
+    await expect(status).toHaveAttribute(
+      'aria-label',
+      /Realtime status: disconnected, syncing via polling every 15 seconds\. Activate to reconnect\./i,
+    );
+
+    await context.close();
+  });
+
   test('panel renders correctly in dark mode at 360px (screenshot evidence)', async ({ browser }, testInfo) => {
     const context = await browser.newContext({ viewport: MOBILE_VIEWPORT, hasTouch: true });
     await context.addInitScript(() => localStorage.setItem('ravn_theme', 'dark'));
