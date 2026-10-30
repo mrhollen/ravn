@@ -1,23 +1,13 @@
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
+import { test, expect } from './fixtures';
 import { randomUUID } from 'crypto';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
+import fs from 'fs'; // write upload source files + inspect server-side artifact store
 import path from 'path';
-import { fileURLToPath } from 'url';
 import zlib from 'zlib';
 import { selectProjectViaDropdown } from './helpers';
 
 // E2E test suite for task 01M3WA51KRSQ1AKYSE9MZEJJ8P:
 // Artifacts: store file uploads on a mountable volume; images inline (click for bigger view),
 // other files in a new tab.
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
 
 function crc32(buf: Buffer): number {
   let c = ~0;
@@ -66,31 +56,6 @@ function generatePng(w: number, h: number, r: number, g: number, b: number): Buf
 }
 
 const PNG_BYTES = generatePng(180, 100, 56, 189, 248);
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until server starts listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
 
 async function seedProjectAndTask(serverUrl: string): Promise<{ projectId: string; taskId: string }> {
   const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
@@ -148,63 +113,11 @@ async function seedProjectAndTask(serverUrl: string): Promise<{ projectId: strin
 }
 
 test.describe('artifacts storage, inline images and new-tab files', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let artifactsDir: string;
-  let serverUrl: string;
+  // Each test gets its own dedicated server + empty artifact store (isolatedServer)
+  // so it can inspect uploads on disk at isolatedServer.artifactsDir without other
+  // specs' data; each seeds a unique project, so the temp DB is otherwise irrelevant.
+  let serverUrl = ''; // per-test dedicated isolatedServer URL
   let uncaughtConsoleErrors: string[] = [];
-
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-artifacts-e2e-'));
-    artifactsDir = path.join(tempDir, 'artifacts');
-    fs.mkdirSync(artifactsDir, { recursive: true });
-
-    const serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: path.join(tempDir, 'ravn.db'),
-        RAVN_ARTIFACTS_DIR: artifactsDir,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    await waitForServer(serverUrl);
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
 
   test.beforeEach(async ({ page }) => {
     uncaughtConsoleErrors = [];
@@ -222,7 +135,10 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
     expect(uncaughtConsoleErrors).toEqual([]);
   });
 
-  test('uploads image, renders inline, click opens preview, other file renders as link, back-compat preserved', async ({ page }) => {
+  test('uploads image, renders inline, click opens preview, other file renders as link, back-compat preserved', async ({ page, isolatedServer }) => {
+    serverUrl = isolatedServer.url;
+    const tempDir = isolatedServer.dataDir; // scratch for upload source files
+    const artifactsDir = isolatedServer.artifactsDir; // where the server stores uploads
     const { projectId, taskId } = await seedProjectAndTask(serverUrl);
 
     // Prepare temp upload files
@@ -357,7 +273,9 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
     expect(notFoundRes.status).toBe(404);
   });
 
-  test('clicking inline image opens lightbox preview modal', async ({ page }) => {
+  test('clicking inline image opens lightbox preview modal', async ({ page, isolatedServer }) => {
+    serverUrl = isolatedServer.url;
+    const tempDir = isolatedServer.dataDir; // scratch for upload source files
     const { projectId, taskId } = await seedProjectAndTask(serverUrl);
 
     const imageFilePath = path.join(tempDir, 'sample-screenshot-2.png');
@@ -394,7 +312,9 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
     await expect(previewImg).toBeVisible();
   });
 
-  test('uploading video artifact displays inline video player and serves inline', async ({ page }) => {
+  test('uploading video artifact displays inline video player and serves inline', async ({ page, isolatedServer }) => {
+    serverUrl = isolatedServer.url;
+    const tempDir = isolatedServer.dataDir; // scratch for upload source files
     const { projectId, taskId } = await seedProjectAndTask(serverUrl);
 
     const videoFilePath = path.join(tempDir, 'sample-test-run.mp4');

@@ -11,49 +11,12 @@
 //     their former ~20px icon-only boxes;
 //   - prefers-reduced-motion must freeze the looping SSE halo and the pulsing
 //     claimed-task badge while keeping every status indicator legible/static.
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { test, expect } from './fixtures';
 import { selectProjectViaDropdown } from './helpers';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
 
 const ACTOR = { name: 'e2e-touch-motion', type: 'agent' as const };
 const TASK_TITLE = 'Touch Motion A11y Task';
 const BLOCKER_TITLE = 'Blocking Task for Relation Row';
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until the server is listening.
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
 
 /** Non-exempt visible interactive controls — same selector set as the width-
  *  based rule in style.css, so every element asserted here is subject to it. */
@@ -67,56 +30,10 @@ async function boxSize(locator: import('@playwright/test').Locator): Promise<{ w
 }
 
 test.describe('pointer-coarse touch targets + prefers-reduced-motion', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverUrl: string;
+  let serverUrl = ''; // worker-scoped shared server (each test seeds + selects its own project)
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-touch-motion-e2e-'));
-    const port = await getFreePort();
-    expect(port).not.toBe(8080);
-    serverUrl = `http://127.0.0.1:${port}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${port}`,
-        RAVN_DATA: path.join(tempDir, 'ravn.db'),
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    await waitForServer(serverUrl);
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
   });
 
   /** Seed a project with one task carrying an AC (drawer Edit/✕ rows) that is

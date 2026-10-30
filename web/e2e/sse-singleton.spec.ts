@@ -1,10 +1,4 @@
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { test, expect } from './fixtures';
 
 /**
  * Ticket 01M3VJ5PQEAJ60B0QGPNZT8NKP — SSE singleton proof (E2E).
@@ -28,106 +22,16 @@ import { fileURLToPath } from 'url';
  *      stays 1), still exactly one open stream, sseStatus unchanged, and no
  *      console errors / uncaught page errors.
  *
- * Self-contained per the repo E2E convention: it spins up its own ephemeral
- * ravn-server on a random high port (never :8080) with a temp DB and serves
- * the pre-built web/dist — it never reuses another spec's server.
+ * Serves the pre-built web/dist against the shared worker-scoped ravn-server
+ * fixture (./fixtures) on an ephemeral temp DB — no per-spec server lifecycle.
  */
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until server starts listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
-
 test.describe('SSE singleton (boot init idempotence)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverPort: number;
-  let serverUrl: string;
+  let serverUrl = ''; // worker-scoped shared server (seeded per-test; board via ?project= deep link)
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    // Ensure static dist is built (board.spec keeps the same convention).
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-sse-singleton-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-
-    serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    expect(serverPort).toBeGreaterThan(1024);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '', // Zero-config local mode
-        OPENCODE_ALLOW_PRIVATE_IPS: 'true',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    serverProcess.stderr?.on('data', (d) => {
-      if (process.env.DEBUG_E2E) console.error('[server stderr]', d.toString());
-    });
-
-    await waitForServer(serverUrl);
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-    expect(fs.existsSync(tempDir)).toBe(false);
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
   });
 
   test.beforeEach(async ({ page }) => {
@@ -213,7 +117,10 @@ test.describe('SSE singleton (boot init idempotence)', () => {
     // -------------------------------------------------------------------------
     // Step 2: Boot the UI and wait until SSE reports connected.
     // -------------------------------------------------------------------------
-    await page.goto(serverUrl);
+    // Deep-link (?project=) so boot adopts the seeded project; on the shared
+    // worker DB a bare goto would auto-select a foreign projects[0] and the
+    // board-content check at the end ('Singleton Watch Task') would miss it.
+    await page.goto(`${serverUrl}/?project=${project.id}`);
     await expect(page).toHaveTitle(/^(crowban|Rävn)$/);
 
     await page.waitForFunction(() => {

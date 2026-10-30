@@ -2,44 +2,8 @@
 //   AC1 — clicking outside the trigger + dropdown dismisses the menu
 //   AC2 — the "Move to" picker renders as a floating dropdown below the ⋮ trigger
 //   AC3 — opening the menu does not shift the card or any sibling card's layout
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until the server is listening.
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
+import { test, expect } from './fixtures';
+import { selectProjectViaDropdown } from './helpers';
 
 async function postJson(url: string, body: unknown): Promise<any> {
   const res = await fetch(url, {
@@ -60,46 +24,13 @@ async function openCardMenu(page: import('@playwright/test').Page, title: string
 }
 
 test.describe('Card move menu (floating popover)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverPort: number;
   let serverUrl: string;
   let projectId: string;
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-card-menu-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-    serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    expect(serverPort).toBeGreaterThan(1024);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    serverProcess.stderr?.on('data', (d) => {
-      if (process.env.DEBUG_E2E) console.error('[server stderr]', d.toString());
-    });
-
-    await waitForServer(serverUrl);
+  // Server owned by the shared worker fixture. Seed this spec's own uniquely-named
+  // project + cards into it; tests select it explicitly before asserting its board.
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
     const proj = await postJson(`${serverUrl}/api/v1/projects`, {
       name: 'Card Move Menu Project',
@@ -123,30 +54,10 @@ test.describe('Card move menu (floating popover)', () => {
     });
   });
 
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
-  });
-
   test('AC1: outside click dismisses the move menu; toggle and label clicks still behave', async ({ page }) => {
     await page.goto(serverUrl);
+    // Shared DB may auto-select a foreign project — pick this spec's own.
+    await selectProjectViaDropdown(page, projectId);
     const card = page.locator('article', { hasText: 'CMM top card' });
     await expect(card).toBeVisible();
     const menu = card.locator('[data-testid="card-move-menu"]');
@@ -177,6 +88,7 @@ test.describe('Card move menu (floating popover)', () => {
 
   test('AC2: the move menu renders as a floating dropdown below the ⋮ trigger', async ({ page }) => {
     await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, projectId);
     await openCardMenu(page, 'CMM top card');
 
     const card = page.locator('article', { hasText: 'CMM top card' });
@@ -200,6 +112,7 @@ test.describe('Card move menu (floating popover)', () => {
 
   test('AC3: opening the move menu shifts neither the card nor its siblings', async ({ page }) => {
     await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, projectId);
     const top = page.locator('article', { hasText: 'CMM top card' });
     const bottom = page.locator('article', { hasText: 'CMM bottom card' });
     await expect(top).toBeVisible();

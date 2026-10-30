@@ -1,44 +1,9 @@
-import { test, expect, type BoundingBox } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
+import { test, expect, type BoundingBox } from './fixtures';
 import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
+import { selectProjectViaDropdown } from './helpers';
 
 // iPhone-class viewport: 375px wide (the AC reference width), touch enabled.
 const MOBILE_VIEWPORT = { width: 375, height: 812 };
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until server starts listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
 
 async function postJson(url: string, body: unknown): Promise<any> {
   const res = await fetch(url, {
@@ -51,50 +16,15 @@ async function postJson(url: string, body: unknown): Promise<any> {
 }
 
 test.describe('Mobile experience (375px, touch)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverPort: number;
   let serverUrl: string;
   let projectId: string;
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
+  // Server owned by the shared worker fixture. Seed this spec's own uniquely-named
+  // project + cards; openMobileBoard() selects it (a shared DB may auto-select another).
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-mobile-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-    serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    expect(serverPort).toBeGreaterThan(1024);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    serverProcess.stderr?.on('data', (d) => {
-      const msg = d.toString();
-      if (process.env.DEBUG_E2E) console.error('[server stderr]', msg);
-    });
-
-    await waitForServer(serverUrl);
-
-    // Seed exactly one project (the app auto-selects the first project on load).
     const proj = await postJson(`${serverUrl}/api/v1/projects`, {
       name: 'Mobile E2E Project',
       description: 'Seeded for the mobile experience e2e spec',
@@ -126,25 +56,6 @@ test.describe('Mobile experience (375px, touch)', () => {
     });
   });
 
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-    expect(fs.existsSync(tempDir)).toBe(false);
-  });
-
   test.beforeEach(async () => {
     uncaughtConsoleErrors = [];
   });
@@ -168,11 +79,8 @@ test.describe('Mobile experience (375px, touch)', () => {
     });
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('Rävn');
-    // The seeded project is auto-selected by the app on load — the custom
-    // Projects dropdown trigger shows it.
-    const trigger = page.getByTestId('project-select');
-    await expect(trigger).toBeVisible();
-    await expect(trigger).toContainText('Mobile E2E Project');
+    // Shared DB may auto-select a foreign project — pick this spec's own.
+    await selectProjectViaDropdown(page, projectId);
     return { context, page, cdp };
   }
 
@@ -543,6 +451,8 @@ test.describe('Mobile experience (375px, touch)', () => {
 
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('Rävn');
+    // Shared DB may auto-select a foreign project — pick this spec's own.
+    await selectProjectViaDropdown(page, projectId);
 
     // Below md a card click opens the full-page view — the mobile fallback skin.
     const card = page.locator('article', { hasText: 'Long title that used to wrap every word' });

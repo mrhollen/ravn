@@ -6,45 +6,9 @@
 //   AC4 — keyboard operability (open/arrows/Enter/Escape/focus return) + 375px
 // Self-contained: ephemeral ravn-server on a random high port + temp DB,
 // serving the pre-built web/dist (mirrors m4.spec.ts / mobile.spec.ts).
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
+import { test, expect } from './fixtures';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { openNewProjectFromDropdown, selectProjectViaDropdown } from './helpers';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
 
 async function postJson(url: string, body: unknown): Promise<any> {
   const res = await fetch(url, {
@@ -63,47 +27,15 @@ async function listProjects(serverUrl: string): Promise<{ total: number; project
 }
 
 test.describe('Projects dropdown (custom control)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverPort: number;
   let serverUrl: string;
   let alphaId: string;
   let betaId: string;
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-project-dropdown-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-    serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    serverProcess.stderr?.on('data', (d) => {
-      if (process.env.DEBUG_E2E) console.error('[server stderr]', d.toString());
-    });
-
-    await waitForServer(serverUrl);
+  // Server is owned by the shared worker fixture; seed this spec's own uniquely
+  // named projects into its DB.
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
     const alpha = await postJson(`${serverUrl}/api/v1/projects`, {
       name: 'Alpha Project',
@@ -123,24 +55,6 @@ test.describe('Projects dropdown (custom control)', () => {
       priority: 2,
       actor: { name: 'e2e-dd-seed', type: 'agent' },
     });
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
   });
 
   test.beforeEach(async () => {

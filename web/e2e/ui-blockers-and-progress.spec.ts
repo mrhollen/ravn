@@ -8,47 +8,8 @@
 //         mini progress bar on their board card (e.g. "3/5 subtasks done").
 // - AC 3: Opening a task highlights its relations and blockers clearly in the detail panel.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import { selectProjectViaDropdown, expectProjectSelected } from './helpers';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
-
-const ACTOR = { name: 'qa-tester', type: 'human' as const };
 
 async function postJson(url: string, body: unknown): Promise<any> {
   const res = await fetch(url, {
@@ -70,11 +31,10 @@ async function patchJson(url: string, body: unknown): Promise<any> {
   return res.json();
 }
 
+const ACTOR = { name: 'qa-tester', type: 'human' as const };
+
 test.describe('Visual blocker indicators & parent epic progress on cards', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverPort: number;
-  let serverUrl: string;
+  let serverUrl = ''; // worker-scoped shared server (assigned in beforeAll)
 
   let project: any;
   let blockerTask1: any;
@@ -85,34 +45,8 @@ test.describe('Visual blocker indicators & parent epic progress on cards', () =>
   let subtask2: any;
   let subtask3: any;
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-blockers-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-    serverPort = await getFreePort();
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    await waitForServer(serverUrl);
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
     // Create Project
     project = await postJson(`${serverUrl}/api/v1/projects`, {
@@ -211,19 +145,6 @@ test.describe('Visual blocker indicators & parent epic progress on cards', () =>
       version: subtask1.version + 1,
       status: 'done',
     });
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
   });
 
   test('AC 1: Blocked task card displays prominent blocker badge with tooltip & interactive popover', async ({ page }) => {

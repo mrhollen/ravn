@@ -10,44 +10,14 @@
 // todo bystander that can never be stalled. Each test drives the real UI
 // against its own ephemeral ravn-server on a random high port (never :8080).
 
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
+import { test, expect } from './fixtures';
+import fs from 'fs'; // evidence screenshot dir (web/test-results/, gitignored)
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// Kept for the evidence screenshot dir (web/test-results/, gitignored) below.
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // retry until the server is listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
 
 const ACTOR = { name: 'e2e-seed', type: 'agent' as const };
 const EXPIRED_ACTOR = { name: 'e2e-expired', type: 'agent' as const };
@@ -57,57 +27,11 @@ const STALLED_TITLE = 'Stalled Doing Task';
 const TODO_TITLE = 'Todo Bystander Task';
 
 test.describe('Expired/stalled board alert and filter (01M5XSNR8VWZTP66GT7ABNSJC1)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverUrl: string;
+  let serverUrl = ''; // worker-scoped shared server (each test seeds + selects its own project)
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-stalled-e2e-'));
-    const serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: path.join(tempDir, 'ravn.db'),
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    await waitForServer(serverUrl);
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
   });
 
   test.beforeEach(async ({ page }) => {

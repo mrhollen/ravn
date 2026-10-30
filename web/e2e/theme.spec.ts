@@ -1,21 +1,9 @@
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
+import { test, expect } from './fixtures';
 import { randomUUID } from 'crypto';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
 // E2E coverage for the dark-theme task (AC1 toggle in header, AC2 high-contrast
 // dark surfaces on board/cards/modals/drawer, AC3 localStorage persistence).
 // Mirrors the ephemeral-server scaffolding of board.spec.ts.
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
 
 // zinc palette reference values (Tailwind v4 default theme) as sRGB triples.
 const ZINC_950: readonly [number, number, number] = [9, 9, 11]; // dark body background
@@ -47,31 +35,6 @@ function nearRgb(received: string, expected: readonly [number, number, number]):
   if (!m) return false;
   const got = [Number(m[1]), Number(m[2]), Number(m[3])];
   return expected.every((v, i) => Math.abs(v - got[i]) <= 2);
-}
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until server starts listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
 }
 
 /** Seed a project + one task via the API and return the project id.
@@ -137,57 +100,12 @@ async function lsTheme(page: import('@playwright/test').Page): Promise<string | 
 }
 
 test.describe('theme (dark mode)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
   let serverUrl: string;
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-theme-e2e-'));
-    const serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: path.join(tempDir, 'ravn.db'),
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    await waitForServer(serverUrl);
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+  // The ephemeral ravn-server (random port + temp DB) is owned by the shared worker fixture.
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
   });
 
   test.beforeEach(async ({ page }) => {

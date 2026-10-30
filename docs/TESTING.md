@@ -10,7 +10,7 @@ are tracked as tasks on the Ravn board (see [Findings index](#findings-index-tas
 |---|---|---|---|---|---|
 | Go unit + integration (`internal/`, `cmd/`) | domain rules, application use-cases, SQLite repos, HTTP handlers, MCP tools | `go test` (+ `-race` in CI) | 86 files, 37,182 LOC (vs 16,948 source LOC → 2.2:1) | **23s** total; `-race` **22s**; slowest package `internal/interface/http` 12.7s | **80.9%** statements total |
 | Web unit (`web/test/`) | pure logic of `web/src/*.ts` (dates, markdown, drafts, API client, board state, moves, refresh, realtime) | `node:test` via `jiti` (`npm run test:unit`) | 1 file, 4,965 LOC, 190 tests | **~8s** | **67.0%** lines / 75.9% branches / 60.5% functions |
-| Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 38 spec files, 15,727 LOC, 175 tests | **~40s** wall (default workers); ~41s CI with 2 workers; peak chromium RSS ≈ 6GB | not measured (E2E is the integration proof) |
+| Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 38 spec files + shared `fixtures.ts`/`helpers.ts`, **12,848** LOC (was 15,727), 175 tests | **~41s** wall (default workers); one shared `ravn-server` per worker (+ a few isolated spins) | not measured (E2E is the integration proof) |
 
 All three run in CI on every push/PR (`.github/workflows/ci.yml`,
 `.forgejo/workflows/ci.yml`): `go test -race ./...`, `npm run test:unit`,
@@ -115,13 +115,31 @@ cd web && node --import jiti/register --test --experimental-test-coverage test/*
 
 ### E2E tests (Playwright)
 
-- Each spec currently boots its own ephemeral `bin/ravn-server` on a random
-  free port with a temp DB and serves prebuilt `web/dist` (never :8080). A
-  worker-scoped fixture to share one server per worker is planned (tracked as
-  a task) — until then, follow the existing scaffolding pattern exactly.
-- **Data isolation contract**: specs must never assume an empty database.
-  Always seed via unique project names (`randomUUID()`), and reference only
-  ids returned by your own seeding calls.
+- Every spec imports `{ test, expect }` from `./fixtures` (not directly from
+  `@playwright/test`). The fixture boots **one shared `bin/ravn-server` per
+  worker** on a random free port with a temp DB and serves prebuilt `web/dist`
+  (never :8080), exposed as the worker-scoped `serverUrl`. Read it by
+  destructuring — `test.beforeAll(async ({ serverUrl }) => { … })` for seeding,
+  or directly in a test body. No per-spec server scaffolding remains in any spec.
+- Need an **empty/untouched** DB, a **global** count, **token-required** mode, or
+  disk access to the data dir? Opt that single test into the fixture's
+  test-scoped `isolatedServer` (`{ url, dataDir, artifactsDir }`) — it boots a
+  private server+DB for just that test. Override its env with
+  `test.use({ isolatedServerEnv: { RAVN_TOKEN } })`. Reserve the imported
+  `getFreePort()` for non-ravn scratch/mock servers only (used by
+  `board.spec.ts` for its mock OpenCode provider).
+- **Data isolation contract**: specs must never assume an empty database. Seed,
+  then select your own project by the id your seed returned (via
+  `selectProjectViaDropdown(page, id)`) or deep-link `?project=<id>`. Any test
+  asserting a **global** count, a **first-visit/empty** state, or token-required
+  behaviour MUST use `isolatedServer` — do not rely on the shared worker DB being
+  pristine. (Fixed project names are fine here because selection is by id and the
+  board is scoped to the selected project; duplicates from sibling specs in the
+  same worker never leak into your assertions.)
+- Screenshot/artifact output dirs may still import `fs`/`path`/`fileURLToPath`
+  (e.g. `hero-screenshot`, `claim-expired`, `md-table-overflow`,
+  `attention-badges`, `stalled-filter`). These are the only remaining module
+  imports in specs — never server scaffolding.
 - `use.screenshot: 'on'` captures a screenshot per test (passing included)
   into `web/test-results/` for QA evidence. These artifacts are ephemeral —
   never commit them; attach task-relevant ones to Rävn tasks via
@@ -144,8 +162,9 @@ Measured on a 12-core / 64GB Linux box, 2026-10-30. CI targets 2 workers for E2E
 | Go full suite (no race) | 23s | ≤ 30s; `internal/interface/http` ≤ 4s once the SSE deadline task lands |
 | Go full suite (`-race`, CI) | 22s | ≤ 60s |
 | Web unit | ~8s | ≤ 15s |
-| E2E (local, default workers) | ~40s | ≤ 60s; no more than one server per worker once the fixture task lands |
-| E2E memory | ~6GB peak chromium + ~38 small Go servers | keep total < 8GB on a 16GB runner box (fixture work should cut this) |
+| E2E (local, default workers) | ~41s | ≤ 60s; one shared `ravn-server` per worker (+ a few isolated spins) — realized by the §3 fixture |
+| E2E memory | ~6GB peak chromium; server count now bounded by worker count, not spec count | keep total < 8GB on a 16GB runner box |
+| E2E memory | ~6GB peak chromium; `ravn-server` count bounded by worker count, not spec count (fixture) | keep total < 8GB on a 16GB runner box |
 
 Rules for keeping the budgets:
 
@@ -165,7 +184,7 @@ Audit results from 2026-10-30, each mapped to a Ravn board task:
 | # | Finding | Task |
 |---|---|---|
 | 1 | `TestAdversarial_SSE_StalledClientPipeWriteDeadline` takes 10.3s on the hard-coded 10s SSE write deadline; dominates the http package (12.7s of 23s total) | [Perf/Test] Make SSE per-write deadline configurable (P5) |
-| 2 | 38 specs × ~100 lines duplicated server scaffolding (≈1,000 LOC, 79 hooks) and 38 server startups per run | [E2E] Worker-scoped Playwright server fixture (P5) |
+| 2 | **Resolved (2026-10-30)**: per-spec scaffolding (~1,000 LOC, 79 hooks, 38 startups/run) replaced by a worker-scoped Playwright server fixture; `web/e2e/` total LOC fell 15,727 → 12,848 (−2,879) despite the shared fixture/helpers being added on top | [E2E] Worker-scoped Playwright server fixture (P5) — done; see §3 E2E |
 | 3 | Web unit suite is one 4,965-line file; failures hard to localize | [Unit/Web] Split into per-module files (P3) |
 | 4 | No coverage measurement for web unit anywhere; baseline now recorded above | [Unit/Web] Coverage script + baselines (P3) |
 | 5 | Batch rollup queries (`OpenTaskCounts`, `ProjectReport` agg, `OpenBlockersByTasks`, …) at 0% despite production use | [Unit/Go] Cover zero-coverage batch aggregates (P3) |

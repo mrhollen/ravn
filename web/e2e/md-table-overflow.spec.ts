@@ -1,9 +1,6 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import { selectProjectViaDropdown } from './helpers';
-import { spawn, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
+import fs from 'fs'; // evidence-dir mkdir for named AC3 screenshots (gitignored)
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -14,11 +11,9 @@ import { fileURLToPath } from 'url';
 // Mirrors the ephemeral-server scaffolding of m4.spec.ts (own server on a
 // random high port, temp DB, serves web/dist).
 
+// QA-evidence anchor (NOT server scaffolding): named AC3 screenshots → web/test-results/
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
 const testResultsDir = path.resolve(__dirname, '../test-results');
 
 // One run of 300 identical characters: no spaces, so the browser cannot
@@ -36,31 +31,6 @@ const WIDE_TABLE_MD = [
 ].join('\n');
 
 const TASK_TITLE = 'Wide Table Overflow Task';
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
 
 /** Seed a project + the one wide-table task via the API; return the project id. */
 async function seedWideTableProject(serverUrl: string): Promise<string> {
@@ -91,48 +61,17 @@ async function seedWideTableProject(serverUrl: string): Promise<string> {
 }
 
 test.describe('wide GFM markdown tables scroll within themselves', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverPort: number;
-  let serverUrl: string;
+  let serverUrl = ''; // worker-scoped shared server (assigned in beforeAll)
   let projectId: string;
 
-  test.beforeAll(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-mdtable-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-    serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    await waitForServer(serverUrl);
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
+    // Seeds its own unique project + the one wide-table task (all three tests
+    // already select it via selectProjectViaDropdown), so the shared DB is safe.
     projectId = await seedWideTableProject(serverUrl);
     // Evidence directory for the named AC3 screenshots (screenshot:'on' also
     // auto-writes here, but this guarantees it exists before the first shot).
     fs.mkdirSync(testResultsDir, { recursive: true });
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
   });
 
   /** Navigate to the board, open the seeded task's drawer and return strict

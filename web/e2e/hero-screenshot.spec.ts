@@ -1,10 +1,8 @@
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
+import { test, expect } from './fixtures';
 import fs from 'fs';
-import net from 'net';
-import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { selectProjectViaDropdown } from './helpers';
 
 // CI hero screenshot: renders the Rävn board in an attractive, populated state
 // (dark theme) and writes ONE canonical image to the stable path CI uploads —
@@ -13,11 +11,10 @@ import { fileURLToPath } from 'url';
 // serving the pre-built web/dist. All seed data is FIXED (no randomness in any
 // visible content) so the composition is identical run to run.
 
+// Artifact-path anchor (NOT server scaffolding): pin the canonical hero.png at
+// <repo>/web/test-results/ regardless of Playwright's invoking CWD.
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
 
 // Stable artifact location — CI uploads exactly this repo-relative path.
 const HERO_SCREENSHOT_PATH = 'web/test-results/hero.png';
@@ -29,31 +26,6 @@ const HERO_SCREENSHOT_PATH = 'web/test-results/hero.png';
 const HERO_SCREENSHOT_ABS = path.resolve(__dirname, '..', 'test-results', 'hero.png');
 
 const SEED_ACTOR = { name: 'hero-seed', type: 'agent' };
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until server starts listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
 
 /** Small REST helpers (server runs with RAVN_TOKEN='' → zero-config local mode). */
 async function postJson(url: string, body: unknown): Promise<any> {
@@ -112,10 +84,8 @@ async function completeAc(taskId: string, seq: number): Promise<void> {
   });
 }
 
-// Mutable per-run state at module scope so the REST helpers below (which are
-// defined next to the other pure helpers) can reach the ephemeral server URL.
-let serverProcess: ChildProcess;
-let tempDir: string;
+// Mutable per-run state at module scope so the REST helpers above (which are
+// defined next to the other pure helpers) can reach the shared worker URL.
 let serverUrl = '';
 
 // Dark theme + an explicit marketing-frame viewport for the hero shot.
@@ -124,60 +94,13 @@ test.use({ colorScheme: 'dark', viewport: { width: 1440, height: 900 } });
 test.describe('hero screenshot (CI artifact web/test-results/hero.png)', () => {
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-hero-e2e-'));
-    const serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: path.join(tempDir, 'ravn.db'),
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
+    // Server owned by the shared worker fixture; this spec seeds a fixed 'Rävn'
+    // project into it and selects it explicitly (a shared DB won't auto-select it).
+    test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+      serverUrl = sharedServerUrl;
     });
 
-    serverProcess.stderr?.on('data', (d) => {
-      const msg = d.toString();
-      if (process.env.DEBUG_E2E) console.error('[server stderr]', msg);
-    });
-
-    await waitForServer(serverUrl);
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  test.beforeEach(async ({ page }) => {
+    test.beforeEach(async ({ page }) => {
     uncaughtConsoleErrors = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
@@ -277,9 +200,11 @@ test.describe('hero screenshot (CI artifact web/test-results/hero.png)', () => {
     });
     await page.goto(serverUrl);
 
-    // App-boot signal: the Projects trigger enables when init finishes. With a
-    // single seeded project, first-visit auto-select loads its board for free.
+    // App-boot signal: the Projects trigger enables when init finishes.
     await expect(page.getByTestId('project-select')).toBeEnabled();
+    // Shared DB holds other specs' projects too — auto-select won't pick 'Rävn',
+    // so select it explicitly to render the deterministic hero composition.
+    await selectProjectViaDropdown(page, project.id);
 
     // The dark class is on <html> (poll — theme application is async).
     await expect.poll(

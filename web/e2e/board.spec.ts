@@ -1,43 +1,7 @@
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import http from 'http';
+import { test, expect, getFreePort } from './fixtures';
 import { expectProjectSelected, selectProjectViaDropdown } from './helpers';
-import net from 'net';
-import os from 'os';
+import http from 'http';
 import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until server starts listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
 
 // Shared seed for the "hoist parents" tests below (one per acceptance
 // criterion): a project with two parent tasks — each linked to one child that is
@@ -119,78 +83,13 @@ async function seedHoistFixture(serverUrl: string, projectName: string): Promise
 }
 
 test.describe('Web E2E test suite', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverPort: number;
   let serverUrl: string;
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    // 1. Ensure static dist is built
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-
-    // 2. Ensure server binary is built
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    // 3. Ephemeral temp DB directory (acceptance criterion 3)
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-
-    // 4. Free high-numbered port (never :8080) (acceptance criterion 3)
-    serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    expect(serverPort).toBeGreaterThan(1024);
-
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    // 5. Boot server with ephemeral DB and UI static dir
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '', // Zero-config local mode
-        OPENCODE_ALLOW_PRIVATE_IPS: 'true',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    serverProcess.stderr?.on('data', (d) => {
-      const msg = d.toString();
-      if (process.env.DEBUG_E2E) console.error('[server stderr]', msg);
-    });
-
-    await waitForServer(serverUrl);
-  });
-
-  test.afterAll(async () => {
-    // Clean shutdown of background server and removal of temp DB
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-    // Verify cleanup
-    expect(fs.existsSync(tempDir)).toBe(false);
+  // Server owned by the shared worker fixture (worker-scoped). Individual tests
+  // seed their own uniquely-named projects via API and selectProjectViaDropdown.
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
   });
 
   test.beforeEach(async ({ page }) => {
@@ -270,8 +169,8 @@ test.describe('Web E2E test suite', () => {
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('Rävn');
 
-    // Header: the custom Projects dropdown reflects the auto-selected seeded project
-    await expectProjectSelected(page, 'Browser E2E Project');
+    // Shared DB may auto-select a foreign project — pick this test's own.
+    await selectProjectViaDropdown(page, project.id);
 
     // Columns should be present
     const todoCol = page.locator('section', { has: page.getByRole('heading', { name: 'To Do' }) });

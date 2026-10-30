@@ -8,45 +8,9 @@
 // project B and assert no card shows a blocked indicator (and a drawer opened
 // on a B task is clean), then switch back to A and assert the badge returns —
 // proving the reset does not over-clear.
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import { selectProjectViaDropdown, expectProjectSelected } from './helpers';
-import { spawn, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
 import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
 
 const ACTOR = { name: 'e2e', type: 'human' as const };
 
@@ -61,9 +25,6 @@ async function postJson(url: string, body: unknown): Promise<any> {
 }
 
 test.describe('Blocked-state cache never leaks across a project switch', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverPort: number;
   let serverUrl: string;
 
   let projA: any;
@@ -75,24 +36,9 @@ test.describe('Blocked-state cache never leaks across a project switch', () => {
   let plainTaskB2: any;
   let blockedTaskC104: any;
 
-  test.beforeAll(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-blocked-cache-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-    serverPort = await getFreePort();
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    await waitForServer(serverUrl);
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    // Seed this spec's own uniquely-named projects into the shared worker DB.
+    serverUrl = sharedServerUrl;
 
     // Project A: one task blocked-by another.
     projA = await postJson(`${serverUrl}/api/v1/projects`, { name: 'Blocked Cache Alpha', actor: ACTOR });
@@ -147,19 +93,6 @@ test.describe('Blocked-state cache never leaks across a project switch', () => {
       kind: 'blocked-by',
       actor: ACTOR,
     });
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
   });
 
   test('project B shows no blocked indicator from project A; the badge returns on switch back', async ({ page }) => {

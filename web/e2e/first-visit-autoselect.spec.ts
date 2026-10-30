@@ -5,133 +5,34 @@
 //         and its board loads WITHOUT any manual interaction;
 //   AC2 — manual selection via the Projects dropdown still works afterwards;
 //   AC2 — a zero-project server keeps the empty state (no phantom selection).
-// Self-contained: each test spins up its OWN ephemeral ravn-server on a
-// random high port (never :8080) with a fresh temp DB in TOKEN-REQUIRED mode
-// (mirrors board.spec.ts's spawn pattern — plus RAVN_TOKEN set to a real
-// value, and every REST seed call carries the Bearer header). Per-test server
-// restart is required because the three cases need mutually exclusive server
-// state (1 project / 2 projects / none); browser-side isolation comes for free
-// from Playwright's default per-test context (no stored ravn_token).
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
+// Isolation: the three cases need a TOKEN-REQUIRED server with mutually
+// exclusive global state (1 project / 2 projects / none), so each test opts into
+// the fixtures' test-scoped `isolatedServer` (a fresh dedicated server + empty
+// DB, torn down after) with `RAVN_TOKEN` set to a real value via
+// `test.use({ isolatedServerEnv })`. Browser-side isolation comes for free from
+// Playwright's default per-test context (no stored ravn_token). Every REST seed
+// call carries the Bearer header.
+import { test, expect } from './fixtures';
 import { expectProjectSelected, selectProjectViaDropdown } from './helpers';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-// A real non-empty token: the server runs in TOKEN-REQUIRED mode, so a fresh
-// visitor's boot fetch gets 401 and the auth modal opens.
+// A real non-empty token: the server runs in TOKEN-REQUIRED mode (via the
+// isolatedServer fixture's env override below), so a fresh visitor's boot fetch
+// gets 401 and the auth modal opens.
 const TOKEN = 'super-secret-e2e-token-12345';
 
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until server starts listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
-
 test.describe('First-visit auth token auto-select', () => {
-  let serverProcess: ChildProcess | null = null;
-  let tempDir = '';
-  let serverPort: number;
-  let serverUrl: string;
+  // Every test in this spec needs a TOKEN-REQUIRED server (see file header), so
+  // opt each one into the fixture's dedicated per-test isolatedServer with a real
+  // RAVN_TOKEN. The shared worker DB is never used here.
+  test.use({ isolatedServerEnv: { RAVN_TOKEN: TOKEN } });
+
+  let serverUrl = '';
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    // Ensure static dist is built (once for the whole suite)
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    // Ensure server binary is built
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-  });
-
-  // One fresh ephemeral server + temp DB per test (see file header for why the
-  // cases cannot share a single DB).
-  test.beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-first-visit-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-
-    serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    expect(serverPort).toBeGreaterThan(1024);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    // Boot server in TOKEN-REQUIRED mode with ephemeral DB and UI static dir
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: TOKEN,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    serverProcess.stderr?.on('data', (d) => {
-      const msg = d.toString();
-      if (process.env.DEBUG_E2E) console.error('[server stderr]', msg);
-    });
-
-    await waitForServer(serverUrl);
-  });
-
   test.afterEach(async () => {
-    // Fail on any uncaught console error or unhandled page error
+    // Fail on any uncaught console error or unhandled page error. (The dedicated
+    // server + temp DB are torn down by the isolatedServer fixture, not here.)
     expect(uncaughtConsoleErrors).toEqual([]);
-    // Clean shutdown of this test's background server and removal of its temp DB
-    if (serverProcess) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        const proc = serverProcess!;
-        const timeout = setTimeout(() => {
-          try {
-            proc.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-        proc.on('exit', () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-      });
-      serverProcess = null;
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
   });
 
   test.beforeEach(async ({ page }) => {
@@ -215,7 +116,9 @@ test.describe('First-visit auth token auto-select', () => {
 
   test('AC1: first-visit token save auto-selects the first project and loads its board with no manual interaction', async ({
     page,
+    isolatedServer,
   }) => {
+    serverUrl = isolatedServer.url; // dedicated per-test token-required server
     const project = await seedProject('AutoSelect Project');
     const task = await seedTask(project.id, 'First Visit Task');
 
@@ -236,7 +139,8 @@ test.describe('First-visit auth token auto-select', () => {
     await expect(page.getByTestId('boot-error')).not.toBeVisible();
   });
 
-  test('AC2: manual project selection still works after first-visit auto-select', async ({ page }) => {
+  test('AC2: manual project selection still works after first-visit auto-select', async ({ page, isolatedServer }) => {
+    serverUrl = isolatedServer.url; // dedicated per-test token-required server
     const pA = await seedProject('Manual Switch Project A');
     await seedTask(pA.id, 'Alpha Board Task');
     const pB = await seedProject('Manual Switch Project B');
@@ -270,7 +174,9 @@ test.describe('First-visit auth token auto-select', () => {
 
   test('AC2: zero-project server keeps the empty state after token save (no phantom selection)', async ({
     page,
+    isolatedServer,
   }) => {
+    serverUrl = isolatedServer.url; // dedicated per-test token-required server
     // Deliberately seed NO projects on this (token-required) server.
 
     await firstVisitSaveToken(page);

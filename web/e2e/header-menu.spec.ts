@@ -15,44 +15,8 @@
 //         set/none label; keyboard contract matching the Projects dropdown
 // Self-contained: ephemeral ravn-server on a random high port + temp DB,
 // serving the pre-built web/dist (mirrors project-dropdown.spec.ts).
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until server starts listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
+import { test, expect } from './fixtures';
+import path from 'path'; // path.join(testInfo.outputDir, …) for evidence screenshots
 
 async function postJson(url: string, body: unknown): Promise<any> {
   const res = await fetch(url, {
@@ -77,82 +41,25 @@ async function lsActor(page: import('@playwright/test').Page): Promise<string | 
 }
 
 test.describe('Consolidated header settings menu', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverPort: number;
-  let serverUrl: string;
-  let projectId: string;
+  let serverUrl = ''; // worker-scoped shared server (assigned in beforeAll)
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      const serverPkg = fs.existsSync(path.join(repoRoot, 'cmd', 'ravn-server'))
-        ? './cmd/ravn-server'
-        : './cmd/crowban-server';
-      execSync(`go build -trimpath -o bin/ravn-server ${serverPkg}`, {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-header-menu-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-    serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    serverProcess.stderr?.on('data', (d) => {
-      const msg = d.toString();
-      if (process.env.DEBUG_E2E) console.error('[server stderr]', msg);
-    });
-
-    await waitForServer(serverUrl);
-
-    // One project so the app auto-selects it on load (no new-project bar).
+    // One project so the app has a board on load (no new-project bar). Header-menu
+    // assertions are independent of WHICH project is selected, so no explicit select.
     const proj = await postJson(`${serverUrl}/api/v1/projects`, {
       name: 'Header Menu Project',
       description: 'Seeded for the header settings menu e2e spec',
       actor: { name: 'e2e-hm-seed', type: 'agent' },
     });
-    projectId = proj.id;
     await postJson(`${serverUrl}/api/v1/tasks`, {
-      project_id: projectId,
+      project_id: proj.id,
       title: 'Header Menu Seed Task',
       priority: 2,
       actor: { name: 'e2e-hm-seed', type: 'agent' },
     });
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
   });
 
   test.beforeEach(async () => {

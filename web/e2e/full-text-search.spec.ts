@@ -7,45 +7,9 @@
 // and ID do not contain the term but which matched via description/notes show
 // a subtle "matched in description/notes" chip (data-testid="match-source-chip").
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import { selectProjectViaDropdown, expectProjectSelected } from './helpers';
-import { spawn, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
+import path from 'path'; // path.join(testInfo.outputDir, …) for evidence screenshots
 
 const ACTOR = { name: 'e2e', type: 'human' as const };
 
@@ -92,9 +56,7 @@ function boardCards(page: import('@playwright/test').Page) {
 }
 
 test.describe('Full-text board search across description and notes (01M5XTAW3RZ4QJCSW9C3CS255R)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverUrl: string;
+  let serverUrl = ''; // worker-scoped shared server (each test selects / deep-links projA)
 
   let projA: any;
   let taskDesc: any; // term in DESCRIPTION only
@@ -102,19 +64,8 @@ test.describe('Full-text board search across description and notes (01M5XTAW3RZ4
   let taskTitle: any; // term in TITLE only
   let taskNone: any; // matches nothing
 
-  test.beforeAll(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-fulltext-'));
-    const dbPath = path.join(tempDir, 'test.db');
-    const port = await getFreePort();
-    serverUrl = `http://127.0.0.1:${port}`;
-
-    serverProcess = spawn(
-      serverBin,
-      ['-addr', `127.0.0.1:${port}`, '-data', dbPath, '-static', staticDir],
-      { stdio: ['ignore', 'inherit', 'inherit'] },
-    );
-
-    await waitForServer(serverUrl);
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
     projA = await postJson(`${serverUrl}/api/v1/projects`, { name: 'Full Text Alpha', actor: ACTOR });
     taskDesc = (await postJson(`${serverUrl}/api/v1/tasks`, {
@@ -149,19 +100,6 @@ test.describe('Full-text board search across description and notes (01M5XTAW3RZ4
       description: 'No special terms in here at all.',
       actor: ACTOR,
     })).task;
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
   });
 
   test('AC1/AC2: typing a term found only in a task DESCRIPTION shows exactly that card, with the match-source chip', async ({ page }, testInfo) => {
@@ -263,25 +201,12 @@ test.describe('Full-text board search across description and notes (01M5XTAW3RZ4
 });
 
 test.describe('Full-text search bypasses the done-column pagination cap (01M5XTAW3RZ4QJCSW9C3CS255R)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverUrl: string;
+  let serverUrl = ''; // worker-scoped shared server (test selects / deep-links projB)
 
   let projB: any;
 
-  test.beforeAll(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-fulltext-done-'));
-    const dbPath = path.join(tempDir, 'test.db');
-    const port = await getFreePort();
-    serverUrl = `http://127.0.0.1:${port}`;
-
-    serverProcess = spawn(
-      serverBin,
-      ['-addr', `127.0.0.1:${port}`, '-data', dbPath, '-static', staticDir],
-      { stdio: ['ignore', 'inherit', 'inherit'] },
-    );
-
-    await waitForServer(serverUrl);
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
     // 25 done tasks in a fresh project; task 0 (completed FIRST → oldest) is
     // the one whose description carries the unique search term. Sequential
@@ -313,19 +238,6 @@ test.describe('Full-text search bypasses the done-column pagination cap (01M5XTA
     await new Promise((r) => setTimeout(r, 1200));
     for (const t of created.slice(1)) {
       await complete(t);
-    }
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
     }
   });
 

@@ -39,21 +39,9 @@
 //     backdrop, plus decorative aria-hidden punctuation (· / ▾ glyphs). No
 //     measurable contrast failure exists (zero violations); both themes are
 //     pinned visually by the committed theme.spec.ts + this spec's screenshots.
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import { AxeBuilder } from '@axe-core/playwright';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { selectProjectViaDropdown, openNewProjectFromDropdown } from './helpers';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
 
 const ACTOR = { name: 'e2e-wcag-audit-seed', type: 'agent' as const };
 const PROJECT_NAME = 'WCAG Audit Project'; // only project → also the boot auto-select target
@@ -81,31 +69,6 @@ interface AxeResults {
   passes: unknown[];
   incomplete: AxeIncomplete[];
   testEngine: { name: string; version: string };
-}
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until the server is listening.
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
 }
 
 async function postJson(url: string, body: unknown): Promise<any> {
@@ -172,44 +135,14 @@ async function audit(label: string, page: import('@playwright/test').Page): Prom
 }
 
 test.describe('axe-core WCAG 2.1 AA audit (board / drawer / new-project form × light + dark)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
   let serverUrl: string;
   let projectId: string;
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-wcag-audit-'));
-    const port = await getFreePort();
-    expect(port).not.toBe(8080);
-    serverUrl = `http://127.0.0.1:${port}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${port}`,
-        RAVN_DATA: path.join(tempDir, 'ravn.db'),
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    serverProcess.stderr?.on('data', (d) => {
-      if (process.env.DEBUG_E2E) console.error('[server stderr]', d.toString());
-    });
-
-    await waitForServer(serverUrl);
+  // Server owned by the shared worker fixture. Seed this spec's own uniquely-named
+  // project + fixtures into it; each test explicitly selects it before auditing.
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
     const proj = await postJson(`${serverUrl}/api/v1/projects`, {
       name: PROJECT_NAME,
@@ -251,24 +184,6 @@ test.describe('axe-core WCAG 2.1 AA audit (board / drawer / new-project form × 
       priority: 2,
       actor: ACTOR,
     });
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
   });
 
   test.beforeEach(async ({ page }) => {

@@ -1,11 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { expectProjectSelected } from './helpers';
+import { test, expect } from './fixtures';
+import { expectProjectSelected, selectProjectViaDropdown } from './helpers';
 
 // Full-page task view (/tasks/<id>) — Rävn task 01M47MWHWW0M1Q3WZYFGFHXTYZ.
 // Self-contained like the other specs: ephemeral ravn-server on a random high
@@ -13,38 +7,7 @@ import { expectProjectSelected } from './helpers';
 // serves index.html for /tasks/<id> via its SPA fallback, so these are REAL
 // deep links end to end.
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
 const MOBILE_VIEWPORT = { width: 375, height: 812 };
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until server starts listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
 
 async function postJson(url: string, body: unknown): Promise<any> {
   const res = await fetch(url, {
@@ -75,50 +38,16 @@ async function getJson(url: string): Promise<any> {
 const SEED_ACTOR = { name: 'e2e-fullpage-seed', type: 'agent' };
 
 test.describe('Full-page task view (/tasks/<id>)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverPort: number;
   let serverUrl: string;
   let projectId: string;
   let taskA: any; // read-only fixture carrying every sidebar section
   let taskB: any; // mutation fixture for the edit-ops test
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-fullpage-'));
-    const dbPath = path.join(tempDir, 'ravn.db');
-    serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    expect(serverPort).toBeGreaterThan(1024);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: dbPath,
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    serverProcess.stderr?.on('data', (d) => {
-      const msg = d.toString();
-      if (process.env.DEBUG_E2E) console.error('[server stderr]', msg);
-    });
-
-    await waitForServer(serverUrl);
+  // Server owned by the shared worker fixture. Seed this spec's own uniquely-named
+  // project + fixtures into it; openBoard() selects it, and deep links adopt it.
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
     const proj = await postJson(`${serverUrl}/api/v1/projects`, {
       name: 'Full page E2E project',
@@ -181,25 +110,6 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     });
   });
 
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-    expect(fs.existsSync(tempDir)).toBe(false);
-  });
-
   test.beforeEach(async ({ page }) => {
     uncaughtConsoleErrors = [];
     page.on('console', (msg) => {
@@ -221,8 +131,8 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
   async function openBoard(page: import('@playwright/test').Page): Promise<void> {
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('Rävn');
-    // The custom Projects dropdown trigger shows the auto-selected seeded project.
-    await expectProjectSelected(page, 'Full page E2E project');
+    // Shared DB may auto-select a foreign project — pick this spec's own.
+    await selectProjectViaDropdown(page, projectId);
     await expect(page.locator('article', { hasText: 'Full page fixture A' })).toBeVisible();
   }
 
@@ -266,10 +176,14 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     // Status control (dropdown trigger + options menu)
     const statusGroup = panel.locator('[role="group"][aria-label="Status"]');
     const statusTrigger = statusGroup.getByTestId('status-dropdown-trigger');
+    // Settle the group after the fixed->relative full-page re-skin before driving it,
+    // and scope each option with .first() so the shared segment + open-menu buttons
+    // don't trip strict mode when they carry the same accessible label.
+    await expect(statusGroup).toBeVisible();
     await expect(statusTrigger).toBeVisible();
     await statusTrigger.click();
     for (const label of ['To Do', 'Doing', 'Done']) {
-      await expect(statusGroup.getByRole('button', { name: label })).toBeVisible();
+      await expect(statusGroup.getByRole('button', { name: label }).first()).toBeVisible();
     }
     await page.keyboard.press('Escape');
 

@@ -8,45 +8,9 @@
 //   AC4 — Archived projects appear in an "Archived" section of the project menu
 //         with a Restore action that reactivates them as normal options.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import { selectProjectViaDropdown, expectProjectSelected } from './helpers';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry until the server is up.
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
+import path from 'path'; // path.join(testInfo.outputDir, …) for evidence screenshots
 
 const ACTOR = { name: 'e2e', type: 'human' as const };
 
@@ -86,33 +50,12 @@ function cardByTitle(page: import('@playwright/test').Page, title: string) {
 }
 
 test.describe('Task archive management (01M5XSNN2KA876TR0QGE79YFPT)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverUrl: string;
+  let serverUrl = ''; // worker-scoped shared server (tests deep-link ?project= to the seeded 'Archive Suite')
   let project: any;
   let uncaughtConsoleErrors: string[] = [];
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-archive-task-'));
-    const dbPath = path.join(tempDir, 'test.db');
-    serverUrl = `http://127.0.0.1:${await getFreePort()}`;
-
-    serverProcess = spawn(
-      serverBin,
-      ['-addr', serverUrl.replace('http://', ''), '-data', dbPath, '-static', staticDir],
-      { stdio: ['ignore', 'inherit', 'inherit'] },
-    );
-    await waitForServer(serverUrl);
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
     project = (await postJson(`${serverUrl}/api/v1/projects`, { name: 'Archive Suite', actor: ACTOR }));
     const mk = async (title: string) =>
@@ -135,24 +78,6 @@ test.describe('Task archive management (01M5XSNN2KA876TR0QGE79YFPT)', () => {
     for (const title of ['Bulk One', 'Bulk Two']) {
       const t = await mk(title);
       await completeTask(serverUrl, t);
-    }
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -330,46 +255,7 @@ test.describe('Task archive management (01M5XSNN2KA876TR0QGE79YFPT)', () => {
 });
 
 test.describe('Archived-project restore section (01M5XSNN2KA876TR0QGE79YFPT)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverUrl: string;
-  let alpha: any;
-  let beta: any;
   let uncaughtConsoleErrors: string[] = [];
-
-  test.beforeAll(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-e2e-archive-project-restore-'));
-    const dbPath = path.join(tempDir, 'test.db');
-    serverUrl = `http://127.0.0.1:${await getFreePort()}`;
-
-    serverProcess = spawn(
-      serverBin,
-      ['-addr', serverUrl.replace('http://', ''), '-data', dbPath, '-static', staticDir],
-      { stdio: ['ignore', 'inherit', 'inherit'] },
-    );
-    await waitForServer(serverUrl);
-
-    alpha = await postJson(`${serverUrl}/api/v1/projects`, { name: 'Alpha Keep', actor: ACTOR });
-    beta = await postJson(`${serverUrl}/api/v1/projects`, { name: 'Beta Archive', actor: ACTOR });
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
 
   test.beforeEach(async ({ page }) => {
     uncaughtConsoleErrors = [];
@@ -389,7 +275,16 @@ test.describe('Archived-project restore section (01M5XSNN2KA876TR0QGE79YFPT)', (
 
   test('AC4: archived project appears in the menu "Archived" section and Restore reactivates it', async ({
     page,
+    isolatedServer,
   }, testInfo) => {
+    // Dedicated empty DB per the fixture's global-state rule: AC4 asserts a
+    // GLOBAL pickable-project count (==1) that cannot coexist with other specs'
+    // projects on the shared worker DB. So this describe opts into `isolatedServer`.
+    const serverUrl = isolatedServer.url;
+
+    await postJson(`${serverUrl}/api/v1/projects`, { name: 'Alpha Keep', actor: ACTOR });
+    const beta = await postJson(`${serverUrl}/api/v1/projects`, { name: 'Beta Archive', actor: ACTOR });
+
     await page.goto(serverUrl);
     // Start on Beta (the archive target).
     await selectProjectViaDropdown(page, beta.id);

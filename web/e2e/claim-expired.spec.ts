@@ -13,104 +13,26 @@
 // muted state on load. Screenshots are written to web/test-results/ as QA
 // evidence (ephemeral; never committed).
 
-import { test, expect } from '@playwright/test';
-import { spawn, execSync, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
+import { test, expect } from './fixtures';
+import fs from 'fs'; // write QA-evidence screenshots to web/test-results/ (gitignored)
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// QA-evidence artifact anchor (NOT server scaffolding): screenshots land in
+// web/test-results/ (ephemeral, gitignored).
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
 const testResultsDir = path.resolve(__dirname, '../test-results');
 
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // retry until the server is listening
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
-
 test.describe('claim lease expiry (active vs expired contrast)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverUrl: string;
   const ACTIVE_TITLE = 'Active Lease Task';
   const EXPIRED_TITLE = 'Expired Lease Task';
   const ACTIVE_ACTOR = 'e2e-seed';
   const EXPIRED_ACTOR = 'e2e-expired';
 
-  test.beforeAll(async () => {
-    if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
-      execSync('npm run build', { cwd: path.resolve(__dirname, '..'), stdio: 'inherit' });
-    }
-    if (!fs.existsSync(serverBin)) {
-      execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
-        cwd: repoRoot,
-        stdio: 'inherit',
-      });
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-claim-expired-e2e-'));
-    const serverPort = await getFreePort();
-    expect(serverPort).not.toBe(8080);
-    serverUrl = `http://127.0.0.1:${serverPort}`;
-
-    serverProcess = spawn(serverBin, [], {
-      env: {
-        ...process.env,
-        RAVN_ADDR: `127.0.0.1:${serverPort}`,
-        RAVN_DATA: path.join(tempDir, 'ravn.db'),
-        RAVN_STATIC_DIR: staticDir,
-        RAVN_TOKEN: '',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    await waitForServer(serverUrl);
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        serverProcess.on('exit', () => resolve());
-        setTimeout(() => {
-          try {
-            serverProcess.kill('SIGKILL');
-          } catch {}
-          resolve();
-        }, 2000);
-      });
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  test('active lease stays indigo+pulsing; expired lease renders muted with cue', async ({ page }) => {
+  // Seeds its own unique project and forces selection by id (below), so the
+  // shared worker server + DB are safe to use here.
+  test('active lease stays indigo+pulsing; expired lease renders muted with cue', async ({ page, serverUrl }) => {
     // ---------------------------------------------------------------- seed
     const projRes = await fetch(`${serverUrl}/api/v1/projects`, {
       method: 'POST',

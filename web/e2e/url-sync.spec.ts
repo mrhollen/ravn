@@ -1,45 +1,9 @@
 // URL Query Parameter Synchronization E2E tests
 // (task 01M5XTAXGDEHFNKFGH9MTG65VK)
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import { selectProjectViaDropdown, expectProjectSelected } from './helpers';
-import { spawn, type ChildProcess } from 'child_process';
-import fs from 'fs';
-import net from 'net';
-import os from 'os';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
-const serverBin = path.join(repoRoot, 'bin', 'ravn-server');
-const staticDir = path.resolve(__dirname, '../dist');
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${url}/healthz`);
-      if (res.ok) return;
-    } catch {
-      // Retry
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
+import path from 'path'; // path.join(testInfo.outputDir, …) for evidence screenshots
 
 const ACTOR = { name: 'e2e', type: 'human' as const };
 
@@ -54,28 +18,15 @@ async function postJson(url: string, body: unknown): Promise<any> {
 }
 
 test.describe('Board filters, sort, and project URL query sync (01M5XTAXGDEHFNKFGH9MTG65VK)', () => {
-  let serverProcess: ChildProcess;
-  let tempDir: string;
-  let serverUrl: string;
+  let serverUrl = ''; // worker-scoped shared server (seeded once here; tests deep-link / select it)
 
   let projA: any;
   let taskA1: any;
   let taskA2: any;
   let taskA3: any;
 
-  test.beforeAll(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ravn-url-sync-'));
-    const dbPath = path.join(tempDir, 'test.db');
-    const port = await getFreePort();
-    serverUrl = `http://127.0.0.1:${port}`;
-
-    serverProcess = spawn(
-      serverBin,
-      ['-addr', `127.0.0.1:${port}`, '-data', dbPath, '-static', staticDir],
-      { stdio: ['ignore', 'inherit', 'inherit'] }
-    );
-
-    await waitForServer(serverUrl);
+  test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
+    serverUrl = sharedServerUrl;
 
     // Seed Project A with tasks
     projA = await postJson(`${serverUrl}/api/v1/projects`, { name: 'URL Sync Alpha', actor: ACTOR });
@@ -106,19 +57,6 @@ test.describe('Board filters, sort, and project URL query sync (01M5XTAXGDEHFNKF
       kind: 'blocked-by',
       actor: ACTOR,
     });
-  });
-
-  test.afterAll(async () => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
-    }
-    if (tempDir && fs.existsSync(tempDir)) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
   });
 
   test('direct URL load with project, priority, unblocked, and search initializes filters (AC2)', async ({ page }) => {
