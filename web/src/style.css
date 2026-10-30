@@ -6,7 +6,7 @@
 
 @layer components {
   .btn-danger {
-    @apply rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-red-400 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-500 dark:focus-visible:ring-red-400 dark:focus-visible:ring-offset-zinc-900;
+    @apply rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-500 dark:focus-visible:ring-indigo-300 dark:focus-visible:ring-offset-zinc-900;
   }
 
   .task-detail-content-wrap {
@@ -51,20 +51,33 @@ html.dark {
 /* --- small component classes used by index.html ------------------------ */
 
 @layer components {
+  /* Shared keyboard-focus token (WCAG 2.4.7 / 2.4.11 / 2.4.13) — the single
+     source of truth for focus visibility: a 2px indigo ring with a 2px offset,
+     painted on :focus-visible so mouse clicks never render it. Light theme:
+     indigo-500 over white (≈4.6:1); dark theme: indigo-300 over the zinc-900
+     offset band. Every .btn-* class below inlines the exact same utilities;
+     ad-hoc buttons/links/cards in index.html take the .focus-ring class. */
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-300 dark:focus-visible:ring-offset-zinc-900;
+  }
+
   .btn-primary {
-    @apply rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-zinc-400 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white dark:focus-visible:ring-zinc-300 dark:focus-visible:ring-offset-zinc-900;
+    @apply rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white dark:focus-visible:ring-indigo-300 dark:focus-visible:ring-offset-zinc-900;
   }
 
   .btn-secondary {
-    @apply rounded-md border border-zinc-200 bg-zinc-100 px-3 py-1.5 text-sm font-medium text-zinc-800 shadow-sm transition hover:bg-zinc-200 active:bg-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:active:bg-zinc-600 dark:focus-visible:ring-zinc-500;
+    @apply rounded-md border border-zinc-200 bg-zinc-100 px-3 py-1.5 text-sm font-medium text-zinc-800 shadow-sm transition hover:bg-zinc-200 active:bg-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:active:bg-zinc-600 dark:focus-visible:ring-indigo-300 dark:focus-visible:ring-offset-zinc-900;
   }
 
   .btn-ghost {
-    @apply rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-zinc-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-transparent dark:text-zinc-300 dark:hover:bg-zinc-800 dark:focus-visible:ring-zinc-300 dark:focus-visible:ring-offset-zinc-900;
+    @apply rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-transparent dark:text-zinc-300 dark:hover:bg-zinc-800 dark:focus-visible:ring-indigo-300 dark:focus-visible:ring-offset-zinc-900;
   }
 
+  /* Form controls use the same indigo identity under :focus (not just
+     :focus-visible) — mouse users editing a field need the indicator too, and
+     WCAG 2.4.13 covers any focus on form controls. 2px ring in both themes. */
   .field {
-    @apply w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm placeholder:text-zinc-600 focus:border-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-400 dark:focus:border-zinc-500 dark:focus:ring-zinc-500;
+    @apply w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm placeholder:text-zinc-600 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-400 dark:focus:border-indigo-500 dark:focus:ring-indigo-300;
   }
 
   .section-title {
@@ -132,7 +145,7 @@ html.dark {
   }
 
   .modal-close {
-    @apply rounded-md p-1 text-lg leading-none text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-zinc-400 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100;
+    @apply rounded-md p-1 text-lg leading-none text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 dark:focus-visible:ring-indigo-300 dark:focus-visible:ring-offset-zinc-900;
   }
 }
 
@@ -219,8 +232,10 @@ article[data-card-density="compact"] .card-select-checkbox {
    excluded — their wrapping <label> is the tappable area (see .tap-target).
     `.tap-target-exempt` carves out intentionally compact controls (segmented
     theme toggle, per-card 3-dot move trigger, column quick-add trigger, inline
-    AC/relation action buttons) that a forced 44px size would distort at small
-    widths. */
+   AC/relation action buttons) that a forced 44px size would distort at small
+     widths. The width rule below is kept for narrow non-touch views; the same
+     minimums also apply by pointer TYPE (next block) so touch tablets are not
+     treated as desktop. */
 @media (max-width: 767px) {
   button:not(.tap-target-exempt),
   select:not(.tap-target-exempt),
@@ -237,5 +252,79 @@ article[data-card-density="compact"] .card-select-checkbox {
      checkboxes need an explicit height. */
   .tap-target {
     min-height: 44px;
+  }
+}
+
+/* --- touch pointers (WCAG 2.5.8 target size minimum) -------------------------
+   Applied by pointer TYPE in addition to the width rule above: a touch tablet
+   (iPad 768/810/834/1024px, touch laptops) must not fall back to compact
+   desktop sizing just because its viewport is wide. Headless e2e note: a
+   Playwright context with hasTouch:true flips (pointer: coarse) in Chromium,
+   so the mobile/tablet specs exercise this block for real. */
+@media (pointer: coarse) {
+  button:not(.tap-target-exempt),
+  select:not(.tap-target-exempt),
+  input:not([type="checkbox"]):not([type="radio"]):not(.tap-target-exempt),
+  textarea:not(.tap-target-exempt) {
+    min-height: 44px;
+  }
+
+  button:not(.tap-target-exempt) {
+    min-width: 44px;
+  }
+
+  .tap-target {
+    min-height: 44px;
+  }
+
+  /* Named compact controls (carved out above via .tap-target-exempt) get a REAL
+     44x44 touch box on coarse pointers — the visible glyph stays centered while
+     the element's own layout box grows, so taps can't fall through to the card
+     or row behind it. Margin is zeroed (beats the utilities' negative margins,
+     which are unlayered-losing to this rule) so the grown box overlaps no
+     neighbouring control. Fine pointers keep the compact look, with a 24x24px
+     floor set inline per-button (WCAG 2.5.8 minimum). */
+  .coarse-44 {
+    min-width: 44px;
+    min-height: 44px;
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Modal close buttons are named only in CSS (.modal-close), so they get the
+     full touch box here rather than a per-element class. */
+  .modal-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* --- reduced motion (WCAG 2.2.2 / 2.3.3) -------------------------------------
+   Continuous looping animations stop for users who prefer reduced motion:
+   - .animate-ping (live SSE halo): the expanding copy is hidden entirely so
+     only the solid status dot remains — a static "connected" indicator.
+   - .animate-pulse (claimed-task badge, loading skeletons): the pulse stops but
+     the element stays fully visible at its base style.
+   The blanket duration/iteration kill catches any other looping animation or
+   transition introduced later. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-ping {
+    animation: none;
+    opacity: 0;
+  }
+
+  .animate-pulse {
+    animation: none;
+  }
+
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

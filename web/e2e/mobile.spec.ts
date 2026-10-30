@@ -369,15 +369,18 @@ test.describe('Mobile experience (375px, touch)', () => {
       }
     }
 
-    // The exemption must actually apply: the per-card 3-dot move trigger stays
-    // a compact icon button (≈24px) instead of ballooning to a forced 44x44
-    // block that would push the priority badge and wrap card titles.
+    // The per-card 3-dot move trigger is `.tap-target-exempt` (so the generic
+    // min-size rule above skips it) but also carries `.coarse-44`: on coarse
+    // pointers it gets a REAL 44x44 touch box — visible glyph centered, margin
+    // zeroed so the grown hit area overlaps no neighbouring control. This
+    // context is hasTouch (→ pointer: coarse), so assert the full minimum here;
+    // the fine-pointer compact look is asserted in touch-targets.spec.ts.
     const menuToggle = page.locator('[data-testid="card-menu-toggle"]').first();
     await expect(menuToggle).toBeVisible();
     const mbox = await menuToggle.boundingBox();
     expect(mbox, 'card menu toggle missing').not.toBeNull();
-    expect(mbox!.height, 'exempted card menu trigger must stay compact (<44px)').toBeLessThan(44);
-    expect(mbox!.width, 'exempted card menu trigger must stay compact (<44px)').toBeLessThan(44);
+    expect(mbox!.height, `coarse-44 card menu trigger must reach 44px (got ${mbox!.height}px)`).toBeGreaterThanOrEqual(44);
+    expect(mbox!.width, `coarse-44 card menu trigger must reach 44px (got ${mbox!.width}px)`).toBeGreaterThanOrEqual(44);
 
     await context.close();
   });
