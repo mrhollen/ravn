@@ -55,9 +55,10 @@ func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID dom
 
 	// Per-write deadline: a stalled/slow client whose TCP buffers fill can block
 	// the handler INSIDE a write, outside the select below. Bounding every
-	// write/flush to writeTimeout guarantees the blocked call returns an error
-	// so we exit and run deferred cleanup instead of zombie-ing.
-	const writeTimeout = 10 * time.Second
+	// write/flush to a.SSEWriteDeadline guarantees the blocked call returns an
+	// error so we exit and run deferred cleanup instead of zombie-ing. The
+	// deadline is wired through Deps (default: DefaultSSEWriteDeadline — 10s in
+	// production); tests override it with short values, not this handler.
 
 	// sseReplayCap bounds how many missed events a reconnecting client replays
 	// in one burst: a long-offline client must not pull an unbounded backlog
@@ -66,7 +67,7 @@ func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID dom
 	const sseReplayCap = 5000
 
 	setWriteDeadline := func() {
-		_ = rc.SetWriteDeadline(time.Now().Add(writeTimeout))
+		_ = rc.SetWriteDeadline(time.Now().Add(a.SSEWriteDeadline))
 	}
 	clearWriteDeadline := func() {
 		_ = rc.SetWriteDeadline(time.Time{})

@@ -105,6 +105,30 @@ func newRealtimeStack(t *testing.T) (stack, *pubsub.Broker, *httptest.Server) {
 	return stack{Handler: mux, App: app}, broker, srv
 }
 
+// TestEvents_SSE_DefaultWriteDeadline pins the PRODUCTION default of the SSE
+// per-write deadline seam (Deps.SSEWriteDeadline / DefaultSSEWriteDeadline):
+// nothing in the adapter may silently change it. Asserting the constant and
+// the value NewApp applies to a zero Deps field keeps this check instant —
+// no test has to sleep out a real 10s write deadline just to pin the value.
+func TestEvents_SSE_DefaultWriteDeadline(t *testing.T) {
+	t.Parallel()
+
+	stk := newStack(t) // Deps.SSEWriteDeadline left zero → NewApp applies the default
+
+	cases := []struct {
+		name string
+		got  time.Duration
+	}{
+		{"DefaultSSEWriteDeadline constant", DefaultSSEWriteDeadline},
+		{"NewApp default when Deps.SSEWriteDeadline is zero", stk.App.SSEWriteDeadline},
+	}
+	for _, tc := range cases {
+		if tc.got != 10*time.Second {
+			t.Errorf("%s = %s; want the unchanged production default of 10s", tc.name, tc.got)
+		}
+	}
+}
+
 func TestEvents_SSE_ConnectAndReceiveTaskCreated(t *testing.T) {
 	stk, _, srv := newRealtimeStack(t)
 

@@ -1045,13 +1045,21 @@ func (pipeAddr) String() string  { return "pipe" }
 // The client reads through ": connected" and then stops reading forever (the
 // stalled client). The next event write therefore blocks INSIDE the write —
 // outside the select, where r.Context().Done() can never be observed. Only the
-// per-write deadline can interrupt it: ~10s later the blocked write surfaces
+// per-write deadline can interrupt it: ~250ms later (we inject a SHORT
+// deadline through Deps.SSEWriteDeadline; production keeps its 10s default,
+// pinned by TestEvents_SSE_DefaultWriteDeadline) the blocked write surfaces
 // os.ErrDeadlineExceeded, the handler returns, and deferred cancel() releases
 // the broker subscription. Without per-write deadlines the pipe write blocks
-// forever and this test times out at 15s (zombie goroutine + leaked sub).
+// forever and this test times out (zombie goroutine + leaked sub).
 func TestAdversarial_SSE_StalledClientPipeWriteDeadline(t *testing.T) {
 	stk, broker, _ := newRealtimeStack(t)
 	proj := createProject(t, stk, "Pipe Stalled Project")
+
+	// Inject a short per-write deadline via the Deps seam so this end-to-end
+	// stalled-client path finishes in ~300ms instead of waiting out the 10s
+	// production default. The assertions are otherwise unchanged: a truly
+	// stalled client must still be released, exactly as in production.
+	stk.App.SSEWriteDeadline = 250 * time.Millisecond
 
 	serverEnd, clientEnd := net.Pipe()
 	defer serverEnd.Close()
@@ -1109,15 +1117,15 @@ func TestAdversarial_SSE_StalledClientPipeWriteDeadline(t *testing.T) {
 	})
 
 	// The handler must exit via the write-deadline error and release its
-	// subscription. Budget is generous (15s > 10s deadline + margin) so CI is
-	// not flaky, but a permanent zombie hang is still caught. Healthy runs
-	// finish in ~10-11s.
-	cleanDeadline := time.Now().Add(15 * time.Second)
+	// subscription. Budget is generous (5s >> injected 250ms deadline + margin)
+	// so CI is not flaky, but a permanent zombie hang is still caught. Healthy
+	// runs finish in ~300ms.
+	cleanDeadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(cleanDeadline) {
 		if broker.SubscriberCountForProject(pID) == 0 {
 			return // handler exited via deadline error, subscription released — no zombie
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("stalled pipe client wedged the handler: subscriber still registered after 15s (zombie goroutine + leaked broker subscription)")
+	t.Fatal("stalled pipe client wedged the handler: subscriber still registered after 5s (zombie goroutine + leaked broker subscription)")
 }

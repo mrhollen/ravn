@@ -22,17 +22,28 @@ import (
 // use-case structs are passed (never the UnitOfWork): the adapter is a thin
 // presentation layer and must not manage transactions itself.
 type Deps struct {
-	Projects     *application.Projects
-	Tasks        *application.Tasks
-	Comments     *application.Comments   // routed in slice 3b
-	Artifacts    *application.Artifacts  // routed in slice 3b
-	Acceptance   *application.Acceptance // routed in slice 3b
-	Relations    *application.Relations  // routed in slice 3b
-	Broker       application.EventBroker // realtime pub-sub for SSE events
-	Events       application.EventStore  // OPTIONAL: activity-log read path behind SSE Last-Event-ID replay; nil = live-only streams (no replay)
-	HTTPClient   *http.Client            // optional HTTP client for external integrations (e.g. OpenCode)
-	ArtifactsDir string                  // directory holding stored artifact files
+	Projects         *application.Projects
+	Tasks            *application.Tasks
+	Comments         *application.Comments   // routed in slice 3b
+	Artifacts        *application.Artifacts  // routed in slice 3b
+	Acceptance       *application.Acceptance // routed in slice 3b
+	Relations        *application.Relations  // routed in slice 3b
+	Broker           application.EventBroker // realtime pub-sub for SSE events
+	Events           application.EventStore  // OPTIONAL: activity-log read path behind SSE Last-Event-ID replay; nil = live-only streams (no replay)
+	HTTPClient       *http.Client            // optional HTTP client for external integrations (e.g. OpenCode)
+	ArtifactsDir     string                  // directory holding stored artifact files
+	SSEWriteDeadline time.Duration           // per-write deadline for SSE streams (stalled-client zombie guard); zero/negative → DefaultSSEWriteDeadline
 }
+
+// DefaultSSEWriteDeadline is the PRODUCTION default for Deps.SSEWriteDeadline.
+// A stalled/slow client whose TCP buffers fill can block an SSE handler INSIDE
+// a write, outside the stream's select loop; bounding every write/flush to
+// this deadline guarantees the blocked call returns an error so the handler
+// exits and runs deferred cleanup instead of zombie-ing. Keep it generous in
+// production — tests override Deps.SSEWriteDeadline with short values rather
+// than touching this constant (see TestEvents_SSE_DefaultWriteDeadline, which
+// pins it at exactly 10s).
+const DefaultSSEWriteDeadline = 10 * time.Second
 
 type noopBroker struct{}
 
@@ -66,6 +77,9 @@ func NewApp(d Deps) *App {
 	}
 	if d.ArtifactsDir == "" {
 		d.ArtifactsDir = "./artifacts"
+	}
+	if d.SSEWriteDeadline <= 0 {
+		d.SSEWriteDeadline = DefaultSSEWriteDeadline // production default; tests may override
 	}
 	return &App{Deps: d}
 }
