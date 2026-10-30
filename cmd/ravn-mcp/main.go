@@ -148,6 +148,12 @@ func runStdio(ctx context.Context, stdin io.Reader, stdout io.Writer, s *mcpsrv.
 func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (http.Handler, *mcpsrv.StreamableHTTPServer, *mcpsrv.SSEServer) {
 	mcs := newMCPServer(apiURL, token, agentName)
 
+	// CORS: ONE origin policy feeds both layers. The SDK transports get it via
+	// WithStreamableHTTPCORS/WithSSECORS (Access-Control-* headers on real
+	// responses, handled inside each transport), and the withCORS middleware
+	// below gets it for answering preflights before auth can reject them.
+	corsOrigins := corsAllowedOrigins()
+
 	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
 		mcpsrv.WithStateLess(true), // no session state: every request is self-contained — restartable/scaleable
 		mcpsrv.WithEndpointPath("/mcp"),
@@ -157,6 +163,10 @@ func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (ht
 		// SDK's DNS-rebinding guard would 403 exactly that traffic, so we take
 		// the documented escape hatch.
 		mcpsrv.WithDisableLocalhostProtection(true),
+		// Browser MCP clients (MCP Inspector web UI, browser extensions) are
+		// cross-origin; without this the SDK's transports emit no CORS headers
+		// and browsers block every call to /mcp.
+		mcpsrv.WithStreamableHTTPCORS(mcpCORSOptions(corsOrigins)...),
 	)
 
 	// Legacy SSE transport for clients that only speak the pre-streamable MCP
@@ -169,6 +179,7 @@ func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (ht
 		mcpsrv.WithKeepAliveInterval(30*time.Second),   // ping keeps idle streams through proxies
 		mcpsrv.WithSSEDisableLocalhostProtection(true), // same LAN-local rationale as the streamable server above
 		mcpsrv.WithAppendQueryToMessageEndpoint(),
+		mcpsrv.WithSSECORS(mcpCORSOptions(corsOrigins)...), // same policy as the streamable transport
 	)
 
 	mux := http.NewServeMux()
@@ -179,7 +190,12 @@ func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (ht
 	// and credentials as the one registered inside the MCP server.
 	mux.HandleFunc("GET /healthz", mcp.HealthzHandler(apiclient.New(apiURL, token)))
 
-	return withLogging(logger, withAuth(token, withModernMCPCompat(mux))), streamable, sse
+	// CORS sits OUTSIDE auth (but inside the request logger): a preflight
+	// OPTIONS carries no Authorization header, so withCORS must answer it 204
+	// before withAuth can 401 it — otherwise cross-origin browsers fail the
+	// handshake the moment RAVN_TOKEN is set. Real (non-preflight) responses
+	// keep their CORS headers from the transports; see withCORS.
+	return withLogging(logger, withCORS(corsOrigins, withAuth(token, withModernMCPCompat(mux)))), streamable, sse
 }
 
 // shutdownServer stops the MCP server in two stages. First, active streaming
@@ -264,6 +280,122 @@ func messageHandlerWithSessionFallback(next http.Handler) http.Handler {
 			}
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// CORS policy for the HTTP transports. Browsers (the MCP Inspector web UI,
+// browser extensions) refuse cross-origin responses that carry no
+// Access-Control-* headers, and they probe with an OPTIONS preflight before
+// the first real request — so both the SDK transports and this process'
+// middleware chain must speak CORS (see withCORS and mcpCORSOptions).
+
+const corsOriginsEnv = "RAVN_MCP_CORS_ORIGINS" // comma-separated origin list; absent/blank → "*"
+
+var (
+	// Methods advertised in preflight responses. DELETE is the streamable
+	// transport's session-termination method; HEAD is served by no route, so
+	// it is deliberately omitted.
+	corsAllowedMethods = []string{http.MethodGet, http.MethodPost, http.MethodDelete, http.MethodOptions}
+
+	// Headers a browser MCP client sends on cross-origin calls and preflights:
+	// JSON-RPC bodies (Content-Type), Bearer auth (Authorization), streamable
+	// session tracking (Mcp-Session-Id), modern protocol negotiation
+	// (Mcp-Protocol-Version) and SSE reconnect bookkeeping (Last-Event-ID).
+	corsAllowedHeaders = []string{
+		"Content-Type", "Authorization", "Mcp-Session-Id", "Mcp-Protocol-Version", "Last-Event-ID",
+	}
+)
+
+// corsAllowedOrigins resolves the allowed cross-origin origins from
+// RAVN_MCP_CORS_ORIGINS (comma-separated, entries trimmed of whitespace). An
+// absent or blank value falls back to "*" — allow any origin. The default is
+// safe because ravn-mcp deliberately never allows credentialed CORS responses
+// (see mcpCORSOptions), so an Access-Control-Allow-Origin of "*" exposes no
+// data a local/LAN client could not already reach by dialing the port
+// directly. When operators pin explicit origins, only those exact origins are
+// echoed back — never "*".
+func corsAllowedOrigins() []string {
+	raw := strings.TrimSpace(os.Getenv(corsOriginsEnv))
+	if raw == "" {
+		return []string{"*"}
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"*"}
+	}
+	return out
+}
+
+// mcpCORSOptions builds the shared CORS configuration for both SDK transports.
+//
+// Credentials are deliberately NOT enabled: ravn-mcp authenticates with a Bearer
+// token in the Authorization header — which a browser fetch() may send on a
+// cross-origin request as soon as the preflight advertises the header — and
+// never with cookies or other HTTP credentials. Omitting
+// Access-Control-Allow-Credentials keeps the default "*" policy spec-compliant
+// (wildcard + credentials is forbidden) and avoids any cookie-exposed
+// cross-site surface. When explicit origins are configured they are echoed back
+// verbatim — the only form a credentialed request would ever need — so enabling
+// WithCORSAllowCredentials later would require no other change here.
+func mcpCORSOptions(allowedOrigins []string) []mcpsrv.CORSOption {
+	return []mcpsrv.CORSOption{
+		mcpsrv.WithCORSAllowedOrigins(allowedOrigins...),
+		mcpsrv.WithCORSAllowedMethods(corsAllowedMethods...),
+		mcpsrv.WithCORSAllowedHeaders(corsAllowedHeaders...),
+	}
+}
+
+// corsResolveOrigin returns the value to advertise in Access-Control-Allow-Origin
+// for a request from origin, given allowedOrigins, or "" when the origin is not
+// permitted. It mirrors the SDK's CORSConfig.resolveOrigin (non-credentials mode):
+// "*" permits every origin; explicit entries permit exactly that origin, echoed
+// back verbatim. A request without an Origin header is same-origin — nothing is
+// advertised for it.
+func corsResolveOrigin(allowedOrigins []string, origin string) string {
+	if origin == "" {
+		return ""
+	}
+	for _, allowed := range allowedOrigins {
+		if allowed == "*" || allowed == origin {
+			return allowed // "*" stays "*"; an exact match returns that origin
+		}
+	}
+	return ""
+}
+
+// withCORS answers CORS preflight (OPTIONS + Access-Control-Request-Method)
+// requests at the front of the chain — before withAuth, withModernMCPCompat or
+// the routing mux can reject them — so browsers complete their handshake to
+// /mcp, /sse and /message even when RAVN_TOKEN is set: a preflight carries no
+// Authorization header and would otherwise die with 401 before the transports'
+// own CORS handling ever ran.
+//
+// Non-preflight cross-origin requests pass through untouched; their
+// Access-Control-Allow-* headers are emitted by the transport handlers
+// themselves (WithStreamableHTTPCORS / WithSSECORS, built from the SAME origin
+// policy), so no response ever carries duplicate CORS headers. Preflights from
+// a disallowed origin still get 204 but without Access-Control-Allow-Origin —
+// the browser then rejects the preflight itself (same semantics as the SDK).
+func withCORS(allowedOrigins []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodOptions || r.Header.Get("Access-Control-Request-Method") == "" {
+			next.ServeHTTP(w, r) // not a CORS preflight — ordinary request/probe
+			return
+		}
+		h := w.Header()
+		// Vary: Origin — caches must not serve this 204 to another origin.
+		h.Add("Vary", "Origin")
+		if origin := corsResolveOrigin(allowedOrigins, r.Header.Get("Origin")); origin != "" {
+			h.Set("Access-Control-Allow-Origin", origin)
+		}
+		h.Set("Access-Control-Allow-Methods", strings.Join(corsAllowedMethods, ", "))
+		h.Set("Access-Control-Allow-Headers", strings.Join(corsAllowedHeaders, ", "))
+		w.WriteHeader(http.StatusNoContent)
 	})
 }
 

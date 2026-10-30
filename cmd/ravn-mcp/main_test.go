@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1046,5 +1047,310 @@ func TestRunStdio_StdoutCarriesOnlyJSONRPC(t *testing.T) {
 		if strings.Contains(string(stderrCaptured), line) {
 			t.Errorf("JSON-RPC protocol line leaked into stderr: %q", line)
 		}
+	}
+}
+
+// ---- CORS (browser MCP clients: MCP Inspector web UI, browser extensions) ----
+
+// corsHeaderSet splits a comma-separated header value into a trimmed set so the
+// tests can assert exact membership instead of substring luck.
+func corsHeaderSet(value string) map[string]bool {
+	set := map[string]bool{}
+	for _, part := range strings.Split(value, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			set[p] = true
+		}
+	}
+	return set
+}
+
+// assertCORSOptionContract verifies a preflight response carries the full
+// contract a browser needs to proceed with real /mcp and /sse requests.
+func assertCORSOptionContract(t *testing.T, resp *http.Response, targetPath string) {
+	t.Helper()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("OPTIONS %s: expected 204 No Content, got %d", targetPath, resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got == "" {
+		t.Fatalf("OPTIONS %s: missing Access-Control-Allow-Origin header", targetPath)
+	}
+	methods := corsHeaderSet(resp.Header.Get("Access-Control-Allow-Methods"))
+	for _, m := range []string{"GET", "POST", "OPTIONS"} {
+		if !methods[m] {
+			t.Errorf("OPTIONS %s: Access-Control-Allow-Methods (%v) does not include %q", targetPath, methods, m)
+		}
+	}
+	headers := corsHeaderSet(resp.Header.Get("Access-Control-Allow-Headers"))
+	for _, h := range []string{"Content-Type", "Authorization", "Mcp-Session-Id", "Mcp-Protocol-Version"} {
+		if !headers[h] {
+			t.Errorf("OPTIONS %s: Access-Control-Allow-Headers (%v) does not include %q", targetPath, headers, h)
+		}
+	}
+}
+
+// corsDoPreflight issues a browser-shaped preflight (OPTIONS + Origin +
+// Access-Control-Request-Method/-Headers, NO Authorization — exactly what a
+// cross-origin fetch() sends before its first real request).
+func corsDoPreflight(t *testing.T, tsURL, targetPath, origin string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodOptions, tsURL+targetPath, nil)
+	if err != nil {
+		t.Fatalf("building preflight request: %v", err)
+	}
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers",
+		"Content-Type, Authorization, Mcp-Session-Id, Mcp-Protocol-Version")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("preflight OPTIONS %s failed: %v", targetPath, err)
+	}
+	return resp
+}
+
+// TestCORSPreflight_McpAndSSEEndpoints verifies the default policy ("*"): a
+// browser-shaped preflight to BOTH /mcp and /sse is answered 204 with
+// Access-Control-Allow-Origin plus methods/headers covering everything the MCP
+// Inspector sends. This stands in for "the Inspector can connect without CORS
+// errors" on the default local configuration.
+func TestCORSPreflight_McpAndSSEEndpoints(t *testing.T) {
+	t.Setenv(corsOriginsEnv, "") // blank → default "*" policy
+	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", "", "test-agent")
+	ts := httptest.NewServer(handler) // ephemeral port; never a fixed one
+	defer ts.Close()
+
+	for _, p := range []string{"/mcp", "/sse"} {
+		t.Run(p, func(t *testing.T) {
+			resp := corsDoPreflight(t, ts.URL, p, "http://localhost:6274") // typical Inspector origin
+			defer resp.Body.Close()
+
+			assertCORSOptionContract(t, resp, p)
+
+			if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+				t.Errorf("default policy: expected Access-Control-Allow-Origin %q, got %q", "*", got)
+			}
+			if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "" {
+				t.Errorf("credentials must not be allowed by default, got %q", got)
+			}
+		})
+	}
+}
+
+// TestCORS_CrossOriginSimpleRequestCarriesAllowOrigin verifies that real
+// (non-preflight) cross-origin responses from BOTH transports carry a matching
+// Access-Control-Allow-Origin — the SDK transport hooks, not just the early
+// preflight layer — and that they deliberately carry no
+// Access-Control-Allow-Credentials.
+func TestCORS_CrossOriginSimpleRequestCarriesAllowOrigin(t *testing.T) {
+	t.Setenv(corsOriginsEnv, "") // blank → default "*" policy
+	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", "", "test-agent")
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	const origin = "http://localhost:6274"
+
+	t.Run("POST /mcp initialize", func(t *testing.T) {
+		initPayload := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"inspector","version":"1.0"}}}`
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", strings.NewReader(initPayload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", origin)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("cross-origin POST /mcp failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 OK for cross-origin POST /mcp, got %d", resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got == "" {
+			t.Fatal("cross-origin POST /mcp response is missing Access-Control-Allow-Origin")
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "" {
+			t.Errorf("credentials must not be allowed, got %q", got)
+		}
+	})
+
+	t.Run("GET /sse stream open", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/sse", nil)
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("Origin", origin)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("cross-origin GET /sse failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 OK for cross-origin GET /sse, got %d", resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got == "" {
+			t.Fatal("cross-origin GET /sse response is missing Access-Control-Allow-Origin")
+		}
+	})
+}
+
+// TestCORSPreflight_AnsweredBeforeAuthWhenTokenSet proves the middleware
+// ordering: with RAVN_TOKEN gating the routes, a preflight (which carries no
+// Authorization header) must STILL be answered 204 with CORS headers — it is
+// handled by withCORS before withAuth can reject it — while unauthenticated
+// real requests are still rejected.
+func TestCORSPreflight_AnsweredBeforeAuthWhenTokenSet(t *testing.T) {
+	const secret = "cors-auth-secret"
+	t.Setenv(corsOriginsEnv, "") // blank → default "*" policy
+	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", secret, "test-agent")
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	for _, p := range []string{"/mcp", "/sse"} {
+		t.Run(p, func(t *testing.T) {
+			resp := corsDoPreflight(t, ts.URL, p, "http://inspector.example")
+			defer resp.Body.Close()
+
+			assertCORSOptionContract(t, resp, p) // 204 + full contract despite auth being on
+		})
+	}
+
+	// A real unauthenticated request is still rejected — CORS did not loosen auth.
+	resp, err := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	if err != nil {
+		t.Fatalf("POST /mcp failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated POST /mcp, got %d", resp.StatusCode)
+	}
+}
+
+// TestCORS_OriginsEnvOverrideHonored verifies RAVN_MCP_CORS_ORIGINS: pinned
+// origins are echoed back exactly (never "*") on both the preflight layer and
+// the transport handlers, disallowed origins receive no Allow-Origin at all
+// (the browser then fails their handshake), and comma-separated entries all
+// work.
+func TestCORS_OriginsEnvOverrideHonored(t *testing.T) {
+	t.Setenv(corsOriginsEnv, "https://inspector.example.com , https://lan-ravn.example")
+	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", "", "test-agent")
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// Both comma-separated entries are honored on prefights.
+	for _, origin := range []string{"https://inspector.example.com", "https://lan-ravn.example"} {
+		t.Run("preflight_"+origin, func(t *testing.T) {
+			resp := corsDoPreflight(t, ts.URL, "/mcp", origin)
+			defer resp.Body.Close()
+
+			assertCORSOptionContract(t, resp, "/mcp")
+			if got := resp.Header.Get("Access-Control-Allow-Origin"); got != origin {
+				t.Errorf("expected echoed origin %q, got %q (must not be *)", origin, got)
+			}
+		})
+	}
+
+	// A disallowed origin gets 204 but NO Access-Control-Allow-Origin.
+	t.Run("preflight_disallowed_origin", func(t *testing.T) {
+		resp := corsDoPreflight(t, ts.URL, "/sse", "https://evil.example")
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("expected 204 even for a disallowed origin, got %d", resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+			t.Errorf("disallowed origin must not receive Allow-Origin, got %q", got)
+		}
+	})
+
+	// The same policy reaches the transport handlers on real responses.
+	initPayload := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"inspector","version":"1.0"}}}`
+	t.Run("POST /mcp allowed origin echoed", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", strings.NewReader(initPayload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "https://inspector.example.com")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST /mcp failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://inspector.example.com" {
+			t.Errorf("expected echoed origin on transport response, got %q", got)
+		}
+	})
+
+	t.Run("POST /mcp disallowed origin gets no Allow-Origin", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", strings.NewReader(initPayload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "https://evil.example")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST /mcp failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 OK (transport still serves), got %d", resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+			t.Errorf("disallowed origin must not receive Allow-Origin on transport responses, got %q", got)
+		}
+	})
+}
+
+// TestCORSPreflight_AllowedOriginsParsing verifies the RAVN_MCP_CORS_ORIGINS
+// parsing contract: blank/absent → wildcard default, comma-separated entries
+// are trimmed and non-empty only, all-comma input falls back to the default.
+func TestCORSPreflight_AllowedOriginsParsing(t *testing.T) {
+	cases := []struct {
+		env  string
+		want []string
+	}{
+		{"", []string{"*"}},
+		{"   ", []string{"*"}},
+		{"https://a.test", []string{"https://a.test"}},
+		{" https://a.test ,https://b.test,", []string{"https://a.test", "https://b.test"}},
+		{" , , ", []string{"*"}},
+	}
+	for _, tc := range cases {
+		t.Run("env="+tc.env, func(t *testing.T) {
+			t.Setenv(corsOriginsEnv, tc.env)
+			if got := corsAllowedOrigins(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("corsAllowedOrigins() with env=%q = %v, want %v", tc.env, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCORSPreflight_ResolveOrigin verifies origin resolution: wildcard matches
+// everything (staying "*"), explicit entries match exactly and are echoed,
+// everything else resolves to "" (no Allow-Origin advertised), and a missing
+// Origin header is never matched.
+func TestCORSPreflight_ResolveOrigin(t *testing.T) {
+	cases := []struct {
+		name    string
+		allowed []string
+		origin  string
+		want    string
+	}{
+		{"wildcard matches any origin", []string{"*"}, "https://any.example", "*"},
+		{"wildcard with empty origin", []string{"*"}, "", ""},
+		{"exact match echoed", []string{"https://a.test"}, "https://a.test", "https://a.test"},
+		{"second of several entries", []string{"https://a.test", "https://b.test"}, "https://b.test", "https://b.test"},
+		{"no match", []string{"https://a.test"}, "https://evil.example", ""},
+		{"nil list matches nothing", nil, "https://a.test", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := corsResolveOrigin(tc.allowed, tc.origin); got != tc.want {
+				t.Fatalf("corsResolveOrigin(%v, %q) = %q, want %q", tc.allowed, tc.origin, got, tc.want)
+			}
+		})
 	}
 }
