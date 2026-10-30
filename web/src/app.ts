@@ -70,6 +70,9 @@ export const LS_CARD_DENSITY = "ravn.card_density";
 export const LS_THEME = "ravn_theme";
 export { LS_TOKEN };
 export const DEFAULT_DONE_LIMIT = 20;
+/** Separator between the segments of a dynamic document.title (WCAG 2.4.2,
+ *  task 01M3MMVV92639YJ5822824NTV1): "<task> – <project> – Rävn". */
+export const TITLE_SEPARATOR = " – ";
 /** Debounce window for the server-side description/notes board search. Local
  *  title/id matching stays instant; this only gates the extra round-trip, so
  *  ~250ms keeps typing latency unperceived (same order as SSE_RELOAD_DEBOUNCE_MS). */
@@ -506,6 +509,31 @@ export function ravnApp() {
     setDocumentTitle(title?: string): void {
       if (typeof document === "undefined") return;
       document.title = title ? `${title} · Rävn` : "Rävn";
+    },
+
+    /** WCAG 2.4.2 (task 01M3MMVV92639YJ5822824NTV1): reflect the active view in
+     *  document.title so browser tabs and screen-reader announcements identify
+     *  WHERE the user is, not just what app:
+     *    task detail open → "<task title> – <project name> – Rävn"
+     *    board view       → "<project name> – Rävn"
+     *    no project yet   → "Rävn" (the static <title> fallback)
+     *  `detail` deliberately outlives its drawer (closeDetail() keeps it for
+     *  fast re-open), so the TASK segment is gated on detailOpen, not on
+     *  detail being non-null. Deliberately NOT called from the boot sequence:
+     *  first paint keeps the static "Rävn" title until the user explicitly
+     *  switches project or opens a task (boot auto-selects silently). */
+    updateDocumentTitle(): void {
+      if (typeof document === "undefined") return;
+      const project = this.projects.find((p) => p.id === this.selectedProjectId);
+      const projectName = (project?.name ?? "").trim();
+      const taskTitle = this.detailOpen ? ((this.detail?.title ?? "").trim()) : "";
+      if (taskTitle && projectName) {
+        document.title = `${taskTitle}${TITLE_SEPARATOR}${projectName}${TITLE_SEPARATOR}Rävn`;
+      } else if (projectName) {
+        document.title = `${projectName}${TITLE_SEPARATOR}Rävn`;
+      } else {
+        document.title = "Rävn";
+      }
     },
 
     /** Re-sync the `.dark` class on <html> with the resolved theme. The OS-
@@ -2612,6 +2640,8 @@ export function ravnApp() {
       void this.loadBoard();
       this.scheduleFullTextSearch();
       this.syncUrlState(true);
+      // User-driven project switch → the tab title follows (WCAG 2.4.2).
+      this.updateDocumentTitle();
     },
 
     async loadBoard(silent = false): Promise<void> {
@@ -3232,6 +3262,10 @@ export function ravnApp() {
         if (pushedEntry) window.history.back();
         else window.history.replaceState(null, "", this.boardUrl());
       }
+      // Drawer closed → the tab title reverts to the board view. (Recomputes:
+      // detailOpen is now false, so any stale `detail` object can't leak its
+      // title into the board state — WCAG 2.4.2.)
+      this.updateDocumentTitle();
     },
 
     /** Switch the open task's detail to the FULL-PAGE view. Pushes /tasks/<id>
@@ -3542,6 +3576,10 @@ export function ravnApp() {
       });
       t.comments = sorted;
       this.detail = t;
+      // Task detail loaded → the tab title names it (WCAG 2.4.2). Covers every
+      // load path: openTask, deep link, popstate and SSE re-fetches (a remote
+      // rename while the drawer is open re-titles the tab too).
+      this.updateDocumentTitle();
       if (t.comments.length > this.totalComments) {
         this.totalComments = t.comments.length;
       }

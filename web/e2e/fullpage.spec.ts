@@ -288,8 +288,10 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     const acRing = acHeading.getByRole('img');
     await expect(acRing).toHaveAttribute('aria-label', '0 of 2 acceptance criteria complete');
     await expect(acRing.locator('circle')).toHaveCount(2);
-    const acBoxes = panel.locator('input[type="checkbox"][aria-label^="Mark done"]');
-    await expect(acBoxes).toHaveCount(2);
+    // AC checkboxes are named by their wrapping label (the criterion text) —
+    // no aria-label attribute on the inputs (ticket 01M3MMVPRGDF20NF81BRYJSYCA).
+    await expect(panel.getByRole('checkbox', { name: 'AC one ships' })).toHaveCount(1);
+    await expect(panel.getByRole('checkbox', { name: 'AC two ships' })).toHaveCount(1);
 
     // Comments (both seeded) + the post-comment form.
     await expect(panel.getByText('Seeded comment one on A')).toBeVisible();
@@ -380,7 +382,7 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     }).toPass({ timeout: 10_000 });
 
     // --- acceptance criterion check-off --------------------------------------
-    const acBox = panel.locator('input[aria-label="Mark done: Edit works from page"]');
+    const acBox = panel.locator('label', { hasText: 'Edit works from page' }).locator('input[type="checkbox"]');
     await acBox.check();
     await expect(async () => {
       const b3 = await getJson(`${serverUrl}/api/v1/tasks/${taskB.id}`);
@@ -455,7 +457,7 @@ test.describe('Full-page task view (/tasks/<id>)', () => {
     expect(box!.x).toBeGreaterThanOrEqual(0);
 
     // Functional at this width: toggle an AC and save notes from the page.
-    const acBox = panel.locator('input[type="checkbox"][aria-label^="Mark done"]').first();
+    const acBox = panel.locator('label', { hasText: 'AC one ships' }).locator('input[type="checkbox"]');
     await acBox.check();
     await expect(async () => {
       const t = await getJson(`${serverUrl}/api/v1/tasks/${taskA.id}`);
