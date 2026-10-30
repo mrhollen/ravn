@@ -129,22 +129,29 @@
           <span class="hidden text-zinc-600 dark:text-zinc-400 sm:inline">Project</span>
           <div class="relative min-w-0 flex-1 md:max-w-xs" data-testid="project-dropdown">
             <div class="flex items-stretch">
-              <button type="button" data-testid="project-select"
-                      aria-haspopup="true" :aria-expanded="projectMenuOpen ? 'true' : 'false'"
-                      :aria-label="'Projects: ' + projectSelectLabel()"
-                      :disabled="!appBooted"
-                      @click="toggleProjectMenu()"
-                      @keydown.down.prevent="openProjectMenu('first')"
-                      @keydown.up.prevent="openProjectMenu('last')"
-                       class="field flex min-w-0 flex-1 items-center justify-between gap-2 rounded-r-none border-r-0 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50">
-                <span class="min-w-0 truncate" x-text="projectSelectLabel()"></span>
-                <!-- todo·doing·done count pill: board-state summary inside the
-                     trigger (pre-filter counts — it summarizes the whole
-                     project, not the filtered view). Hidden until a board is
-                     loaded; the truncate title absorbs the width on mobile. -->
-                <span x-show="board" x-cloak data-testid="project-counts"
-                      class="hidden shrink-0 items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 sm:inline-flex dark:bg-zinc-800 dark:text-zinc-300"
-                      :aria-label="'Board counts: ' + statusCounts().todo + ' to do, ' + statusCounts().doing + ' doing, ' + statusCounts().done + ' done'">
+               <button type="button" data-testid="project-select"
+                       aria-haspopup="true" :aria-expanded="projectMenuOpen ? 'true' : 'false'"
+                       :disabled="!appBooted"
+                       @click="toggleProjectMenu()"
+                       @keydown.down.prevent="openProjectMenu('first')"
+                       @keydown.up.prevent="openProjectMenu('last')"
+                        class="field flex min-w-0 flex-1 items-center justify-between gap-2 rounded-r-none border-r-0 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50">
+                 <!-- Accessible name comes from the visible content (the label
+                      below ALREADY carries name + task counts), so no aria-label:
+                      a static label override would mismatch the rendered text
+                      (WCAG 4.1.2, axe label-content-name-mismatch). The sr-only
+                      prefix keeps "Projects" context for AT without duplicating
+                      the pill digits into the name. -->
+                 <span class="sr-only">Projects: </span>
+                 <span class="min-w-0 truncate" x-text="projectSelectLabel()"></span>
+                 <!-- todo·doing·done count pill: board-state summary inside the
+                      trigger (pre-filter counts — it summarizes the whole
+                      project, not the filtered view). Hidden until a board is
+                      loaded; the truncate title absorbs the width on mobile.
+                      aria-hidden: the digits are already in the label text above,
+                      so they must not repeat in the button's accessible name. -->
+                 <span x-show="board" x-cloak data-testid="project-counts" aria-hidden="true"
+                       class="hidden shrink-0 items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 sm:inline-flex dark:bg-zinc-800 dark:text-zinc-300">
                   <span x-text="statusCounts().todo"></span>
                   <span class="text-zinc-400" aria-hidden="true">·</span>
                   <span class="text-amber-700 dark:text-amber-400" x-text="statusCounts().doing"></span>
@@ -544,18 +551,24 @@ DOM-placed after the collapsible strip: on md+ it renders flush
             <button type="button" @click="clearSort()" x-show="sortKey !== ''" x-cloak
                     data-testid="sort-clear"
                     class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
-              Clear sort
-            </button>
+               Clear sort
+             </button>
 
+             <!-- No aria-label on these three toggles: the visible state text
+                  ("Hoist parents (on)", "Density: Comfortable", "Archived (off)")
+                  IS the accessible name, with :aria-pressed carrying the state —
+                  a redundant label that doesn't contain the rendered text would
+                  violate WCAG 4.1.2 (axe label-content-name-mismatch). The
+                  tooltips carry the longer phrasing. Mobile twins follow suit. -->
               <button type="button" @click="toggleHoistParents()" :aria-pressed="hoistParents"
-                      data-testid="sort-hoist-parents" aria-label="Hoist parent tickets to the top of each column"
+                      data-testid="sort-hoist-parents"
                       class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                       title="Keep parent tickets at the top of each column">
                 <span x-text="'Hoist parents ' + (hoistParents ? '(on)' : '(off)')"></span>
               </button>
 
               <button type="button" @click="toggleCardDensity()" :aria-pressed="cardDensity === 'compact'"
-                      data-testid="card-density-toggle" aria-label="Toggle card display density between comfortable and compact"
+                      data-testid="card-density-toggle"
                       class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                       :title="'Switch to ' + (cardDensity === 'comfortable' ? 'compact' : 'comfortable') + ' card density'">
                 <span x-text="'Density: ' + (cardDensity === 'compact' ? 'Compact' : 'Comfortable')"></span>
@@ -564,7 +577,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               <!-- "Show archived" board view (AC3): swaps the columns' data source to the
                    separately-fetched archived set; OFF restores the untouched live board. -->
               <button type="button" @click="toggleShowArchived()" :aria-pressed="showArchived"
-                      data-testid="show-archived-toggle" aria-label="Show or hide archived tasks on the board"
+                      data-testid="show-archived-toggle"
                       class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                       :title="showArchived ? 'Hide archived tasks' : 'Show archived tasks'">
                 <span x-text="'Archived ' + (showArchived ? '(on)' : '(off)')"></span>
@@ -678,24 +691,26 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                  Enter/Space activation for free (no @keydown wiring needed).
                  aria-live (a global ARIA attribute) keeps announcing state
                  changes politely; the old role="status" was dropped because an
-                 explicit role on a button overrides its implicit interactive
-                 semantics. hover/active/focus-visible classes make the
-                 interactivity visually evident. The dynamic aria-label states
-                 BOTH the function and the current state (the visible text alone
-                 only shows the state), adapted to sseStatus
-                 ('connected'|'connecting'|'disconnected') + the polling flag:
-                 a screen reader hears "Realtime status: disconnected, syncing
-                 via polling every 15 seconds. Activate to reconnect.", never a
-                 dead-end bare "Offline". (01M3MMXANW2BJ4V55GGB3GK8QN,
-                 01M3MMTXVXVH4CBJR7KK5B6XF4) -->
-             <button type="button" data-testid="mobile-sse-status" aria-live="polite" @click="connectSse()"
-                     :aria-label="sseStatus === 'connecting'
-                       ? 'Reconnecting to the realtime stream…'
-                       : sseStatus === 'connected'
-                         ? 'Realtime status: connected. Activate to reconnect.'
-                         : (polling
-                           ? 'Realtime status: disconnected, syncing via polling every 15 seconds. Activate to reconnect.'
-                           : 'Realtime status: disconnected. Activate to reconnect.')"
+                  explicit role on a button overrides its implicit interactive
+                  semantics. hover/active/focus-visible classes make the
+                  interactivity visually evident. The dynamic aria-label states
+                  BOTH the function and the current state (the visible text alone
+                  only shows the state), adapted to sseStatus
+                  ('connected'|'connecting'|'disconnected') + the polling flag:
+                  a screen reader hears "Realtime status: disconnected, syncing
+                  via polling every 15 seconds. Activate to reconnect.", never a
+                  dead-end bare "Offline". It is PREFIXED with sseStatusWord()
+                  (the visible word) so the accessible name CONTAINS the rendered
+                  text — WCAG 4.1.2 / axe label-content-name-mismatch.
+                  (01M3MMXANW2BJ4V55GGB3GK8QN, 01M3MMTXVXVH4CBJR7KK5B6XF4) -->
+              <button type="button" data-testid="mobile-sse-status" aria-live="polite" @click="connectSse()"
+                      :aria-label="sseStatusWord() + ' — ' + (sseStatus === 'connecting'
+                        ? 'Reconnecting to the realtime stream…'
+                        : sseStatus === 'connected'
+                          ? 'Realtime status: connected. Activate to reconnect.'
+                          : (polling
+                            ? 'Realtime status: disconnected, syncing via polling every 15 seconds. Activate to reconnect.'
+                            : 'Realtime status: disconnected. Activate to reconnect.'))"
                     class="flex w-full cursor-pointer select-none items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium transition-colors hover:bg-zinc-100 active:bg-zinc-200 focus-ring dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
                     :class="sseStatus === 'connected'
                        ? 'text-emerald-700 dark:text-emerald-400'
@@ -721,7 +736,9 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         'bg-zinc-400 dark:bg-zinc-500': sseStatus !== 'connected' && sseStatus !== 'connecting' && !polling
                       }"></span>
               </span>
-              <span x-text="sseStatus === 'connected' ? 'Live' : sseStatus === 'connecting' ? 'Reconnecting…' : (polling ? 'Polling every 15s' : 'Offline — click to connect')"></span>
+               <!-- sseStatusWord() = single source of truth shared with the
+                    :aria-label prefix above (see app.ts). -->
+               <span x-text="sseStatusWord()"></span>
             </button>
             <label class="tap-target mt-2 flex cursor-pointer items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300" title="Re-fetches the board every 15 seconds">
               <input type="checkbox" data-testid="mobile-auto-refresh-toggle" x-model="polling" @change="pollingChanged()"
@@ -861,14 +878,14 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   </button>
 
                   <button type="button" @click="toggleHoistParents()" :aria-pressed="hoistParents"
-                          data-testid="sort-hoist-parents" aria-label="Hoist parent tickets to the top of each column"
+                          data-testid="sort-hoist-parents"
                           class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                           title="Keep parent tickets at the top of each column">
                     <span x-text="'Hoist parents ' + (hoistParents ? '(on)' : '(off)')"></span>
                   </button>
 
                   <button type="button" @click="toggleCardDensity()" :aria-pressed="cardDensity === 'compact'"
-                          data-testid="card-density-toggle" aria-label="Toggle card display density between comfortable and compact"
+                          data-testid="card-density-toggle"
                           class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                           :title="'Switch to ' + (cardDensity === 'comfortable' ? 'compact' : 'comfortable') + ' card density'">
                     <span x-text="'Density: ' + (cardDensity === 'compact' ? 'Compact' : 'Comfortable')"></span>
@@ -877,7 +894,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   <!-- "Show archived" board view (AC3) — mobile twin of the desktop toggle;
                        only ONE exists in the DOM per viewport (x-if isMobile / !isMobile). -->
                   <button type="button" @click="toggleShowArchived()" :aria-pressed="showArchived"
-                          data-testid="show-archived-toggle" aria-label="Show or hide archived tasks on the board"
+                          data-testid="show-archived-toggle"
                           class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                           :title="showArchived ? 'Hide archived tasks' : 'Show archived tasks'">
                     <span x-text="'Archived ' + (showArchived ? '(on)' : '(off)')"></span>
@@ -1327,11 +1344,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
                         <div class="card-meta-row flex flex-wrap items-center text-zinc-600 dark:text-zinc-400"
                              :class="cardDensity === 'compact' ? 'mt-1 gap-x-2 gap-y-0.5 text-[11px]' : 'mt-2 gap-x-3 gap-y-1 text-xs'">
-                          <!-- Task short ID: the card's identity chip — muted monospace,
-                               full ULID in the title for copy/lookup. -->
-                          <span data-testid="card-short-id" :title="'Task ' + task.id"
-                                class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] leading-none text-zinc-500 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
-                                x-text="shortId(task.id)"></span>
+                           <!-- Task short ID: the card's identity chip — muted monospace,
+                                full ULID in the title for copy/lookup. Light text is zinc-600
+                                (not zinc-500): on the zinc-100 chip fill that only reaches
+                                ~4.3:1 — below the WCAG 2.1 AA 4.5:1 minimum for this size. -->
+                           <span data-testid="card-short-id" :title="'Task ' + task.id"
+                                 class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] leading-none text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
+                                 x-text="shortId(task.id)"></span>
                           <!-- Prominent blocker badge with tooltip/popover (AC1) -->
                           <div x-show="isBlocked(task.id)" x-cloak
                                class="relative inline-flex items-center"
@@ -2384,16 +2403,18 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                          @click.outside="statusMenuOpen = false; ownerPopoverOpen = false">
                       <!-- Left half: Status dropdown trigger -->
                       <div class="relative flex items-stretch" role="group" aria-label="Status">
-                        <button type="button"
-                                @click="toggleStatusMenu()"
-                                data-testid="status-dropdown-trigger"
-                                aria-label="Status"
-                                aria-haspopup="menu"
-                                :aria-expanded="statusMenuOpen"
-                                class="focus-ring flex items-center gap-2 rounded-l-md px-2.5 py-1 text-xs font-medium text-zinc-800 transition hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800"
-                                title="Change task status">
-                          <span class="h-2 w-2 rounded-full"
-                                :class="detail.status === 'todo' ? 'bg-zinc-400' : (detail.status === 'doing' ? 'bg-amber-500' : 'bg-emerald-500')"></span>
+                         <button type="button"
+                                 @click="toggleStatusMenu()"
+                                 data-testid="status-dropdown-trigger"
+                                 aria-haspopup="menu"
+                                 :aria-expanded="statusMenuOpen"
+                                 class="focus-ring flex items-center gap-2 rounded-l-md px-2.5 py-1 text-xs font-medium text-zinc-800 transition hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                                 title="Change task status">
+                           <!-- sr-only functional prefix (no aria-label): the name must
+                                CONTAIN the visible status word — "Change status: Doing". -->
+                           <span class="sr-only">Change status:</span>
+                           <span class="h-2 w-2 rounded-full"
+                                 :class="detail.status === 'todo' ? 'bg-zinc-400' : (detail.status === 'doing' ? 'bg-amber-500' : 'bg-emerald-500')"></span>
                           <span x-text="statusLabel(detail.status)"></span>
                           <svg class="h-3.5 w-3.5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
@@ -2425,15 +2446,18 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
                       <!-- Right half: Owner popover trigger -->
                       <div class="relative flex items-stretch">
-                        <button type="button"
-                                @click="toggleOwnerPopover()"
-                                data-testid="owner-popover-trigger"
-                                aria-label="Durable Owner"
-                                aria-haspopup="dialog"
-                                :aria-expanded="ownerPopoverOpen"
-                                class="focus-ring flex items-center gap-1.5 rounded-r-md border-l border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                                :title="detail.assignee ? ('Durable Owner: ' + actorLabel(detail.assignee) + ' — click to change or clear') : 'Durable Owner — click to assign'">
-                          <svg class="h-3.5 w-3.5" :class="detail.assignee ? 'text-amber-500 dark:text-amber-400' : 'text-zinc-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                         <button type="button"
+                                 @click="toggleOwnerPopover()"
+                                 data-testid="owner-popover-trigger"
+                                 aria-haspopup="dialog"
+                                 :aria-expanded="ownerPopoverOpen"
+                                 class="focus-ring flex items-center gap-1.5 rounded-r-md border-l border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                                 :title="detail.assignee ? ('Durable Owner: ' + actorLabel(detail.assignee) + ' — click to change or clear') : 'Durable Owner — click to assign'">
+                           <!-- sr-only functional prefix (no aria-label): the name must
+                                CONTAIN the visible owner word — "Durable owner: <name>"
+                                or "Durable owner: Unassigned". -->
+                           <span class="sr-only">Durable owner:</span>
+                           <svg class="h-3.5 w-3.5" :class="detail.assignee ? 'text-amber-500 dark:text-amber-400' : 'text-zinc-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                           </svg>
                           <span :class="detail.assignee ? 'font-semibold text-amber-700 dark:text-amber-300' : 'text-zinc-500 dark:text-zinc-400'"

@@ -2928,6 +2928,18 @@ export function ravnApp() {
       else this.stopPolling();
     },
 
+    /** Visible + spoken status word for the mobile "Status & Refresh" SSE button
+     *  (data-testid="mobile-sse-status"). Single source of truth so the button's
+     *  x-text and its :aria-label prefix can never drift apart — WCAG 4.1.2
+     *  requires the accessible name to CONTAIN the visible text, so the label is
+     *  built as sseStatusWord() + ' — ' + the stateful sentence. The mobile-menu
+     *  spec asserts those full sentences unanchored; the prefix preserves them. */
+    sseStatusWord(): string {
+      if (this.sseStatus === "connected") return "Live";
+      if (this.sseStatus === "connecting") return "Reconnecting…";
+      return this.polling ? "Polling every 15s" : "Offline — click to connect";
+    },
+
     startPolling(): void {
       this.stopPolling();
       this.pollTimer = window.setInterval(() => void this.pollTick(), POLL_MS);

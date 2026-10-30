@@ -804,7 +804,10 @@ test.describe('Web E2E test suite', () => {
     const assigneeInput = drawer.getByPlaceholder('Assignee name (e.g. alice, agent-1)');
     await expect(assigneeInput).toBeVisible();
     await assigneeInput.fill('charlie-human');
-    await drawer.getByRole('button', { name: 'Assign' }).click();
+    // exact:true — the owner-popover trigger's accessible name ("Durable owner:
+    // Unassigned") contains "assign" as a substring and would otherwise make this
+    // locator ambiguous (strict-mode violation). See WCAG 4.1.2 naming epic.
+    await drawer.getByRole('button', { name: 'Assign', exact: true }).click();
     await expect(page.getByText('Assigned to charlie-human')).toBeVisible();
     await expect(drawer.getByText('charlie-human').first()).toBeVisible();
 
