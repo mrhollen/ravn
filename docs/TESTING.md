@@ -13,8 +13,11 @@ are tracked as tasks on the Ravn board (see [Findings index](#findings-index-tas
 | Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 38 spec files + shared `fixtures.ts`/`helpers.ts`, **12,848** LOC (was 15,727), 175 tests | **~41s** wall (default workers); one shared `ravn-server` per worker (+ a few isolated spins) | not measured (E2E is the integration proof) |
 
 All three run in CI on every push/PR (`.github/workflows/ci.yml`,
-`.forgejo/workflows/ci.yml`): `go test -race ./...`, `npm run test:unit`,
-then the E2E suite after the web build and server binary are produced.
+`.forgejo/workflows/ci.yml`): `go test -race ./... -coverprofile=c.out -cover`,
+`npm run test:unit:coverage`, then the E2E suite after the web build and server
+binary are produced. The two instrumented runs print their coverage reports
+and feed a shared ratcheting gate (`scripts/ci/coverage-gate.sh`, floors in §2)
+that fails the pipeline on breach.
 
 ### Run them
 
@@ -68,7 +71,10 @@ Values are the reporter's exact two-decimal output, descending by line %.
 | src/types.ts | 37.98% | 100.00% | 100.00% |
 | **All files (total)** | **67.18%** | **76.44%** | **60.48%** |
 
-The total line coverage is the ratcheting baseline: it must stay ≥ 65%.
+The total line coverage is the ratcheting baseline: it must stay ≥ 65% (the web
+unit floor) and the Go total must stay ≥ 80% (the Go statement floor). Both are
+enforced in CI by `scripts/ci/coverage-gate.sh` — see "How to ratchet the
+floors" below.
 
 Notes:
 
@@ -90,15 +96,60 @@ The plain reporter writes the table to **stdout** with a stable total line
     ℹ all files    |  67.18 |    76.44 |   60.48 |
 
 Pipe-friendly one-liner (POSIX awk; prints `67.18` = total line %; the suite's
-own pass/fail exit code is preserved by piping only after the command):
+own pass/fail exit code is preserved by piping only after the command). The
+match is on row *content*, not the prefix, because the prefix differs between
+Node versions:
 
     npm run test:unit:coverage 2>/dev/null \
-      | awk -F'|' '/^ℹ all files/ { gsub(/ /, "", $2); print $2 }'
+      | awk -F'|' '$1 ~ /all files/ { gsub(/[[:space:]]/, "", $2); print $2 }'
 
 Caveat (measured on Node 26.12.1): `--test-reporter=json` is currently broken —
 Node mis-parses the value and exits 7 with
 `ERR_MODULE_NOT_FOUND: Cannot find package 'json'` (`tap`/`spec` work fine).
 Parse the plain table instead; revisit if a future Node release fixes it.
+
+Caveat (measured 2026-10-31, Node v22 vs v26): the CI runners pin **Node v22**
+(`setup-node` in both `ci.yml` files), whose plain reporter prefixes report
+rows with `#` instead of `ℹ` and — more importantly — **includes the test files
+themselves** (`web/test/*.test.ts`, `test-helpers.ts`) in the table. So the CI
+total reads ~82.35% while a modern local Node (v26, which reports `src/` only)
+reads ~69.35%. Both comfortably clear the 65% floor; the gate matches the total
+row by content so it works on both. If you bump the runner's Node major, re-check
+which file set is reported before ratcheting (see below).
+
+### How to ratchet the floors
+
+CI enforces two floors via `scripts/ci/coverage-gate.sh`, called from an
+identical "Coverage gate (ratcheting floors)" step in **both**
+`.github/workflows/ci.yml` and `.forgejo/workflows/ci.yml`. The script is the
+single source of truth — the workflows only invoke it — so the two pipelines
+cannot drift:
+
+- `GO_FLOOR=80` — total Go statement coverage, parsed from
+  `go tool cover -func=c.out | tail -1` (profile written by
+  `go test -race ./... -coverprofile=c.out -cover`).
+- `WEB_FLOOR=65` — web unit total line coverage, parsed from the "all files"
+  row of `npm run test:unit:coverage` (captured to `web-unit-coverage.log`).
+
+Ratchet procedure (only once actual coverage has gone up *and stayed up*):
+
+1. Raise real coverage first — land the new tests and let CI show the new
+   totals for a few runs.
+2. Bump the matching constant at the top of `scripts/ci/coverage-gate.sh` to
+   the new measured total (or slightly under it, so unrelated work isn't
+   blocked).
+3. Update the baseline note in this section so doc and gate agree, and refresh
+   the per-package / per-file tables above with a re-measurement.
+
+Never lower a floor; never bump one without the matching coverage change — the
+point is that unrelated work never has to touch coverage, but covered ground is
+never re-lost. To verify the gate itself locally without touching real
+coverage, override the env floors (e.g. `GO_FLOOR=99 WEB_FLOOR=99 scripts/ci/
+coverage-gate.sh c.out web-unit-coverage.log` must FAIL; defaults must PASS).
+
+Measured totals as of 2026-10-31 (post test-quality epic): Go **83.9%**
+statements; web unit total lines **69.35%** on Node 26 / **82.35%** on the
+CI-pinned Node 22 (see the v22 caveat above) — both floors have headroom.
 
 ### How to measure
 
@@ -239,7 +290,7 @@ Audit results from 2026-10-30, each mapped to a Ravn board task:
 | 5 | Batch rollup queries (`OpenTaskCounts`, `ProjectReport` agg, `OpenBlockersByTasks`, …) at 0% despite production use | [Unit/Go] Cover zero-coverage batch aggregates (P3) |
 | 6 | cmd/ravn-exec 45.2%, cmd/ravn-server 62.5% — lowest packages; flag/env/shutdown paths untested | [Unit/Go] Raise cmd package coverage (P3) |
 | 7 | api.ts 69.7% lines (SSE + error paths), focus.ts 41.7% functions | [Unit/Web] Close api.ts/focus.ts gaps (P3) |
-| 8 | CI reports no coverage and enforces no floor | [CI] Coverage reporting + ratcheting gates (P3; blocked by #4) |
+| 8 | **Resolved (2026-10-31)**: CI now runs both instrumented suites once each, prints per-package (Go) and per-file (web unit) coverage plus totals, and enforces ratcheting floors (Go ≥ 80% statements, web unit ≥ 65% lines) via a shared `scripts/ci/coverage-gate.sh` step present in both workflows — see §2 "How to ratchet the floors" | [CI] Coverage reporting + ratcheting gates (P3; blocked by #4) — done |
 | 9 | **Resolved (2026-10-30)**: E2E flake policy landed — `retries: process.env.CI ? 1 : 0` in `playwright.config.ts`, plus an `e2e/flake-reporter.ts` `onEnd` hook that surfaces pass-via-retry (flaky) tests; the wall-clock expiry waits in `claim-expired`/`stalled-filter` (`ttl_sec=1`) were replaced by bounded ≤3s auto-retrying `expect()s` (the app re-renders expired/stalled state live via a 1s `nowTick`) | [E2E] Flake policy: bounded retries + timing audit (P3) — done; see §3 E2E |
 | 10 | Test LOC ratio 2.2:1 with legacy "challenger/stress_rN" files overlapping regular tests; inconsistent naming | [Test] Deduplicate adversarial Go tests (P2) |
 

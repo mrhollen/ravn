@@ -34,8 +34,15 @@ jobs:
       - name: Check linting (go vet)
         run: go vet ./...
 
-      - name: Run Go tests
-        run: go test -race ./...
+      - name: Run Go tests (with coverage profile)
+        run: |
+          # Single instrumented run: the same suite as before, plus per-package
+          # statement coverage on screen and a merged profile in c.out for the
+          # Coverage gate step. Format documented in docs/TESTING.md §2.
+          go test -race ./... -coverprofile=c.out -cover
+          echo ""
+          echo "--- Go coverage total (statements, all packages) ---"
+          go tool cover -func=c.out | tail -1
 
       - name: Build static binaries
         run: |
@@ -162,10 +169,23 @@ jobs:
             exit 1
           fi
 
-      - name: Run web unit tests
+      - name: Run web unit tests (with coverage)
         run: |
           cd web
-          npm run test:unit
+          set -o pipefail
+          # Same suite as `npm run test:unit`, instrumented: Node's plain
+          # reporter prints a per-file coverage table plus the "all files"
+          # total line (docs/TESTING.md §2; the gate handles both the v22 '#'
+          # and v26 'ℹ' row styles). Captured for the Coverage gate step.
+          npm run test:unit:coverage 2>&1 | tee ../web-unit-coverage.log
+
+      - name: Coverage gate (ratcheting floors)
+        run: |
+          # Fails this job if total Go statement coverage < GO_FLOOR or web
+          # unit line coverage < WEB_FLOOR. The shared script is invoked
+          # identically by BOTH workflow files (.github + .forgejo) so their
+          # behavior cannot drift; how to ratchet: docs/TESTING.md §2.
+          bash scripts/ci/coverage-gate.sh c.out web-unit-coverage.log
 
       - name: Run browser E2E tests
         run: |
