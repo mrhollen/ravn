@@ -9,7 +9,7 @@ import (
 )
 
 // ======================================================================================
-// R4 EMPIRICAL TESTS: Dockerfile CA-Certificates Invariants
+// DOCKERFILE CA-CERTIFICATES INVARIANTS
 // (Rävn task 01M3MMZYHN503HZY11V1V1G2RF)
 // ======================================================================================
 //
@@ -21,7 +21,7 @@ import (
 // therefore install ca-certificates via apk WHILE STILL ROOT (before any USER
 // directive drops privileges).
 //
-// TestChallenger_R4_DockerfilesCACertificates statically audits Dockerfile,
+// TestDockerfiles_AlpineRuntimeStagesInstallCACertsAsRoot statically audits Dockerfile,
 // Dockerfile.server, and Dockerfile.mcp. It joins shell line-continuations
 // into logical statements first, so the audit is robust to formatting: the
 // apk add may sit in its own RUN or be merged into an existing multi-command
@@ -45,13 +45,13 @@ type dockerStage struct {
 // match as well.
 var apkAddCACerts = regexp.MustCompile(`apk\s+(?:-\S+\s+)*add\s+(?:-\S+\s+)*ca-certificates`)
 
-// TestChallenger_R4_DockerfilesCACertificates programmatically audits Dockerfile,
+// TestDockerfiles_AlpineRuntimeStagesInstallCACertsAsRoot programmatically audits Dockerfile,
 // Dockerfile.server, and Dockerfile.mcp to verify that all alpine runtime stages
 // across the multi-stage and standalone Dockerfiles install ca-certificates with
 // root privileges before switching to unprivileged USER app. Any alpine runtime
 // stage missing the package (including one added after this test was written)
 // fails the test and is reported by file/stage.
-func TestChallenger_R4_DockerfilesCACertificates(t *testing.T) {
+func TestDockerfiles_AlpineRuntimeStagesInstallCACertsAsRoot(t *testing.T) {
 	rootPath := filepath.Join("..", "..")
 	dockerfiles := []string{
 		filepath.Join(rootPath, "Dockerfile"),
