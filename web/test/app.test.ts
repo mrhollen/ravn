@@ -4,21 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  dateInputToIso,
-  dueCalendarDate,
-  fmtDueDate,
-  formatClaimCountdown,
-  isClaimExpired,
-  isOverdue,
-  isStalledExpired,
-  localCalendarToday,
-  needsAttention,
-  safeStorage,
-} from "../src/util.ts";
-import { escapeHtml, isAllowedHref, renderMarkdown } from "../src/md.ts";
-import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, serializeCommentDraft } from "../src/drafts.ts";
+import { dateInputToIso, dueCalendarDate, safeStorage } from "../src/util.ts";
 import { ApiError, api } from "../src/api.ts";
+import { createDebounce } from "../src/refresh.ts";
 import {
   ravnApp,
   isMobileDetailViewport,
@@ -35,120 +23,175 @@ import {
   SEARCH_DEBOUNCE_MS,
   FULLTEXT_SEARCH_LIMIT,
 } from "../src/app.ts";
-import { nextTrapIndex, pickFocusable } from "../src/focus.ts";
-import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
-import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, shouldApplyBoard } from "../src/refresh.ts";
-import { dispatchRealtimeEvent, KNOWN_REALTIME_KINDS, type RealtimeDispatchHooks } from "../src/realtime.ts";
+import { localYmd, withFetch, withWindow } from "./test-helpers.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --------------------------------------------------------------------------- R8: safeStorage
-test("R8: safeStorage basic in-memory operations", () => {
-  safeStorage.clear();
-  assert.equal(safeStorage.getItem("test_key"), null);
 
-  safeStorage.setItem("test_key", "test_val");
-  assert.equal(safeStorage.getItem("test_key"), "test_val");
+function fakeDetail(id: string, notes: string): any {
+  return { id, notes, comments: [], assignee: undefined, blocked: false };
+}
 
-  safeStorage.setItem("test_key", "new_val");
-  assert.equal(safeStorage.getItem("test_key"), "new_val");
+function dueTask(id: string, daysFromToday: number, status: "todo" | "doing" | "done" = "todo"): any {
+  return { id, title: `due ${id}`, status, priority: 3, version: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", due_at: `${localYmd(daysFromToday)}T00:00:00Z` };
+}
 
-  safeStorage.removeItem("test_key");
-  assert.equal(safeStorage.getItem("test_key"), null);
-
-  safeStorage.setItem("k1", "v1");
-  safeStorage.setItem("k2", "v2");
-  safeStorage.clear();
-  assert.equal(safeStorage.getItem("k1"), null);
-  assert.equal(safeStorage.getItem("k2"), null);
-});
-
-test("R8: safeStorage handles DOMException: SecurityError gracefully", () => {
-  // Mock window.localStorage to throw a SecurityError (mimics sandboxed iframe or blocked cookies)
+function withConfirm(app: any, answer: boolean | ((msg: string) => boolean)) {
   const origWindow = (globalThis as any).window;
-  try {
-    (globalThis as any).window = {};
-    Object.defineProperty((globalThis as any).window, "localStorage", {
-      get() {
-        const err = new Error("The operation is insecure.");
-        err.name = "SecurityError";
-        throw err;
-      },
-      configurable: true,
-    });
+  let lastMessage = "";
+  (globalThis as any).window = {
+    confirm(msg: string) {
+      lastMessage = msg;
+      return typeof answer === "function" ? answer(msg) : answer;
+    },
+  };
+  return {
+    get lastMessage() {
+      return lastMessage;
+    },
+    restore() {
+      if (origWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = origWindow;
+    },
+  };
+}
 
-    // None of these should throw
-    assert.doesNotThrow(() => {
-      safeStorage.setItem("secure_test", "in_memory_data");
-    });
-    assert.equal(safeStorage.getItem("secure_test"), "in_memory_data");
+function toastBlock(): string {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  const block = html.match(/data-testid="toast-stack"[\s\S]*?<\/template>\s*<\/div>/);
+  assert.ok(block, "toast stack markup found in index.html");
+  return block[0];
+}
 
-    assert.doesNotThrow(() => {
-      safeStorage.removeItem("secure_test");
-    });
-    assert.equal(safeStorage.getItem("secure_test"), null);
-  } finally {
-    if (origWindow === undefined) {
-      delete (globalThis as any).window;
-    } else {
-      (globalThis as any).window = origWindow;
+function emptyBoard(projectId: string): any {
+  return { project_id: projectId, tasks: { todo: [], doing: [], done: [] } };
+}
+
+function bootIdempotencyHarness() {
+  const origWindow = (globalThis as any).window;
+  const origEventSource = (globalThis as any).EventSource;
+  const origSetInterval = (globalThis as any).setInterval;
+
+  const listenerCounts: Record<string, number> = {};
+  const intervalCalls: unknown[] = [];
+  let esConstructed = 0;
+
+  (globalThis as any).setInterval = (...args: Parameters<typeof setInterval>) => {
+    intervalCalls.push(args);
+    return origSetInterval(...args);
+  };
+
+  (globalThis as any).window = {
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    location: { pathname: "/" }, // every real browser has one; boot reads it for deep links
+    addEventListener: (t: string) => {
+      listenerCounts[t] = (listenerCounts[t] ?? 0) + 1;
+    },
+    setTimeout: (...args: unknown[]) => setTimeout(...(args as Parameters<typeof setTimeout>)),
+    clearTimeout: (...args: unknown[]) => clearTimeout(...(args as Parameters<typeof clearTimeout>)),
+  };
+
+  class FakeEventSource {
+    url: string;
+    onopen: any = null;
+    onerror: any = null;
+    onmessage: any = null;
+    closed = false;
+    constructor(url: string) {
+      this.url = url;
+      esConstructed++;
+    }
+    addEventListener() {}
+    close() {
+      this.closed = true;
     }
   }
-});
+  (globalThis as any).EventSource = FakeEventSource;
 
-test("R8: safeStorage handles localStorage.setItem QuotaExceededError gracefully", () => {
-  const origWindow = (globalThis as any).window;
-  try {
-    const fakeStore = new Map<string, string>();
-    (globalThis as any).window = {
-      localStorage: {
-        getItem(k: string) {
-          return fakeStore.get(k) ?? null;
-        },
-        setItem(_k: string, _v: string) {
-          const err = new Error("QuotaExceededError");
-          err.name = "QuotaExceededError";
-          throw err;
-        },
-        removeItem(k: string) {
-          fakeStore.delete(k);
-        },
-        clear() {
-          fakeStore.clear();
-        },
-      },
-    };
+  return {
+    listenerCounts,
+    intervalCalls,
+    getEsConstructed: () => esConstructed,
+    /** The module-level SSE counters are shared across tests — reset so each
+     *  test asserts its own steady state. */
+    resetSseCounters() {
+      sseTelemetry.opened = 0;
+      sseTelemetry.closed = 0;
+    },
+    restore() {
+      (globalThis as any).setInterval = origSetInterval;
+      if (origWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = origWindow;
+      if (origEventSource === undefined) delete (globalThis as any).EventSource;
+      else (globalThis as any).EventSource = origEventSource;
+    },
+  };
+}
 
-    // setItem throws QuotaExceededError, should fall back to memoryStorage
-    assert.doesNotThrow(() => {
-      safeStorage.setItem("quota_key", "saved_in_mem");
-    });
-    assert.equal(safeStorage.getItem("quota_key"), "saved_in_mem");
-  } finally {
-    if (origWindow === undefined) {
-      delete (globalThis as any).window;
-    } else {
-      (globalThis as any).window = origWindow;
-    }
-  }
-});
+function acToggleDetailFixture(): any {
+  return {
+    id: "task-ac-toggle",
+    acceptance_criteria: [
+      { seq: 1, text: "First criterion", done: false },
+      { seq: 2, text: "Second criterion", done: true },
+    ],
+  };
+}
+
+function archTask(id: string, status: "todo" | "doing" | "done", version = 1): any {
+  return {
+    id, title: "T-" + id, description: null, status, priority: 0, due_at: null,
+    claimed_by: null, claim_expires_at: null, assigned_to: null,
+    ac_total: 0, comment_count: 0, blocked_by: [], archived: false, version,
+  };
+}
+
+function archBoard(projectId: string, byStatus: Record<string, any[]> = {}): any {
+  return {
+    project_id: projectId,
+    tasks: { todo: byStatus.todo ?? [], doing: byStatus.doing ?? [], done: byStatus.done ?? [] },
+    counts: {
+      todo: (byStatus.todo ?? []).length,
+      doing: (byStatus.doing ?? []).length,
+      done: (byStatus.done ?? []).length,
+    },
+  };
+}
+
+function archApp() {
+  const app = ravnApp() as any;
+  app.selectedProjectId = "proj-1";
+  app.detail = null;
+  app.toasts = [];
+  // Keep resync hermetic: record board reloads instead of hitting the network.
+  app.loadBoardCalls = 0;
+  app.loadBoard = async () => { app.loadBoardCalls++; };
+  app.refreshArchivedViewCalls = 0;
+  app.refreshArchivedView = async () => { app.refreshArchivedViewCalls++; };
+  return app;
+}
+
+function lastToast(app: any, needle?: string): any {
+  const t = [...app.toasts].reverse().find((x: any) => (needle ? x.msg.includes(needle) : true));
+  assert.ok(t, `expected a toast${needle ? ` matching "${needle}"` : ""}; got ${JSON.stringify(app.toasts.map((x: any) => x.msg))}`);
+  return t;
+}
 
 test("R8: ravnApp initializes cleanly when window.localStorage is blocked by SecurityError", () => {
-  const origWindow = (globalThis as any).window;
-  try {
-    (globalThis as any).window = {
-      matchMedia: () => ({ matches: false, addEventListener: () => {} }),
-    };
-    Object.defineProperty((globalThis as any).window, "localStorage", {
-      get() {
-        const err = new Error("DOMException: The operation is insecure.");
-        err.name = "SecurityError";
-        throw err;
-      },
-      configurable: true,
-    });
+  const win: any = {
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+  };
+  Object.defineProperty(win, "localStorage", {
+    get() {
+      const err = new Error("DOMException: The operation is insecure.");
+      err.name = "SecurityError";
+      throw err;
+    },
+    configurable: true,
+  });
 
+  withWindow(win, () => {
     // Initializing ravnApp() must not throw!
     let appInstance: any;
     assert.doesNotThrow(() => {
@@ -165,86 +208,9 @@ test("R8: ravnApp initializes cleanly when window.localStorage is blocked by Sec
       appInstance.setTheme("dark");
       appInstance.saveSort();
     });
-  } finally {
-    if (origWindow === undefined) {
-      delete (globalThis as any).window;
-    } else {
-      (globalThis as any).window = origWindow;
-    }
-  }
+  });
 });
 
-// --------------------------------------------------------------------------- R9: Markdown
-test("R9: escapeHtml escapes HTML special characters", () => {
-  assert.equal(escapeHtml("<script>alert(1)</script>"), "&lt;script&gt;alert(1)&lt;/script&gt;");
-  assert.equal(escapeHtml("a && b > c < d"), "a &amp;&amp; b &gt; c &lt; d");
-});
-
-test("R9: renderMarkdown handles empty and fallback without crashing", () => {
-  assert.equal(renderMarkdown(""), "");
-  assert.equal(renderMarkdown(null), "");
-  assert.equal(renderMarkdown(undefined), "");
-  assert.equal(renderMarkdown("   "), "");
-
-  // When DOMParser is absent, renderMarkdown gracefully degrades to escaped paragraph
-  const res = renderMarkdown("Hello *world*");
-  assert.ok(res.length > 0);
-  assert.ok(res.includes("Hello"));
-});
-
-// ---------------------------------------------------------------------------
-// Markdown href allow-list — ticket 01M3MMYWX96KGGYRZTCXD4FNVG
-// isAllowedHref() is the single classifier sanitizeHtml uses for every URL-typed
-// attribute (anchor/area href, src, …). We test it directly because the unit
-// suite runs in Node without DOMParser; renderMarkdown delegates to it verbatim.
-// ---------------------------------------------------------------------------
-
-test("MdHref: protocol-relative URLs are rejected (the core fix)", () => {
-  assert.equal(isAllowedHref("//evil.com"), false, "//evil.com must be stripped");
-  assert.equal(isAllowedHref("//evil.com/phish?x=1"), false);
-  assert.equal(isAllowedHref("///x"), false, "triple-slash resolves to host x — strip");
-  assert.equal(isAllowedHref("  //evil.com  "), false, "whitespace-padded protocol-relative");
-  assert.equal(isAllowedHref("//\t/evil.com"), false, "tab between the slashes still starts with //");
-});
-
-test("MdHref: backslash smuggling into a relative path is rejected", () => {
-  // Browsers normalize "\" to "/" in special-scheme contexts, so "/\evil.com"
-  // would navigate cross-origin to https://evil.com.
-  assert.equal(isAllowedHref("/\\evil.com"), false);
-  assert.equal(isAllowedHref("\\\\evil.com"), false);
-});
-
-test("MdHref: root-relative and fragment links keep working", () => {
-  assert.equal(isAllowedHref("/tasks/123"), true, "root-relative path is kept");
-  assert.equal(isAllowedHref("/"), true, "site root is kept");
-  assert.equal(isAllowedHref("/a/b?c=d#e"), true, "path with query+hash is kept");
-  assert.equal(isAllowedHref("#section"), true, "fragment-only is kept");
-});
-
-test("MdHref: http(s), mailto and fragments are allowed; schemes are case-insensitive", () => {
-  assert.equal(isAllowedHref("https://example.com"), true);
-  assert.equal(isAllowedHref("http://example.com/a?b=c#d"), true);
-  assert.equal(isAllowedHref("HTTPS://EXAMPLE.COM"), true, "uppercase scheme + host is allowed");
-  assert.equal(isAllowedHref("mailto:x@y"), true);
-  assert.equal(isAllowedHref("MAILTO:X@Y"), true, "uppercase mailto is allowed");
-});
-
-test("MdHref: disallowed schemes are rejected (no regression)", () => {
-  assert.equal(isAllowedHref("javascript:alert(1)"), false);
-  assert.equal(isAllowedHref("java&#x09;script:alert(1)".replace("&#x09;", "\t")), false, "tab (C0) inside the scheme token");
-  assert.equal(isAllowedHref("data:text/html,<script>alert(1)</script>"), false);
-  assert.equal(isAllowedHref("vbscript:MsgBox(1)"), false);
-  assert.equal(isAllowedHref("ftp://files.example.com/x"), false);
-  assert.equal(isAllowedHref("file:///etc/passwd"), false);
-});
-
-test("MdHref: empty and bare-relative strings stay rejected (legacy behavior)", () => {
-  assert.equal(isAllowedHref(""), false, "empty was stripped before too");
-  assert.equal(isAllowedHref("   "), false, "whitespace-only");
-  assert.equal(isAllowedHref("tasks/123"), false, "bare relative without leading / was stripped before");
-});
-
-// --------------------------------------------------------------------------- R10: Accessible Card Semantics
 test("R10: web/index.html uses <article> containers with scoped keyboard listeners", () => {
   const htmlPath = path.resolve(__dirname, "../index.html");
   const html = fs.readFileSync(htmlPath, "utf-8");
@@ -303,12 +269,6 @@ test("R10: web/index.html uses <article> containers with scoped keyboard listene
     "Card title must expose the id the card's aria-labelledby points at",
   );
 });
-
-// --------------------------------------------------------------------------- Notes scratchpad reset (task 01M3MMSVAF8RV8J7VGDSCV6M07)
-/** Build a minimal TaskDetail-shaped object for applyDetail(). */
-function fakeDetail(id: string, notes: string): any {
-  return { id, notes, comments: [], assignee: undefined, blocked: false };
-}
 
 test("Notes: closeDetail() resets the scratchpad so no draft leaks (AC1)", () => {
   const app = ravnApp();
@@ -408,19 +368,6 @@ test("Notes: clean close does not prompt and a fresh open loads server notes (re
   assert.equal(app.notesDirty, false);
 });
 
-// ---------------------------------------------------------------------------
-// canApplyDetail — drawer ownership guard (task 01M3MMY78F1TRP6MKDRT0SKQWB)
-// ---------------------------------------------------------------------------
-
-test("Drawer: canApplyDetail only admits an open drawer's own payload", () => {
-  assert.equal(canApplyDetail("A", "A", true), true, "open + matching id applies");
-  assert.equal(canApplyDetail("A", "B", true), false, "foreign task id never applies (switch mid-fetch)");
-  assert.equal(canApplyDetail("A", "A", false), false, "closed drawer ignores in-flight fetches");
-  assert.equal(canApplyDetail(null, "A", true), false, "null payload id fails closed");
-  assert.equal(canApplyDetail("", "A", true), false, "empty payload id fails closed");
-  assert.equal(canApplyDetail("A", null, true), false, "no active task id fails closed");
-});
-
 test("Drawer: a stale foreign response must NOT reset a dirty draft of the open task", () => {
   const app = ravnApp();
   app.detailOpen = true;
@@ -462,65 +409,6 @@ test("Drawer: a response for a closed drawer is discarded (AC3 core)", () => {
   app.detail = null;
   app.applyDetail(fakeDetail("A", "late notes for A"));
   assert.equal(app.detail, null, "late foreign payload did not install itself into B's drawer");
-});
-
-// --------------------------------------------------------------------------- Due dates as calendar days (task 01M3MMT0T5678NXKC41JX05Z63)
-// Run the suite under TZ=UTC, TZ=America/New_York and TZ=Pacific/Kiritimati —
-// every due-date assertion below must hold in ALL of them.
-
-/** Local-calendar "YYYY-MM-DD" offset by N days (test helper only). */
-function localYmd(offsetDays: number): string {
-  const n = new Date();
-  n.setDate(n.getDate() + offsetDays);
-  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
-}
-
-/** Minimal TaskSummary row for columns() filtering. */
-function dueTask(id: string, daysFromToday: number, status: "todo" | "doing" | "done" = "todo"): any {
-  return { id, title: `due ${id}`, status, priority: 3, version: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", due_at: `${localYmd(daysFromToday)}T00:00:00Z` };
-}
-
-test("Due: dueCalendarDate extracts the UTC calendar day in every timezone", () => {
-  // This app's own storage format (UTC midnight) — same answer in any TZ.
-  assert.equal(dueCalendarDate("2026-10-01T00:00:00Z"), "2026-10-01");
-  assert.equal(dueCalendarDate("2028-02-29T00:00:00Z"), "2028-02-29"); // leap day (2028 is a leap year)
-  assert.equal(dueCalendarDate("1999-12-31T23:59:59Z"), "1999-12-31");
-  // Non-Z offsets written by external tools (instant == Oct 1 00:00Z).
-  assert.equal(dueCalendarDate("2026-10-01T08:00:00+08:00"), "2026-10-01");
-  assert.equal(dueCalendarDate("2026-10-01T05:30:00+05:30"), "2026-10-01");
-  assert.equal(dueCalendarDate("2026-09-30T19:00:00-05:00"), "2026-10-01"); // western offset, same instant
-  assert.equal(dueCalendarDate("2026-10-01T12:00:00Z"), "2026-10-01"); // mid-day instant, same calendar day
-  assert.equal(dueCalendarDate("not-a-date"), "");
-});
-
-test("Due: fmtDueDate renders the encoded day identically in every timezone (off-by-one regression)", () => {
-  // The original bug: this rendered "Sep 30" in browsers west of UTC.
-  assert.equal(fmtDueDate("2026-10-01T00:00:00Z"), "Oct 1");
-  assert.equal(fmtDueDate("2028-02-29T00:00:00Z"), "Feb 29, 2028"); // other year → includes the year
-  // Year appears when it isn't the current one.
-  const otherYear = fmtDueDate("2025-01-02T00:00:00Z");
-  assert.ok(otherYear.includes("Jan 2"), `got "${otherYear}"`);
-  assert.ok(otherYear.includes("2025"), `got "${otherYear}"`);
-  const currentYear = fmtDueDate(`${new Date().getFullYear()}-07-04T00:00:00Z`);
-  assert.ok(!/19\d{2}|20\d{2}/.test(currentYear), `current-year label must omit the year, got "${currentYear}"`);
-  // Garbage passes through untouched.
-  assert.equal(fmtDueDate("nonsense"), "nonsense");
-});
-
-test("Due: isOverdue boundary — a task due today is never overdue during its due day", () => {
-  // The original bug marked this overdue from ~8pm local the previous evening.
-  assert.equal(isOverdue({ due_at: `${localYmd(0)}T00:00:00Z`, status: "todo" }), false, "due today → not overdue");
-  assert.equal(isOverdue({ due_at: `${localYmd(-1)}T00:00:00Z`, status: "todo" }), true, "due yesterday → overdue");
-  assert.equal(isOverdue({ due_at: `${localYmd(1)}T00:00:00Z`, status: "todo" }), false, "due tomorrow → not overdue");
-  assert.equal(isOverdue({ due_at: undefined as unknown as string, status: "todo" }), false);
-  assert.equal(isOverdue({ due_at: `${localYmd(-5)}T00:00:00Z`, status: "done" }), false, "done tasks never overdue");
-});
-
-test("Due: dateInputToIso round-trips through the picker without shifting the day", () => {
-  const picked = "2026-10-01"; // what the <input type="date"> holds
-  const stored = dateInputToIso(picked);
-  assert.equal(stored, "2026-10-01T00:00:00Z", "storage format unchanged (UTC midnight)");
-  assert.equal(dueCalendarDate(stored!), picked, "stored day === picked day");
 });
 
 test("Due: 'Due today' filter matches exactly today and excludes older overdue tasks (AC3)", () => {
@@ -569,7 +457,6 @@ test("Due: editing round-trip preserves the calendar day shown on the card (dupl
   assert.equal(app.editDraft.due, "");
 });
 
-// --------------------------------------------------------------------------- Hoist-parents preference (parent cards float to the column top)
 test("HoistParents: defaults ON when unset, malformed value falls back to ON, toggle persists", () => {
   safeStorage.clear();
   const app = ravnApp();
@@ -622,421 +509,6 @@ test("HoistParents: hoists within server order and under an active sort; OFF = p
   safeStorage.clear();
 });
 
-// --------------------------------------------------------------------------- Focus trap (task 01M3MMSVRFBPCK329KFSDR1WHV)
-test("FocusTrap: nextTrapIndex wraps forward and backward (AC1)", () => {
-  // 4 focusables: Tab from last wraps to first; Shift+Tab from first wraps to last.
-  assert.equal(nextTrapIndex(4, 0, true), 1);
-  assert.equal(nextTrapIndex(4, 2, true), 3);
-  assert.equal(nextTrapIndex(4, 3, true), 0); // forward wrap
-  assert.equal(nextTrapIndex(4, 3, false), 2);
-  assert.equal(nextTrapIndex(4, 1, false), 0);
-  assert.equal(nextTrapIndex(4, 0, false), 3); // backward wrap
-});
-
-test("FocusTrap: nextTrapIndex handles a single focusable (stays put)", () => {
-  assert.equal(nextTrapIndex(1, 0, true), 0);
-  assert.equal(nextTrapIndex(1, 0, false), 0);
-});
-
-test("FocusTrap: nextTrapIndex with no focusables and outside focus", () => {
-  assert.equal(nextTrapIndex(0, 0, true), -1); // nothing to trap — caller preventDefaults
-  assert.equal(nextTrapIndex(0, -1, false), -1);
-  // Focus was outside the trap: start at the nearer end.
-  assert.equal(nextTrapIndex(3, -1, true), 0);
-  assert.equal(nextTrapIndex(3, -1, false), 2);
-  // Out-of-range indices degrade to the same ends (no crash).
-  assert.equal(nextTrapIndex(3, 99, true), 0);
-  assert.equal(nextTrapIndex(3, -7, false), 2);
-});
-
-test("FocusTrap: pickFocusable keeps tabbable AND visible elements only", () => {
-  const els = [
-    { tabIndex: 0 }, // button/input — keep
-    { tabIndex: -1 }, // explicit non-tabbable — drop
-    { tabIndex: 5 }, // custom positive tabindex — keep
-  ];
-  assert.deepEqual(pickFocusable(els), [{ tabIndex: 0 }, { tabIndex: 5 }]); // default: all shown
-
-  // Hidden (x-show display:none) elements are dropped even when tabbable.
-  const vis = [
-    { tabIndex: 0, hidden: false },
-    { tabIndex: 0, hidden: true },
-    { tabIndex: -1, hidden: false },
-  ];
-  assert.deepEqual(
-    pickFocusable(vis, (el) => !(el as any).hidden),
-    [{ tabIndex: 0, hidden: false }],
-  );
-
-  // Empty input → empty output.
-  assert.deepEqual(pickFocusable([]), []);
-});
-
-// ---------------------------------------------------------------------------
-// moves.ts — per-task in-flight lock + request timeout (task 01M3MMY2SYX3RR9NZHJTSVBS1C)
-// ---------------------------------------------------------------------------
-
-test("Moves: beginMove allows a task, then blocks a DUPLICATE of the same id only", () => {
-  const busy = new Set<string>();
-  assert.equal(beginMove(busy, "A"), true); // A starts moving
-  assert.equal(beginMove(busy, "A"), false); // duplicate concurrent move of A is blocked
-  assert.equal(beginMove(busy, "B"), true); // a DIFFERENT task stays fully interactive
-  assert.deepEqual(
-    [...busy].sort(),
-    ["A", "B"],
-  );
-});
-
-test("Moves: endMove releases the lock so the same task can move again (idempotent)", () => {
-  const busy = new Set<string>();
-  beginMove(busy, "A");
-  endMove(busy, "A");
-  assert.equal(beginMove(busy, "A"), true); // re-allowed after release
-  endMove(busy, "A");
-  endMove(busy, "A"); // idempotent — no throw
-  assert.equal([...busy].length, 0);
-});
-
-test("Moves: withTimeout resolves fast calls untouched and does not abort", async () => {
-  let seenAborted = false;
-  const r = await withTimeout(50, async (signal) => {
-    seenAborted = signal.aborted;
-    return "ok";
-  });
-  assert.equal(r.value, "ok");
-  assert.equal(r.timedOut, false);
-  assert.equal(seenAborted, false); // fast path never trips the abort
-});
-
-test("Moves: withTimeout reports timedOut=true when the deadline passes", async () => {
-  const r = await withTimeout(20, (signal) => new Promise((_res, rej) => {
-    signal.addEventListener("abort", () => rej(new Error("aborted")));
-  }));
-  assert.equal(r.value, undefined);
-  assert.equal(r.timedOut, true); // we aborted it ourselves — a stall, not an API error
-  assert.ok(r.error instanceof Error);
-});
-
-test("Moves: withTimeout distinguishes a real error from a timeout (timedOut=false)", async () => {
-  const boom = new Error("version_conflict");
-  const r = await withTimeout(100, async () => {
-    throw boom;
-  });
-  assert.equal(r.value, undefined);
-  assert.equal(r.timedOut, false); // the fn threw its own error before the deadline
-  assert.equal(r.error, boom);
-});
-
-test("Moves: withTimeout clears its timer once the request settles (no dangling abort)", async () => {
-  // A call that resolves well before a SHORT deadline must leave no pending
-  // abort — if the timer leaked, it would fire during the wait below.
-  let abortedAfterSettle = false;
-  const r = await withTimeout(60, (signal) => {
-    signal.addEventListener("abort", () => (abortedAfterSettle = true));
-    return "done";
-  });
-  assert.equal(r.value, "done");
-  // Past the 60ms deadline: a leaked timer would have aborted by now.
-  await new Promise((res) => setTimeout(res, 100));
-  assert.equal(abortedAfterSettle, false);
-});
-
-// ---------------------------------------------------------------------------
-// refresh.ts — SSE reload debounce + sequence/ownership guards (task 01M3MMXYJXBSD4JTR6EK463M7E)
-// ---------------------------------------------------------------------------
-
-/** Virtual clock with real timer semantics (fire in due order, one at a time). */
-function fakeClock() {
-  let now = 0;
-  let nextId = 1;
-  const timers = new Map<number, { at: number; fn: () => void }>();
-  return {
-    setTimer(fn: () => void, ms: number) {
-      const id = nextId++;
-      timers.set(id, { at: now + ms, fn });
-      return id;
-    },
-    clearTimer(id: unknown) {
-      timers.delete(id as number);
-    },
-    /** Advance the clock, running any timers that come due along the way. */
-    advance(ms: number) {
-      const target = now + ms;
-      for (;;) {
-        let earliestId: number | null = null;
-        let earliestAt = Infinity;
-        for (const [id, t] of timers) {
-          if (t.at <= target && t.at < earliestAt) {
-            earliestAt = t.at;
-            earliestId = id;
-          }
-        }
-        if (earliestId === null) break;
-        now = earliestAt;
-        const t = timers.get(earliestId)!;
-        timers.delete(earliestId);
-        t.fn();
-      }
-      now = target;
-    },
-  };
-}
-
-test("Refresh: trailing debounce coalesces a burst into ONE call after the quiet window", () => {
-  const clock = fakeClock();
-  let calls = 0;
-  const d = createDebounce(() => calls++, 200, clock as never);
-
-  // Burst of 4 "events" within the 200ms window (each restarts the window).
-  d.schedule(); // t=0
-  clock.advance(50);
-  d.schedule(); // t=50
-  clock.advance(70);
-  d.schedule(); // t=120
-  clock.advance(30);
-  d.schedule(); // t=150
-
-  clock.advance(49); // t=199: window from last (150+200=350) not elapsed yet
-  assert.equal(calls, 0, "no reload before the quiet period ends");
-  clock.advance(50); // t=249 — still before t=350
-  assert.equal(calls, 0, "window is measured from the LAST event, not the first");
-
-  clock.advance(101); // t=350: due
-  assert.equal(calls, 1, "burst produced EXACTLY one reload");
-  clock.advance(500); // nothing scheduled since → no more calls
-  assert.equal(calls, 1);
-});
-
-test("Refresh: a lone schedule fires once at the window edge", () => {
-  const clock = fakeClock();
-  let calls = 0;
-  const d = createDebounce(() => calls++, 200, clock as never);
-  d.schedule();
-  clock.advance(199);
-  assert.equal(calls, 0);
-  clock.advance(1); // exactly t=200
-  assert.equal(calls, 1);
-});
-
-test("Refresh: cancel() drops the pending call; isPending reflects state", () => {
-  const clock = fakeClock();
-  let calls = 0;
-  const d = createDebounce(() => calls++, 200, clock as never);
-  assert.equal(d.isPending(), false);
-  d.schedule();
-  assert.equal(d.isPending(), true);
-  d.cancel();
-  assert.equal(d.isPending(), false);
-  clock.advance(1000);
-  assert.equal(calls, 0, "cancelled reload never fired");
-});
-
-test("Refresh: sequence guard — next() retires older tokens, latest() is a read", () => {
-  const g = createSequenceGuard();
-  const t1 = g.next();
-  const t2 = g.next();
-  assert.equal(g.latest(), t2, "latest() reads without issuing");
-  assert.equal(g.isFresh(t2), true);
-  assert.equal(g.isFresh(t1), false, "an earlier-initiated load is stale after a newer one");
-});
-
-test("Refresh: shouldApplyBoard — fresh + owned applies; stale or foreign-project never", () => {
-  const ok = { token: 5, latestToken: 5, payloadProjectId: "P1", selectedProjectId: "P1" };
-  assert.equal(shouldApplyBoard(ok), true);
-
-  assert.equal(
-    shouldApplyBoard({ ...ok, token: 4 }),
-    false,
-    "stale response (newer load initiated) must not overwrite fresh state",
-  );
-  assert.equal(
-    shouldApplyBoard({ ...ok, selectedProjectId: "P2" }),
-    false,
-    "late project-A payload must never render into selected project B",
-  );
-  assert.equal(shouldApplyBoard({ ...ok, payloadProjectId: null }), false, "unknown ownership fails closed");
-  assert.equal(shouldApplyBoard({ ...ok, selectedProjectId: "" }), false, "no project selected → fail closed");
-});
-
-test("Refresh: coalesceInFlight — concurrent duplicates share ONE execution", async () => {
-  let runs = 0;
-  const slow = (ms: number) => new Promise((res) => setTimeout(res, ms));
-  const c = coalesceInFlight(async (x: number) => { runs++; await slow(20); return x * 10; });
-
-  const p1 = c.call(1); // first caller starts the flight
-  await new Promise((r) => setTimeout(r, 5)); // while in flight…
-  const p2 = c.call(99); // …a duplicate JOINS it (args ignored, shared promise)
-  assert.equal(c.inFlight(), true);
-
-  const [r1, r2] = await Promise.all([p1, p2]);
-  assert.equal(runs, 1, "underlying fn ran exactly once");
-  assert.equal(r1, 10);
-  assert.equal(r2, 10, "joiner gets the same settled result");
-  assert.equal(c.inFlight(), false, "flight cleared after settle");
-
-  await c.call(2); // a later call runs again (no caching)
-  assert.equal(runs, 2, "coalescing is per-interval, not a memo cache");
-});
-
-test("Refresh: coalesceInFlight — a failed flight resets so the next call retries", async () => {
-  let runs = 0;
-  let failNext = true;
-  const c = coalesceInFlight(async (): Promise<string> => {
-    runs++;
-    if (failNext) throw new Error("boom");
-    return "ok";
-  });
-
-  const p1 = c.call();
-  const p2 = c.call(); // joins the failing flight
-  await assert.rejects(() => p1, /boom/);
-  await assert.rejects(() => p2, /boom/, "joiner sees the same rejection");
-  assert.equal(c.inFlight(), false, "failed flight is released too");
-
-  failNext = false;
-  assert.equal(await c.call(), "ok", "after a failure the next call re-runs (no stuck coalescer)");
-  assert.equal(runs, 2, "exactly two executions: the failed flight + the successful retry");
-});
-
-// --------------------------------------------------------------- transition map
-// The client transition map (moves.ts LEGAL_TRANSITIONS) is a MIRROR of the
-// server's domain.CanTransition — internal/domain/status.go, matrix pinned by
-// TestCanTransition in internal/domain/status_test.go. These tests pin the same
-// pairs so a drift on either side shows up here or in `go test ./internal/...`.
-
-test("Moves: canMove mirrors the full 9-pair server transition matrix", () => {
-  const pairs: Array<[string, string, boolean]> = [
-    // legal (the only three)
-    ["todo", "doing", true],
-    ["doing", "done", true],
-    ["doing", "todo", true],
-    ["done", "todo", true],
-    // illegal — skipping a step / going backwards through doing
-    ["todo", "done", false],
-    ["done", "doing", false],
-    // self-transitions: rejected by domain.CanTransition (API no-ops them)
-    ["todo", "todo", false],
-    ["doing", "doing", false],
-    ["done", "done", false],
-  ];
-  for (const [from, to, want] of pairs) {
-    assert.equal(canMove(from, to), want, `canMove(${from}, ${to})`);
-  }
-});
-
-test("Moves: canMove fails closed on unknown/empty statuses (like the server)", () => {
-  for (const [from, to] of [
-    ["", "todo"],
-    ["todo", ""],
-    ["unknown", "unknown"],
-    ["doing", "invalid"],
-  ] as Array<[string, string]>) {
-    assert.equal(canMove(from, to), false, `canMove(${from}, ${to})`);
-  }
-});
-
-test("Moves: legalTargets returns each status' allowed destinations (server order)", () => {
-  assert.deepEqual(legalTargets("todo"), ["doing"]);
-  assert.deepEqual(legalTargets("doing"), ["done", "todo"]);
-  assert.deepEqual(legalTargets("done"), ["todo"]);
-  assert.deepEqual(legalTargets("nonsense"), []);
-  const copy = legalTargets("doing");
-  copy.push("nope");
-  assert.deepEqual(legalTargets("doing"), ["done", "todo"], "returns a fresh copy, not the map entry");
-});
-
-test("Moves: friendlyTransitionError maps the server's ErrInvalid message to a friendly toast", () => {
-  // Exact server shape — internal/application/tasks.go wraps domain.ErrInvalid:
-  const e = new Error('invalid input: cannot transition status from "todo" to "done"');
-  assert.equal(friendlyTransitionError(e), "Can't move To Do → Done — that's not an allowed step.");
-
-  const e2 = new Error('invalid input: cannot transition status from "done" to "doing"');
-  assert.equal(friendlyTransitionError(e2), "Can't move Done → Doing — that's not an allowed step.");
-
-  // Anything else (network errors, version conflicts, plain failures) passes through untouched.
-  assert.equal(friendlyTransitionError(new Error("version conflict")), null);
-  assert.equal(friendlyTransitionError(new TypeError("fetch failed")), null);
-  assert.equal(friendlyTransitionError(null), null);
-  assert.equal(friendlyTransitionError("cannot transition status from \"todo\" to \"done\""), null, "non-Error values are not interpreted");
-});
-
-// ------------------------------------------------------------------ api timeouts
-// Task 01M3MMYBHECPH5Z5FRHJDS5G4J: every request() call is bounded by a default
-// timeout (API_TIMEOUT_MS) merged with any caller-supplied AbortSignal. These
-// tests pin the error mapping and the signal-composition / cause-attribution
-// semantics that keep the move flow's specific "Move timed out" message intact.
-
-import { ApiTimeoutError, errMsg as apiErrMsg, setApiTimeoutMsForTests, withRequestTimeout } from "../src/api.ts";
-
-test("API: errMsg maps our timeout + native abort DOMExceptions to the friendly message", () => {
-  const wanted = "Request timed out — please check your connection or server status.";
-  assert.equal(apiErrMsg(new ApiTimeoutError(20_000)), wanted);
-  // Native DOMException shapes (global in Node 17+ and all browsers):
-  assert.equal(apiErrMsg(new DOMException("aborted", "AbortError")), wanted);
-  assert.equal(apiErrMsg(new DOMException("timeout", "TimeoutError")), wanted);
-  // Anything else keeps its existing mapping:
-  assert.equal(apiErrMsg(new Error("boom")), "boom");
-  assert.equal(apiErrMsg("plain string"), "plain string");
-});
-
-test("API: errMsg keeps the precedence of the existing mappings (ApiError, TypeError network)", async () => {
-  const { ApiError } = await import("../src/api.ts");
-  // ApiError → its body message/error verbatim, exactly as before this task.
-  assert.equal(apiErrMsg(new ApiError(409, { error: "version_conflict", current_version: 7 })), "version_conflict");
-  assert.equal(apiErrMsg(new ApiError(400, { error: "invalid input", message: 'cannot transition status from "todo" to "done"' })), 'cannot transition status from "todo" to "done"');
-  // TypeError = fetch network failure → the "is it running?" message.
-  assert.equal(apiErrMsg(new TypeError("fetch failed")), "cannot reach the ravn server (/api/v1) — is it running?");
-});
-
-test("API: withRequestTimeout — no caller signal, our timer wins after ~ms", async () => {
-  const guard = withRequestTimeout(30);
-  assert.equal(guard.signal.aborted, false);
-  await new Promise((r) => setTimeout(r, 60)); // let the 30ms timer fire + settle
-  assert.equal(guard.signal.aborted, true, "signal aborted by the timeout");
-  assert.equal(guard.timedOut(), true, "attributed to OUR timer");
-  guard.cleanup();
-});
-
-test("API: withRequestTimeout — caller abort fires FIRST and is not misattributed", async () => {
-  const ctrl = new AbortController();
-  const guard = withRequestTimeout(500, ctrl.signal); // generous timeout
-  ctrl.abort(); // caller loses its own race quickly
-  assert.equal(guard.signal.aborted, true, "merged signal follows the caller");
-  assert.equal(guard.timedOut(), false, "caller abort is NOT reported as our timeout");
-  guard.cleanup();
-});
-
-test("API: withRequestTimeout — a pre-aborted caller signal adopts immediately", () => {
-  const ctrl = new AbortController();
-  ctrl.abort();
-  const guard = withRequestTimeout(500, ctrl.signal);
-  assert.equal(guard.signal.aborted, true);
-  assert.equal(guard.timedOut(), false);
-  guard.cleanup();
-});
-
-test("API: withRequestTimeout — cleanup clears the timer (no late abort after cancel)", async () => {
-  const guard = withRequestTimeout(25);
-  guard.cleanup(); // cancel before the deadline
-  await new Promise((r) => setTimeout(r, 70));
-  assert.equal(guard.signal.aborted, false, "cancelled request never times out late");
-});
-
-test("API: setApiTimeoutMsForTests — override applies and ≤0 restores the default", async () => {
-  const { API_TIMEOUT_MS } = await import("../src/api.ts");
-  setApiTimeoutMsForTests(1);
-  // (behavior of the active value is exercised by the browser hang QA; here we
-  // only pin that the override accepts, resets, and never leaves zero/negative.)
-  setApiTimeoutMsForTests(-5);
-  assert.ok(API_TIMEOUT_MS > 0, "default constant stays sane");
-  setApiTimeoutMsForTests(20_000); // restore for any later tests in this file
-});
-
-// ------------------------------------------------------------- full-page route
-// Task 01M47MWHWW0M1Q3WZYFGFHXTYZ: /tasks/<id> is the client-side deep link to
-// the full-page task view. ravn-server's SPA fallback serves index.html for
-// these paths, so this pure pathname mapping owns both directions of the route.
-
 test("FullPage: taskRouteIdFromPath parses only single-segment /tasks/<id> routes", () => {
   assert.equal(taskRouteIdFromPath("/"), null, "board route has no task");
   assert.equal(taskRouteIdFromPath(""), null);
@@ -1070,10 +542,6 @@ test("FullPage: the app boots in drawer mode and openFullPage is a safe no-op wi
   assert.equal(app.fullPageOpen, false, "nothing to switch without a loaded task");
 });
 
-// ---------------------------------------------------------------------------
-// Task 01M47MWSTTPS14M6XB1A8HFPV1: default detail surface is a WIDE CENTERED
-// MODAL at ≥md; below md (<768px) card clicks open the /tasks/<id> full page.
-
 test("Modal: isMobileDetailViewport sits just below Tailwind's md (768px) breakpoint", () => {
   assert.equal(MOBILE_DETAIL_MAX_WIDTH, 768);
   assert.equal(isMobileDetailViewport(375), true, "phone width is mobile");
@@ -1094,66 +562,54 @@ test("Modal: without a window (Node) openTask takes the desktop path, not the fu
 
 test("Modal: openTask below 768px enters the full-page route via a pushed /tasks/<id> entry", async () => {
   const app = ravnApp();
-  const origWindow = (globalThis as any).window;
   const pushed: string[] = [];
-  try {
-    (globalThis as any).window = {
-      innerWidth: MOBILE_DETAIL_MAX_WIDTH - 1, // 767 — mobile side of the boundary
-      location: { pathname: "/", search: "", hash: "" },
-      history: {
-        pushState(_state: unknown, _title: string, url: string) {
-          pushed.push(url);
-        },
-        replaceState(_state: unknown, _title: string, url: string) {
-          pushed.push("replace:" + url);
-        },
+  const win: any = {
+    innerWidth: MOBILE_DETAIL_MAX_WIDTH - 1, // 767 — mobile side of the boundary
+    location: { pathname: "/", search: "", hash: "" },
+    history: {
+      pushState(_state: unknown, _title: string, url: string) {
+        pushed.push(url);
       },
-      setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
-    };
+      replaceState(_state: unknown, _title: string, url: string) {
+        pushed.push("replace:" + url);
+      },
+    },
+    setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
+  };
+  await withWindow(win, async () => {
     await app.openTask("01M47MWSTTPS14M6XB1A8HFPV1");
 
     assert.equal(app.detailOpen, true);
     assert.equal(app.fullPageOpen, true, "mobile opens the FULL PAGE, not the modal");
     assert.equal(app.fullPagePushed, true, "we pushed the entry — close must history.back()");
     assert.deepEqual(pushed, ["/tasks/01M47MWSTTPS14M6XB1A8HFPV1"], "one pushState to /tasks/<id>");
-  } finally {
-    if (origWindow === undefined) delete (globalThis as any).window;
-    else (globalThis as any).window = origWindow;
-  }
+  });
 });
 
 test("Modal: openTask at ≥768px keeps the modal (no URL change)", async () => {
   const app = ravnApp();
-  const origWindow = (globalThis as any).window;
   const pushed: string[] = [];
-  try {
-    (globalThis as any).window = {
-      innerWidth: MOBILE_DETAIL_MAX_WIDTH, // 768 — desktop side of the boundary
-      location: { pathname: "/", search: "", hash: "" },
-      history: {
-        pushState(_state: unknown, _title: string, url: string) {
-          pushed.push(url);
-        },
-        replaceState(_state: unknown, _title: string, url: string) {
-          pushed.push("replace:" + url);
-        },
+  const win: any = {
+    innerWidth: MOBILE_DETAIL_MAX_WIDTH, // 768 — desktop side of the boundary
+    location: { pathname: "/", search: "", hash: "" },
+    history: {
+      pushState(_state: unknown, _title: string, url: string) {
+        pushed.push(url);
       },
-      setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
-    };
+      replaceState(_state: unknown, _title: string, url: string) {
+        pushed.push("replace:" + url);
+      },
+    },
+    setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
+  };
+  await withWindow(win, async () => {
     await app.openTask("01M47MWSTTPS14M6XB1A8HFPV1");
 
     assert.equal(app.detailOpen, true);
     assert.equal(app.fullPageOpen, false, "at md the default surface is the centered modal");
     assert.deepEqual(pushed, [], "a plain card click must never touch the URL");
-  } finally {
-    if (origWindow === undefined) delete (globalThis as any).window;
-    else (globalThis as any).window = origWindow;
-  }
+  });
 });
-
-// ---------------------------------------------------------------------------
-// Task 01M3MMYFRMAW7XM6QDTXNQA6ED: a failed detail fetch must leave a visible
-// drawer error state + retry path — never the bare "Loading task…" trap.
 
 test("DrawerError: openTask with an unreachable server sets detailLoadError (non-fatal)", async () => {
   const app = ravnApp();
@@ -1169,40 +625,36 @@ test("DrawerError: openTask with an unreachable server sets detailLoadError (non
 
 test("DrawerError: a 404 maps to the deleted-task message", async () => {
   const app = ravnApp();
-  const origFetch = (globalThis as any).fetch;
-  try {
-    (globalThis as any).fetch = async () =>
+  await withFetch(
+    async () =>
       new Response(JSON.stringify({ error: "not found", message: "task not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" },
-      });
-    await app.openTask("01M3MMYFRMAW7XM6QDTXNQA6ED");
-    assert.equal(app.detailLoadError, "This task was deleted or no longer exists.");
-  } finally {
-    if (origFetch === undefined) delete (globalThis as any).fetch;
-    else (globalThis as any).fetch = origFetch;
-  }
+      }),
+    async () => {
+      await app.openTask("01M3MMYFRMAW7XM6QDTXNQA6ED");
+      assert.equal(app.detailLoadError, "This task was deleted or no longer exists.");
+    },
+  );
 });
 
 test("DrawerError: a failure for a task that is NOT open does not touch the drawer", async () => {
   const app = ravnApp();
-  const origFetch = (globalThis as any).fetch;
-  try {
-    (globalThis as any).fetch = async () =>
+  await withFetch(
+    async () =>
       new Response(JSON.stringify({ error: "internal", message: "boom" }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
-      });
-    app.detailOpen = true;
-    app.detailId = "OPEN-TASK";
-    // A stale SSE-style refresh (idToFetch ≠ detailId) fails — the open task's state is untouched.
-    const applied = await app.refreshDetail(true, "STALE-TASK");
-    assert.equal(applied, false);
-    assert.equal(app.detailLoadError, null, "ownership gate: only the OPEN task's failures surface");
-  } finally {
-    if (origFetch === undefined) delete (globalThis as any).fetch;
-    else (globalThis as any).fetch = origFetch;
-  }
+      }),
+    async () => {
+      app.detailOpen = true;
+      app.detailId = "OPEN-TASK";
+      // A stale SSE-style refresh (idToFetch ≠ detailId) fails — the open task's state is untouched.
+      const applied = await app.refreshDetail(true, "STALE-TASK");
+      assert.equal(applied, false);
+      assert.equal(app.detailLoadError, null, "ownership gate: only the OPEN task's failures surface");
+    },
+  );
 });
 
 test("DrawerError: an applied payload clears detailLoadError and re-renders the detail", () => {
@@ -1231,10 +683,6 @@ test("DrawerError: openTask clears a previous task's error state before loading"
     "the stale error from task A must not survive the switch",
   );
 });
-
-// ---------------------------------------------------------------------------
-// Task 01M47NDGZR47NR1Z6SKQJ3BDP2: "New project" moved INTO a custom Projects
-// dropdown (trigger button + Alpine-managed menu) replacing the native select.
 
 test("Dropdown: index.html has no standalone New project button and wires the custom control", () => {
   const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
@@ -1312,9 +760,6 @@ test("Dropdown: Escape chain closes the dropdown BEFORE the new-project bar", ()
   app.dismissTop(); // second Esc now closes the bar (draft untouched)
   assert.equal(app.showNewProject, false);
 });
-
-// Task 01M47NPF5YK99MVGD8K4ZRS81R: theme / identity / auto-refresh / token
-// consolidated into ONE compact header settings menu (avatar trigger + panel).
 
 test("HeaderMenu: index.html wires the consolidated trigger + panel at the dropdown tier", () => {
   const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
@@ -1415,10 +860,6 @@ test("HeaderMenu: toggle opens/closes; Escape chain and mutual exclusion with th
   assert.equal(app.headerMenuOpen, false, "menu closes on the token entry");
   assert.equal(app.showAuthModal, true, "auth modal opens");
 });
-
-// Task 01M47NPQHY5CR2VPG14HVDM02P: the spelled-out "Settings" ghost button is
-// replaced by a gear icon VISUALLY ATTACHED to the right edge of the Projects
-// dropdown (a split control sharing one bordered unit).
 
 test("ProjectSettingsGear: index.html wires the gear into the project-dropdown split control", () => {
   const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
@@ -1559,28 +1000,6 @@ test("ArchiveProject: open/cancel confirmation and Escape handling", () => {
   app.dismissTop(); // second Escape
   assert.equal(app.showProjectSettings, false, "second Escape closes settings modal");
 });
-
-// --------------------------------------------------------------------------- Discard guards (task 01M3MMZ188XJBGKFSWBGESK79D)
-/** Stub window.confirm to a fixed answer; restores the original binding. */
-function withConfirm(app: any, answer: boolean | ((msg: string) => boolean)) {
-  const origWindow = (globalThis as any).window;
-  let lastMessage = "";
-  (globalThis as any).window = {
-    confirm(msg: string) {
-      lastMessage = msg;
-      return typeof answer === "function" ? answer(msg) : answer;
-    },
-  };
-  return {
-    get lastMessage() {
-      return lastMessage;
-    },
-    restore() {
-      if (origWindow === undefined) delete (globalThis as any).window;
-      else (globalThis as any).window = origWindow;
-    },
-  };
-}
 
 test("DiscardGuards: confirmDiscard delegates to window.confirm; unblocked where absent", () => {
   const app = ravnApp() as any;
@@ -1825,16 +1244,6 @@ test("DiscardGuards: openTask with a dirty edit draft prompts; decline stays on 
   }
 });
 
-// ---------------------------------------------------------------------------
-// Toast notifications: dismiss button, slide+fade transitions, kind icons.
-
-function toastBlock(): string {
-  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
-  const block = html.match(/data-testid="toast-stack"[\s\S]*?<\/template>\s*<\/div>/);
-  assert.ok(block, "toast stack markup found in index.html");
-  return block[0];
-}
-
 test("Toasts: dismiss button, slide+fade enter/leave transitions, and kind icons", () => {
   const t = toastBlock();
   // AC1 — explicit × dismiss button on every toast (single removal path).
@@ -1884,15 +1293,6 @@ test("Toasts: dismissToast plays the leave phase, then drops only the targeted t
   await new Promise((r) => setTimeout(r, 320));
   assert.deepEqual(app.toasts.map((t: { id: number }) => t.id), [2], "only the dismissed toast is dropped");
 });
-
-// ---------------------------------------------------------------------------
-// Ticket 01M3MMYP938G972KY8NF7RGMQR: a transient network failure on load must
-// NOT wipe the selected project ID from state/localStorage — surface a boot
-// error screen with Retry instead of opening the New Project bar.
-
-function emptyBoard(projectId: string): any {
-  return { project_id: projectId, tasks: { todo: [], doing: [], done: [] } };
-}
 
 test("BootError: index.html wires the dedicated boot-error screen (role=alert + Retry)", () => {
   const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
@@ -2039,79 +1439,6 @@ test("Boot: first visit (no stored id) on a successful load selects and persists
   }
 });
 
-// ---------------------------------------------------------------------------
-// Ticket 01M3VJ5PQEAJ60B0QGPNZT8NKP: Alpine invokes the root component's
-// init() TWICE per page load — x-data auto-runs a data object's init method,
-// then the explicit x-init="init()" runs it again (verified empirically against
-// the shipped bundle: two invocation stacks ~6ms apart, the second carrying
-// Alpine's `[Alpine] init()` eval frame). The init() guard must make every boot
-// side effect happen AT MOST ONCE per component instance.
-
-/** Harness for the idempotence tests: a fake window (counting addEventListener),
- *  a counting global setInterval wrapper, and a counting FakeEventSource so the
- *  SSE path is actually exercised (without it connectSse() bails on Node).
- *  Mirrors the R8 safeStorage global-swap convention; restore() in `finally`. */
-function bootIdempotencyHarness() {
-  const origWindow = (globalThis as any).window;
-  const origEventSource = (globalThis as any).EventSource;
-  const origSetInterval = (globalThis as any).setInterval;
-
-  const listenerCounts: Record<string, number> = {};
-  const intervalCalls: unknown[] = [];
-  let esConstructed = 0;
-
-  (globalThis as any).setInterval = (...args: Parameters<typeof setInterval>) => {
-    intervalCalls.push(args);
-    return origSetInterval(...args);
-  };
-
-  (globalThis as any).window = {
-    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
-    location: { pathname: "/" }, // every real browser has one; boot reads it for deep links
-    addEventListener: (t: string) => {
-      listenerCounts[t] = (listenerCounts[t] ?? 0) + 1;
-    },
-    setTimeout: (...args: unknown[]) => setTimeout(...(args as Parameters<typeof setTimeout>)),
-    clearTimeout: (...args: unknown[]) => clearTimeout(...(args as Parameters<typeof clearTimeout>)),
-  };
-
-  class FakeEventSource {
-    url: string;
-    onopen: any = null;
-    onerror: any = null;
-    onmessage: any = null;
-    closed = false;
-    constructor(url: string) {
-      this.url = url;
-      esConstructed++;
-    }
-    addEventListener() {}
-    close() {
-      this.closed = true;
-    }
-  }
-  (globalThis as any).EventSource = FakeEventSource;
-
-  return {
-    listenerCounts,
-    intervalCalls,
-    getEsConstructed: () => esConstructed,
-    /** The module-level SSE counters are shared across tests — reset so each
-     *  test asserts its own steady state. */
-    resetSseCounters() {
-      sseTelemetry.opened = 0;
-      sseTelemetry.closed = 0;
-    },
-    restore() {
-      (globalThis as any).setInterval = origSetInterval;
-      if (origWindow === undefined) delete (globalThis as any).window;
-      else (globalThis as any).window = origWindow;
-      if (origEventSource === undefined) delete (globalThis as any).EventSource;
-      else (globalThis as any).EventSource = origEventSource;
-    },
-  };
-}
-
 test("InitIdempotence: concurrent double init() shares ONE boot — fetch, ticker, listeners and EventSource each run exactly once", async () => {
   safeStorage.removeItem("ravn.project");
   const origListProjects = api.listProjects;
@@ -2253,219 +1580,6 @@ test("InitIdempotence: a failed boot keeps the memo — repeated init() no-ops a
   }
 });
 
-// ---------------------------------------------------------------------------
-// Ticket 01M3MMZF23F6WN7PT43T73SHFK — the SSE receiver must process ALL server
-// events regardless of the event NAME. The wire format is DEFAULT (unnamed)
-// message frames (`id:` + one `data:` JSON payload, no `event:` line) and the
-// pure dispatchRealtimeEvent() core (src/realtime.ts) routes by payload.kind,
-// so a brand-new server-side kind takes exactly the same safe generic refresh
-// as a known one — and nothing ever throws. These tests drive that core with
-// hook spies: no browser, EventSource, or Alpine instance required.
-
-function realtimeDispatchFixture(overrides: { selectedProjectId?: string | null; openDetailTaskIds?: Set<string> } = {}) {
-  const calls = {
-    cursor: [] as Array<{ lastEventId: string; projectId: string | null | undefined }>,
-    reloads: 0,
-    detailRefreshes: [] as string[],
-  };
-  const hooks: RealtimeDispatchHooks = {
-    selectedProjectId: () => overrides.selectedProjectId ?? "proj-1",
-    isDetailOpenFor: (id) => overrides.openDetailTaskIds?.has(id) ?? false,
-    advanceCursor: (lastEventId, projectId) => {
-      calls.cursor.push({ lastEventId, projectId });
-    },
-    scheduleReload: () => {
-      calls.reloads++;
-    },
-    refreshDetail: (taskId) => {
-      calls.detailRefreshes.push(taskId);
-      return Promise.resolve(true);
-    },
-  };
-  return { calls, hooks };
-}
-
-function realtimePayload(overrides: Record<string, unknown> = {}): string {
-  return JSON.stringify({
-    event_id: "ev-1",
-    project_id: "proj-1",
-    task_id: "task-9",
-    kind: "status-changed",
-    status: "doing",
-    timestamp: "2026-10-29T00:00:00Z",
-    ...overrides,
-  });
-}
-
-test("RealtimeDispatch: known kind routes to the coalesced reload + in-place drawer refresh and advances the cursor", () => {
-  const { calls, hooks } = realtimeDispatchFixture({ openDetailTaskIds: new Set(["task-9"]) });
-
-  const result = dispatchRealtimeEvent({ data: realtimePayload(), lastEventId: "frame-123" }, hooks);
-
-  assert.equal(result.status, "dispatched");
-  assert.equal(result.kind, "status-changed");
-  assert.equal(result.knownKind, true, "a canonical kind is reported as known");
-  assert.equal(result.cursorAdvanced, true, "replay cursor advances to the frame id");
-  assert.deepEqual(calls.cursor, [{ lastEventId: "frame-123", projectId: "proj-1" }]);
-  assert.equal(result.reloadScheduled, true, "coalesced board + projects refresh scheduled");
-  assert.equal(calls.reloads, 1);
-  assert.equal(result.detailRefreshTaskId, "task-9", "open drawer re-fetched in place");
-  assert.deepEqual(calls.detailRefreshes, ["task-9"]);
-});
-
-test("RealtimeDispatch: UNKNOWN (future server) kind still triggers the generic fallback refresh — no client code change required", () => {
-  const { calls, hooks } = realtimeDispatchFixture();
-
-  // A kind absent from this client's KNOWN_REALTIME_KINDS — e.g. a new
-  // task-archived / project-updated event from a newer server build.
-  let result: any;
-  assert.doesNotThrow(() => {
-    result = dispatchRealtimeEvent(
-      { data: realtimePayload({ kind: "task-archived", project_id: undefined, task_id: undefined }), lastEventId: "frame-456" },
-      hooks
-    );
-  }, "an unrecognized kind must never throw");
-
-  assert.equal(result.status, "dispatched");
-  assert.equal(result.kind, "task-archived");
-  assert.equal(result.knownKind, false, "the new kind is reported as unknown…");
-  assert.equal(result.reloadScheduled, true, "…yet still takes the safe generic refresh (board + projects)");
-  assert.equal(calls.reloads, 1);
-  assert.equal(result.cursorAdvanced, true, "and the cursor advances so a reconnect replays nothing twice");
-  assert.deepEqual(calls.detailRefreshes, [], "no task_id → no drawer refresh for this event");
-});
-
-test("RealtimeDispatch: malformed / non-object payloads are dropped quietly — never throw, never refresh", () => {
-  const badBodies = ["{not json", "42", "[1,2]", "{}", '{"kind":""}', "null"];
-  for (const body of badBodies) {
-    const { calls, hooks } = realtimeDispatchFixture();
-    let result: any;
-    assert.doesNotThrow(
-      () => {
-        result = dispatchRealtimeEvent({ data: body, lastEventId: "frame-x" }, hooks);
-      },
-      `body ${JSON.stringify(body)} must not throw`
-    );
-    assert.equal(result.status, "malformed", `body ${JSON.stringify(body)}`);
-    assert.equal(calls.reloads, 0, `body ${JSON.stringify(body)}: no pointless refresh`);
-    assert.equal(calls.cursor.length, 0, `body ${JSON.stringify(body)}: cursor untouched`);
-  }
-});
-
-test("RealtimeDispatch: empty data is a no-op", () => {
-  const { calls, hooks } = realtimeDispatchFixture();
-  for (const data of [undefined, null, ""]) {
-    const result = dispatchRealtimeEvent({ data, lastEventId: "frame-y" }, hooks);
-    assert.equal(result.status, "empty");
-  }
-  assert.equal(calls.reloads, 0, "nothing scheduled for empty frames");
-});
-
-test("RealtimeDispatch: events for another project are scoped out — no cursor advance, no reload", () => {
-  const { calls, hooks } = realtimeDispatchFixture({ selectedProjectId: "proj-1" });
-
-  const result = dispatchRealtimeEvent(
-    { data: realtimePayload({ project_id: "proj-OTHER" }), lastEventId: "frame-z" },
-    hooks
-  );
-
-  assert.equal(result.status, "scoped-out");
-  assert.equal(result.reloadScheduled, false);
-  assert.equal(calls.reloads, 0);
-  assert.equal(result.cursorAdvanced, false, "a foreign-project frame must not poison the replay cursor");
-  assert.equal(calls.cursor.length, 0);
-});
-
-test("RealtimeDispatch: KNOWN_REALTIME_KINDS mirrors the canonical server set and excludes 'message'", () => {
-  const expected = [
-    "created",
-    "updated",
-    "status-changed",
-    "claimed",
-    "released",
-    "heartbeat",
-    "assigned",
-    "noted",
-    "commented",
-    "ac-toggled",
-    "artifact-added",
-    "relation-changed",
-    "ac-added",
-    "ac-updated",
-    "ac-removed",
-  ];
-  assert.equal(KNOWN_REALTIME_KINDS.size, expected.length);
-  for (const k of expected) assert.ok(KNOWN_REALTIME_KINDS.has(k), `missing canonical kind ${k}`);
-  assert.ok(!KNOWN_REALTIME_KINDS.has("message"), "'message' must stay out: default frames are onmessage's job");
-});
-
-test("connectSse: onmessage is the primary handler; legacy named listeners cover every canonical kind but NOT 'message' (no double dispatch)", () => {
-  // Construct BEFORE swapping globals so ravnApp()'s window-conditional
-  // initializers see the same bare Node environment as the other tests.
-  const app = ravnApp() as any;
-  const instances: any[] = [];
-  class RecordingEventSource {
-    url: string;
-    onopen: any = null;
-    onerror: any = null;
-    onmessage: any = null;
-    namedListeners: string[] = [];
-    closed = false;
-    constructor(url: string) {
-      this.url = url;
-      instances.push(this);
-    }
-    addEventListener(type: string) {
-      this.namedListeners.push(type);
-    }
-    close() {
-      this.closed = true;
-    }
-  }
-
-  const origWindow = (globalThis as any).window;
-  const origEs = (globalThis as any).EventSource;
-  // Inert timers so no disconnect-notification timer outlives the test.
-  (globalThis as any).window = { setTimeout: () => 0, clearTimeout: () => {} };
-  (globalThis as any).EventSource = RecordingEventSource;
-
-  try {
-    app.selectedProjectId = "proj-42";
-    app.connectSse();
-    assert.equal(instances.length, 1, "exactly one EventSource constructed");
-    const es = instances[0];
-    assert.ok(String(es.url).includes("/api/v1/projects/proj-42/events"), `unexpected stream url ${es.url}`);
-    assert.equal(typeof es.onmessage, "function", "PRIMARY path: default (unnamed) frames reach onmessage");
-    assert.deepEqual(
-      [...es.namedListeners].sort(),
-      [...KNOWN_REALTIME_KINDS].sort(),
-      "legacy named listeners cover exactly the canonical kinds (old-server defense-in-depth)"
-    );
-    assert.ok(!es.namedListeners.includes("message"), "'message' must NOT be a named listener — it would double-dispatch every frame");
-  } finally {
-    if (instances[0]) instances[0].close();
-    (globalThis as any).window = origWindow;
-    if (origEs === undefined) delete (globalThis as any).EventSource;
-    else (globalThis as any).EventSource = origEs;
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Ticket 01M3MMZ5VSPXWS9RYP1D24H5AG: the native AC checkbox flips its .checked
-// on click BEFORE the server answers. On a failed toggle ac.done is never
-// mutated, so Alpine's :checked binding has no diff to re-sync — the handler
-// must revert the DOM element explicitly and surface the error toast.
-
-function acToggleDetailFixture(): any {
-  return {
-    id: "task-ac-toggle",
-    acceptance_criteria: [
-      { seq: 1, text: "First criterion", done: false },
-      { seq: 2, text: "Second criterion", done: true },
-    ],
-  };
-}
-
 test("toggleAc: failed server toggle leaves the model untouched and reverts the DOM checkbox", async () => {
   const origToggleAc = api.toggleAc;
   try {
@@ -2548,14 +1662,6 @@ test("toggleAc: successful toggle merges the server's row back into detail state
     (api as any).toggleAc = origToggleAc;
   }
 });
-
-// ---------------------------------------------------------------------------
-// Blocked-state cache project scoping (task 01M3MMZASQB2RBB2Q4RS3GM0JK)
-// The card-badge blocked state lives in TWO client caches (derived board diff
-// + detail-fetched knowledge). Both are scoped to the project they were
-// derived/learned under, so switching projects can never render a "blocked"
-// indicator based on a DIFFERENT project's tasks.
-// ---------------------------------------------------------------------------
 
 test("BlockedCache: selectProject() clears both caches, re-scoped to the new project (AC1)", () => {
   const app = ravnApp() as any;
@@ -2746,10 +1852,6 @@ test("BlockedCache: a detail payload for the CURRENT project still learns blocke
   assert.equal(app.isBlocked("b9"), true);
 });
 
-// ---------------------------------------------------------------------------
-// OpenCode session URL & status (task 01M3MMZPDPNNP1TRQXTK4HEDGM)
-// ---------------------------------------------------------------------------
-
 test("OpenCode: startTaskInOpenCode captures session_id and session_url, records in openCodeSessions, and emits actionable toast", async () => {
   const origStartOpenCode = api.startOpenCode;
   try {
@@ -2832,10 +1934,6 @@ test("OpenCode: index.html wires opencode-session-banner and toast-action-link",
   assert.match(html, /data-testid="opencode-session-link"/, "detail drawer renders opencode session link");
   assert.match(html, /data-testid="opencode-session-id"/, "detail drawer renders opencode session id");
 });
-
-// ---------------------------------------------------------------------------
-// OpenCode configurable agent & variant (task 01M53XWXG5Q5Q53MPYDCJWNHSW)
-// ---------------------------------------------------------------------------
 
 test("OpenCode options: helpers filter models, agents, and variants gracefully", async () => {
   const app = ravnApp() as any;
@@ -3107,35 +2205,6 @@ test("OpenCode: index.html wires all configurable agent and variant test IDs", (
   assert.match(html, /data-testid="opencode-config-start-btn"/);
 });
 
-// ---------------------------------------------------------------------------
-// Operational bar consolidation (task 01M55HBQP76ZPA33KNAB7D2A0V)
-// ---------------------------------------------------------------------------
-
-test("Countdown: formatClaimCountdown formats durations and handles boundaries cleanly", () => {
-  const baseNow = 1700000000000;
-  // Empty, null, undefined, invalid
-  assert.equal(formatClaimCountdown(undefined, baseNow), "");
-  assert.equal(formatClaimCountdown(null, baseNow), "");
-  assert.equal(formatClaimCountdown("", baseNow), "");
-  assert.equal(formatClaimCountdown("not-a-date", baseNow), "");
-
-  // Expired / 0 seconds
-  assert.equal(formatClaimCountdown(new Date(baseNow).toISOString(), baseNow), "0:00");
-  assert.equal(formatClaimCountdown(new Date(baseNow - 10000).toISOString(), baseNow), "0:00");
-
-  // 5 seconds
-  assert.equal(formatClaimCountdown(new Date(baseNow + 5000).toISOString(), baseNow), "0:05");
-
-  // 14 minutes 59 seconds
-  assert.equal(formatClaimCountdown(new Date(baseNow + (14 * 60 + 59) * 1000).toISOString(), baseNow), "14:59");
-
-  // 60 minutes
-  assert.equal(formatClaimCountdown(new Date(baseNow + 60 * 60 * 1000).toISOString(), baseNow), "60:00");
-
-  // 75 minutes 3 seconds
-  assert.equal(formatClaimCountdown(new Date(baseNow + (75 * 60 + 3) * 1000).toISOString(), baseNow), "75:03");
-});
-
 test("Countdown: ravnApp.claimCountdown references reactive nowTick", () => {
   const app = ravnApp() as any;
   const baseNow = 1700000000000;
@@ -3153,89 +2222,6 @@ test("Countdown: ravnApp.claimCountdown references reactive nowTick", () => {
   assert.equal(app.claimCountdown({}), "");
   app.nowTick += 100000;
   assert.equal(app.claimCountdown({ claim_expires_at: expiry }), "0:00");
-});
-
-test("isClaimExpired mirrors claimHint's 'lease expired' branch", () => {
-  const baseNow = 1700000000000;
-  const actor = { name: "a", type: "agent" };
-
-  // Unclaimed → never "expired".
-  assert.equal(isClaimExpired({}, baseNow), false);
-
-  // Claimed with no expiry recorded → never "expired" (there is nothing to expire).
-  assert.equal(isClaimExpired({ claimed_by: actor }, baseNow), false);
-
-  // Future expiry → active, not expired.
-  assert.equal(
-    isClaimExpired({ claimed_by: actor, claim_expires_at: new Date(baseNow + 10_000).toISOString() }, baseNow),
-    false,
-  );
-
-  // Exactly now → diff <= 0 → expired.
-  assert.equal(
-    isClaimExpired({ claimed_by: actor, claim_expires_at: new Date(baseNow).toISOString() }, baseNow),
-    true,
-  );
-
-  // Past expiry → expired.
-  assert.equal(
-    isClaimExpired({ claimed_by: actor, claim_expires_at: new Date(baseNow - 60_000).toISOString() }, baseNow),
-    true,
-  );
-
-  // Unparseable expiry → cannot be determined → not expired (matches claimHint returning "").
-  assert.equal(
-    isClaimExpired({ claimed_by: actor, claim_expires_at: "not-a-date" }, baseNow),
-    false,
-  );
-});
-
-test("isStalledExpired flags only doing tasks with a lapsed lease or >60min idle (01M5XSNR8VWZTP66GT7ABNSJC1)", () => {
-  const baseNow = 1_700_000_000_000;
-  const actor = { name: "a", type: "agent" };
-  const freshIso = new Date(baseNow - 5 * 60_000).toISOString(); // touched 5 min ago
-  const staleIso = new Date(baseNow - 61 * 60_000).toISOString(); // untouched for 61 min
-
-  // doing + expired lease → stalled regardless of how recent the update is.
-  assert.equal(
-    isStalledExpired(
-      { status: "doing", updated_at: freshIso, claimed_by: actor, claim_expires_at: new Date(baseNow - 60_000).toISOString() },
-      baseNow,
-    ),
-    true,
-  );
-
-  // doing + unclaimed + idle > 60 min → stalled.
-  assert.equal(isStalledExpired({ status: "doing", updated_at: staleIso }, baseNow), true);
-
-  // doing + active lease + recently touched → healthy.
-  assert.equal(
-    isStalledExpired(
-      { status: "doing", updated_at: freshIso, claimed_by: actor, claim_expires_at: new Date(baseNow + 800_000).toISOString() },
-      baseNow,
-    ),
-    false,
-  );
-
-  // doing + unclaimed + recently touched → healthy.
-  assert.equal(isStalledExpired({ status: "doing", updated_at: freshIso }, baseNow), false);
-
-  // todo/done are NEVER stalled — even with an expired lease or a stale update.
-  assert.equal(
-    isStalledExpired(
-      { status: "todo", updated_at: staleIso, claimed_by: actor, claim_expires_at: new Date(baseNow - 60_000).toISOString() },
-      baseNow,
-    ),
-    false,
-  );
-  assert.equal(isStalledExpired({ status: "done", updated_at: staleIso }, baseNow), false);
-
-  // Boundary: EXACTLY 60 min idle is not stalled (strictly-greater window).
-  const exactIso = new Date(baseNow - 60 * 60_000).toISOString();
-  assert.equal(isStalledExpired({ status: "doing", updated_at: exactIso }, baseNow), false);
-
-  // Unparseable updated_at with no expired lease → cannot establish idle age → not stalled.
-  assert.equal(isStalledExpired({ status: "doing", updated_at: "not-a-date" }, baseNow), false);
 });
 
 test("Stalled filter: pill count, columns() predicate, and filter wiring (01M5XSNR8VWZTP66GT7ABNSJC1)", () => {
@@ -3313,25 +2299,6 @@ test("Stalled filter URL sync: stalled=1 parses, builds, and round-trips (01M5XS
   assert.equal(fresh.filterStalled, true);
   fresh.applyQueryParams({}, true); // popstate with no stalled param → reset to off
   assert.equal(fresh.filterStalled, false);
-});
-
-test("needsAttention flags only open tasks whose newest comment is a question/handoff (01M5XTAYKJGP878ZEZB7TJW4ZB)", () => {
-  // Open tasks with a question/handoff newest comment → true.
-  assert.equal(needsAttention({ status: "todo", last_comment_kind: "question" }), true);
-  assert.equal(needsAttention({ status: "doing", last_comment_kind: "handoff" }), true);
-
-  // Routine kinds never match, on any status.
-  for (const kind of ["progress", "note", "decision"]) {
-    assert.equal(needsAttention({ status: "todo", last_comment_kind: kind }), false, `${kind} is routine`);
-  }
-
-  // No comments at all (field omitted on the wire) → false.
-  assert.equal(needsAttention({ status: "todo" }), false);
-  assert.equal(needsAttention({ status: "doing" }), false);
-
-  // Done tasks are NEVER attention — even with a question/handoff newest comment.
-  assert.equal(needsAttention({ status: "done", last_comment_kind: "question" }), false);
-  assert.equal(needsAttention({ status: "done", last_comment_kind: "handoff" }), false);
 });
 
 test("Needs-attention filter: badge helper, columns() predicate, and filter wiring (01M5XTAYKJGP878ZEZB7TJW4ZB)", () => {
@@ -3488,132 +2455,6 @@ test("OperationalBar: index.html markup contains unified card, split-capsules, a
   assert.doesNotMatch(html, />\s*Heartbeat\s*</);
 });
 
-// ---------------------------------------------------------------------------
-// Write/Preview toggle + draft auto-save (ravn.draft.task.<id>.* localStorage keys)
-// ---------------------------------------------------------------------------
-
-test("Drafts: key builders produce namespaced per-task keys", () => {
-  assert.equal(descriptionDraftKey("01ABC"), "ravn.draft.task.01ABC.description");
-  assert.equal(commentDraftKey("01ABC"), "ravn.draft.task.01ABC.comment");
-  assert.notEqual(descriptionDraftKey("A"), descriptionDraftKey("B"), "keys are per-task — no cross-task collision");
-  assert.notEqual(descriptionDraftKey("X"), commentDraftKey("X"), "description and comment keys never collide for one task");
-});
-
-test("Drafts: serialize → deserialize round-trips body and kind", () => {
-  const draft = { body: "**bold** draft", kind: "handoff" as const };
-  assert.deepEqual(deserializeCommentDraft(serializeCommentDraft(draft)), draft);
-  for (const kind of ["progress", "question", "decision", "handoff", "note"] as const) {
-    assert.equal(
-      deserializeCommentDraft(serializeCommentDraft({ body: "x", kind }))?.kind,
-      kind,
-      `round-trip preserves kind ${kind}`,
-    );
-  }
-});
-
-test("Drafts: deserialize tolerates malformed and legacy payloads (never throws)", () => {
-  assert.equal(deserializeCommentDraft(null), null);
-  assert.equal(deserializeCommentDraft(""), null);
-  assert.equal(deserializeCommentDraft("   "), null, "blank raw payload → nothing saved");
-  assert.equal(deserializeCommentDraft("not json"), null);
-  assert.equal(deserializeCommentDraft("[1,2]"), null, "non-object JSON → not a draft");
-  assert.deepEqual(deserializeCommentDraft('{"kind":"question"}'), null, "missing body → nothing restorable");
-  // Legacy fallback shape: a bare JSON string stores the body only.
-  assert.deepEqual(deserializeCommentDraft(JSON.stringify("old draft")), { body: "old draft", kind: "progress" });
-  assert.equal(deserializeCommentDraft(JSON.stringify("   ")), null, "blank legacy string is blank");
-  // Unknown or missing kind falls back to progress; valid kinds are preserved.
-  assert.deepEqual(deserializeCommentDraft('{"body":"hi","kind":"bogus"}'), { body: "hi", kind: "progress" });
-  assert.deepEqual(deserializeCommentDraft('{"body":"hi"}'), { body: "hi", kind: "progress" });
-});
-
-test("Drafts: ravnApp.saveDescriptionDraft saves, blanks remove, no loaded task = no-op", () => {
-  const app = ravnApp() as any;
-  safeStorage.removeItem(descriptionDraftKey("T1"));
-
-  // No task loaded → the handler must never write (it has no id to key on).
-  app.editDraft.description = "orphan";
-  app.saveDescriptionDraft();
-  assert.equal(safeStorage.getItem(descriptionDraftKey("T1")), null);
-
-  app.detail = { id: "T1", title: "t", description: "", priority: 0, due_at: null, assignee: undefined };
-  app.editDraft.description = "wip description";
-  app.saveDescriptionDraft();
-  assert.equal(safeStorage.getItem(descriptionDraftKey("T1")), "wip description");
-
-  // Blank value REMOVES the key so nothing stale lingers for the next edit.
-  app.editDraft.description = "   ";
-  app.saveDescriptionDraft();
-  assert.equal(safeStorage.getItem(descriptionDraftKey("T1")), null);
-});
-
-test("Drafts: ravnApp.saveCommentDraft persists body AND selected kind as JSON", () => {
-  const app = ravnApp() as any;
-  safeStorage.removeItem(commentDraftKey("T2"));
-  app.detail = { id: "T2", title: "t", description: "", priority: 0, due_at: null, assignee: undefined };
-
-  app.commentForm = { kind: "question" as const, body: "still thinking…" };
-  app.saveCommentDraft();
-  assert.deepEqual(deserializeCommentDraft(safeStorage.getItem(commentDraftKey("T2"))), {
-    body: "still thinking…",
-    kind: "question",
-  });
-
-  // Blank body removes the key even when a kind is selected.
-  app.commentForm = { kind: "note" as const, body: "" };
-  app.saveCommentDraft();
-  assert.equal(safeStorage.getItem(commentDraftKey("T2")), null);
-});
-
-test("Drafts: startEditing restores a saved description while the snapshot keeps server truth", () => {
-  const app = ravnApp() as any;
-  safeStorage.setItem(descriptionDraftKey("T3"), "local WIP draft");
-  app.detail = { id: "T3", title: "t", description: "server desc", priority: 0, due_at: null, assignee: undefined };
-  app.descShowPreview = true; // stale toggle must be reset for a fresh edit session
-
-  app.startEditing();
-
-  assert.equal(app.editingTask, true);
-  assert.equal(app.descShowPreview, false, "a fresh edit always starts in Write mode");
-  assert.equal(app.editDraft.description, "local WIP draft", "the saved local draft wins over the server value");
-  assert.equal(
-    app.editDraftOriginal.description,
-    "server desc",
-    "snapshot keeps SERVER truth so dirty-detection / discard guard stay correct",
-  );
-  assert.equal(app.editDraftDirty(), true, "a restored draft counts as an unsaved change");
-
-  // No stored draft → the server value is used and the form starts clean.
-  app.cancelEditing();
-  app.detail = { id: "T4", title: "t", description: "server only", priority: 0, due_at: null, assignee: undefined };
-  app.startEditing();
-  assert.equal(app.editDraft.description, "server only");
-  assert.equal(app.editDraftDirty(), false);
-});
-
-test("Drafts: restoreCommentDraftForTask resets then restores per task (no cross-task leak)", () => {
-  const app = ravnApp() as any;
-  safeStorage.setItem(commentDraftKey("TA"), serializeCommentDraft({ body: "A's draft", kind: "decision" }));
-
-  // Task B has NO stored draft: opening it must not surface A's text.
-  app.restoreCommentDraftForTask("TB");
-  assert.deepEqual(app.commentForm, { kind: "progress", body: "" }, "no stored draft for this id → clean defaults (no leak)");
-  assert.equal(app.commentShowPreview, false);
-
-  // Re-opening A restores BOTH its body and selected type.
-  app.restoreCommentDraftForTask("TA");
-  assert.deepEqual(app.commentForm, { kind: "decision", body: "A's draft" });
-  assert.equal(app.commentShowPreview, false, "restore resets the toggle back to Write mode");
-
-  // Task C corrupt payload
-  safeStorage.setItem(commentDraftKey("TC"), "{corrupted json");
-  app.restoreCommentDraftForTask("TC");
-  assert.deepEqual(app.commentForm, { kind: "progress", body: "" });
-});
-
-// ---------------------------------------------------------------------------
-// Header menu trigger name display & initial (task 01M5K1PD4C3NNM2VSEKEPT9KT8)
-// ---------------------------------------------------------------------------
-
 test("HeaderMenu: trigger markup hides initial on desktop (md:hidden) and uses initial on mobile", () => {
   const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
   assert.match(
@@ -3627,10 +2468,6 @@ test("HeaderMenu: trigger markup hides initial on desktop (md:hidden) and uses i
     "name span must be revealed on desktop via md:inline",
   );
 });
-
-// ---------------------------------------------------------------------------
-// Liveness indicator replacement with 30s disconnect notification (task 01M5K1HDAHCNRCJA322P1YF8HR)
-// ---------------------------------------------------------------------------
 
 test("SSE Disconnect Notification: triggers after delay, persists, clears on restore, and dismisses manually", async () => {
   const app = ravnApp() as any;
@@ -3673,7 +2510,6 @@ test("SSE Disconnect Notification: triggers after delay, persists, clears on res
   assert.equal(app.sseDisconnectToastId, null, "manual dismiss clears sseDisconnectToastId");
 });
 
-// ----------------------------------------------------------- Card Density & Done Pagination
 test("CardDensity: readStoredCardDensity defaults to comfortable and validates values", () => {
   safeStorage.clear();
   assert.equal(isCardDensity("comfortable"), true);
@@ -3833,22 +2669,21 @@ test("URL Sync: buildBoardQueryString round-trips and omits empty/default parame
 });
 
 test("URL Sync: syncUrlState updates window.history.replaceState without polluting history (AC1)", () => {
-  const origWindow = (globalThis as any).window;
   const replacedUrls: string[] = [];
-  try {
-    (globalThis as any).window = {
-      matchMedia: () => ({ matches: false, addEventListener: () => {} }),
-      location: { pathname: "/", search: "", hash: "" },
-      history: {
-        replaceState(_state: unknown, _title: string, url: string) {
-          replacedUrls.push(url);
-          (globalThis as any).window.location.search = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-        },
+  const win: any = {
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    location: { pathname: "/", search: "", hash: "" },
+    history: {
+      replaceState(_state: unknown, _title: string, url: string) {
+        replacedUrls.push(url);
+        (globalThis as any).window.location.search = url.includes("?") ? url.slice(url.indexOf("?")) : "";
       },
-      setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
-      clearTimeout: (id: any) => globalThis.clearTimeout(id),
-    };
+    },
+    setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
+    clearTimeout: (id: any) => globalThis.clearTimeout(id),
+  };
 
+  withWindow(win, () => {
     const app = ravnApp() as any;
     app.selectedProjectId = "proj_alpha";
     app.filterPriority = "2";
@@ -3864,27 +2699,23 @@ test("URL Sync: syncUrlState updates window.history.replaceState without polluti
     app.syncUrlState(true);
     assert.equal(replacedUrls.length, 2);
     assert.equal(replacedUrls[1], "/?project=proj_alpha&priority=2&unblocked=1&sort=priority&dir=asc");
-  } finally {
-    if (origWindow === undefined) delete (globalThis as any).window;
-    else (globalThis as any).window = origWindow;
-  }
+  });
 });
 
 test("URL Sync: clearFilters clears filter parameters from URL query string (AC3)", () => {
-  const origWindow = (globalThis as any).window;
   const replacedUrls: string[] = [];
-  try {
-    (globalThis as any).window = {
-      matchMedia: () => ({ matches: false, addEventListener: () => {} }),
-      location: { pathname: "/", search: "?project=proj_alpha&priority=4&unblocked=1&q=test", hash: "" },
-      history: {
-        replaceState(_state: unknown, _title: string, url: string) {
-          replacedUrls.push(url);
-          (globalThis as any).window.location.search = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-        },
+  const win: any = {
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    location: { pathname: "/", search: "?project=proj_alpha&priority=4&unblocked=1&q=test", hash: "" },
+    history: {
+      replaceState(_state: unknown, _title: string, url: string) {
+        replacedUrls.push(url);
+        (globalThis as any).window.location.search = url.includes("?") ? url.slice(url.indexOf("?")) : "";
       },
-    };
+    },
+  };
 
+  withWindow(win, () => {
     const app = ravnApp() as any;
     app.selectedProjectId = "proj_alpha";
     app.filterPriority = "4";
@@ -3898,27 +2729,23 @@ test("URL Sync: clearFilters clears filter parameters from URL query string (AC3
     assert.equal(app.filterSearch, "");
     assert.equal(replacedUrls.length, 1);
     assert.equal(replacedUrls[0], "/?project=proj_alpha", "Filters removed from URL, project preserved");
-  } finally {
-    if (origWindow === undefined) delete (globalThis as any).window;
-    else (globalThis as any).window = origWindow;
-  }
+  });
 });
 
 test("URL Sync: applyQueryParams and initFromUrl restore board state and reconcile on popstate (AC2/AC4)", () => {
-  const origWindow = (globalThis as any).window;
-  try {
-    (globalThis as any).window = {
-      matchMedia: () => ({ matches: false, addEventListener: () => {} }),
-      location: {
-        pathname: "/",
-        search: "?project=proj_beta&priority=1&owner=alice&due=today&unblocked=1&q=needle&sort=due_at&dir=asc",
-        hash: "",
-      },
-      history: {
-        replaceState: () => {},
-      },
-    };
+  const win: any = {
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    location: {
+      pathname: "/",
+      search: "?project=proj_beta&priority=1&owner=alice&due=today&unblocked=1&q=needle&sort=due_at&dir=asc",
+      hash: "",
+    },
+    history: {
+      replaceState: () => {},
+    },
+  };
 
+  withWindow(win, () => {
     const app = ravnApp() as any;
     app.initFromUrl();
 
@@ -3938,10 +2765,7 @@ test("URL Sync: applyQueryParams and initFromUrl restore board state and reconci
     assert.equal(app.filterDue, "");
     assert.equal(app.filterUnblocked, false);
     assert.equal(app.filterSearch, "");
-  } finally {
-    if (origWindow === undefined) delete (globalThis as any).window;
-    else (globalThis as any).window = origWindow;
-  }
+  });
 });
 
 test("URL Sync: index.html wires syncUrlState on filter inputs", () => {
@@ -3951,11 +2775,6 @@ test("URL Sync: index.html wires syncUrlState on filter inputs", () => {
   assert.ok(html.includes('@input="syncUrlState()"'), "Must wire input syncUrlState on search field");
   assert.ok(html.includes('@change="syncUrlState(true)"'), "Must wire change syncUrlState on dropdowns/checkboxes");
 });
-
-// ---------------------------------------------------------------------------
-// Task 01M5XTAW3RZ4QJCSW9C3CS255R: full-text board search (description/notes)
-// with match-source indicator. The instant local title/id filter is unchanged;
-// a debounced GET /tasks?search= contributes ids that columns() UNIONs in.
 
 test("FullTextSearch: a typing burst coalesces into ONE debounced server query whose ids union into the board (AC1)", async () => {
   const origListTasks = api.listTasks;
@@ -4215,75 +3034,6 @@ test("FullTextSearch: index.html renders the match-source chip and hides done pa
   // listTasksParams (the board's own fetch) must NOT leak the search term —
   // the board stays unfiltered; only the debounced api.listTasks call searches.
   assert.equal(FULLTEXT_SEARCH_LIMIT >= 100, true, "full-text page requests a full server page");
-});
-
-// ===========================================================================
-// Archive management (Rävn task 01M5XSNN2KA876TR0QGE79YFPT)
-// Task archive/unarchive (+Undo), bulk "Archive all Done", the "Show archived"
-// board view, and the project menu's Archived/Restore section.
-// ===========================================================================
-
-function archTask(id: string, status: "todo" | "doing" | "done", version = 1): any {
-  return {
-    id, title: "T-" + id, description: null, status, priority: 0, due_at: null,
-    claimed_by: null, claim_expires_at: null, assigned_to: null,
-    ac_total: 0, comment_count: 0, blocked_by: [], archived: false, version,
-  };
-}
-
-function archBoard(projectId: string, byStatus: Record<string, any[]> = {}): any {
-  return {
-    project_id: projectId,
-    tasks: { todo: byStatus.todo ?? [], doing: byStatus.doing ?? [], done: byStatus.done ?? [] },
-    counts: {
-      todo: (byStatus.todo ?? []).length,
-      doing: (byStatus.doing ?? []).length,
-      done: (byStatus.done ?? []).length,
-    },
-  };
-}
-
-/** Hermetic app instance with archive-relevant collaborators stubbed. */
-function archApp() {
-  const app = ravnApp() as any;
-  app.selectedProjectId = "proj-1";
-  app.detail = null;
-  app.toasts = [];
-  // Keep resync hermetic: record board reloads instead of hitting the network.
-  app.loadBoardCalls = 0;
-  app.loadBoard = async () => { app.loadBoardCalls++; };
-  app.refreshArchivedViewCalls = 0;
-  app.refreshArchivedView = async () => { app.refreshArchivedViewCalls++; };
-  return app;
-}
-
-function lastToast(app: any, needle?: string): any {
-  const t = [...app.toasts].reverse().find((x: any) => (needle ? x.msg.includes(needle) : true));
-  assert.ok(t, `expected a toast${needle ? ` matching "${needle}"` : ""}; got ${JSON.stringify(app.toasts.map((x: any) => x.msg))}`);
-  return t;
-}
-
-test("ArchiveMgmt: api.listProjects(true) targets /projects?archived=true; listTasks serializes archived=true", async () => {
-  const origFetch = (globalThis as any).fetch;
-  const urls: string[] = [];
-  try {
-    (globalThis as any).fetch = async (url: string | URL, init?: any) => {
-      urls.push(String(url));
-      if (String(url).includes("/projects")) {
-        return new Response(JSON.stringify({ projects: [], total: 0 }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ tasks: [], total: 0 }), { status: 200 });
-    };
-    await api.listProjects(true);
-    await api.listTasks({ project_id: "proj-1", archived: true, limit: 100, offset: 0 });
-  } finally {
-    if (origFetch === undefined) delete (globalThis as any).fetch;
-    else (globalThis as any).fetch = origFetch;
-  }
-  assert.match(urls[0], /\/projects\?archived=true$/, "includeArchived flips the query filter");
-  const taskUrl = urls[1];
-  assert.match(taskUrl, /archived=true/, "listTasks passes archived=true");
-  assert.match(taskUrl, /project_id=proj-1/, "project scoping rides along");
 });
 
 test("ArchiveMgmt: loadProjects fills BOTH open and archived lists; an archived-side failure degrades gracefully", async () => {
@@ -4612,14 +3362,6 @@ test("ArchiveMgmt: index.html wires every archive testid the E2E suite depends o
   assert.ok(html.includes(':draggable="!showArchived"'));
   assert.match(html, /data-testid="card-menu-anchor"[^>]*x-show="!showArchived"/);
 });
-
-// ===========================================================================
-// Board multi-select + floating batch-action bar
-// (Rävn task 01M5XTB04A8ZX1TX8ARYFG5D9F)
-// Checkbox/modifier selection, anchor-range semantics, select-all-visible under
-// filters/caps, the robust per-task batch engine (version guard + one 409
-// retry, optimistic mutation, summary toast), and the Escape contract.
-// ===========================================================================
 
 test("MultiSelect: checkbox toggle adds/removes and re-anchors range selection", () => {
   const app = archApp();
@@ -4959,7 +3701,3 @@ test("MultiSelect: index.html wires every batch-bar testid the E2E suite depends
   const css = fs.readFileSync(path.resolve(__dirname, "../src/style.css"), "utf-8");
   assert.match(css, /\.card-select-checkbox\s*{[^}]*opacity:\s*0/);
 });
-
-
-
-
