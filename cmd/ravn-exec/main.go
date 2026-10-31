@@ -25,10 +25,21 @@ func main() {
 	os.Exit(runCLI(os.Args[1:], os.Stderr))
 }
 
-// runCLI is the injectable CLI entry point: argv + a stderr writer in, exit code
-// out. It is split from main so argument parsing, flag validation and env wiring
-// can be tested without touching the real process stdio or spawning children.
-func runCLI(args []string, errW io.Writer) int {
+// cliResolution is everything resolved from argv and environment for one run:
+// the wrapped command's lease options plus the upstream API URL and bearer token.
+type cliResolution struct {
+	apiURL string
+	token  string
+	opts   Options
+}
+
+// parseCLIArgs parses ravn-exec's flags, validates them and resolves the RAVN_*
+// env overrides (RAVN_API_URL, RAVN_TOKEN, RAVN_AGENT_NAME). It is split from
+// runCLI so flag parsing, validation and env resolution can be tested WITHOUT
+// spawning children or touching the network. On bad input it returns exit code 2
+// with the usage already written to errW — same messages and codes as before the
+// split; no behavior changed.
+func parseCLIArgs(args []string, errW io.Writer) (cliResolution, int) {
 	fs := flag.NewFlagSet("ravn-exec", flag.ContinueOnError)
 	fs.SetOutput(errW)
 
@@ -39,35 +50,49 @@ func runCLI(args []string, errW io.Writer) int {
 	)
 
 	if err := fs.Parse(args); err != nil { // bad flag value / unknown flag: usage already printed to errW
-		return 2
+		return cliResolution{}, 2
 	}
 
 	command := fs.Args() // everything after the flags (and any explicit "--")
 	if *taskID == "" {
 		fmt.Fprintln(errW, "usage: ravn-exec --task-id <id> [--ttl-sec N] [--interval DUR] -- <command> [args...]")
-		return 2
+		return cliResolution{}, 2
 	}
 	if len(command) == 0 {
 		fmt.Fprintln(errW, "ravn-exec: a command to run after the flags is required")
-		return 2
+		return cliResolution{}, 2
 	}
 
 	apiURL := envOr("RAVN_API_URL", "http://ravn-server:8080") // same default as ravn-mcp
 	token := os.Getenv("RAVN_TOKEN")
 	actor := apiclient.Actor{Type: "agent", Name: envOr("RAVN_AGENT_NAME", "agent")}
 
-	opts := Options{
-		TaskID:            *taskID,
-		Actor:             actor,
-		TTLSec:            *ttlSec,
-		HeartbeatInterval: *interval,
-		Command:           command,
+	return cliResolution{
+		apiURL: apiURL,
+		token:  token,
+		opts: Options{
+			TaskID:            *taskID,
+			Actor:             actor,
+			TTLSec:            *ttlSec,
+			HeartbeatInterval: *interval,
+			Command:           command,
+		},
+	}, 0
+}
+
+// runCLI is the injectable CLI entry point: argv + a stderr writer in, exit code
+// out. It parses and resolves via parseCLIArgs (testable seam), then wires the
+// resolved values into Run with the real client and foreground runner.
+func runCLI(args []string, errW io.Writer) int {
+	res, code := parseCLIArgs(args, errW)
+	if code != 0 {
+		return code
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	return Run(ctx, apiclient.New(apiURL, token), opts, runForeground(command))
+	return Run(ctx, apiclient.New(res.apiURL, res.token), res.opts, runForeground(res.opts.Command))
 }
 
 // runForeground is the production runWrapped body: it execs command with stdin,

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -42,23 +43,40 @@ import (
 var version = "dev"
 
 func main() {
+	os.Exit(run(os.Args[1:], os.Stderr))
+}
+
+// run is the injectable server entry point: argv + a stderr writer in, exit code
+// out. It is split from main so flag/env resolution, DB-open and artifacts-dir
+// failure paths, static-dir detection and the graceful-shutdown wiring can be
+// tested without os.Exit or real process stdio. Behavior (defaults, env/flag
+// precedence, log messages, exit codes) is unchanged from the former inline
+// main body; the only structural difference is that flag parsing uses a
+// dedicated FlagSet writing to errW instead of the global flag package.
+func run(args []string, errW io.Writer) int {
+	fs := flag.NewFlagSet("ravn-server", flag.ContinueOnError)
+	fs.SetOutput(errW)
+
 	var (
-		addr   = flag.String("addr", envOr("RAVN_ADDR", ":8080"), "listen address, e.g. :8080")
-		data   = flag.String("data", envOr("RAVN_DATA", "/data/ravn.db"), "path of the SQLite database file")
-		token  = flag.String("token", os.Getenv("RAVN_TOKEN"), "bearer token gating /api/v1 routes; empty disables auth (dev default)")
-		static = flag.String("static", envOr("RAVN_STATIC_DIR", "./web/dist"),
+		addr   = fs.String("addr", envOr("RAVN_ADDR", ":8080"), "listen address, e.g. :8080")
+		data   = fs.String("data", envOr("RAVN_DATA", "/data/ravn.db"), "path of the SQLite database file")
+		token  = fs.String("token", os.Getenv("RAVN_TOKEN"), "bearer token gating /api/v1 routes; empty disables auth (dev default)")
+		static = fs.String("static", envOr("RAVN_STATIC_DIR", "./web/dist"),
 			"directory holding the built web UI (Vite dist); placeholder root is served when it has no index.html")
-		artifacts = flag.String("artifacts-dir", envOr("RAVN_ARTIFACTS_DIR", defaultArtifactsDir()),
+		artifacts = fs.String("artifacts-dir", envOr("RAVN_ARTIFACTS_DIR", defaultArtifactsDir()),
 			"directory holding stored artifact uploads")
-		logLevel = flag.String("log-level", envOr("LOG_LEVEL", envOr("RAVN_LOG_LEVEL", "info")),
+		logLevel = fs.String("log-level", envOr("LOG_LEVEL", envOr("RAVN_LOG_LEVEL", "info")),
 			"log level: debug, info, warn, error")
-		corsOrigins = flag.String("cors-origins", envOr("RAVN_CORS_ORIGINS", "*"),
+		corsOrigins = fs.String("cors-origins", envOr("RAVN_CORS_ORIGINS", "*"),
 			"comma-separated list of allowed CORS origins or '*' for any origin")
 	)
-	flag.Parse()
+
+	if err := fs.Parse(args); err != nil { // bad flag value / unknown flag: usage already printed to errW
+		return 2
+	}
 
 	lvl := parseLogLevel(*logLevel)
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	logger := slog.New(slog.NewTextHandler(errW, &slog.HandlerOptions{
 		Level: lvl,
 	}))
 	slog.SetDefault(logger)
@@ -67,7 +85,7 @@ func main() {
 
 	if err := os.MkdirAll(*artifacts, 0o755); err != nil {
 		logger.Error("failed to create artifacts dir", "dir", *artifacts, "err", err)
-		os.Exit(1)
+		return 1
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -76,7 +94,7 @@ func main() {
 	pool, closePool, err := sqlite.OpenPool(ctx, *data)
 	if err != nil {
 		logger.Error("database open failed", "err", err)
-		os.Exit(1)
+		return 1
 	}
 	defer func() {
 		if err := closePool(); err != nil {
@@ -113,6 +131,7 @@ func main() {
 		srv.Close()
 	}
 	logger.Info("stopped")
+	return 0
 }
 
 // healthResponse is the /healthz body (ARCHITECTURE §8): 200 with db "ok" when
