@@ -83,13 +83,25 @@ test.describe('claim lease expiry (active vs expired contrast)', () => {
     expect(leaseB.claimed_by?.name).toBe(EXPIRED_ACTOR);
     expect(typeof leaseB.claim_expires_at).toBe('string');
 
-    // Wait until B's lease has truly crossed its expiry (server clock == host clock;
-    // a small margin avoids flakiness on the exact boundary instant).
+    // DETERMINISM (flake policy, AC3): confirm ttl_sec=1 produced a genuinely short
+    // lease (expiry within ~2s of now — not the 900s default), then advance the wall
+    // clock PAST that known expiry with ONE bounded sleep. This replaces the old
+    // unbounded `while (Date.now() < expiryMs + 250) await sleep(50)` busy-poll loop
+    // (the anti-pattern AC2 audits for).
     const expiryMs = Date.parse(leaseB.claim_expires_at);
     expect(Number.isNaN(expiryMs)).toBe(false);
-    while (Date.now() < expiryMs + 250) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    expect(expiryMs - Date.now()).toBeLessThan(2000);
+
+    // Intentional pacing (NOT an assertion wait): the muted capsule STYLING flips
+    // live on the app's 1s `nowTick` (claimExpired reads it), but the "lease
+    // expired" HINT TEXT comes from claimHint(), which reads Date.now() directly and
+    // therefore does NOT re-evaluate on nowTick — it is fixed at first paint. To get
+    // a deterministic fully-expired card (styling + struck name + "lease expired") we
+    // must reach expiry BEFORE the board's initial render, so this single bounded
+    // sleep advances past the KNOWN expiry instant (+250ms margin). The ≤3s bounded
+    // expects below still guard against a slow first paint.
+    const waitMs = Math.max(0, expiryMs - Date.now() + 250);
+    if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
 
     // ---------------------------------------------------------------- board
     fs.mkdirSync(testResultsDir, { recursive: true });
@@ -112,8 +124,11 @@ test.describe('claim lease expiry (active vs expired contrast)', () => {
     await expect(activeCapsule.getByText(/until \d{2}:\d{2}/)).toBeVisible();
 
     // EXPIRED card: muted zinc capsule, struck-through dim name, grey "lease expired".
+    // The board is (almost) guaranteed to paint already-expired thanks to the bounded
+    // pre-expiry sleep above; the ≤3s auto-retrying timeout below is a safety net for
+    // a slow first paint — NOT a reliance on waiting out the TTL.
     const expiredCapsule = expiredCard.getByTestId('card-claim-capsule');
-    await expect(expiredCapsule).toHaveClass(/border-zinc-300/);
+    await expect(expiredCapsule).toHaveClass(/border-zinc-300/, { timeout: 3000 });
     await expect(expiredCapsule).not.toHaveClass(/border-indigo-200/);
     await expect(expiredCapsule.getByText(EXPIRED_ACTOR, { exact: true })).toHaveClass(/line-through/);
     await expect(expiredCapsule.getByText('lease expired', { exact: true })).toBeVisible();

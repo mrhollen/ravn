@@ -105,7 +105,9 @@ test.describe('Board loading skeleton', () => {
     await seedTask(serverUrl, project.id, 'Alpha Skel Card');
 
     // Delay EVERY board GET (any project) while the request is in flight — the
-    // boot continuation's loadBoard lands inside this window.
+    // boot continuation's loadBoard lands inside this window. Intentional pacing
+    // (simulated API latency via route interception): NOT an assertion wait; the
+    // skeleton + real-board states are asserted with polling expect()s below.
     await page.route(new RegExp(`/api/v1/projects/.+/board(\\?|$)`), async (route) => {
       await new Promise((r) => setTimeout(r, 1500));
       route.continue();
@@ -143,7 +145,9 @@ test.describe('Board loading skeleton', () => {
     await waitForBoardCard(page, 'Alpha Switch Card');
 
     // Delay ONLY project B's board fetch: clicking the option nulls `board`
-    // (selectProject) and starts this slow round-trip.
+    // (selectProject) and starts this slow round-trip. Intentional pacing
+    // (simulated API latency via route interception): NOT an assertion wait; the
+    // skeleton + real-board states are asserted with polling expect()s below.
     await page.route(
       new RegExp(`/api/v1/projects/${projectB.id}/board(\\?|$)`),
       async (route) => {
@@ -178,7 +182,9 @@ test.describe('Board loading skeleton', () => {
     await seedTask(serverUrl, project.id, 'Gamma Skel Card');
 
     // Hold EVERY board fetch long enough to capture BOTH theme variants while a
-    // skeleton is up.
+    // skeleton is up. Intentional pacing (simulated API latency via route
+    // interception): NOT an assertion wait; the placeholder colors are read around
+    // the polling expect(skel).toBeVisible() gates.
     const holdRoute = new RegExp(`/api/v1/projects/.+/board(\\?|$)`);
     await page.route(holdRoute, async (route) => {
       await new Promise((r) => setTimeout(r, 2500));

@@ -1699,7 +1699,9 @@ test.describe('Web E2E test suite', () => {
 
     const hourMs = 3600 * 1000;
     const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
-    // >1s apart so RFC3339 timestamps never collide regardless of storage precision
+    // Intentional pacing (not an assertion wait): space seeded created_at by >1s so
+    // RFC3339 timestamps never collide regardless of storage precision; the sort
+    // order itself is asserted below with a polling expect.poll(...).
     const tick = () => new Promise((r) => setTimeout(r, 1100));
 
     const mkTask = async (body: Record<string, unknown>) => {

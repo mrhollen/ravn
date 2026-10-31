@@ -179,8 +179,23 @@ cd web && npm run test:unit:coverage
   never commit them; attach task-relevant ones to Rävn tasks via
   `attach_artifact` with `data_base64` (see AGENTS.md).
 - Prefer auto-retrying `expect()` assertions over `setTimeout` sleeps when
-  waiting for UI state. Flakes: CI uses bounded retries once the flake policy
-  task lands; locally run a failed spec twice before assuming regression.
+  waiting for UI state. **E2E flake policy** (task 01M66ZGEAXJV3KENXW07CXJVY9):
+  `playwright.config.ts` sets `retries: process.env.CI ? 1 : 0` — CI retries a test
+  once so a single transient failure does not force a full-suite re-run (the
+  most expensive run in the repo after Go); locally retries stay 0 so failures
+  surface immediately (run a failed spec twice before assuming regression). A pass
+  *via* its retry is NOT silently green: `e2e/flake-reporter.ts` (wired as the
+  second reporter) walks the finished suite in `onEnd` and logs every test whose
+  final attempt passed after ≥1 failed attempt. Any remaining `setTimeout` in a
+   spec must be intentional pacing (simulated API latency, gesture/sample cadence),
+   never an assertion wait — audit with
+   `rg "setTimeout|new Promise" e2e/*.spec.ts`. Live UI state that reads the app's
+   reactive 1s `nowTick` (stalled count/filter, muted capsule styling) is observed
+   via bounded ≤3s auto-retrying `expect()s` — no pre-sleep. One exception: a card's
+   claim-hint TEXT (`claimHint()` in util.ts) reads `Date.now()` directly and does
+   NOT re-render on `nowTick`, so `claim-expired` reaches its KNOWN expiry instant
+   with a single bounded sleep before first paint (replacing the old unbounded
+   busy-poll), then still guards the flip with a ≤3s timeout.
 - Strict locators: exact-match `getByText(..., { exact: true })` or scoping to
   a container/role — Playwright strict-mode violations are a common CI failure.
 - The deterministic hero screenshot is `e2e/hero-screenshot.spec.ts`;
@@ -225,7 +240,7 @@ Audit results from 2026-10-30, each mapped to a Ravn board task:
 | 6 | cmd/ravn-exec 45.2%, cmd/ravn-server 62.5% — lowest packages; flag/env/shutdown paths untested | [Unit/Go] Raise cmd package coverage (P3) |
 | 7 | api.ts 69.7% lines (SSE + error paths), focus.ts 41.7% functions | [Unit/Web] Close api.ts/focus.ts gaps (P3) |
 | 8 | CI reports no coverage and enforces no floor | [CI] Coverage reporting + ratcheting gates (P3; blocked by #4) |
-| 9 | No retry policy in Playwright config; wall-clock-dependent specs (`ttl_sec=1` lease, transition waits) can race on slow CI | [E2E] Flake policy: bounded retries + timing audit (P3) |
+| 9 | **Resolved (2026-10-30)**: E2E flake policy landed — `retries: process.env.CI ? 1 : 0` in `playwright.config.ts`, plus an `e2e/flake-reporter.ts` `onEnd` hook that surfaces pass-via-retry (flaky) tests; the wall-clock expiry waits in `claim-expired`/`stalled-filter` (`ttl_sec=1`) were replaced by bounded ≤3s auto-retrying `expect()s` (the app re-renders expired/stalled state live via a 1s `nowTick`) | [E2E] Flake policy: bounded retries + timing audit (P3) — done; see §3 E2E |
 | 10 | Test LOC ratio 2.2:1 with legacy "challenger/stress_rN" files overlapping regular tests; inconsistent naming | [Test] Deduplicate adversarial Go tests (P2) |
 
 Not actioned (deliberate, documented): per-test screenshots on passing tests

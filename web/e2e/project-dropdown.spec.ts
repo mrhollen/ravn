@@ -201,6 +201,8 @@ test.describe('Projects dropdown (custom control)', () => {
     const settleMenuFocus = (expectedTestid: string): Promise<void> =>
       expect(async () => {
         const first = await focusInfo().then((i) => i?.testid);
+        // Intentional pacing (not an assertion wait): fixed ~120ms sample interval;
+        // stability itself is asserted by the outer expect(...).toPass() below.
         await new Promise((r) => setTimeout(r, 120));
         const second = await focusInfo().then((i) => i?.testid);
         expect(first).toBe(expectedTestid);

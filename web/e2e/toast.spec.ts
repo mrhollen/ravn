@@ -105,8 +105,10 @@ test.describe('toast notifications', () => {
       const win = window as any;
       const app = win.Alpine.$data(document.querySelector('[x-data="app()"]'));
       app.toast('e2e transition check');
-      // Let the ENTER transition fully finish first, so the leave starts from a
-      // clean resting state (clicking mid-enter would race Alpine's cancel path).
+      // Intentional pacing (in-browser probe; expect() polling is unavailable
+      // inside evaluate): let the ENTER transition fully finish first so the leave
+      // starts from a clean resting state — clicking mid-enter would race Alpine's
+      // cancel path. NOT an assertion wait; the assertions below check the LEAVE.
       await new Promise((r) => setTimeout(r, 300));
       const el = [...document.querySelectorAll('[data-testid="toast-stack"] > *')].find(
         (n) => n instanceof HTMLElement && (n.textContent || '').includes('e2e transition check'),
@@ -118,6 +120,9 @@ test.describe('toast notifications', () => {
       const samples: number[] = [];
       const motionValues = new Set<string>();
       let sawLeaveClasses = false;
+      // Intentional pacing (in-browser probe): sample computed motion at ~16ms for
+      // ~400ms to catch intermediate leave values — NOT an assertion wait; the
+      // sampled arrays are asserted afterward in Node.
       const end = performance.now() + 400;
       while (performance.now() < end) {
         if (!el.isConnected) break;

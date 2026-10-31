@@ -235,6 +235,8 @@ test.describe('Full-text search bypasses the done-column pagination cap (01M5XTA
       await patchJson(`${serverUrl}/api/v1/tasks/${t.id}`, { status: 'done', version: doing.version, actor: ACTOR });
     };
     await complete(created[0]);
+    // Intentional pacing (not an assertion wait): pause >1s so the server's
+    // second-precision completed_at stamps task 0 strictly oldest (see above).
     await new Promise((r) => setTimeout(r, 1200));
     for (const t of created.slice(1)) {
       await complete(t);

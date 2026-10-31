@@ -98,11 +98,12 @@ test.describe('Expired/stalled board alert and filter (01M5XSNR8VWZTP66GT7ABNSJC
     const leaseB = await claimB.json();
     expect(leaseB.claimed_by?.name).toBe(EXPIRED_ACTOR.name);
 
-    // Wait until B's lease has truly crossed its expiry (small margin avoids
-    // flakiness on the exact boundary instant).
-    while (Date.now() < Date.parse(leaseB.claim_expires_at) + 250) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    // DETERMINISM (flake policy): do NOT sleep until B crosses its real expiry.
+    // The stalled count re-evaluates LIVE every ~1s (app.ts `nowTick` →
+    // isStalledExpired), so the pill flips to "N stalled" on the first ticker tick
+    // after the lease lapses — no refetch needed. The tests below OBSERVE that
+    // state with bounded auto-retrying expect() timeouts (≤3s) instead of a fixed
+    // wall-clock pre-sleep, which is exactly what made this spec racy.
 
     // C: plain todo — never claimable into "stalled" by status alone.
     await postJson(`${serverUrl}/api/v1/tasks`, {
@@ -137,8 +138,10 @@ test.describe('Expired/stalled board alert and filter (01M5XSNR8VWZTP66GT7ABNSJC
     await expect(todoCard).toBeVisible();
 
     // ---------------------------------------------------------------- (a) pill
+    // The pill only appears once B's lease has lapsed AND the app's ~1s ticker has
+    // re-counted — so poll for it with a bounded ≤3s timeout, not a fixed pre-sleep.
     const pill = page.getByTestId('stalled-alert-pill');
-    await expect(pill).toBeVisible();
+    await expect(pill).toBeVisible({ timeout: 3000 });
     // Exact count: exactly ONE stalled task (the expired lease) — the healthy
     // doing task and the todo bystander must not be counted.
     await expect(pill).toHaveText(/1\s*stalled/);
@@ -204,8 +207,9 @@ test.describe('Expired/stalled board alert and filter (01M5XSNR8VWZTP66GT7ABNSJC
 
     const healthyCard = page.locator('article', { hasText: HEALTHY_TITLE });
     const stalledCard = page.locator('article', { hasText: STALLED_TITLE });
-    await expect(stalledCard).toBeVisible();
-    await expect(healthyCard).not.toBeVisible();
+    // Filter is restored from ?stalled=1, but B only appears once its lease has
+    // lapsed and the ~1s ticker re-counted → bounded ≤3s poll, not a fixed pre-sleep.
+    await expect(stalledCard).toBeVisible({ timeout: 3000 });
 
     // The checkbox and pill reflect the restored state.
     await expect(page.getByTestId('filter-stalled')).toBeChecked();

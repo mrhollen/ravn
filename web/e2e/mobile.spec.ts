@@ -108,6 +108,8 @@ test.describe('Mobile experience (375px, touch)', () => {
 
     await dispatch('touchStart', cx);
     // Walk the finger across in small steps so the gesture reads as a swipe.
+    // Intentional pacing (CDP touch-event cadence), NOT an assertion wait — no UI
+    // state is asserted on these sleeps; Playwright asserts the result afterward.
     for (const step of [15, 40, 65, 95]) {
       await new Promise((r) => setTimeout(r, 12));
       await dispatch('touchMove', cx + sign * step);
