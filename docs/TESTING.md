@@ -1,16 +1,18 @@
 # Testing Strategy & Best Practices
 
-Audited 2026-10-30. This document is the source of truth for how ravn is tested,
-the measured baselines, and the conventions new tests must follow. Improvements
-are tracked as tasks on the Ravn board (see [Findings index](#findings-index-task-traceability)).
+Audited 2026-10-30; re-measured post-epic (test-quality epic
+`01M6735WRK6XC46HQCSYGAEYVC`) on 2026-10-31. This document is the source of
+truth for how ravn is tested, the measured baselines, and the conventions new
+tests must follow. Improvements are tracked as tasks on the Ravn board (see
+[Findings index](#findings-index-task-traceability)).
 
 ## 1. The three suites
 
-| Suite | What it covers | Runner | Size (2026-10-30) | Wall time (local, 12-core) | Coverage |
+| Suite | What it covers | Runner | Size (2026-10-31, post-epic) | Wall time (local, 12-core) | Coverage |
 |---|---|---|---|---|---|
-| Go unit + integration (`internal/`, `cmd/`) | domain rules, application use-cases, SQLite repos, HTTP handlers, MCP tools | `go test` (+ `-race` in CI) | 86 files, 37,182 LOC (vs 16,948 source LOC → 2.2:1) | **23s** total; `-race` **22s**; slowest package `internal/interface/http` 12.7s | **80.9%** statements total |
-| Web unit (`web/test/`) | pure logic of `web/src/*.ts` (dates, markdown, drafts, API client, board state, moves, refresh, realtime) | `node:test` via `jiti` (`npm run test:unit`; coverage: `npm run test:unit:coverage`) | 9 module files + `test-helpers.ts`, 4,834 LOC, 190 tests | **~8s** | **67.2%** lines / 76.4% branches / 60.5% functions (re-measured post-split) |
-| Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 38 spec files + shared `fixtures.ts`/`helpers.ts`, **12,848** LOC (was 15,727), 175 tests | **~41s** wall (default workers); one shared `ravn-server` per worker (+ a few isolated spins) | not measured (E2E is the integration proof) |
+| Go unit + integration (`internal/`, `cmd/`) | domain rules, application use-cases, SQLite repos, HTTP handlers, MCP tools | `go test` (+ `-race` in CI) | 91 files, **38,080** LOC (vs 16,948 source LOC → 2.2:1) | **3.6s** total; `-race` **12.5s**; slowest package `internal/interface/http` ~3.2s wall (measured post-epic, 2026-10-31) | **83.9%** statements total |
+| Web unit (`web/test/`) | pure logic of `web/src/*.ts` (dates, markdown, drafts, API client, board state, moves, refresh, realtime) | `node:test` via `jiti` (`npm run test:unit`; coverage: `npm run test:unit:coverage`) | 9 module files + `test-helpers.ts`, **5,641** LOC, **221** tests | **~8.1s** (suite 7.9s) | **69.35%** lines / 79.03% branches / 67.07% functions (re-measured post-epic) |
+| Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 38 spec files + shared `fixtures.ts`/`helpers.ts`, **12,848** LOC (was 15,727), 175 tests | **~43s** wall (default workers; measured post-epic); one shared `ravn-server` per worker (+ a few isolated spins) | not measured (E2E is the integration proof) |
 
 All three run in CI on every push/PR (`.github/workflows/ci.yml`,
 `.forgejo/workflows/ci.yml`): `go test -race ./... -coverprofile=c.out -cover`,
@@ -29,7 +31,7 @@ cd web && npm run build && cd ..   # E2E serves web/dist
 cd web && npx playwright test      # or: make e2e (builds as needed)
 ```
 
-## 2. Coverage baselines (2026-10-30)
+## 2. Coverage baselines (re-measured post-epic, 2026-10-31)
 
 ### Go — per package, statements (`go test ./... -cover`)
 
@@ -37,23 +39,25 @@ cd web && npx playwright test      # or: make e2e (builds as needed)
 |---|---|---|
 | internal/infrastructure/clock, idgen | 100% | |
 | internal/domain | 91.0% | state machine + invariants well covered |
+| cmd/ravn-exec | 90.8% | flag/env parse + spawn covered via `parseCLIArgs` seam (C2, f430f84) |
+| cmd/ravn-server | 90.1% | wiring/flags/shutdown covered via full-boot tests on the `run()` seam (C2, f430f84) |
 | internal/infrastructure/pubsub | 88.8% | |
-| internal/application | 84.9% | hides untested batch rollups (see findings) |
+| internal/application | 86.8% | batch rollups (`ListWithCounts`) now covered (C1, e5bc919) |
+| internal/infrastructure/apiclient | 83.8% | `ProjectReport` client path now covered (C1, e5bc919) |
 | internal/interface/http | 83.4% | handlers + security middleware |
 | internal/mcp | 82.4% | tools/resources/prompts |
 | cmd/ravn-mcp | 80.7% | |
-| internal/infrastructure/apiclient | 79.8% | |
-| internal/infrastructure/sqlite | 70.3% | |
-| cmd/ravn-server | 62.5% | wiring/flags untested (see findings) |
-| cmd/ravn-exec | 45.2% | `runCLI`/`runForeground` at 0% (see findings) |
+| internal/infrastructure/sqlite | 77.5% | rollup/boundary queries now covered (C1, e5bc919) |
 
-Known **0%-covered production functions** (all confirmed in use, not dead code):
-`OpenTaskCounts`, `ListWithCounts`, `ProjectReport` aggregation,
-`OpenBlockersByTasks`, `SubtaskProgressByParents`, `CountByTask`, `MaxAtByTasks`.
+The previously-known **0%-covered production functions** (all confirmed in use,
+not dead code) are all at ≥80% now — measured post-epic: `ListWithCounts` 92.6%,
+`ProjectReport` (apiclient) 100.0% (+ handler 95.2%), `CountByTask` 100.0%,
+`OpenBlockersByTasks` 90.0%, `SubtaskProgressByParents` 88.9%,
+`MaxAtByTasks` 85.7%, `OpenTaskCounts` 84.6% (C1, e5bc919).
 
 ### Web unit — per file (`npm run test:unit:coverage`)
 
-Re-measured post-split (9 per-module test files + `test-helpers.ts`, 190 tests)
+Re-measured post-epic (9 per-module test files + `test-helpers.ts`, 221 tests)
 with Node's built-in plain coverage reporter on Node 26 — zero extra deps.
 Values are the reporter's exact two-decimal output, descending by line %.
 
@@ -62,14 +66,17 @@ Values are the reporter's exact two-decimal output, descending by line %.
 | src/drafts.ts | 100.00% | 100.00% | 100.00% |
 | src/moves.ts | 97.44% | 94.74% | 88.89% |
 | src/refresh.ts | 94.34% | 100.00% | 89.47% |
+| src/focus.ts | 93.85% | 90.91% | 100.00% |
+| src/api.ts | 88.21% | 96.10% | 97.92% |
 | src/util.ts | 80.06% | 86.76% | 54.84% |
 | src/realtime.ts | 79.25% | 95.45% | 100.00% |
-| src/api.ts | 71.37% | 77.46% | 47.92% |
 | src/md.ts | 68.63% | 87.50% | 100.00% |
 | src/app.ts | 66.54% | 73.10% | 59.28% |
-| src/focus.ts | 52.31% | 100.00% | 41.67% |
 | src/types.ts | 37.98% | 100.00% | 100.00% |
-| **All files (total)** | **67.18%** | **76.44%** | **60.48%** |
+| **All files (total)** | **69.35%** | **79.03%** | **67.07%** |
+
+`api.ts` and `focus.ts` rose in B3 (44bfcfd): api lines 71.37% → 88.21%
+(funcs 47.92% → 97.92%), focus lines 52.31% → 93.85% (funcs 41.67% → 100.00%).
 
 The total line coverage is the ratcheting baseline: it must stay ≥ 65% (the web
 unit floor) and the Go total must stay ≥ 80% (the Go statement floor). Both are
@@ -93,9 +100,9 @@ Notes:
 The plain reporter writes the table to **stdout** with a stable total line
 (exactly as printed, including spacing):
 
-    ℹ all files    |  67.18 |    76.44 |   60.48 |
+    ℹ all files    |  69.35 |    79.03 |   67.07 |
 
-Pipe-friendly one-liner (POSIX awk; prints `67.18` = total line %; the suite's
+Pipe-friendly one-liner (POSIX awk; prints `69.35` = total line %; the suite's
 own pass/fail exit code is preserved by piping only after the command). The
 match is on row *content*, not the prefix, because the prefix differs between
 Node versions:
@@ -150,6 +157,9 @@ coverage-gate.sh c.out web-unit-coverage.log` must FAIL; defaults must PASS).
 Measured totals as of 2026-10-31 (post test-quality epic): Go **83.9%**
 statements; web unit total lines **69.35%** on Node 26 / **82.35%** on the
 CI-pinned Node 22 (see the v22 caveat above) — both floors have headroom.
+Re-confirmed by the fresh post-epic verification run of 2026-10-31
+(`go tool cover -func` total line and `npm run test:unit:coverage` all-files
+row): identical totals.
 
 ### How to measure
 
@@ -180,10 +190,12 @@ cd web && npm run test:unit:coverage
 - `t.Parallel()` is fine and used throughout the http package; note that
   parallel tests make `-json` wall-time accounting misleading when profiling.
   To find a slow test, run it standalone: `go test -run '^TestName$'`.
-- The SSE handler's per-write deadline is a 10s production constant
-  (`internal/interface/http/handlers_events.go`). Tests that depend on it
-  should use a short injected value once the deadline becomes configurable
-  (tracked as a task) — never add `time.Sleep(10 * time.Second)` style waits.
+- The SSE handler's per-write deadline is injectable via
+  `Deps.SSEWriteDeadline` (`internal/interface/http/app.go`), defaulting to the
+  production 10s constant (`DefaultSSEWriteDeadline = 10 * time.Second`; landed
+  in 41a6479). Tests that depend on it must inject a short value — the
+  stalled-client adversarial test uses 250ms, and `TestEvents_SSE_DefaultWriteDeadline`
+  pins the production default — never add `time.Sleep(10 * time.Second)` style waits.
 
 ### Web unit tests
 
@@ -255,23 +267,24 @@ cd web && npm run test:unit:coverage
 
 ## 4. Performance budgets
 
-Measured on a 12-core / 64GB Linux box, 2026-10-30. CI targets 2 workers for E2E.
+Measured on a 12-core / 64GB Linux box, 2026-10-30; "Current" actuals
+re-measured fresh in the post-epic verification run of 2026-10-31. CI targets
+2 workers for E2E.
 
-| Budget | Current | Target |
+| Budget | Current (measured 2026-10-31) | Target |
 |---|---|---|
-| Go full suite (no race) | 23s | ≤ 30s; `internal/interface/http` ≤ 4s once the SSE deadline task lands |
-| Go full suite (`-race`, CI) | 22s | ≤ 60s |
-| Web unit | ~8s | ≤ 15s |
-| E2E (local, default workers) | ~41s | ≤ 60s; one shared `ravn-server` per worker (+ a few isolated spins) — realized by the §3 fixture |
-| E2E memory | ~6GB peak chromium; server count now bounded by worker count, not spec count | keep total < 8GB on a 16GB runner box |
+| Go full suite (no race) | **3.6s**; slowest package `internal/interface/http` ~3.2s wall | ≤ 30s; `internal/interface/http` ≤ 4s — met via the §3 SSE deadline seam (A1, 41a6479) |
+| Go full suite (`-race`, CI) | **12.5s** | ≤ 60s |
+| Web unit | **~8.1s** (221 tests) | ≤ 15s |
+| E2E (local, default workers) | **~43s** (175 passed) | ≤ 60s; one shared `ravn-server` per worker (+ a few isolated spins) — realized by the §3 fixture |
 | E2E memory | ~6GB peak chromium; `ravn-server` count bounded by worker count, not spec count (fixture) | keep total < 8GB on a 16GB runner box |
 
 Rules for keeping the budgets:
 
 - No test may wait longer than 3s for an *injected* timeout; production
-  deadlines belong behind configurable seams. The single exception is the
-  stalled-SSE-client zombie check, which must stay end-to-end but with a short
-  deadline (tracked).
+  deadlines belong behind configurable seams. The stalled-SSE-client zombie
+  check stays end-to-end but runs against a short injected deadline (the
+  10s production default is pinned separately — see §3).
 - E2E specs must not rebuild `web/dist` or the server binary per test —
   build once in `beforeAll` (existing pattern) or let the fixture handle it.
 - Keep the Go test:source LOC ratio near 2:1; large additions need justification
@@ -281,23 +294,56 @@ Rules for keeping the budgets:
 
 Audit results from 2026-10-30, each mapped to a Ravn board task:
 
+All ten audit findings are **resolved** as of the post-epic verification (2026-10-31):
+
 | # | Finding | Task |
 |---|---|---|
-| 1 | `TestAdversarial_SSE_StalledClientPipeWriteDeadline` takes 10.3s on the hard-coded 10s SSE write deadline; dominates the http package (12.7s of 23s total) | [Perf/Test] Make SSE per-write deadline configurable (P5) |
-| 2 | **Resolved (2026-10-30)**: per-spec scaffolding (~1,000 LOC, 79 hooks, 38 startups/run) replaced by a worker-scoped Playwright server fixture; `web/e2e/` total LOC fell 15,727 → 12,848 (−2,879) despite the shared fixture/helpers being added on top | [E2E] Worker-scoped Playwright server fixture (P5) — done; see §3 E2E |
-| 3 | Web unit suite is one 4,965-line file; failures hard to localize | [Unit/Web] Split into per-module files (P3) |
-| 4 | **Resolved**: no coverage measurement existed for web unit; `npm run test:unit:coverage` added, per-file baselines re-measured post-split (§2, incl. the stable total line + parse recipe for CI) | [Unit/Web] Coverage script + baselines (P3) — done; unblocks #8 |
-| 5 | Batch rollup queries (`OpenTaskCounts`, `ProjectReport` agg, `OpenBlockersByTasks`, …) at 0% despite production use | [Unit/Go] Cover zero-coverage batch aggregates (P3) |
-| 6 | cmd/ravn-exec 45.2%, cmd/ravn-server 62.5% — lowest packages; flag/env/shutdown paths untested | [Unit/Go] Raise cmd package coverage (P3) |
-| 7 | api.ts 69.7% lines (SSE + error paths), focus.ts 41.7% functions | [Unit/Web] Close api.ts/focus.ts gaps (P3) |
-| 8 | **Resolved (2026-10-31)**: CI now runs both instrumented suites once each, prints per-package (Go) and per-file (web unit) coverage plus totals, and enforces ratcheting floors (Go ≥ 80% statements, web unit ≥ 65% lines) via a shared `scripts/ci/coverage-gate.sh` step present in both workflows — see §2 "How to ratchet the floors" | [CI] Coverage reporting + ratcheting gates (P3; blocked by #4) — done |
-| 9 | **Resolved (2026-10-30)**: E2E flake policy landed — `retries: process.env.CI ? 1 : 0` in `playwright.config.ts`, plus an `e2e/flake-reporter.ts` `onEnd` hook that surfaces pass-via-retry (flaky) tests; the wall-clock expiry waits in `claim-expired`/`stalled-filter` (`ttl_sec=1`) were replaced by bounded ≤3s auto-retrying `expect()s` (the app re-renders expired/stalled state live via a 1s `nowTick`) | [E2E] Flake policy: bounded retries + timing audit (P3) — done; see §3 E2E |
-| 10 | Test LOC ratio 2.2:1 with legacy "challenger/stress_rN" files overlapping regular tests; inconsistent naming | [Test] Deduplicate adversarial Go tests (P2) |
+| 1 | **Resolved (2026-10-30, 41a6479)**: `TestAdversarial_SSE_StalledClientPipeWriteDeadline` took 10.3s on the hard-coded 10s SSE write deadline; the deadline is now injectable via `Deps.SSEWriteDeadline` (production default stays 10s, pinned by `TestEvents_SSE_DefaultWriteDeadline`), the stalled-client test uses an injected 250ms (10.3s → 0.26s), the http package fell 12.7s → ~3.2s wall and the full Go suite 23s → 3.6s | [Perf/Test] Make SSE per-write deadline configurable (P5) — done; see §3 Go |
+| 2 | **Resolved (2026-10-30, 33e1255)**: per-spec scaffolding (~1,000 LOC, 79 hooks, 38 startups/run) replaced by a worker-scoped Playwright server fixture; `web/e2e/` total LOC fell 15,727 → 12,848 (−2,879) despite the shared fixture/helpers being added on top | [E2E] Worker-scoped Playwright server fixture (P5) — done; see §3 E2E |
+| 3 | **Resolved (2026-10-31, ad85bb8)**: the 4,965-line monolith was split into 9 per-module files + `test-helpers.ts`; all original test titles byte-identical | [Unit/Web] Split into per-module files (P3) — done; see §3 Web unit |
+| 4 | **Resolved (2026-10-31, 7a93084)**: no coverage measurement existed for web unit; `npm run test:unit:coverage` added, per-file baselines re-measured post-split (§2, incl. the stable total line + parse recipe for CI) | [Unit/Web] Coverage script + baselines (P3) — done; unblocks #8 |
+| 5 | **Resolved (2026-10-31, e5bc919)**: all seven batch rollup queries that sat at 0% despite production use now measure ≥80% (§2 lists the exact values); Go total rose to 83.9% | [Unit/Go] Cover zero-coverage batch aggregates (P3) — done; see §2 |
+| 6 | **Resolved (2026-10-31, f430f84)**: cmd/ravn-exec 45.2% → 90.8%, cmd/ravn-server 62.5% → 90.1%; flag/env/shutdown paths covered via the `parseCLIArgs`/`run()` seams with real end-to-end fakes and full-boot tests | [Unit/Go] Raise cmd package coverage (P3) — done; see §2 |
+| 7 | **Resolved (2026-10-31, 44bfcfd)**: api.ts lines 71.37% → 88.21% (funcs 47.92% → 97.92%), focus.ts lines 52.31% → 93.85% (funcs 41.67% → 100%) via mocked-fetch + hand-rolled DOM-fake unit tests | [Unit/Web] Close api.ts/focus.ts gaps (P3) — done; see §2 |
+| 8 | **Resolved (2026-10-31, 53e53d3)**: CI now runs both instrumented suites once each, prints per-package (Go) and per-file (web unit) coverage plus totals, and enforces ratcheting floors (Go ≥ 80% statements, web unit ≥ 65% lines) via a shared `scripts/ci/coverage-gate.sh` step present in both workflows — see §2 "How to ratchet the floors" | [CI] Coverage reporting + ratcheting gates (P3; blocked by #4) — done |
+| 9 | **Resolved (2026-10-31, 2d9f294)**: E2E flake policy landed — `retries: process.env.CI ? 1 : 0` in `playwright.config.ts`, plus an `e2e/flake-reporter.ts` `onEnd` hook that surfaces pass-via-retry (flaky) tests; the wall-clock expiry waits in `claim-expired`/`stalled-filter` (`ttl_sec=1`) were replaced by bounded ≤3s auto-retrying `expect()s` (the app re-renders expired/stalled state live via a 1s `nowTick`; the one exception is the claim-hint TEXT, which reads `Date.now()` directly — see §3 E2E) | [E2E] Flake policy: bounded retries + timing audit (P3; blocked by #2) — done; see §3 E2E |
+| 10 | **Resolved (2026-10-31, 7f976e2 + 2954d06)**: −814 LOC of verified pure duplication removed from the legacy "challenger/stress_rN" files with ZERO coverage regression (per-function diff of before/after coverprofiles: 463 functions, none dropped); Go test LOC 38,894 → 38,080 (net growth vs the pre-epic 37,182 baseline is real added coverage tests, §2). Naming standardized: hostile-input tests live in `*_adversarial_test.go` per package (`cmd/ravn-mcp/adversarial_test.go` kept its descriptive name), no milestone-style names remain repo-wide | [Test] Deduplicate adversarial Go tests (P2) — done; see §3 Go |
 
 Not actioned (deliberate, documented): per-test screenshots on passing tests
 (QA evidence workflow, AGENTS.md); `fullyParallel: false` with file-level
 parallelism (current wall time is fine); absence of a vitest/jest framework
 (node:test + jiti is intentionally dependency-light).
+
+## Post-epic state (2026-10-30)
+
+Epic `01M6735WRK6XC46HQCSYGAEYVC` (test-suite audit remediation, 10 children)
+is complete. Final verification pass (fresh full-suite run, 2026-10-31,
+12-core / 64GB Linux):
+
+- **Go total statement coverage: 83.9%** (floor ≥80%). All seven former
+  zero-coverage batch rollup functions now measure ≥80% (§2). Per-package
+  minimum is sqlite at 77.5%.
+- **Web unit line coverage: 69.35%** locally on Node 26 (`src/` only); the
+  CI-pinned Node 22 reporter reads ~82.35% (it includes `web/test/*.test.ts`)
+  — both clear the ≥65% floor. api.ts 88.21% / focus.ts 93.85% lines; app.ts
+  (66.54%) is now the largest remaining gap.
+- **Go test LOC: 38,080** across 91 `*_test.go` files (pre-epic baseline
+  37,182). The dedupe removed −814 lines of verified-safe pure duplication with
+  zero coverage regression; the net growth over the baseline is real added
+  coverage tests (C1/C2/B1–B3). Naming convention in effect: hostile-input
+  tests live in `*_adversarial_test.go`; no `stress_rN`/milestone-style names
+  remain (a repo-wide grep finds only a descriptive actor name `"challenger"`
+  in fixture data, not milestone naming).
+- **CI floors active**: Go ≥80% statements and web unit ≥65% lines are enforced
+  in both `.github/workflows/ci.yml` and `.forgejo/workflows/ci.yml` via the
+  shared `scripts/ci/coverage-gate.sh` step (E1, 53e53d3). Ratchet procedure:
+  §2.
+- **E2E flake policy**: `retries: process.env.CI ? 1 : 0` + `e2e/flake-reporter.ts`
+  surfacing pass-only-via-retry tests (D2, 2d9f294). Suite: 175 tests green in
+  ~43s wall; one shared `ravn-server` per worker with a bounded
+  `isolatedServer` opt-out for the few global-state specs.
+- All ten child tasks are status=done with linked/attached evidence (commit
+  SHAs in the findings index above).
 
 ## 6. What "good" looks like for new tests
 
