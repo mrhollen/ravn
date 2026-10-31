@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -22,168 +21,85 @@ import (
 	"github.com/mrhollen/ravn/internal/mcp"
 )
 
-// TestAdversarial_AuthPermutations verifies the full matrix of endpoints and auth permutations
-// under both empty and configured RAVN_TOKEN environments.
+// TestAdversarial_AuthPermutations pins auth edge cases that the standard withAuth tests
+// do not cover: tab-separated Bearer headers, header/query precedence when both are
+// supplied, wrong query key names, and the invariant that an empty RAVN_TOKEN never
+// yields 401 no matter what credentials arrive.
 func TestAdversarial_AuthPermutations(t *testing.T) {
 	const secret = "secret123"
 
-	dummyMcpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"result":"ok"}`))
-	})
+	}))
 
-	mux := http.NewServeMux()
-	mux.Handle("/mcp", dummyMcpHandler)
-	mux.Handle("/sse", dummyMcpHandler)
-	mux.Handle("/message", dummyMcpHandler)
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-
-	t.Run("RAVN_TOKEN_empty_allows_all", func(t *testing.T) {
+	t.Run("empty token never returns 401", func(t *testing.T) {
 		handler := withAuth("", mux)
-		endpoints := []string{"/mcp", "/sse", "/message", "/healthz", "/unmapped"}
-		authVariations := []struct {
+		cases := []struct {
 			name   string
 			header string
 			query  string
 		}{
 			{"no auth", "", ""},
 			{"wrong bearer", "Bearer wrong", ""},
-			{"valid bearer", "Bearer secret123", ""},
+			{"valid bearer", "Bearer " + secret, ""},
 			{"wrong query", "", "token=wrong"},
-			{"valid query", "", "token=secret123"},
+			{"valid query", "", "token=" + secret},
 		}
-
-		for _, ep := range endpoints {
-			for _, av := range authVariations {
-				t.Run(ep+"_"+av.name, func(t *testing.T) {
+		for _, ep := range []string{"/mcp", "/unmapped"} {
+			for _, c := range cases {
+				t.Run(ep+"_"+c.name, func(t *testing.T) {
 					path := ep
-					if av.query != "" {
-						path += "?" + av.query
+					if c.query != "" {
+						path += "?" + c.query
 					}
 					req := httptest.NewRequest(http.MethodPost, path, nil)
-					if ep == "/healthz" {
-						req = httptest.NewRequest(http.MethodGet, path, nil)
-					}
-					if av.header != "" {
-						req.Header.Set("Authorization", av.header)
+					if c.header != "" {
+						req.Header.Set("Authorization", c.header)
 					}
 					rec := httptest.NewRecorder()
 					handler.ServeHTTP(rec, req)
 
-					// When token is empty, unmapped returns 404; everything else returns 200.
-					// Under NO circumstance should it return 401.
 					if rec.Code == http.StatusUnauthorized {
-						t.Fatalf("expected path %s not to return 401 when token is empty, got 401", ep)
+						t.Fatalf("%s with %q: empty token must never yield 401", ep, c.name)
 					}
-					if ep == "/unmapped" {
-						if rec.Code != http.StatusNotFound {
-							t.Fatalf("expected unmapped to return 404, got %d", rec.Code)
-						}
-					} else {
-						if rec.Code != http.StatusOK {
-							t.Fatalf("expected %s to return 200, got %d", ep, rec.Code)
-						}
+					if ep == "/unmapped" && rec.Code != http.StatusNotFound {
+						t.Fatalf("%s: want 404, got %d", ep, rec.Code)
+					}
+					if ep == "/mcp" && rec.Code != http.StatusOK {
+						t.Fatalf("%s: want 200, got %d", ep, rec.Code)
 					}
 				})
 			}
 		}
 	})
 
-	t.Run("RAVN_TOKEN_configured_gating", func(t *testing.T) {
+	t.Run("configured token edge cases", func(t *testing.T) {
 		handler := withAuth(secret, mux)
-
-		type testCase struct {
-			name       string
-			path       string
-			method     string
-			header     string
-			wantStatus int
+		cases := []struct {
+			name   string
+			path   string
+			header string
+			want   int
+		}{
+			{"tab separated bearer rejected", "/mcp", "Bearer\t" + secret, http.StatusUnauthorized},
+			{"wrong query key name rejected", "/mcp?auth=" + secret, "", http.StatusUnauthorized},
+			{"valid header beats invalid query", "/mcp?token=wrong", "Bearer " + secret, http.StatusOK},
+			{"invalid header falls back to valid query", "/mcp?token=" + secret, "Bearer wrong", http.StatusOK},
+			{"invalid header and invalid query rejected", "/mcp?token=wrong", "Bearer wrong", http.StatusUnauthorized},
 		}
-
-		cases := []testCase{
-			// 1. Missing header / query -> 401 on gated routes
-			{"missing auth /mcp", "/mcp", http.MethodPost, "", http.StatusUnauthorized},
-			{"missing auth /sse", "/sse", http.MethodGet, "", http.StatusUnauthorized},
-			{"missing auth /message", "/message", http.MethodPost, "", http.StatusUnauthorized},
-
-			// 2. Wrong token -> 401
-			{"wrong token /mcp", "/mcp", http.MethodPost, "Bearer wrong", http.StatusUnauthorized},
-			{"wrong token /sse", "/sse", http.MethodGet, "Bearer wrong", http.StatusUnauthorized},
-			{"wrong token /message", "/message", http.MethodPost, "Bearer wrong", http.StatusUnauthorized},
-
-			// 3. Case insensitive Bearer scheme -> 200
-			{"Bearer lowercase", "/mcp", http.MethodPost, "bearer " + secret, http.StatusOK},
-			{"Bearer uppercase", "/mcp", http.MethodPost, "BEARER " + secret, http.StatusOK},
-			{"Bearer mixed", "/mcp", http.MethodPost, "bEaReR " + secret, http.StatusOK},
-			{"Bearer standard", "/mcp", http.MethodPost, "Bearer " + secret, http.StatusOK},
-
-			// 4. Malformed headers -> 401
-			{"no space between scheme and token", "/mcp", http.MethodPost, "Bearer" + secret, http.StatusUnauthorized},
-			{"wrong scheme Basic", "/mcp", http.MethodPost, "Basic " + secret, http.StatusUnauthorized},
-			{"wrong scheme Token", "/mcp", http.MethodPost, "Token " + secret, http.StatusUnauthorized},
-			{"scheme only no token", "/mcp", http.MethodPost, "Bearer", http.StatusUnauthorized},
-			{"scheme with single trailing space", "/mcp", http.MethodPost, "Bearer ", http.StatusUnauthorized},
-			{"scheme with multiple trailing spaces", "/mcp", http.MethodPost, "Bearer    ", http.StatusUnauthorized},
-			{"extra tokens in header", "/mcp", http.MethodPost, "Bearer " + secret + " extra", http.StatusUnauthorized},
-			{"tab separated header", "/mcp", http.MethodPost, "Bearer\t" + secret, http.StatusUnauthorized},
-
-			// 5. Query param authentication
-			{"valid query param /mcp", "/mcp?token=" + secret, http.MethodPost, "", http.StatusOK},
-			{"valid query param /sse", "/sse?token=" + secret, http.MethodGet, "", http.StatusOK},
-			{"valid query param /message", "/message?token=" + secret, http.MethodPost, "", http.StatusOK},
-			{"valid query with additional params", "/mcp?foo=bar&token=" + secret + "&baz=1", http.MethodPost, "", http.StatusOK},
-			{"invalid query param", "/mcp?token=wrong", http.MethodPost, "", http.StatusUnauthorized},
-			{"empty query param", "/mcp?token=", http.MethodPost, "", http.StatusUnauthorized},
-			{"wrong query key", "/mcp?auth=" + secret, http.MethodPost, "", http.StatusUnauthorized},
-
-			// 6. Header + Query combinations
-			{"valid header + invalid query", "/mcp?token=wrong", http.MethodPost, "Bearer " + secret, http.StatusOK},
-			{"invalid header + valid query (fallback)", "/mcp?token=" + secret, http.MethodPost, "Bearer wrong", http.StatusOK},
-			{"invalid header + invalid query", "/mcp?token=wrong", http.MethodPost, "Bearer wrong", http.StatusUnauthorized},
-
-			// 7. /healthz is never gated
-			{"healthz without auth", "/healthz", http.MethodGet, "", http.StatusOK},
-			{"healthz with wrong auth header", "/healthz", http.MethodGet, "Bearer wrong", http.StatusOK},
-			{"healthz with wrong auth query", "/healthz?token=wrong", http.MethodGet, "", http.StatusOK},
-			{"healthz with valid auth", "/healthz", http.MethodGet, "Bearer " + secret, http.StatusOK},
-
-			// 8. Unmapped paths
-			{"unmapped without auth", "/unmapped", http.MethodGet, "", http.StatusNotFound},
-			{"unmapped with auth", "/unmapped", http.MethodGet, "Bearer " + secret, http.StatusNotFound},
-		}
-
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				req := httptest.NewRequest(tc.method, tc.path, nil)
+				req := httptest.NewRequest(http.MethodPost, tc.path, nil)
 				if tc.header != "" {
 					req.Header.Set("Authorization", tc.header)
 				}
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, req)
-
-				if rec.Code != tc.wantStatus {
-					t.Fatalf("expected status %d for %s, got %d (body: %s)", tc.wantStatus, tc.name, rec.Code, rec.Body.String())
-				}
-
-				if tc.wantStatus == http.StatusUnauthorized {
-					ct := rec.Header().Get("Content-Type")
-					if !strings.HasPrefix(ct, "application/json") {
-						t.Errorf("expected Content-Type application/json for 401, got %q", ct)
-					}
-					var errResp map[string]any
-					if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-						t.Fatalf("failed to parse 401 error response JSON: %v", err)
-					}
-					if errResp["error"] != "unauthorized" {
-						t.Errorf("expected error='unauthorized', got %v", errResp["error"])
-					}
-					if errResp["message"] != "missing or invalid auth token" {
-						t.Errorf("expected message='missing or invalid auth token', got %v", errResp["message"])
-					}
+				if rec.Code != tc.want {
+					t.Fatalf("%s: want %d, got %d (body: %s)", tc.name, tc.want, rec.Code, rec.Body.String())
 				}
 			})
 		}
@@ -585,51 +501,6 @@ func TestAdversarial_NoBodyBufferingOn401(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 Unauthorized, got %d", rec.Code)
-	}
-}
-
-// TestAdversarial_AllHTTPMethodsGated verifies that withAuth gates all HTTP methods
-// on /mcp, /sse, and /message when token is set.
-func TestAdversarial_AllHTTPMethodsGated(t *testing.T) {
-	const secret = "method-secret-999"
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	handler := withAuth(secret, inner)
-
-	methods := []string{
-		http.MethodGet,
-		http.MethodPost,
-		http.MethodPut,
-		http.MethodDelete,
-		http.MethodPatch,
-		http.MethodHead,
-		http.MethodOptions,
-	}
-
-	routes := []string{"/mcp", "/sse", "/message"}
-
-	for _, route := range routes {
-		for _, m := range methods {
-			t.Run(route+"_"+m, func(t *testing.T) {
-				// Unauthenticated -> 401
-				reqNoAuth := httptest.NewRequest(m, route, nil)
-				recNoAuth := httptest.NewRecorder()
-				handler.ServeHTTP(recNoAuth, reqNoAuth)
-				if recNoAuth.Code != http.StatusUnauthorized {
-					t.Fatalf("expected method %s on %s without auth to return 401, got %d", m, route, recNoAuth.Code)
-				}
-
-				// Authenticated -> 200
-				reqAuth := httptest.NewRequest(m, route, nil)
-				reqAuth.Header.Set("Authorization", "Bearer "+secret)
-				recAuth := httptest.NewRecorder()
-				handler.ServeHTTP(recAuth, reqAuth)
-				if recAuth.Code != http.StatusOK {
-					t.Fatalf("expected method %s on %s with auth to return 200, got %d", m, route, recAuth.Code)
-				}
-			})
-		}
 	}
 }
 

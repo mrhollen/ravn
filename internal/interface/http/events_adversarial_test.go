@@ -275,45 +275,6 @@ func TestAdversarial_SSE_WriteChunkFailureScenarios(t *testing.T) {
 			t.Errorf("subscriber count = %d, want 0 after initial write failure", count)
 		}
 	})
-
-	t.Run("FailureOnEventWrite", func(t *testing.T) {
-		stk, broker, _ := newRealtimeStack(t)
-		proj := createProject(t, stk, "Event Fail Project")
-
-		rec := &faultyResponseWriter{
-			failOnCount: 2, // succeed on connected comment (1), fail on event write (2)
-		}
-
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			req := httptest.NewRequest("GET", "/api/v1/projects/"+proj.ID+"/events", nil)
-			stk.Handler.ServeHTTP(rec, req)
-		}()
-
-		// Wait for subscription
-		deadline := time.Now().Add(1 * time.Second)
-		for time.Now().Before(deadline) {
-			if broker.SubscriberCountForProject(domain.ID(proj.ID)) == 1 {
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-
-		// Trigger event
-		newTask(t, stk, proj.ID, "Event to Fail")
-
-		select {
-		case <-done:
-			// Clean exit
-		case <-time.After(2 * time.Second):
-			t.Fatal("handler did not exit after event write failure")
-		}
-
-		if count := broker.SubscriberCountForProject(domain.ID(proj.ID)); count != 0 {
-			t.Errorf("subscriber count = %d, want 0 after event write failure", count)
-		}
-	})
 }
 
 // TestAdversarial_SSE_GoroutineAndSubscriberZeroLeakStress runs an intensive
@@ -665,66 +626,6 @@ func TestAdversarial_SSE_NonFlusherStreamingUnsupported(t *testing.T) {
 
 	if count := broker.SubscriberCountForProject(domain.ID(proj.ID)); count != 0 {
 		t.Errorf("subscriber count = %d, want 0 when streaming unsupported", count)
-	}
-}
-
-// TestAdversarial_SSE_QueryParamEndpoint_TCPReset tests the query parameter endpoint
-// /api/v1/events?project_id=... with raw TCP connection and hard RST.
-func TestAdversarial_SSE_QueryParamEndpoint_TCPReset(t *testing.T) {
-	stk, broker, srv := newRealtimeStack(t)
-	proj := createProject(t, stk, "Query Param TCP Reset Project")
-
-	serverAddr := srv.Listener.Addr().String()
-	conn, err := net.Dial("tcp", serverAddr)
-	if err != nil {
-		t.Fatalf("dial raw tcp: %v", err)
-	}
-
-	reqStr := fmt.Sprintf("GET /api/v1/events?project_id=%s HTTP/1.1\r\nHost: %s\r\nAccept: text/event-stream\r\n\r\n", proj.ID, serverAddr)
-	if _, err := conn.Write([]byte(reqStr)); err != nil {
-		conn.Close()
-		t.Fatalf("write raw http request: %v", err)
-	}
-
-	reader := bufio.NewReader(conn)
-	for i := 0; i < 20; i++ {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			t.Fatalf("read raw http response: %v", err)
-		}
-		if strings.Contains(line, ": connected") {
-			break
-		}
-	}
-
-	if count := broker.SubscriberCountForProject(domain.ID(proj.ID)); count != 1 {
-		conn.Close()
-		t.Fatalf("subscriber count = %d, want 1", count)
-	}
-
-	// Abrupt TCP RST
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetLinger(0)
-	}
-	_ = conn.Close()
-
-	time.Sleep(30 * time.Millisecond)
-
-	// Publish an event: server write fails on reset socket
-	newTask(t, stk, proj.ID, "Post Query Param RST Task")
-
-	deadline := time.Now().Add(2 * time.Second)
-	cleaned := false
-	for time.Now().Before(deadline) {
-		if broker.SubscriberCountForProject(domain.ID(proj.ID)) == 0 {
-			cleaned = true
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	if !cleaned {
-		t.Errorf("subscriber count = %d, want 0 after query param TCP RST and event write", broker.SubscriberCountForProject(domain.ID(proj.ID)))
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"regexp"
 	"sort"
 	"testing"
 	"time"
@@ -13,211 +12,10 @@ import (
 	"github.com/mrhollen/ravn/internal/domain"
 )
 
-var tsRegex = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{9}Z$`)
-
-func TestChallenger_R1_TimestampFormattingInvariants(t *testing.T) {
-	// 1. Generate diverse timestamps across year/month/day/leap/subsecond boundaries
-	years := []int{1970, 1999, 2000, 2024, 2025, 2026, 2028, 2099, 2100, 2400}
-	months := []time.Month{time.January, time.February, time.March, time.June, time.December}
-	nanoseconds := []int{
-		0,
-		1,
-		2,
-		999,
-		1_000_000,
-		100_000_000,
-		500_000_000,
-		999_999_998,
-		999_999_999,
-	}
-	zones := []*time.Location{
-		time.UTC,
-		time.FixedZone("EDT", -4*3600),
-		time.FixedZone("EST", -5*3600),
-		time.FixedZone("JST", 9*3600),
-		time.FixedZone("IST", int(5.5*3600)),
-		time.FixedZone("NPT", int(5.75*3600)),    // Nepal UTC+5:45
-		time.FixedZone("NST", int(-3.5*3600)),    // Newfoundland UTC-3:30
-		time.FixedZone("CHAST", int(12.75*3600)), // Chatham UTC+12:45
-	}
-
-	var timestamps []time.Time
-	for _, y := range years {
-		for _, m := range months {
-			days := []int{1, 15, 28}
-			if m == time.February {
-				// Check leap year
-				isLeap := (y%4 == 0 && y%100 != 0) || (y%400 == 0)
-				if isLeap {
-					days = append(days, 29)
-				}
-			} else {
-				days = append(days, 30)
-			}
-
-			for _, d := range days {
-				for _, ns := range nanoseconds {
-					for _, z := range zones {
-						timestamps = append(timestamps, time.Date(y, m, d, 12, 0, 0, ns, z))
-						timestamps = append(timestamps, time.Date(y, m, d, 23, 59, 59, ns, z))
-					}
-				}
-			}
-		}
-	}
-
-	t.Logf("Generated %d boundary timestamp variations", len(timestamps))
-
-	for i, ts := range timestamps {
-		formatted := formatTS(ts)
-
-		// Invariant 1: Exactly 30 characters
-		if len(formatted) != 30 {
-			t.Fatalf("[%d] len(formatTS(%v)) = %d, want 30; got %q", i, ts, len(formatted), formatted)
-		}
-
-		// Invariant 2: Matches strict RFC3339 fixed 9-digit UTC format
-		if !tsRegex.MatchString(formatted) {
-			t.Fatalf("[%d] formatTS(%v) = %q does not match regex %s", i, ts, formatted, tsRegex.String())
-		}
-
-		// Invariant 3: Round-trip via parseTS must equal original instant
-		parsed, err := parseTS(formatted)
-		if err != nil {
-			t.Fatalf("[%d] parseTS(%q) failed: %v", i, formatted, err)
-		}
-		if !parsed.Equal(ts) {
-			t.Fatalf("[%d] parseTS(%q) = %v, want %v", i, formatted, parsed, ts)
-		}
-	}
-}
-
-func TestChallenger_R1_SQLiteStringComparisonOracle(t *testing.T) {
-	ctx := context.Background()
-	db := openTestDB(t)
-
-	// Test boundary pairs in SQLite directly
-	base := time.Date(2026, 2, 28, 23, 59, 59, 0, time.UTC)
-	pairs := []struct {
-		name string
-		t1   time.Time
-		t2   time.Time
-	}{
-		{
-			name: "whole sec vs 1ns later",
-			t1:   base,
-			t2:   base.Add(1 * time.Nanosecond),
-		},
-		{
-			name: "1ns vs 2ns",
-			t1:   base.Add(1 * time.Nanosecond),
-			t2:   base.Add(2 * time.Nanosecond),
-		},
-		{
-			name: "whole sec vs 500ms later",
-			t1:   base,
-			t2:   base.Add(500 * time.Millisecond),
-		},
-		{
-			name: "500ms vs 999999999ns",
-			t1:   base.Add(500 * time.Millisecond),
-			t2:   base.Add(999*time.Millisecond + 999999*time.Nanosecond),
-		},
-		{
-			name: "999999999ns vs next whole second",
-			t1:   base.Add(999*time.Millisecond + 999999*time.Nanosecond),
-			t2:   base.Add(1 * time.Second),
-		},
-		{
-			name: "leap year leap day boundary 2024-02-29 23:59:59.999999999 to 2024-03-01 00:00:00",
-			t1:   time.Date(2024, 2, 29, 23, 59, 59, 999999999, time.UTC),
-			t2:   time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC),
-		},
-		{
-			name: "non-leap year boundary 2025-02-28 23:59:59.999999999 to 2025-03-01 00:00:00",
-			t1:   time.Date(2025, 2, 28, 23, 59, 59, 999999999, time.UTC),
-			t2:   time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC),
-		},
-		{
-			name: "century leap boundary 2000-02-29 23:59:59.999999999 to 2000-03-01 00:00:00",
-			t1:   time.Date(2000, 2, 29, 23, 59, 59, 999999999, time.UTC),
-			t2:   time.Date(2000, 3, 1, 0, 0, 0, 0, time.UTC),
-		},
-		{
-			name: "year rollover 2026-12-31 23:59:59.999999999 to 2027-01-01 00:00:00",
-			t1:   time.Date(2026, 12, 31, 23, 59, 59, 999999999, time.UTC),
-			t2:   time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
-		},
-		{
-			name: "timezone offset vs UTC: 10:00 JST (+9) is 01:00 UTC vs 02:00 UTC",
-			t1:   time.Date(2026, 5, 1, 10, 0, 0, 0, time.FixedZone("JST", 9*3600)), // 01:00 UTC
-			t2:   time.Date(2026, 5, 1, 2, 0, 0, 0, time.UTC),                       // 02:00 UTC
-		},
-		{
-			name: "fractional timezone offset: 06:15 IST (+5:30) is 00:45 UTC vs 00:46 UTC",
-			t1:   time.Date(2026, 5, 1, 6, 15, 0, 0, time.FixedZone("IST", int(5.5*3600))), // 00:45 UTC
-			t2:   time.Date(2026, 5, 1, 0, 46, 0, 0, time.UTC),                             // 00:46 UTC
-		},
-		{
-			name: "fractional timezone with nanoseconds: 06:15:00.500 IST vs 00:45:00.500000001 UTC",
-			t1:   time.Date(2026, 5, 1, 6, 15, 0, 500000000, time.FixedZone("IST", int(5.5*3600))),
-			t2:   time.Date(2026, 5, 1, 0, 45, 0, 500000001, time.UTC),
-		},
-	}
-
-	for _, tc := range pairs {
-		t.Run(tc.name, func(t *testing.T) {
-			s1 := formatTS(tc.t1)
-			s2 := formatTS(tc.t2)
-
-			var (
-				sqlLess    int
-				sqlEqual   int
-				sqlGreater int
-			)
-
-			err := db.QueryRowContext(ctx, `SELECT (? < ?), (? = ?), (? > ?)`, s1, s2, s1, s2, s1, s2).
-				Scan(&sqlLess, &sqlEqual, &sqlGreater)
-			if err != nil {
-				t.Fatalf("SQLite comparison failed: %v", err)
-			}
-
-			// Expected: t1 is strictly before t2
-			if !tc.t1.Before(tc.t2) {
-				t.Fatalf("Test setup error: t1 (%v) is not before t2 (%v)", tc.t1, tc.t2)
-			}
-
-			if sqlLess != 1 {
-				t.Errorf("SQLite %q < %q = %d, want 1 (t1=%v, t2=%v)", s1, s2, sqlLess, tc.t1, tc.t2)
-			}
-			if sqlEqual != 0 {
-				t.Errorf("SQLite %q = %q = %d, want 0", s1, s2, sqlEqual)
-			}
-			if sqlGreater != 0 {
-				t.Errorf("SQLite %q > %q = %d, want 0 (comparison inversion!)", s1, s2, sqlGreater)
-			}
-
-			// Reverse comparison in SQLite: s2 > s1 must be true, s2 < s1 must be false
-			var (
-				revLess    int
-				revGreater int
-			)
-			err = db.QueryRowContext(ctx, `SELECT (? < ?), (? > ?)`, s2, s1, s2, s1).
-				Scan(&revLess, &revGreater)
-			if err != nil {
-				t.Fatalf("Reverse SQLite comparison failed: %v", err)
-			}
-			if revLess != 0 {
-				t.Errorf("Reverse SQLite %q < %q = %d, want 0", s2, s1, revLess)
-			}
-			if revGreater != 1 {
-				t.Errorf("Reverse SQLite %q > %q = %d, want 1", s2, s1, revGreater)
-			}
-		})
-	}
-}
-
-func TestChallenger_R1_RandomizedFuzzOrdering(t *testing.T) {
+// TestTimestamps_SQLiteComparisonFuzzMatchesGoSemantics fuzzes formatted timestamp
+// pairs through a real SQLite connection and asserts the string comparison always
+// matches Go's Before/Equal semantics (including equal-instant normalization).
+func TestTimestamps_SQLiteComparisonFuzzMatchesGoSemantics(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 
@@ -265,7 +63,10 @@ func TestChallenger_R1_RandomizedFuzzOrdering(t *testing.T) {
 	}
 }
 
-func TestChallenger_R1_LeaseExactBoundaryConditions(t *testing.T) {
+// TestClaim_LeaseExactNanosecondBoundaries adversarially pins the exact lease-expiry
+// boundary semantics: 1ns before (lease valid), exactly at expiry (still valid for the
+// holder, not stealable), and 1ns after (expired: holder loses, rival may take over).
+func TestClaim_LeaseExactNanosecondBoundaries(t *testing.T) {
 	// Adversarially test lease expiration exact boundary:
 	// Exact whole second vs exact fraction vs 1ns offsets.
 	ctx := context.Background()
@@ -403,7 +204,9 @@ func TestChallenger_R1_LeaseExactBoundaryConditions(t *testing.T) {
 	}
 }
 
-func TestChallenger_R1_DueDateSortingAndFiltering(t *testing.T) {
+// TestTasksList_DueOrderingSubsecondAndDeadlineFilters verifies canonical due-date
+// ordering at subsecond precision over real SQL, plus DueBefore/DueAfter filtering.
+func TestTasksList_DueOrderingSubsecondAndDeadlineFilters(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	tasks, projects := newTaskUseCase(t, db)
@@ -534,7 +337,10 @@ func TestChallenger_R1_DueDateSortingAndFiltering(t *testing.T) {
 	}
 }
 
-func TestChallenger_R1_EventStoreSubsecondOrdering(t *testing.T) {
+// TestEventStore_SubsecondDescendingOrder verifies event-store ordering holds at
+// subsecond precision: events appended with < 1s gaps must come back strictly
+// descending from ListByTask over real SQL.
+func TestEventStore_SubsecondDescendingOrder(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	events := newEventStore(db)

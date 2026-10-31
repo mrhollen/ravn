@@ -121,8 +121,8 @@ cd web && npm run test:unit:coverage
 - Table-driven tests with named cases; keep one concern per `func Test...`.
 - Adversarial/hostile-input tests live in `*_adversarial_test.go`
   (timestamp boundaries, lease races, auth gating, body limits). Do not use
-  milestone-style names like `stress_rN` for new files (legacy ones are being
-  consolidated — see findings index).
+  milestone-style names like `stress_rN` — the legacy stress/challenger files
+  are consolidated into the per-package adversarial test files.
 - Shared setup per package: sqlite tests use `openTestDB(t)` from db_test.go;
   http tests use the `newStack`/`doReq` helpers in http_test.go. Reuse these —
   do not re-create pools or clients per test file.

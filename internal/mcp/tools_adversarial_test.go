@@ -24,13 +24,16 @@ import (
 )
 
 // ======================================================================================
-// R7 EMPIRICAL TESTS: MCP clear_due & clear_assignee Tool Schema & Round-Trip
+// ADVERSARIAL update_task TOOL TESTS: schema shape, conflicting inputs, and live
+// SQLite round-trips. Wire-level type rejections and flag-default mapping are covered
+// by tools_test.go (TestUpdateTaskClearDueAndAssigneeRoundTrip et al.) — do not
+// duplicate them here.
 // ======================================================================================
 
-// TestChallenger_R7_ToolSchemaDefinition directly inspects the JSON schema of update_task
-// as registered with the MCP server to verify that clear_due and clear_assignee are exposed
-// as booleans with appropriate descriptions.
-func TestChallenger_R7_ToolSchemaDefinition(t *testing.T) {
+// TestUpdateTaskSchema_ClearFlagsExposedAsBooleans directly inspects the JSON schema of
+// update_task as registered with the MCP server to verify that clear_due and
+// clear_assignee are exposed as booleans with appropriate descriptions.
+func TestUpdateTaskSchema_ClearFlagsExposedAsBooleans(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -93,165 +96,12 @@ func TestChallenger_R7_ToolSchemaDefinition(t *testing.T) {
 	}
 }
 
-// TestChallenger_R7_SchemaValidation_TypeRejections sends non-boolean values to
-// clear_due and clear_assignee to verify that the MCP server's input schema validator
-// rejects them with isError: true.
-func TestChallenger_R7_SchemaValidation_TypeRejections(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	upstream, _, _ := newMockUpstream(t)
-	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
-	defer func() { _ = c.Close() }()
-
-	invalidValues := []struct {
-		desc  string
-		value any
-	}{
-		{"string 'true'", "true"},
-		{"string 'false'", "false"},
-		{"empty string", ""},
-		{"integer 1", 1},
-		{"integer 0", 0},
-		{"float 1.0", 1.0},
-		{"slice", []any{true}},
-		{"map", map[string]any{"clear": true}},
-	}
-
-	// Test clear_due type rejections
-	for _, tc := range invalidValues {
-		t.Run("clear_due/"+tc.desc, func(t *testing.T) {
-			res := callTool(t, c, ctx, "update_task", map[string]any{
-				"id":        "T1",
-				"version":   4,
-				"clear_due": tc.value,
-			})
-			if !res.IsError {
-				t.Fatalf("expected isError=true for clear_due=%v (%s), got success: %s",
-					tc.value, tc.desc, firstText(t, res))
-			}
-		})
-	}
-
-	// Test clear_assignee type rejections
-	for _, tc := range invalidValues {
-		t.Run("clear_assignee/"+tc.desc, func(t *testing.T) {
-			res := callTool(t, c, ctx, "update_task", map[string]any{
-				"id":             "T1",
-				"version":        4,
-				"clear_assignee": tc.value,
-			})
-			if !res.IsError {
-				t.Fatalf("expected isError=true for clear_assignee=%v (%s), got success: %s",
-					tc.value, tc.desc, firstText(t, res))
-			}
-		})
-	}
-}
-
-// TestChallenger_R7_PayloadMapping_AllPermutations tests all 9 permutations of
-// (clear_due: [omitted, false, true]) x (clear_assignee: [omitted, false, true])
-// to verify exact wire decoding and mapping to apiclient.UpdateTaskRequest.
-func TestChallenger_R7_PayloadMapping_AllPermutations(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	upstream, _, calls := newMockUpstream(t)
-	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
-	defer func() { _ = c.Close() }()
-
-	type testCase struct {
-		name              string
-		args              map[string]any
-		wantClearDue      bool
-		wantClearAssignee bool
-	}
-
-	tests := []testCase{
-		{
-			name:         "omitted_omitted",
-			args:         map[string]any{"id": "T1", "version": 4},
-			wantClearDue: false, wantClearAssignee: false,
-		},
-		{
-			name:         "omitted_false",
-			args:         map[string]any{"id": "T1", "version": 4, "clear_assignee": false},
-			wantClearDue: false, wantClearAssignee: false,
-		},
-		{
-			name:         "omitted_true",
-			args:         map[string]any{"id": "T1", "version": 4, "clear_assignee": true},
-			wantClearDue: false, wantClearAssignee: true,
-		},
-		{
-			name:         "false_omitted",
-			args:         map[string]any{"id": "T1", "version": 4, "clear_due": false},
-			wantClearDue: false, wantClearAssignee: false,
-		},
-		{
-			name:         "false_false",
-			args:         map[string]any{"id": "T1", "version": 4, "clear_due": false, "clear_assignee": false},
-			wantClearDue: false, wantClearAssignee: false,
-		},
-		{
-			name:         "false_true",
-			args:         map[string]any{"id": "T1", "version": 4, "clear_due": false, "clear_assignee": true},
-			wantClearDue: false, wantClearAssignee: true,
-		},
-		{
-			name:         "true_omitted",
-			args:         map[string]any{"id": "T1", "version": 4, "clear_due": true},
-			wantClearDue: true, wantClearAssignee: false,
-		},
-		{
-			name:         "true_false",
-			args:         map[string]any{"id": "T1", "version": 4, "clear_due": true, "clear_assignee": false},
-			wantClearDue: true, wantClearAssignee: false,
-		},
-		{
-			name:         "true_true",
-			args:         map[string]any{"id": "T1", "version": 4, "clear_due": true, "clear_assignee": true},
-			wantClearDue: true, wantClearAssignee: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			callCountBefore := len(*calls)
-			res := callTool(t, c, ctx, "update_task", tt.args)
-			if res.IsError {
-				t.Fatalf("update_task returned unexpected error: %s", firstText(t, res))
-			}
-
-			if len(*calls) != callCountBefore+1 {
-				t.Fatalf("expected 1 new call, got %d", len(*calls)-callCountBefore)
-			}
-			lastCall := (*calls)[len(*calls)-1]
-			if lastCall.method != http.MethodPatch || lastCall.path != "/api/v1/tasks/T1" {
-				t.Fatalf("unexpected call: %s %s", lastCall.method, lastCall.path)
-			}
-
-			var req apiclient.UpdateTaskRequest
-			if err := json.Unmarshal([]byte(lastCall.body), &req); err != nil {
-				t.Fatalf("failed to unmarshal request body: %v", err)
-			}
-
-			if req.ClearDue != tt.wantClearDue {
-				t.Errorf("ClearDue = %v, want %v", req.ClearDue, tt.wantClearDue)
-			}
-			if req.ClearAssignee != tt.wantClearAssignee {
-				t.Errorf("ClearAssignee = %v, want %v", req.ClearAssignee, tt.wantClearAssignee)
-			}
-		})
-	}
-}
-
-// TestChallenger_R7_ConflictingInputs_DeterministicDomain verifies that when an agent
+// TestUpdateTask_ConflictingClearAndSetInputsDeterministic verifies that when an agent
 // sends conflicting inputs (e.g. clear_due: true with due_at: "...", or clear_assignee: true
 // with assignee: {...}):
 // 1. The MCP tool faithfully forwards both values to the API client payload.
 // 2. The domain / application logic deterministically executes the clearing semantics.
-func TestChallenger_R7_ConflictingInputs_DeterministicDomain(t *testing.T) {
+func TestUpdateTask_ConflictingClearAndSetInputsDeterministic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -318,17 +168,17 @@ func TestChallenger_R7_ConflictingInputs_DeterministicDomain(t *testing.T) {
 	})
 }
 
-// TestChallenger_R7_FullStack_LiveSQLiteRoundTrip builds the entire real stack:
+// TestUpdateTask_ClearDueAssigneeFullStackLiveSQLite builds the entire real stack:
 // SQLite on disk (temp file) -> UnitOfWork -> Tasks use case -> HTTP App ->
 // Live HTTP server -> apiclient -> MCP Server -> Streamable HTTP -> mcpclient.Client.
 // It verifies that clear_due and clear_assignee round-trip end-to-end and directly
 // checks the SQLite database columns to prove real database persistence.
-func TestChallenger_R7_FullStack_LiveSQLiteRoundTrip(t *testing.T) {
+func TestUpdateTask_ClearDueAssigneeFullStackLiveSQLite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	// 1. Stand up real SQLite database
-	dbPath := filepath.Join(t.TempDir(), "challenger_r7_live.db")
+	dbPath := filepath.Join(t.TempDir(), "update_task_live_stack.db")
 	db, closeDB, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("sqlite.Open failed: %v", err)
@@ -358,7 +208,7 @@ func TestChallenger_R7_FullStack_LiveSQLiteRoundTrip(t *testing.T) {
 	// 2. Stand up real MCP server pointing to the live HTTP server
 	api := apiclient.New(httpServer.URL, "")
 	mcs := mcpsrv.NewMCPServer("ravn", "1.0.0", ServerOptions()...)
-	RegisterTools(mcs, api, apiclient.Actor{Type: "agent", Name: "challenger-agent"})
+	RegisterTools(mcs, api, apiclient.Actor{Type: "agent", Name: "mcp-adversarial-agent"})
 	streamable := mcpsrv.NewStreamableHTTPServer(mcs,
 		mcpsrv.WithStateLess(true),
 		mcpsrv.WithEndpointPath("/mcp"),
@@ -374,7 +224,7 @@ func TestChallenger_R7_FullStack_LiveSQLiteRoundTrip(t *testing.T) {
 
 	// Step A: Create a project
 	projRes := callTool(t, c, ctx, "create_project", map[string]any{
-		"name":        "Empirical R7 Project",
+		"name":        "Update Task Live Project",
 		"description": "Project for live verification",
 	})
 	if projRes.IsError {
