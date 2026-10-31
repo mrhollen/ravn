@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test:unit": "node --import jiti/register --test test/*.test.ts",
+    "test:unit:coverage": "node --import jiti/register --test --experimental-test-coverage test/*.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

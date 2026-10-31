@@ -9,7 +9,7 @@ are tracked as tasks on the Ravn board (see [Findings index](#findings-index-tas
 | Suite | What it covers | Runner | Size (2026-10-30) | Wall time (local, 12-core) | Coverage |
 |---|---|---|---|---|---|
 | Go unit + integration (`internal/`, `cmd/`) | domain rules, application use-cases, SQLite repos, HTTP handlers, MCP tools | `go test` (+ `-race` in CI) | 86 files, 37,182 LOC (vs 16,948 source LOC → 2.2:1) | **23s** total; `-race` **22s**; slowest package `internal/interface/http` 12.7s | **80.9%** statements total |
-| Web unit (`web/test/`) | pure logic of `web/src/*.ts` (dates, markdown, drafts, API client, board state, moves, refresh, realtime) | `node:test` via `jiti` (`npm run test:unit`) | 1 file, 4,965 LOC, 190 tests | **~8s** | **67.0%** lines / 75.9% branches / 60.5% functions |
+| Web unit (`web/test/`) | pure logic of `web/src/*.ts` (dates, markdown, drafts, API client, board state, moves, refresh, realtime) | `node:test` via `jiti` (`npm run test:unit`; coverage: `npm run test:unit:coverage`) | 9 module files + `test-helpers.ts`, 4,834 LOC, 190 tests | **~8s** | **67.2%** lines / 76.4% branches / 60.5% functions (re-measured post-split) |
 | Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 38 spec files + shared `fixtures.ts`/`helpers.ts`, **12,848** LOC (was 15,727), 175 tests | **~41s** wall (default workers); one shared `ravn-server` per worker (+ a few isolated spins) | not measured (E2E is the integration proof) |
 
 All three run in CI on every push/PR (`.github/workflows/ci.yml`,
@@ -48,25 +48,57 @@ Known **0%-covered production functions** (all confirmed in use, not dead code):
 `OpenTaskCounts`, `ListWithCounts`, `ProjectReport` aggregation,
 `OpenBlockersByTasks`, `SubtaskProgressByParents`, `CountByTask`, `MaxAtByTasks`.
 
-### Web unit — per file (`node --import jiti/register --test --experimental-test-coverage`)
+### Web unit — per file (`npm run test:unit:coverage`)
+
+Re-measured post-split (9 per-module test files + `test-helpers.ts`, 190 tests)
+with Node's built-in plain coverage reporter on Node 26 — zero extra deps.
+Values are the reporter's exact two-decimal output, descending by line %.
 
 | File | Lines | Branches | Functions |
 |---|---|---|---|
-| src/drafts.ts | 100% | 100% | 100% |
-| src/moves.ts | 97.4% | 94.7% | 88.9% |
-| src/refresh.ts | 94.3% | 100% | 89.5% |
-| src/realtime.ts | 78.6% | 95.5% | 100% |
-| src/util.ts | 79.8% | 85.3% | 54.8% |
-| src/api.ts | 69.7% | 69.1% | 47.9% |
-| src/md.ts | 68.6% | 87.5% | 100% |
-| src/app.ts | 66.5% | 73.1% | 59.3% |
-| src/focus.ts | 52.3% | 100% | 41.7% |
+| src/drafts.ts | 100.00% | 100.00% | 100.00% |
+| src/moves.ts | 97.44% | 94.74% | 88.89% |
+| src/refresh.ts | 94.34% | 100.00% | 89.47% |
+| src/util.ts | 80.06% | 86.76% | 54.84% |
+| src/realtime.ts | 79.25% | 95.45% | 100.00% |
+| src/api.ts | 71.37% | 77.46% | 47.92% |
+| src/md.ts | 68.63% | 87.50% | 100.00% |
+| src/app.ts | 66.54% | 73.10% | 59.28% |
+| src/focus.ts | 52.31% | 100.00% | 41.67% |
+| src/types.ts | 37.98% | 100.00% | 100.00% |
+| **All files (total)** | **67.18%** | **76.44%** | **60.48%** |
 
-Note: `web/src/app.ts` is a ~5,300-line module holding most UI state; its
-low *unit* coverage is partly structural — large DOM/init sections are only
-reachable through E2E. Extracting pure logic from app.ts (as was done for
-moves/refresh/realtime/drafts) is the lever that keeps raising unit coverage
-without adding brittle DOM tests.
+The total line coverage is the ratcheting baseline: it must stay ≥ 65%.
+
+Notes:
+
+- `web/src/app.ts` is a ~5,300-line module holding most UI state; its
+  low *unit* coverage is partly structural — large DOM/init sections are only
+  reachable through E2E. Extracting pure logic from app.ts (as was done for
+  moves/refresh/realtime/drafts) is the lever that keeps raising unit coverage
+  without adding brittle DOM tests.
+- `src/types.ts` is the wire-contract module: mostly `interface`/type
+  declarations plus a handful of const tables (`STATUSES`, `COMMENT_KINDS`, …).
+  Every runtime line it has executes (100% functions); the uncovered lines are
+  type-declaration residue, so its low line % is expected and not a target.
+
+#### Extracting the total for CI gates
+
+The plain reporter writes the table to **stdout** with a stable total line
+(exactly as printed, including spacing):
+
+    ℹ all files    |  67.18 |    76.44 |   60.48 |
+
+Pipe-friendly one-liner (POSIX awk; prints `67.18` = total line %; the suite's
+own pass/fail exit code is preserved by piping only after the command):
+
+    npm run test:unit:coverage 2>/dev/null \
+      | awk -F'|' '/^ℹ all files/ { gsub(/ /, "", $2); print $2 }'
+
+Caveat (measured on Node 26.12.1): `--test-reporter=json` is currently broken —
+Node mis-parses the value and exits 7 with
+`ERR_MODULE_NOT_FOUND: Cannot find package 'json'` (`tap`/`spec` work fine).
+Parse the plain table instead; revisit if a future Node release fixes it.
 
 ### How to measure
 
@@ -78,6 +110,8 @@ go test ./... -count=1 -coverprofile=/tmp/c.out && go tool cover -func=/tmp/c.ou
 
 # Web unit (Node >= 23; repo CI uses Node 26) — no extra deps
 cd web && node --import jiti/register --test --experimental-test-coverage test/*.test.ts
+# ...or the identical invocation via npm script:
+cd web && npm run test:unit:coverage
 ```
 
 ## 3. Conventions
@@ -186,7 +220,7 @@ Audit results from 2026-10-30, each mapped to a Ravn board task:
 | 1 | `TestAdversarial_SSE_StalledClientPipeWriteDeadline` takes 10.3s on the hard-coded 10s SSE write deadline; dominates the http package (12.7s of 23s total) | [Perf/Test] Make SSE per-write deadline configurable (P5) |
 | 2 | **Resolved (2026-10-30)**: per-spec scaffolding (~1,000 LOC, 79 hooks, 38 startups/run) replaced by a worker-scoped Playwright server fixture; `web/e2e/` total LOC fell 15,727 → 12,848 (−2,879) despite the shared fixture/helpers being added on top | [E2E] Worker-scoped Playwright server fixture (P5) — done; see §3 E2E |
 | 3 | Web unit suite is one 4,965-line file; failures hard to localize | [Unit/Web] Split into per-module files (P3) |
-| 4 | No coverage measurement for web unit anywhere; baseline now recorded above | [Unit/Web] Coverage script + baselines (P3) |
+| 4 | **Resolved**: no coverage measurement existed for web unit; `npm run test:unit:coverage` added, per-file baselines re-measured post-split (§2, incl. the stable total line + parse recipe for CI) | [Unit/Web] Coverage script + baselines (P3) — done; unblocks #8 |
 | 5 | Batch rollup queries (`OpenTaskCounts`, `ProjectReport` agg, `OpenBlockersByTasks`, …) at 0% despite production use | [Unit/Go] Cover zero-coverage batch aggregates (P3) |
 | 6 | cmd/ravn-exec 45.2%, cmd/ravn-server 62.5% — lowest packages; flag/env/shutdown paths untested | [Unit/Go] Raise cmd package coverage (P3) |
 | 7 | api.ts 69.7% lines (SSE + error paths), focus.ts 41.7% functions | [Unit/Web] Close api.ts/focus.ts gaps (P3) |
