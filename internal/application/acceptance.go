@@ -335,6 +335,71 @@ func (s *Acceptance) RemoveAC(ctx context.Context, actor domain.Actor, taskID do
 	return err
 }
 
+// ReorderACs updates the display order of existing criteria on taskID according
+// to the sequence order in seqs. seqs must contain each existing criterion's seq.
+func (s *Acceptance) ReorderACs(ctx context.Context, actor domain.Actor, taskID domain.ID, seqs []int) ([]domain.AcceptanceCriterion, error) {
+	a, err := normalizeActor(actor)
+	if err != nil {
+		return nil, err
+	}
+	now := s.clock.Now()
+	var out []domain.AcceptanceCriterion
+	var r Repos
+	err = s.uow.Run(ctx, &r, func() error {
+		t, gerr := r.Tasks.Get(ctx, taskID)
+		if gerr != nil {
+			return gerr
+		}
+		if err := frozenACError(t, "reordering acceptance criteria on"); err != nil {
+			return err
+		}
+		cur, lerr := r.ACs.ListByTask(ctx, taskID)
+		if lerr != nil {
+			return lerr
+		}
+		if len(cur) != len(seqs) {
+			return fmt.Errorf("%w: reorder count %d does not match criteria count %d", domain.ErrInvalid, len(seqs), len(cur))
+		}
+		oldSeqs := make([]int, len(cur))
+		for i, c := range cur {
+			oldSeqs[i] = c.Seq
+		}
+		fresh, rerr := r.ACs.Reorder(ctx, taskID, seqs)
+		if rerr != nil {
+			return rerr
+		}
+		out = fresh
+
+		// Check if ordering actually changed before logging event
+		changed := false
+		for i, s := range seqs {
+			if s != oldSeqs[i] {
+				changed = true
+				break
+			}
+		}
+		if !changed {
+			return nil
+		}
+
+		ev := domain.Event{
+			ID:        s.idgen.NewID(),
+			ProjectID: &t.ProjectID,
+			TaskID:    &t.ID,
+			Actor:     a,
+			Kind:      domain.EventACUpdated,
+			Before:    compactJSON(map[string]any{"reorder": true, "seqs": oldSeqs}),
+			After:     compactJSON(map[string]any{"reorder": true, "seqs": seqs}),
+			At:        now,
+		}
+		return r.Events.Append(ctx, ev)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // Progress returns the (total, done) acceptance-criterion aggregate for each
 // of the given tasks — in ONE grouped read (no N+1). It backs the board
 // snapshot's per-card AC-progress badge: counts only, no criterion text.

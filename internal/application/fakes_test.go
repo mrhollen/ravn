@@ -654,6 +654,29 @@ func (f *fakeACs) Delete(_ context.Context, taskID domain.ID, seq int) (domain.A
 	return domain.AcceptanceCriterion{}, domain.ErrNotFound
 }
 
+// Reorder reorders the criteria in memory according to the given seqs slice.
+func (f *fakeACs) Reorder(_ context.Context, taskID domain.ID, seqs []int) ([]domain.AcceptanceCriterion, error) {
+	rows := f.byTask[taskID]
+	if len(rows) != len(seqs) {
+		return nil, domain.ErrInvalid
+	}
+	bySeq := make(map[int]domain.AcceptanceCriterion, len(rows))
+	for _, r := range rows {
+		bySeq[r.Seq] = r
+	}
+	newRows := make([]domain.AcceptanceCriterion, len(seqs))
+	for i, s := range seqs {
+		c, ok := bySeq[s]
+		if !ok {
+			return nil, domain.ErrInvalid
+		}
+		c.Seq = i + 1
+		newRows[i] = c
+	}
+	f.byTask[taskID] = newRows
+	return newRows, nil
+}
+
 // fakeComments is an in-memory CommentRepository (append + newest-first tail).
 type fakeComments struct {
 	byTask map[domain.ID][]domain.Comment

@@ -341,6 +341,10 @@ type AcceptanceCriterionRepository interface {
 	// rows keep their seq values (gaps stay). Unknown pair → domain.ErrNotFound.
 	Delete(ctx context.Context, taskID domain.ID, seq int) (domain.AcceptanceCriterion, error)
 
+	// Reorder updates the sequence values of existing criteria for a task according
+	// to the given ordered slice of existing seq values.
+	Reorder(ctx context.Context, taskID domain.ID, seqs []int) ([]domain.AcceptanceCriterion, error)
+
 	// ProgressByTasks returns one TaskACProgress per given task — the total
 	// criterion count and how many are done — computed by ONE grouped query
 	// over all the passed ids (no N+1). Tasks with NO criteria at all are

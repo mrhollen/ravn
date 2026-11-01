@@ -372,4 +372,88 @@ test.describe('Task Modal Enhancements (Discard Confirmation & Double Column)', 
     await page.keyboard.press('Escape');
     await expect(newTaskModal).not.toBeVisible();
   });
+
+  // ---------------------------------------------------------------------------
+  // Task 01M5XTC91NH638XMKH4GM5AH6R: Multi-line checklist paste splitting & reordering
+  // ---------------------------------------------------------------------------
+  test('01M5XTC91NH638XMKH4GM5AH6R: multi-line checklist paste splitting, reordering, and keyboard edit save/cancel', async ({ page }) => {
+    await openBoard(page);
+
+    const card = page.locator('article', { hasText: 'Modal Enhancements Fixture' });
+    await card.click();
+
+    const drawer = page.locator('#cb-detail-drawer');
+    await expect(drawer).toBeVisible();
+
+    const acInput = drawer.getByPlaceholder('Add acceptance criterion…');
+    await expect(acInput).toBeVisible();
+
+    // 1. AC1: Paste multi-line checklist with markdown bullets
+    await acInput.focus();
+    await page.evaluate(() => {
+      const input = document.querySelector('input[placeholder="Add acceptance criterion…"]') as HTMLInputElement;
+      const dt = new DataTransfer();
+      dt.setData('text/plain', '- [ ] Alpha criterion\n* Beta criterion\n1. Gamma criterion');
+      const pasteEvent = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+      input.dispatchEvent(pasteEvent);
+    });
+
+    // Verify all 3 criteria are created with stripped bullets
+    await expect(drawer.getByText('Alpha criterion', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('Beta criterion', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('Gamma criterion', { exact: true })).toBeVisible();
+
+    // 2. AC2: Reorder via down button
+    const downButtons = drawer.getByTitle('Move criterion down');
+    await downButtons.first().click();
+
+    // After down click, Beta should be first and Alpha second
+    const acItems = drawer.locator('ul.flex.flex-col.gap-1\\.5 > li');
+    await expect(acItems.first()).toContainText('Beta criterion');
+    await expect(acItems.nth(1)).toContainText('Alpha criterion');
+
+    // Persisted across reload
+    await page.reload();
+    await selectProjectViaDropdown(page, projectId);
+    const cardReload = page.locator('article', { hasText: 'Modal Enhancements Fixture' });
+    await cardReload.click();
+    await expect(drawer).toBeVisible();
+
+    const acItemsReload = drawer.locator('ul.flex.flex-col.gap-1\\.5 > li');
+    await expect(acItemsReload.first()).toContainText('Beta criterion');
+    await expect(acItemsReload.nth(1)).toContainText('Alpha criterion');
+
+    // Reorder back via up button
+    const upButtons = drawer.getByTitle('Move criterion up');
+    await upButtons.nth(1).click();
+    await expect(acItemsReload.first()).toContainText('Alpha criterion');
+
+    // 3. AC3: Inline edit with Enter to save, Escape to cancel, Cmd/Ctrl+Enter to save
+    const editButtons = drawer.getByRole('button', { name: 'Edit criterion' });
+    await editButtons.first().click();
+
+    const acEditArea = drawer.getByRole('textbox', { name: 'Edit acceptance criterion' });
+    await expect(acEditArea).toBeVisible();
+    await acEditArea.fill('Alpha criterion updated');
+    await acEditArea.press('Enter');
+
+    await expect(acEditArea).not.toBeVisible();
+    await expect(drawer.getByText('Alpha criterion updated', { exact: true })).toBeVisible();
+
+    // Escape cancels
+    await editButtons.first().click();
+    await expect(acEditArea).toBeVisible();
+    await acEditArea.fill('Should be cancelled');
+    await acEditArea.press('Escape');
+    await expect(acEditArea).not.toBeVisible();
+    await expect(drawer.getByText('Alpha criterion updated', { exact: true })).toBeVisible();
+
+    // Ctrl+Enter / Meta+Enter saves
+    await editButtons.first().click();
+    await expect(acEditArea).toBeVisible();
+    await acEditArea.fill('Alpha criterion shortcut saved');
+    await acEditArea.press('Control+Enter');
+    await expect(acEditArea).not.toBeVisible();
+    await expect(drawer.getByText('Alpha criterion shortcut saved', { exact: true })).toBeVisible();
+  });
 });

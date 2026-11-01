@@ -53,6 +53,7 @@ import {
   localCalendarToday,
   initials,
   needsAttention,
+  parseChecklistText,
   priorityClass,
   priorityName,
   relTime,
@@ -150,6 +151,7 @@ export function formatEventDetail(e?: { kind: string; before?: string; after?: s
       return seq !== undefined ? `AC #${seq} added${text}` : "AC added";
     }
     case "ac-updated": {
+      if (a?.reorder || b?.reorder) return "ACs reordered";
       const seq = a?.seq ?? b?.seq;
       return seq !== undefined ? `AC #${seq} updated` : "AC updated";
     }
@@ -4732,6 +4734,8 @@ export function ravnApp() {
     editingAcText: "",
     savingAcSeq: 0,
     deletingAcSeq: 0,
+    reorderingAcs: false,
+    draggedAcSeq: 0,
 
     /** Toggle one criterion; the 200 response carries the updated AC row, which
      *  is merged back into detail (authoritative). `ev` is the change event —
@@ -4768,23 +4772,118 @@ export function ravnApp() {
 
     async addAc(): Promise<void> {
       const t = this.detail;
-      const text = this.newAcText.trim();
-      if (!t || !text || this.addingAc) return;
+      const lines = parseChecklistText(this.newAcText);
+      if (!t || lines.length === 0 || this.addingAc) return;
       this.addingAc = true;
       try {
-        const fresh = await api.addAc(t.id, text, this.actor());
-        const d = this.detail;
-        if (d && d.id === t.id) {
-          this.detail = {
-            ...d,
-            acceptance_criteria: [...d.acceptance_criteria, fresh],
-          };
+        for (const line of lines) {
+          const fresh = await api.addAc(t.id, line, this.actor());
+          const d = this.detail;
+          if (d && d.id === t.id) {
+            this.detail = {
+              ...d,
+              acceptance_criteria: [...d.acceptance_criteria, fresh],
+            };
+          }
         }
         this.newAcText = "";
+        if (lines.length > 1) {
+          this.toast(`${lines.length} criteria added`);
+        }
       } catch (e) {
         this.toast(errMsg(e), "error");
       } finally {
         this.addingAc = false;
+      }
+    },
+
+    async handleAcPaste(e: ClipboardEvent): Promise<void> {
+      const raw = e.clipboardData?.getData("text") || "";
+      if (!raw.includes("\n")) return;
+      e.preventDefault();
+      const lines = parseChecklistText(raw);
+      if (lines.length === 0) return;
+      const t = this.detail;
+      if (!t || this.addingAc) return;
+      this.addingAc = true;
+      try {
+        for (const line of lines) {
+          const fresh = await api.addAc(t.id, line, this.actor());
+          const d = this.detail;
+          if (d && d.id === t.id) {
+            this.detail = {
+              ...d,
+              acceptance_criteria: [...d.acceptance_criteria, fresh],
+            };
+          }
+        }
+        this.newAcText = "";
+        this.toast(`${lines.length} criteria added`);
+      } catch (err) {
+        this.toast(errMsg(err), "error");
+      } finally {
+        this.addingAc = false;
+      }
+    },
+
+    async moveAc(seq: number, direction: "up" | "down"): Promise<void> {
+      const t = this.detail;
+      if (!t || this.reorderingAcs) return;
+      const acs = [...t.acceptance_criteria];
+      const index = acs.findIndex((x) => x.seq === seq);
+      if (index === -1) return;
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= acs.length) return;
+
+      const temp = acs[index];
+      acs[index] = acs[targetIndex];
+      acs[targetIndex] = temp;
+
+      const newSeqs = acs.map((x) => x.seq);
+      this.reorderingAcs = true;
+      try {
+        const updated = await api.reorderAcs(t.id, newSeqs, this.actor());
+        const d = this.detail;
+        if (d && d.id === t.id) {
+          this.detail = {
+            ...d,
+            acceptance_criteria: updated,
+          };
+        }
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.reorderingAcs = false;
+      }
+    },
+
+    async dropAc(targetSeq: number): Promise<void> {
+      const sourceSeq = this.draggedAcSeq;
+      this.draggedAcSeq = 0;
+      if (!sourceSeq || sourceSeq === targetSeq) return;
+      const t = this.detail;
+      if (!t || this.reorderingAcs) return;
+      const acs = [...t.acceptance_criteria];
+      const sourceIdx = acs.findIndex((x) => x.seq === sourceSeq);
+      const targetIdx = acs.findIndex((x) => x.seq === targetSeq);
+      if (sourceIdx === -1 || targetIdx === -1) return;
+      const [item] = acs.splice(sourceIdx, 1);
+      acs.splice(targetIdx, 0, item);
+      const newSeqs = acs.map((x) => x.seq);
+      this.reorderingAcs = true;
+      try {
+        const updated = await api.reorderAcs(t.id, newSeqs, this.actor());
+        const d = this.detail;
+        if (d && d.id === t.id) {
+          this.detail = {
+            ...d,
+            acceptance_criteria: updated,
+          };
+        }
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.reorderingAcs = false;
       }
     },
 

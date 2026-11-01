@@ -386,6 +386,13 @@ export const api = {
     });
   },
 
+  reorderAcs(taskId: string, seqs: number[], actor: ActorInput): Promise<AcRow[]> {
+    return request<AcRow[]>(`/tasks/${taskId}/acceptance-criteria/reorder`, {
+      method: "PUT",
+      body: JSON.stringify({ actor, seqs }),
+    });
+  },
+
   addComment(taskId: string, req: CommentReq): Promise<CommentRow> {
     return post<CommentRow>(`/tasks/${taskId}/comments`, req);
   },

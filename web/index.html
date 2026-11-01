@@ -2775,7 +2775,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                      </svg></h3>
                   <ul class="flex flex-col gap-1.5">
                     <template x-for="ac in detail.acceptance_criteria" :key="ac.seq">
-                       <li class="rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm transition dark:border-zinc-700 dark:bg-zinc-800">
+                       <li :draggable="editingAcSeq === 0"
+                           @dragstart="draggedAcSeq = ac.seq; $event.dataTransfer?.setData('text/plain', String(ac.seq))"
+                           @dragover.prevent
+                           @drop.prevent="dropAc(ac.seq)"
+                           @dragend="draggedAcSeq = 0"
+                           :class="draggedAcSeq === ac.seq ? 'opacity-40' : ''"
+                           class="rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm transition dark:border-zinc-700 dark:bg-zinc-800">
                         <!-- view mode: the whole row (checkbox + text) is one tappable label -->
                         <div x-show="editingAcSeq !== ac.seq" class="flex items-start gap-2.5">
                            <!-- The wrapping <label> is the checkbox's accessible name (WCAG 4.1.2,
@@ -2797,6 +2803,18 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                             </span>
                           </label>
                           <div class="flex items-center gap-1 shrink-0">
+                             <button type="button" @click="moveAc(ac.seq, 'up')"
+                                     :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0 || reorderingAcs || detail.acceptance_criteria.findIndex(x => x.seq === ac.seq) === 0"
+                                     class="coarse-44 tap-target-exempt focus-ring rounded px-1.5 py-1 text-xs text-zinc-600 hover:bg-zinc-100 hover:text-zinc-800 font-medium dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 disabled:opacity-30 disabled:pointer-events-none"
+                                     title="Move criterion up" :aria-label="'Move criterion ' + ac.seq + ' up'">
+                               ↑
+                             </button>
+                             <button type="button" @click="moveAc(ac.seq, 'down')"
+                                     :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0 || reorderingAcs || detail.acceptance_criteria.findIndex(x => x.seq === ac.seq) === detail.acceptance_criteria.length - 1"
+                                     class="coarse-44 tap-target-exempt focus-ring rounded px-1.5 py-1 text-xs text-zinc-600 hover:bg-zinc-100 hover:text-zinc-800 font-medium dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 disabled:opacity-30 disabled:pointer-events-none"
+                                     title="Move criterion down" :aria-label="'Move criterion ' + ac.seq + ' down'">
+                               ↓
+                             </button>
                              <button type="button" @click="startEditingAc(ac)"
                                      :disabled="savingAcSeq !== 0 || deletingAcSeq !== 0"
                                       class="coarse-44 tap-target-exempt focus-ring rounded px-1.5 py-1 text-xs text-zinc-600 hover:bg-zinc-100 hover:text-zinc-700 font-medium dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
@@ -2815,6 +2833,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         <!-- inline edit mode -->
                         <form x-show="editingAcSeq === ac.seq" x-cloak @submit.prevent="saveAcEdit(ac.seq)" class="flex flex-col gap-2">
                           <textarea x-model="editingAcText" rows="2" aria-label="Edit acceptance criterion"
+                                    @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); saveAcEdit(ac.seq); }"
+                                    @keydown.cmd.enter.prevent="saveAcEdit(ac.seq)"
+                                    @keydown.ctrl.enter.prevent="saveAcEdit(ac.seq)"
+                                    @keydown.escape.stop.prevent="cancelEditingAc()"
                                     class="field w-full text-xs"
                                     placeholder="Acceptance criterion text…" required></textarea>
                           <div class="flex items-center justify-end gap-2">
@@ -2836,6 +2858,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   <!-- add acceptance criterion form -->
                   <form @submit.prevent="addAc()" class="mt-2.5 flex items-center gap-2">
                     <input type="text" x-model="newAcText" placeholder="Add acceptance criterion…"
+                           @paste="handleAcPaste($event)"
                            aria-label="New acceptance criterion" class="field flex-1 text-xs py-1.5" />
                     <button type="submit" :disabled="addingAc || !newAcText.trim()" class="btn-primary text-xs py-1.5 px-3 shrink-0">
                       <span x-text="addingAc ? 'Adding…' : '+ Add criterion'"></span>

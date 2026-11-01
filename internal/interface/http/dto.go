@@ -550,6 +550,12 @@ type acRemoveReq struct {
 	Actor actorInput `json:"actor"`
 }
 
+// acReorderReq is PUT/POST /tasks/{id}/acceptance-criteria/reorder.
+type acReorderReq struct {
+	Actor actorInput `json:"actor"`
+	Seqs  []int      `json:"seqs"`
+}
+
 // artifactReq is POST /tasks/{id}/artifacts. Kind must be one of
 // log|screenshot|command-output|trace|url|other (else 400); Ref is the URL or
 // filesystem path and must not be empty after trimming (else 400); Summary is

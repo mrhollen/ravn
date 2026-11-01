@@ -406,6 +406,43 @@ func (a *App) handleRemoveAC(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleReorderAC → PUT / POST /api/v1/tasks/{id}/acceptance-criteria/reorder.
+// Reorders existing criteria to match the provided seq order. Returns the updated
+// list of criteria with dense 1..n seq values.
+func (a *App) handleReorderAC(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req acReorderReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	actor, err := req.Actor.toDomain()
+	if err != nil {
+		writeAppError(w, err, "task", id)
+		return
+	}
+	if len(req.Seqs) == 0 {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": "reorder seqs must not be empty",
+		})
+		return
+	}
+	criteria, err := a.Acceptance.ReorderACs(ctx, actor, id, req.Seqs)
+	if err != nil {
+		writeAppError(w, err, "task", id)
+		return
+	}
+	out := make([]acDTO, len(criteria))
+	for i, c := range criteria {
+		out[i] = toAC(c)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // --- artifacts -----------------------------------------------------------------------
 
 const maxArtifactUploadSize = 10 << 20 // 10MB

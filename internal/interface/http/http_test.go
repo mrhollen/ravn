@@ -1472,10 +1472,22 @@ func TestAcceptanceCriteriaEditingEndpoints(t *testing.T) {
 		t.Fatalf("DELETE ac unknown seq = %d, want 404", code)
 	}
 
+	// Reorder the remaining criteria (seqs: 1, 2 -> 2, 1)
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/tasks/"+task.ID+"/acceptance-criteria/reorder", map[string]any{
+		"actor": actor("ada"), "seqs": []int{2, 1},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("PUT ac reorder = %d, want 200 (body %s)", code, string(body))
+	}
+	reordered := mustDecode[[]acDTO](t, body)
+	if len(reordered) != 2 || reordered[0].Seq != 1 || reordered[0].Text != "logout works (hardened)" || reordered[1].Seq != 2 || reordered[1].Text != "login works" {
+		t.Fatalf("reordered criteria = %+v, want logout as seq 1 and login as seq 2", reordered)
+	}
+
 	// get_task still exposes the reworded row and its done state.
 	d = getDetail(t, stk, task.ID)
-	if d.AcceptanceCriteria[1].Text != "logout works (hardened)" || !d.AcceptanceCriteria[1].Done {
-		t.Fatalf("final AC seq 2 = %+v, want reworded + done", d.AcceptanceCriteria[1])
+	if d.AcceptanceCriteria[0].Text != "logout works (hardened)" || !d.AcceptanceCriteria[0].Done {
+		t.Fatalf("final AC seq 1 = %+v, want logout (reordered to seq 1) + done", d.AcceptanceCriteria[0])
 	}
 	evKinds := make([]string, 0, len(d.Events))
 	for _, e := range d.Events {

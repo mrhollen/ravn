@@ -32,6 +32,7 @@ const apiPrefix = "/api/v1"
 //	POST  /api/v1/tasks/{id}/acceptance-criteria           append a new AC at next seq → 201 row; 400 empty text
 //	PATCH /api/v1/tasks/{id}/acceptance-criteria/{seq}   toggle one AC, or reword it via "text" → 200 updated row; 404 unknown seq
 //	DELETE /api/v1/tasks/{id}/acceptance-criteria/{seq}  remove one AC (actor required) → 204; 404 unknown task/seq
+//	PUT   /api/v1/tasks/{id}/acceptance-criteria/reorder reorder criteria seqs → 200 updated rows; 400 invalid seqs
 //	POST  /api/v1/tasks/{id}/artifacts  attach evidence → 201 artifact
 //	POST  /api/v1/tasks/{id}/opencode/start  dispatch OpenCode autonomous session → 200 session_id + session_url
 //	POST  /api/v1/tasks/{id}/relations  add edge (upsert) → 201 new / 200 re-add; 409 parent conflict
@@ -62,6 +63,8 @@ func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/acceptance-criteria", app.handleAddAC)
 	mux.HandleFunc("PATCH "+apiPrefix+"/tasks/{id}/acceptance-criteria/{seq}", app.handleToggleAC)
 	mux.HandleFunc("DELETE "+apiPrefix+"/tasks/{id}/acceptance-criteria/{seq}", app.handleRemoveAC)
+	mux.HandleFunc("PUT "+apiPrefix+"/tasks/{id}/acceptance-criteria/reorder", app.handleReorderAC)
+	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/acceptance-criteria/reorder", app.handleReorderAC)
 	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/artifacts", app.handleAttachArtifact)
 	mux.HandleFunc("POST /tasks/{id}/artifacts", app.handleAttachArtifact)
 	mux.HandleFunc("GET /artifacts/{id}", app.handleGetArtifact)

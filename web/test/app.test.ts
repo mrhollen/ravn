@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { dateInputToIso, dueCalendarDate, safeStorage } from "../src/util.ts";
+import { dateInputToIso, dueCalendarDate, parseChecklistText, safeStorage } from "../src/util.ts";
 import { ApiError, api } from "../src/api.ts";
 import { createDebounce } from "../src/refresh.ts";
 import {
@@ -4139,6 +4139,83 @@ test("Artifacts clipboard paste and drag-and-drop upload (01M5XTB1F8GFTEYPC2RDW6
     api.uploadArtifact = origUpload;
   }
 });
+
+test("AC: parseChecklistText strips markdown prefixes and extracts non-empty lines", () => {
+  const input = `
+- [ ] First item
+- [x] Second item
+* Third item
++ Fourth item
+1. Fifth item
+10. Tenth item
+[ ] Sixth item
+   Plain seventh item
+  `;
+  const result = parseChecklistText(input);
+  assert.deepEqual(result, [
+    "First item",
+    "Second item",
+    "Third item",
+    "Fourth item",
+    "Fifth item",
+    "Tenth item",
+    "Sixth item",
+    "Plain seventh item",
+  ]);
+});
+
+test("AC: handleAcPaste and moveAc support batch paste and reordering", async () => {
+  const app = ravnApp();
+  app.detail = {
+    id: "01TEST_TASK",
+    acceptance_criteria: [
+      { seq: 1, text: "AC One", done: false },
+      { seq: 2, text: "AC Two", done: true },
+    ],
+  } as any;
+
+  const addedAcs: string[] = [];
+  const origAddAc = api.addAc;
+  const origReorderAcs = api.reorderAcs;
+
+  try {
+    api.addAc = (async (_id: string, text: string) => {
+      addedAcs.push(text);
+      return { seq: 3 + addedAcs.length, text, done: false } as any;
+    }) as any;
+
+    let reorderedSeqs: number[] = [];
+    api.reorderAcs = (async (_id: string, seqs: number[]) => {
+      reorderedSeqs = seqs;
+      return seqs.map((s, idx) => ({ seq: idx + 1, text: `AC ${s}`, done: false })) as any;
+    }) as any;
+
+    // 1. handleAcPaste with multiline markdown
+    let defaultPrevented = false;
+    await app.handleAcPaste({
+      preventDefault: () => { defaultPrevented = true; },
+      clipboardData: {
+        getData: (format: string) => format === "text" ? "- [ ] Batch 1\n- [ ] Batch 2\n* Batch 3" : "",
+      },
+    } as any);
+
+    assert.ok(defaultPrevented, "multiline paste prevented default");
+    assert.deepEqual(addedAcs, ["Batch 1", "Batch 2", "Batch 3"]);
+    assert.equal(app.detail.acceptance_criteria.length, 5);
+
+    // 2. moveAc down (seq 1 swaps with seq 2)
+    await app.moveAc(1, "down");
+    assert.deepEqual(reorderedSeqs, [2, 1, 4, 5, 6]);
+
+    // 3. moveAc up on the item now at index 1 (which has seq: 2 in the updated criteria)
+    await app.moveAc(2, "up");
+    assert.deepEqual(reorderedSeqs, [2, 1, 3, 4, 5]);
+  } finally {
+    api.addAc = origAddAc;
+    api.reorderAcs = origReorderAcs;
+  }
+});
+
 
 
 

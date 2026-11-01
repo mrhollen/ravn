@@ -143,6 +143,13 @@ func TestContentTypeEnforcement_MutatingEndpoints(t *testing.T) {
 			validBody:  `{"actor":{"name":"ada","type":"human"},"other_id":"` + task2.ID + `","kind":"related"}`,
 			wantStatus: http.StatusCreated,
 		},
+		{
+			name:       "PUT /tasks/{id}/acceptance-criteria/reorder",
+			method:     "PUT",
+			path:       "/api/v1/tasks/" + task.ID + "/acceptance-criteria/reorder",
+			validBody:  `{"actor":{"name":"ada","type":"human"},"seqs":[1]}`,
+			wantStatus: http.StatusOK,
+		},
 	}
 
 	for _, ep := range endpoints {

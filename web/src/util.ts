@@ -261,6 +261,19 @@ export function splitLines(s: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Parse checklist or multi-line text into acceptance criteria, stripping
+ * common Markdown list/checkbox prefixes (`- [ ] `, `- [x] `, `* `, `1. `).
+ */
+export function parseChecklistText(s: string): string[] {
+  return s
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => l.replace(/^[-*+]\s+(\[[ xX]\]\s+)?|^\d+\.\s+|^\[[ xX]\]\s+/, "").trim())
+    .filter(Boolean);
+}
+
 // ----------------------------------------------------------- safe storage
 // Safe localStorage wrapper with in-memory map fallback.
 // Sandboxed iframes, Safari private browsing, or storage-disabled browsers throw

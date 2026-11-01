@@ -681,3 +681,52 @@ func TestArtifactsAttach_OptionalSummary(t *testing.T) {
 		t.Errorf("artifact = %+v, want ref /tmp/trace.txt with empty summary", got)
 	}
 }
+
+func TestAcceptanceReorderACs(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := seedTaskWithACs(t, svc) // seq 1: "login works", seq 2: "logout works"
+	acs := NewAcceptance(uow, fc, &fakeIDGen{})
+
+	// Add a 3rd AC
+	_, err := acs.AddAC(ctx, testAgent, task.ID, "profile works")
+	if err != nil {
+		t.Fatalf("AddAC: %v", err)
+	}
+
+	// Reorder: 3, 1, 2
+	fresh, err := acs.ReorderACs(ctx, testAgent, task.ID, []int{3, 1, 2})
+	if err != nil {
+		t.Fatalf("ReorderACs: %v", err)
+	}
+	if len(fresh) != 3 {
+		t.Fatalf("ReorderACs returned %d criteria, want 3", len(fresh))
+	}
+	if fresh[0].Seq != 1 || fresh[0].Text != "profile works" {
+		t.Errorf("first AC = %+v, want seq 1 'profile works'", fresh[0])
+	}
+	if fresh[1].Seq != 2 || fresh[1].Text != "First check" {
+		t.Errorf("second AC = %+v, want seq 2 'First check'", fresh[1])
+	}
+	if fresh[2].Seq != 3 || fresh[2].Text != "Second check" {
+		t.Errorf("third AC = %+v, want seq 3 'Second check'", fresh[2])
+	}
+
+	// Verify event was appended
+	evs := eventsOfKind(uow, domain.EventACUpdated)
+	if len(evs) == 0 {
+		t.Fatal("no EventACUpdated emitted for reorder")
+	}
+	last := evs[len(evs)-1]
+	if !strings.Contains(last.After, `"reorder":true`) {
+		t.Errorf("reorder event after = %s, want reorder:true", last.After)
+	}
+
+	// Invalid counts or unknown seqs return ErrInvalid
+	if _, err := acs.ReorderACs(ctx, testAgent, task.ID, []int{1, 2}); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("missing seq in reorder err = %v, want ErrInvalid", err)
+	}
+	if _, err := acs.ReorderACs(ctx, testAgent, task.ID, []int{1, 2, 99}); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("unknown seq in reorder err = %v, want ErrInvalid", err)
+	}
+}

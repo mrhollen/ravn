@@ -223,6 +223,46 @@ func (r *acceptanceCriterionRepo) Delete(ctx context.Context, taskID domain.ID, 
 	return c, nil
 }
 
+// Reorder updates the criteria seqs to 1..len(seqs) matching the specified seq ordering.
+func (r *acceptanceCriterionRepo) Reorder(ctx context.Context, taskID domain.ID, seqs []int) ([]domain.AcceptanceCriterion, error) {
+	cur, err := r.ListByTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if len(cur) != len(seqs) {
+		return nil, fmt.Errorf("%w: reorder count %d does not match criteria count %d", domain.ErrInvalid, len(seqs), len(cur))
+	}
+	bySeq := make(map[int]bool, len(cur))
+	for _, c := range cur {
+		bySeq[c.Seq] = true
+	}
+	for _, s := range seqs {
+		if !bySeq[s] {
+			return nil, fmt.Errorf("%w: unknown or duplicate seq %d in reorder list", domain.ErrInvalid, s)
+		}
+	}
+
+	// Phase 1: Set each seq to temporary negative seq -(i+1)
+	for i, s := range seqs {
+		tempSeq := -(i + 1)
+		_, err := r.q.ExecContext(ctx,
+			`UPDATE acceptance_criterion SET seq = ? WHERE task_id = ? AND seq = ?`,
+			tempSeq, string(taskID), s)
+		if err != nil {
+			return nil, fmt.Errorf("phase 1 reorder criteria for task %s: %w", taskID, err)
+		}
+	}
+	// Phase 2: Flip negative seqs to positive
+	_, err = r.q.ExecContext(ctx,
+		`UPDATE acceptance_criterion SET seq = -seq WHERE task_id = ? AND seq < 0`,
+		string(taskID))
+	if err != nil {
+		return nil, fmt.Errorf("phase 2 reorder criteria for task %s: %w", taskID, err)
+	}
+
+	return r.ListByTask(ctx, taskID)
+}
+
 // ProgressByTasks returns (total, done) criterion aggregates for each given
 // task in ONE grouped query — no N+1. Tasks with no criteria are omitted from
 // the map; empty input short-circuits without SQL.
