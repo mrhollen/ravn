@@ -3198,6 +3198,10 @@ export function ravnApp() {
       this.ownerPopoverOpen = false;
       this.priorityPopoverOpen = false;
       this.duePopoverOpen = false;
+      this.relationForm.targetId = "";
+      this.relationForm.search = "";
+      this.relationForm.open = false;
+      this.relationForm.activeIndex = -1;
       this.editingTask = false;
       // Write/Preview toggles never outlive an open: every drawer opens in
       // Write mode for both markdown fields (AC 1).
@@ -3259,6 +3263,10 @@ export function ravnApp() {
       this.ownerPopoverOpen = false;
       this.priorityPopoverOpen = false;
       this.duePopoverOpen = false;
+      this.relationForm.targetId = "";
+      this.relationForm.search = "";
+      this.relationForm.open = false;
+      this.relationForm.activeIndex = -1;
       this.editingTask = false;
       // The drawer's error state never outlives its drawer (same rule as the
       // notes scratchpad). openTask() also clears it, so a re-open starts clean.
@@ -5051,23 +5059,110 @@ export function ravnApp() {
     relationForm: {
       kind: "parent" as string,
       targetId: "",
+      search: "",
+      open: false,
       busy: false,
+      activeIndex: -1,
     },
 
-    availableRelationTasks(): TaskSummary[] {
+    selectRelationTarget(t: TaskSummary): void {
+      this.relationForm.targetId = t.id;
+      this.relationForm.search = `${t.title} (${shortId(t.id)})`;
+      this.relationForm.open = false;
+      this.relationForm.activeIndex = -1;
+    },
+
+    onRelationComboboxKeyDown(dir: "up" | "down"): void {
+      const list = this.filteredRelationTasks();
+      if (list.length === 0) return;
+      this.relationForm.open = true;
+      if (dir === "down") {
+        this.relationForm.activeIndex = (this.relationForm.activeIndex + 1) % list.length;
+      } else {
+        this.relationForm.activeIndex =
+          this.relationForm.activeIndex <= 0 ? list.length - 1 : this.relationForm.activeIndex - 1;
+      }
+    },
+
+    onRelationComboboxEnter(): void {
+      const list = this.filteredRelationTasks();
+      if (this.relationForm.open && this.relationForm.activeIndex >= 0 && this.relationForm.activeIndex < list.length) {
+        this.selectRelationTarget(list[this.relationForm.activeIndex]);
+      } else if (!this.relationForm.busy && (this.relationForm.targetId || this.relationForm.search.trim())) {
+        this.addRelation();
+      }
+    },
+
+    filteredRelationTasks(): TaskSummary[] {
       const d = this.detail;
       const b = this.board;
-      if (!b) return [];
-      const currentId = d?.id;
-      const out: TaskSummary[] = [];
+      if (!b || !d) return [];
+      const currentId = d.id;
+      const kind = this.relationForm.kind;
+      const q = (this.relationForm.search || "").trim().toLowerCase();
+
+      // Collect all tasks except current task
+      const all: TaskSummary[] = [];
+      const seen = new Set<string>();
       for (const s of STATUSES) {
         for (const t of b.tasks[s] ?? []) {
-          if (t.id !== currentId) {
-            out.push(t);
+          if (t.id !== currentId && !seen.has(t.id)) {
+            seen.add(t.id);
+            all.push(t);
           }
         }
       }
-      return out;
+
+      // AC3: exclude tasks already related with the same kind
+      const existingRelations = d.relations ?? [];
+      const isAlreadyRelated = (taskId: string): boolean => {
+        return existingRelations.some((r) => {
+          if (kind === "parent") {
+            return r.kind === "child" && r.task_id === d.id && r.other_task_id === taskId;
+          } else if (kind === "child") {
+            return r.kind === "child" && r.task_id === taskId && r.other_task_id === d.id;
+          } else if (kind === "blocked-by") {
+            return r.kind === "blocked-by" && r.task_id === d.id && r.other_task_id === taskId;
+          } else if (kind === "blocking") {
+            return r.kind === "blocked-by" && r.task_id === taskId && r.other_task_id === d.id;
+          } else if (kind === "duplicate-of") {
+            return r.kind === "duplicate-of" && (r.task_id === taskId || r.other_task_id === taskId);
+          } else if (kind === "related") {
+            return r.kind === "related" && (r.task_id === taskId || r.other_task_id === taskId);
+          }
+          return false;
+        });
+      };
+
+      const eligible = all.filter((t) => !isAlreadyRelated(t.id));
+
+      // Filter by search query
+      const filtered = q
+        ? eligible.filter((t) => {
+            const sid = shortId(t.id).toLowerCase();
+            return (
+              t.title.toLowerCase().includes(q) ||
+              t.id.toLowerCase().includes(q) ||
+              sid.includes(q) ||
+              t.status.toLowerCase().includes(q)
+            );
+          })
+        : eligible;
+
+      // AC2: If kind is 'blocked-by', sort open tasks before done tasks
+      if (kind === "blocked-by") {
+        return filtered.sort((a, b) => {
+          if (a.status === "done" && b.status !== "done") return 1;
+          if (a.status !== "done" && b.status === "done") return -1;
+          return a.priority - b.priority;
+        });
+      }
+
+      return filtered;
+    },
+
+    availableRelationTasks(): TaskSummary[] {
+      return this.filteredRelationTasks();
     },
 
     /** Resolve relation edges to display rows (direction-aware for child and
@@ -5184,7 +5279,17 @@ export function ravnApp() {
 
     async addRelation(): Promise<void> {
       const d = this.detail;
-      const targetId = this.relationForm.targetId.trim();
+      let targetId = this.relationForm.targetId.trim();
+      if (!targetId && this.relationForm.search.trim()) {
+        const q = this.relationForm.search.trim();
+        const match = this.filteredRelationTasks().find(
+          (t) =>
+            t.id === q ||
+            t.id.toLowerCase() === q.toLowerCase() ||
+            shortId(t.id).toLowerCase() === q.toLowerCase(),
+        );
+        targetId = match ? match.id : q;
+      }
       const kind = this.relationForm.kind;
       if (!d || !targetId || this.relationForm.busy) return;
       if (targetId === d.id) {
@@ -5207,6 +5312,9 @@ export function ravnApp() {
           await api.addRelation(d.id, targetId, kind, this.actor());
         }
         this.relationForm.targetId = "";
+        this.relationForm.search = "";
+        this.relationForm.open = false;
+        this.relationForm.activeIndex = -1;
         await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
         this.toast("Relation added");
       } catch (e) {

@@ -3802,4 +3802,73 @@ test("Inline quick-edit: priority and due popovers, 409 rebase and Cmd/Ctrl+Ente
   }
 });
 
+test("Relation combobox: search, exclusion of current & already-related, and blocked-by sorting (01M5XTB2HA8SJ1G5QB4FQGQZ29)", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  // AC1: Searchable combobox input + listbox in HTML
+  assert.ok(html.includes('data-testid="relation-target-input"'), "relation target input testid present");
+  assert.ok(html.includes('role="combobox"'), "combobox role present");
+  assert.ok(html.includes('role="listbox"'), "listbox role present");
+  assert.ok(html.includes('data-testid="relation-suggestions-list"'), "suggestions list testid present");
+  assert.ok(html.includes('data-testid="relation-submit-btn"'), "submit button testid present");
+
+  const app = ravnApp();
+  const currentTask: any = {
+    id: "01J3ZK8WQ9X7M2P4R6S8T0U001",
+    title: "Current Task",
+    relations: [
+      { task_id: "01J3ZK8WQ9X7M2P4R6S8T0U001", other_task_id: "01J3ZK8WQ9X7M2P4R6S8T0U002", kind: "child" }, // 002 is parent
+      { task_id: "01J3ZK8WQ9X7M2P4R6S8T0U001", other_task_id: "01J3ZK8WQ9X7M2P4R6S8T0U003", kind: "blocked-by" }, // 003 is blocker
+    ],
+  };
+  app.detail = currentTask;
+  app.board = {
+    project: { id: "p1", name: "P1" } as any,
+    counts: { todo: 2, doing: 1, done: 1 },
+    tasks: {
+      todo: [
+        { id: "01J3ZK8WQ9X7M2P4R6S8T0U001", title: "Current Task", priority: 2, status: "todo" } as any,
+        { id: "01J3ZK8WQ9X7M2P4R6S8T0U002", title: "Parent Task", priority: 1, status: "todo" } as any,
+        { id: "01J3ZK8WQ9X7M2P4R6S8T0U004", title: "Alpha Feature", priority: 3, status: "todo" } as any,
+      ],
+      doing: [
+        { id: "01J3ZK8WQ9X7M2P4R6S8T0U003", title: "Blocker Task", priority: 1, status: "doing" } as any,
+      ],
+      done: [
+        { id: "01J3ZK8WQ9X7M2P4R6S8T0U005", title: "Done Beta", priority: 0, status: "done" } as any,
+      ],
+    },
+  };
+
+  // AC3: Current task (001) excluded; 002 already related as parent so excluded when kind is parent
+  app.relationForm.kind = "parent";
+  app.relationForm.search = "";
+  let list = app.filteredRelationTasks();
+  assert.ok(!list.some((t) => t.id === "01J3ZK8WQ9X7M2P4R6S8T0U001"), "current task excluded");
+  assert.ok(!list.some((t) => t.id === "01J3ZK8WQ9X7M2P4R6S8T0U002"), "already-related parent excluded when kind=parent");
+  assert.ok(list.some((t) => t.id === "01J3ZK8WQ9X7M2P4R6S8T0U004"), "unrelated task 004 included");
+
+  // Filter by search query
+  app.relationForm.search = "Alpha";
+  list = app.filteredRelationTasks();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, "01J3ZK8WQ9X7M2P4R6S8T0U004");
+
+  // AC2: When kind is blocked-by, open tasks are sorted before done tasks
+  app.relationForm.kind = "blocked-by";
+  app.relationForm.search = "";
+  list = app.filteredRelationTasks();
+  // 003 is already related as blocked-by, so excluded
+  assert.ok(!list.some((t) => t.id === "01J3ZK8WQ9X7M2P4R6S8T0U003"), "already blocker excluded");
+  // 004 (todo) should appear before 005 (done), even though 005 has higher priority (P0 vs P3)
+  const idx004 = list.findIndex((t) => t.id === "01J3ZK8WQ9X7M2P4R6S8T0U004");
+  const idx005 = list.findIndex((t) => t.id === "01J3ZK8WQ9X7M2P4R6S8T0U005");
+  assert.ok(idx004 < idx005, "open task (todo) sorted before done task when kind=blocked-by");
+
+  // Selection & keyboard navigation
+  app.selectRelationTarget(list[0]);
+  assert.equal(app.relationForm.targetId, list[0].id);
+  assert.equal(app.relationForm.open, false);
+});
+
+
 

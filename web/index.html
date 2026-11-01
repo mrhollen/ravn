@@ -3139,21 +3139,54 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                           <option value="related">Related</option>
                         </select>
                       </div>
-                      <div>
-                        <label for="relation-target-select" class="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">Target task</label>
-                        <select id="relation-target-select" x-model="relationForm.targetId" class="field text-xs py-1 mb-1">
-                          <option value="">Select a task…</option>
-                          <template x-for="t in availableRelationTasks()" :key="t.id">
-                            <option :value="t.id" x-text="t.title + ' (' + shortId(t.id) + ')'"></option>
+                      <div class="relative" @click.outside="relationForm.open = false">
+                        <label for="relation-target-input" class="block text-[11px] font-medium text-zinc-600 dark:text-zinc-400 mb-1">Target task</label>
+                        <input type="text"
+                               id="relation-target-input"
+                               role="combobox"
+                               aria-autocomplete="list"
+                               :aria-expanded="relationForm.open"
+                               aria-controls="relation-suggestions-list"
+                               data-testid="relation-target-input"
+                               x-model="relationForm.search"
+                               @focus="relationForm.open = true"
+                               @input="relationForm.open = true; relationForm.targetId = ''; relationForm.activeIndex = -1;"
+                               @keydown.down.prevent="onRelationComboboxKeyDown('down')"
+                               @keydown.up.prevent="onRelationComboboxKeyDown('up')"
+                               @keydown.enter.prevent="onRelationComboboxEnter()"
+                               @keydown.escape.stop="relationForm.open = false"
+                               placeholder="Search title, short ID, or paste ULID…"
+                               class="field text-xs py-1 w-full" />
+                        <ul x-show="relationForm.open && filteredRelationTasks().length > 0" x-cloak
+                            id="relation-suggestions-list"
+                            role="listbox"
+                            data-testid="relation-suggestions-list"
+                            class="absolute left-0 right-0 top-full z-40 mt-1 max-h-56 overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-900 text-xs">
+                          <template x-for="(t, idx) in filteredRelationTasks()" :key="t.id">
+                            <li role="option"
+                                :aria-selected="relationForm.targetId === t.id || relationForm.activeIndex === idx"
+                                :data-testid="'relation-candidate-' + t.id"
+                                @click="selectRelationTarget(t)"
+                                @mouseenter="relationForm.activeIndex = idx"
+                                class="flex items-center justify-between gap-2 px-3 py-1.5 cursor-pointer transition"
+                                :class="relationForm.activeIndex === idx ? 'bg-sky-50 dark:bg-sky-950/50 text-sky-900 dark:text-sky-200' : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200'">
+                              <div class="flex items-center gap-1.5 min-w-0">
+                                <span class="rounded px-1.5 py-0.2 text-[10px] font-semibold ring-1 shrink-0"
+                                      :class="priorityClass(t.priority)" x-text="'P' + t.priority"></span>
+                                <span class="truncate font-medium" x-text="t.title"></span>
+                                <code class="text-[10px] font-mono text-zinc-600 dark:text-zinc-400 shrink-0" x-text="shortId(t.id)"></code>
+                              </div>
+                              <span class="rounded px-1.5 py-0.2 text-[10px] font-medium shrink-0"
+                                    :class="colCountPillClass(t.status)" x-text="statusLabel(t.status)"></span>
+                            </li>
                           </template>
-                        </select>
-                        <input type="text" x-model="relationForm.targetId" name="other_id" aria-label="Target task ID"
-                               placeholder="Or enter target task ID (ULID)…"
-                               class="field font-mono text-[11px] py-1" />
+                        </ul>
                       </div>
                     </div>
                     <div class="flex justify-end mt-1">
-                      <button type="submit" :disabled="relationForm.busy || !relationForm.targetId.trim()"
+                      <button type="submit"
+                              data-testid="relation-submit-btn"
+                              :disabled="relationForm.busy || (!relationForm.targetId && !relationForm.search.trim())"
                               class="btn-primary text-xs py-1 px-3"
                               x-text="relationForm.busy ? 'Adding…' : 'Add relation'"></button>
                     </div>

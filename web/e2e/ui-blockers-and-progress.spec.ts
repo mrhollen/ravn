@@ -258,4 +258,61 @@ test.describe('Visual blocker indicators & parent epic progress on cards', () =>
     await page.keyboard.press('Escape');
     await expect(drawer).toBeHidden();
   });
+
+  test('AC 4: Searching by title/short ID and adding a relation via searchable combobox', async ({ page }) => {
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, project.id);
+    await expectProjectSelected(page, 'Blockers and Progress Project');
+
+    // Open User Profile Dashboard task
+    const card = page.locator('article', { hasText: 'User Profile Dashboard' });
+    await card.click();
+
+    const drawer = page.locator('#cb-detail-drawer');
+    await expect(drawer).toBeVisible();
+
+    const comboboxInput = drawer.locator('[data-testid="relation-target-input"]');
+    await expect(comboboxInput).toBeVisible();
+
+    // 1. Search by title
+    await comboboxInput.fill('Security Hardening');
+    const suggestions = drawer.locator('[data-testid="relation-suggestions-list"]');
+    await expect(suggestions).toBeVisible();
+    await expect(suggestions).toContainText('Security Hardening Epic');
+
+    // Select candidate
+    const candidate = suggestions.locator(`[data-testid="relation-candidate-${parentEpic.id}"]`);
+    await candidate.click();
+    await expect(suggestions).not.toBeVisible();
+    await expect(comboboxInput).toHaveValue(new RegExp('Security Hardening Epic'));
+
+    // Select kind 'related'
+    const kindSelect = drawer.locator('#relation-kind-select');
+    await kindSelect.selectOption('related');
+
+    // Submit relation
+    const submitBtn = drawer.locator('[data-testid="relation-submit-btn"]');
+    await submitBtn.click();
+
+    // Verify relation is added to relations list
+    const relationsList = drawer.locator('[data-testid="detail-relations-list"]');
+    await expect(relationsList.getByText('Security Hardening Epic')).toBeVisible();
+
+    // 2. Test search by short ID and keyboard selection (Down arrow + Enter)
+    const shortIdStr = subtask2.id.slice(-6).toUpperCase();
+    await comboboxInput.fill(shortIdStr);
+    await expect(suggestions).toBeVisible();
+    await expect(suggestions).toContainText('Rate Limit Login Route');
+
+    await comboboxInput.press('ArrowDown');
+    await comboboxInput.press('Enter');
+    await expect(suggestions).not.toBeVisible();
+    await expect(comboboxInput).toHaveValue(new RegExp('Rate Limit Login Route'));
+
+    await submitBtn.click();
+    await expect(relationsList.getByText('Rate Limit Login Route')).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+  });
 });
