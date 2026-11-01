@@ -382,6 +382,8 @@ type ArtifactRepository interface {
 	Add(ctx context.Context, a domain.Artifact) error
 	// ListByTask returns all artifacts ordered by created_at ASC.
 	ListByTask(ctx context.Context, taskID domain.ID) ([]domain.Artifact, error)
+	// Delete removes the artifact with artifactID from taskID, returning the deleted artifact.
+	Delete(ctx context.Context, taskID, artifactID domain.ID) (domain.Artifact, error)
 }
 
 // RelationRepository persists the directed task edges (hierarchy, blocked-by,

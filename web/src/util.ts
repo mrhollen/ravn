@@ -343,3 +343,17 @@ export const safeStorage = {
   },
 };
 
+/**
+ * Detects whether an artifact is a text, log, or command output file that can be
+ * previewed inline in a <pre> block. Checks canonical kinds ('log', 'command-output', 'trace')
+ * as well as common text file extensions in ref or summary.
+ */
+export function isTextArtifact(a: { kind?: string; ref?: string; summary?: string } | null | undefined): boolean {
+  if (!a) return false;
+  const kinds = ["log", "command-output", "trace"];
+  if (a.kind && kinds.includes(a.kind)) return true;
+  const textExt = /\.(log|txt|json|out|sh|diff|patch|md|ya?ml|xml|csv)\b/i;
+  return textExt.test(a.ref || "") || textExt.test(a.summary || "");
+}
+
+

@@ -108,3 +108,45 @@ func (s *Artifacts) AttachWithID(ctx context.Context, id domain.ID, actor domain
 	}
 	return art, nil // adapters store values as-given; artifacts are immutable after insert
 }
+
+// Remove removes the artifact with artifactID from taskID and appends an
+// `artifact-removed` event recording what was deleted. Returns the removed artifact.
+func (s *Artifacts) Remove(ctx context.Context, actor domain.Actor, taskID, artifactID domain.ID) (domain.Artifact, error) {
+	a, err := normalizeActor(actor)
+	if err != nil {
+		return domain.Artifact{}, err
+	}
+	now := s.clock.Now()
+	var removed domain.Artifact
+	var r Repos
+	err = s.uow.Run(ctx, &r, func() error {
+		t, gerr := r.Tasks.Get(ctx, taskID)
+		if gerr != nil {
+			return gerr
+		}
+		del, derr := r.Artifacts.Delete(ctx, taskID, artifactID)
+		if derr != nil {
+			return derr
+		}
+		removed = del
+		ev := domain.Event{
+			ID:        s.idgen.NewID(),
+			ProjectID: &t.ProjectID,
+			TaskID:    &taskID,
+			Actor:     a,
+			Kind:      domain.EventArtifactRemoved,
+			Before: compactJSON(map[string]any{
+				"id":      removed.ID.String(),
+				"kind":    string(removed.Kind),
+				"ref":     removed.Ref,
+				"summary": removed.Summary,
+			}),
+			At: now,
+		}
+		return r.Events.Append(ctx, ev)
+	})
+	if err != nil {
+		return domain.Artifact{}, err
+	}
+	return removed, nil
+}

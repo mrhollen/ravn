@@ -9,6 +9,7 @@ import {
   isClaimExpired,
   isOverdue,
   isStalledExpired,
+  isTextArtifact,
   needsAttention,
   safeStorage,
 } from "../src/util.ts";
@@ -258,4 +259,26 @@ test("needsAttention flags only open tasks whose newest comment is a question/ha
   // Done tasks are NEVER attention — even with a question/handoff newest comment.
   assert.equal(needsAttention({ status: "done", last_comment_kind: "question" }), false);
   assert.equal(needsAttention({ status: "done", last_comment_kind: "handoff" }), false);
+});
+
+test("isTextArtifact identifies log/command-output/trace and text file extensions", () => {
+  assert.equal(isTextArtifact(null), false);
+  assert.equal(isTextArtifact(undefined), false);
+
+  // Canonical kinds
+  assert.equal(isTextArtifact({ kind: "log", ref: "https://example.com/output" }), true);
+  assert.equal(isTextArtifact({ kind: "command-output", ref: "/artifacts/foo" }), true);
+  assert.equal(isTextArtifact({ kind: "trace", ref: "/artifacts/bar" }), true);
+
+  // Text file extensions in ref or summary
+  assert.equal(isTextArtifact({ kind: "other", ref: "/artifacts/01ABC.log" }), true);
+  assert.equal(isTextArtifact({ kind: "other", ref: "/artifacts/01ABC.txt" }), true);
+  assert.equal(isTextArtifact({ kind: "other", ref: "/artifacts/output.json" }), true);
+  assert.equal(isTextArtifact({ kind: "other", ref: "/artifacts/patch.diff" }), true);
+  assert.equal(isTextArtifact({ kind: "other", ref: "/artifacts/01ABC", summary: "build.log" }), true);
+
+  // Non-text files
+  assert.equal(isTextArtifact({ kind: "screenshot", ref: "/artifacts/shot.png" }), false);
+  assert.equal(isTextArtifact({ kind: "other", ref: "/artifacts/video.mp4" }), false);
+  assert.equal(isTextArtifact({ kind: "url", ref: "https://github.com/org/repo" }), false);
 });

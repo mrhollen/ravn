@@ -137,6 +137,7 @@ test("RealtimeDispatch: KNOWN_REALTIME_KINDS mirrors the canonical server set an
     "ac-added",
     "ac-updated",
     "ac-removed",
+    "artifact-removed",
   ];
   assert.equal(KNOWN_REALTIME_KINDS.size, expected.length);
   for (const k of expected) assert.ok(KNOWN_REALTIME_KINDS.has(k), `missing canonical kind ${k}`);

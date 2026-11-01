@@ -464,6 +464,8 @@ test("API: comment + artifact endpoints — query opts, summary optionality, For
       // a JSON Content-Type for it (let the browser set the boundary).
       const file = new File(["png-bytes"], "shot.png", { type: "image/png" });
       await api.uploadArtifact("t-1", file, "screenshot", "evidence", actor);
+
+      await api.deleteArtifact("t-1", "art-1", actor);
     },
   );
   assert.deepEqual(
@@ -475,8 +477,12 @@ test("API: comment + artifact endpoints — query opts, summary optionality, For
       ["POST", "/api/v1/tasks/t-1/artifacts"],
       ["POST", "/api/v1/tasks/t-1/artifacts"],
       ["POST", "/api/v1/tasks/t-1/artifacts"],
+      ["DELETE", "/api/v1/tasks/t-1/artifacts/art-1"],
     ],
   );
+  const deleteCall = calls[6];
+  assert.equal(deleteCall.init.headers["X-Actor-Name"], "opencode");
+  assert.equal(deleteCall.init.headers["X-Actor-Type"], "agent");
   const noSummary = JSON.parse(calls[3].init.body);
   assert.equal(noSummary.summary, undefined);
   const fdCall = calls[5];

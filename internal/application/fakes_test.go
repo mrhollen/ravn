@@ -768,6 +768,18 @@ func (f *fakeArtifacts) ListByTask(_ context.Context, taskID domain.ID) ([]domai
 	return out, nil
 }
 
+// Delete removes the artifact with artifactID from taskID in memory.
+func (f *fakeArtifacts) Delete(_ context.Context, taskID, artifactID domain.ID) (domain.Artifact, error) {
+	rows := f.byTask[taskID]
+	for i, a := range rows {
+		if a.ID == artifactID {
+			f.byTask[taskID] = append(rows[:i], rows[i+1:]...)
+			return a, nil
+		}
+	}
+	return domain.Artifact{}, domain.ErrNotFound
+}
+
 // fakeRelations is an in-memory RelationRepository: edges touching either end
 // are returned by ListByTask; Add/Remove keep minimal upsert/delete semantics.
 type fakeRelations struct {

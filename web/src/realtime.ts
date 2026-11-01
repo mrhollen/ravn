@@ -41,6 +41,7 @@ export const KNOWN_REALTIME_KINDS: ReadonlySet<string> = new Set([
   "ac-added",
   "ac-updated",
   "ac-removed",
+  "artifact-removed",
 ]);
 
 /** Minimal shape of an inbound SSE delivery — MessageEvent exposes exactly

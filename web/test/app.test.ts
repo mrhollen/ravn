@@ -4216,6 +4216,63 @@ test("AC: handleAcPaste and moveAc support batch paste and reordering", async ()
   }
 });
 
+test("Artifacts: deleteArtifact removes artifact after confirmation and toggleArtifactPreview expands preview", async () => {
+  const app = ravnApp() as any;
+  app.detail = {
+    id: "task-art",
+    artifacts: [
+      { id: "art-1", kind: "log", ref: "/artifacts/build.log", summary: "Build logs" },
+      { id: "art-2", kind: "screenshot", ref: "/artifacts/screen.png" },
+    ],
+  };
+
+  const origFetch = globalThis.fetch;
+  const origDeleteArtifact = api.deleteArtifact;
+  let deletedId = "";
+
+  try {
+    api.deleteArtifact = (async (_taskId: string, artifactId: string) => {
+      deletedId = artifactId;
+    }) as any;
+
+    // 1. deleteArtifact canceled by user
+    app.confirmDiscard = () => false;
+    await app.deleteArtifact("art-1");
+    assert.equal(deletedId, "");
+    assert.equal(app.detail.artifacts.length, 2);
+
+    // 2. toggle preview fetches text
+    (globalThis as any).fetch = async (url: string) => {
+      assert.equal(url, "/artifacts/build.log");
+      return new Response("Build started\nBuild finished OK", { status: 200 });
+    };
+    await app.toggleArtifactPreview(app.detail.artifacts[0]);
+    assert.equal(app.artifactTextExpanded["art-1"], true);
+    assert.equal(app.artifactTextContent["art-1"], "Build started\nBuild finished OK");
+
+    // 3. toggle again collapses preview without re-fetching
+    (globalThis as any).fetch = () => {
+      throw new Error("should not fetch again");
+    };
+    await app.toggleArtifactPreview(app.detail.artifacts[0]);
+    assert.equal(app.artifactTextExpanded["art-1"], false);
+    assert.equal(app.artifactTextContent["art-1"], "Build started\nBuild finished OK");
+
+    // 4. deleteArtifact confirmed by user
+    app.confirmDiscard = () => true;
+    await app.deleteArtifact("art-1");
+    assert.equal(deletedId, "art-1");
+    assert.equal(app.detail.artifacts.length, 1);
+    assert.equal(app.detail.artifacts[0].id, "art-2");
+    assert.equal(app.artifactTextExpanded["art-1"], undefined);
+    assert.equal(app.artifactTextContent["art-1"], undefined);
+  } finally {
+    globalThis.fetch = origFetch;
+    api.deleteArtifact = origDeleteArtifact;
+  }
+});
+
+
 
 
 

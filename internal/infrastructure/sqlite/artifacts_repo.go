@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/mrhollen/ravn/internal/application"
@@ -65,6 +67,34 @@ func (r *artifactRepo) ListByTask(ctx context.Context, taskID domain.ID) ([]doma
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// Delete removes the artifact row keyed by (taskID, artifactID) and returns the deleted row.
+func (r *artifactRepo) Delete(ctx context.Context, taskID, artifactID domain.ID) (domain.Artifact, error) {
+	row := r.q.QueryRowContext(ctx,
+		`SELECT `+artifactColumns+` FROM artifact WHERE task_id = ? AND id = ?`,
+		string(taskID), string(artifactID))
+	a, err := scanArtifact(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Artifact{}, fmt.Errorf("%w: artifact %s on task %s", domain.ErrNotFound, artifactID, taskID)
+	}
+	if err != nil {
+		return domain.Artifact{}, err
+	}
+	res, err := r.q.ExecContext(ctx,
+		`DELETE FROM artifact WHERE task_id = ? AND id = ?`,
+		string(taskID), string(artifactID))
+	if err != nil {
+		return domain.Artifact{}, fmt.Errorf("delete artifact %s on task %s: %w", artifactID, taskID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return domain.Artifact{}, err
+	}
+	if n == 0 {
+		return domain.Artifact{}, domain.ErrNotFound
+	}
+	return a, nil
 }
 
 // scanArtifact maps one row (in artifactColumns order) to a domain.Artifact.

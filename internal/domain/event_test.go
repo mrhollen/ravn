@@ -53,6 +53,7 @@ func TestEventKinds_CanonicalSetIsLocked(t *testing.T) {
 		EventReleased, EventHeartbeat, EventAssigned, EventNoted,
 		EventCommented, EventACToggled, EventArtifactAdded,
 		EventRelationChanged, EventACAdded, EventACUpdated, EventACRemoved,
+		EventArtifactRemoved,
 	}
 	got := EventKinds()
 	if len(got) != len(want) {
@@ -120,7 +121,7 @@ func TestEventKinds_ConcurrentAccessRaceFree(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 512; i++ {
 				kinds := EventKinds()
-				if len(kinds) != 15 {
+				if len(kinds) != 16 {
 					mu.Lock()
 					badLength++
 					mu.Unlock()

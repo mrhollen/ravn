@@ -767,6 +767,57 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 	writeJSON(w, http.StatusCreated, toArtifact(art))
 }
 
+// handleRemoveArtifact → DELETE /api/v1/tasks/{id}/artifacts/{artifact_id}
+func (a *App) handleRemoveArtifact(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	taskID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	artifactIDStr := r.PathValue("artifact_id")
+	if !validArtifactID(artifactIDStr) {
+		writeJSONError(w, http.StatusNotFound, map[string]any{
+			"error":   "not found",
+			"message": "artifact not found",
+		})
+		return
+	}
+	artifactID := domain.ID(artifactIDStr)
+
+	var req artifactRemoveReq
+	if _, ok := decodeOptionalJSON(w, r, &req); !ok {
+		return
+	}
+	actorIn, hasActor := extractActor(r, req.Actor)
+	if !hasActor {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   "invalid input",
+			"message": `actor is required for artifact removal: send a JSON body with {"actor":{"name":"..."}}, X-Actor-Name header, or ?actor_name query parameter`,
+		})
+		return
+	}
+	actor, err := actorIn.toDomain()
+	if err != nil {
+		writeAppError(w, err, "task", taskID)
+		return
+	}
+
+	removed, err := a.Artifacts.Remove(ctx, actor, taskID, artifactID)
+	if err != nil {
+		writeAppError(w, err, "task", taskID)
+		return
+	}
+
+	// If stored file exists on disk, remove it as well (unreferenced stored file)
+	if a.ArtifactsDir != "" && (strings.HasPrefix(removed.Ref, "/artifacts/") || strings.Contains(removed.Ref, artifactIDStr)) {
+		if filePath, ferr := findArtifactFile(a.ArtifactsDir, artifactIDStr); ferr == nil && filePath != "" {
+			_ = os.Remove(filePath)
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *App) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !validArtifactID(id) {

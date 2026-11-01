@@ -67,6 +67,8 @@ func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/acceptance-criteria/reorder", app.handleReorderAC)
 	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/artifacts", app.handleAttachArtifact)
 	mux.HandleFunc("POST /tasks/{id}/artifacts", app.handleAttachArtifact)
+	mux.HandleFunc("DELETE "+apiPrefix+"/tasks/{id}/artifacts/{artifact_id}", app.handleRemoveArtifact)
+	mux.HandleFunc("DELETE /tasks/{id}/artifacts/{artifact_id}", app.handleRemoveArtifact)
 	mux.HandleFunc("GET /artifacts/{id}", app.handleGetArtifact)
 	mux.HandleFunc("GET "+apiPrefix+"/artifacts/{id}", app.handleGetArtifact)
 	mux.HandleFunc("POST "+apiPrefix+"/tasks/{id}/opencode/start", app.handleOpenCodeStart)

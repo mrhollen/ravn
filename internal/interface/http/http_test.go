@@ -1542,6 +1542,28 @@ func TestArtifactAttachAndErrors(t *testing.T) {
 		t.Fatalf("POST /artifacts (no summary) = %d, want 201 (body %s)", code, string(body))
 	}
 
+	// DELETE /api/v1/tasks/{id}/artifacts/{artifact_id}
+	code, _ = doReq(t, stk.Handler, "DELETE", "/api/v1/tasks/"+task.ID+"/artifacts/"+art.ID, map[string]any{
+		"actor": actor("ada"),
+	})
+	if code != http.StatusNoContent {
+		t.Fatalf("DELETE /artifacts = %d, want 204", code)
+	}
+
+	// Verify it was deleted from task
+	d = getDetail(t, stk, task.ID)
+	if len(d.Artifacts) != 1 || d.Artifacts[0].ID == art.ID {
+		t.Fatalf("get_task artifacts after delete = %+v, want art %s deleted", d.Artifacts, art.ID)
+	}
+
+	// Second delete returns 404
+	code, _ = doReq(t, stk.Handler, "DELETE", "/api/v1/tasks/"+task.ID+"/artifacts/"+art.ID, map[string]any{
+		"actor": actor("ada"),
+	})
+	if code != http.StatusNotFound {
+		t.Fatalf("DELETE deleted artifact = %d, want 404", code)
+	}
+
 	// Bad kind → 400; empty ref → 400; unknown task → 404.
 	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/artifacts", map[string]any{
 		"actor": actor("agent-a"), "kind": "photo", "ref": "x",

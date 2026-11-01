@@ -422,6 +422,17 @@ export const api = {
     return post<ArtifactRow>(`/tasks/${taskId}/artifacts`, fd);
   },
 
+  deleteArtifact(taskId: string, artifactId: string, actor: ActorInput): Promise<void> {
+    return request<void>(`/tasks/${taskId}/artifacts/${artifactId}`, {
+      method: "DELETE",
+      headers: {
+        "X-Actor-Name": actor.name,
+        ...(actor.type ? { "X-Actor-Type": actor.type } : {}),
+      },
+      body: JSON.stringify({ actor }),
+    });
+  },
+
   // --- opencode autonomous integration --------------------------------------
   getOpenCodeOptions(
     projectId: string,

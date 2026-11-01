@@ -3093,8 +3093,20 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                               </button>
                             </div>
                           </template>
-                          <span class="ml-auto"><span x-text="actorLabel(a.actor)"></span>
-                            <time class="text-zinc-600 dark:text-zinc-400" :title="a.created_at" x-text="relTime(a.created_at)"></time></span>
+                          <div class="ml-auto flex items-center gap-2">
+                            <span><span x-text="actorLabel(a.actor)"></span> <time class="text-zinc-600 dark:text-zinc-400" :title="a.created_at" x-text="relTime(a.created_at)"></time></span>
+                            <button type="button"
+                                    @click="deleteArtifact(a.id)"
+                                    data-testid="delete-artifact-btn"
+                                    :disabled="deletingArtifactId === a.id"
+                                    title="Delete artifact"
+                                    aria-label="Delete artifact"
+                                    class="rounded p-0.5 text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 focus-ring transition">
+                              <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                              </svg>
+                            </button>
+                          </div>
                         </div>
                         <!-- Stored image: inline <img> capped max-w / max-h, object-contain, click for preview -->
                         <template x-if="isStoredImage(a)">
@@ -3122,6 +3134,38 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                               <source :src="a.ref" />
                               Your browser does not support the audio tag.
                             </audio>
+                          </div>
+                        </template>
+                        <!-- Text / Log artifact: inline collapsible <pre> viewer -->
+                        <template x-if="isStoredText(a)">
+                          <div class="mt-2 text-xs">
+                            <button type="button"
+                                    @click="toggleArtifactPreview(a)"
+                                    data-testid="toggle-artifact-preview-btn"
+                                    class="inline-flex items-center gap-1.5 rounded bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600 focus-ring">
+                              <svg class="h-3 w-3 transition-transform" :class="artifactTextExpanded[a.id] ? 'rotate-90' : ''" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                              </svg>
+                              <span x-text="artifactTextExpanded[a.id] ? 'Hide preview' : 'Preview log / output'"></span>
+                            </button>
+                            <div x-show="artifactTextExpanded[a.id]" x-cloak class="mt-2">
+                              <template x-if="artifactTextLoading[a.id]">
+                                <div class="flex items-center gap-2 p-2 text-zinc-500 font-mono text-[11px]" data-testid="artifact-preview-loading">
+                                  <svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+                                  <span>Loading content…</span>
+                                </div>
+                              </template>
+                              <template x-if="artifactTextError[a.id]">
+                                <div class="rounded border border-rose-200 bg-rose-50 p-2 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300 font-mono text-[11px]" data-testid="artifact-preview-error">
+                                  <span x-text="artifactTextError[a.id]"></span>
+                                </div>
+                              </template>
+                              <template x-if="!artifactTextLoading[a.id] && !artifactTextError[a.id] && artifactTextContent[a.id] !== undefined">
+                                <pre data-testid="artifact-text-preview"
+                                     class="max-h-64 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-2.5 font-mono text-[11px] leading-relaxed text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 selection:bg-indigo-500 selection:text-white"
+                                     x-text="artifactTextContent[a.id] || '(empty)'"></pre>
+                              </template>
+                            </div>
                           </div>
                         </template>
                         <p x-show="a.summary" x-cloak class="mt-1 text-xs text-zinc-600 dark:text-zinc-400" x-text="a.summary"></p>

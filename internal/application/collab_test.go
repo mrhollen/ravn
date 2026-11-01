@@ -682,6 +682,40 @@ func TestArtifactsAttach_OptionalSummary(t *testing.T) {
 	}
 }
 
+func TestArtifactsRemove(t *testing.T) {
+	ctx := context.Background()
+	svc, fc, uow := newTaskTestEnv(t)
+	task := mustCreateTask(t, svc, "Artifact task", 0, nil)
+	arts := NewArtifacts(uow, fc, &fakeIDGen{})
+
+	attached, err := arts.Attach(ctx, testAgent, task.ID, domain.ArtifactLog, "/tmp/run.log", "test output")
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+
+	removed, err := arts.Remove(ctx, testAgent, task.ID, attached.ID)
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if removed.ID != attached.ID || removed.Ref != "/tmp/run.log" {
+		t.Errorf("removed artifact = %+v, want ID %s", removed, attached.ID)
+	}
+
+	// Verify artifact-removed event
+	evs := eventsOfKind(uow, domain.EventArtifactRemoved)
+	if len(evs) != 1 {
+		t.Fatalf("eventsOfKind(EventArtifactRemoved) = %d, want 1", len(evs))
+	}
+	if !strings.Contains(evs[0].Before, attached.ID.String()) {
+		t.Errorf("event Before = %s, want to contain artifact ID", evs[0].Before)
+	}
+
+	// Double remove returns ErrNotFound
+	if _, err := arts.Remove(ctx, testAgent, task.ID, attached.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("second remove err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestAcceptanceReorderACs(t *testing.T) {
 	ctx := context.Background()
 	svc, fc, uow := newTaskTestEnv(t)

@@ -45,6 +45,9 @@ const (
 	EventACAdded   EventKind = "ac-added"   // an acceptance criterion row was appended
 	EventACUpdated EventKind = "ac-updated" // an acceptance criterion's text was reworded
 	EventACRemoved EventKind = "ac-removed" // an acceptance criterion row was deleted
+
+	// Artifact-editing kinds
+	EventArtifactRemoved EventKind = "artifact-removed" // an evidence artifact was removed
 )
 
 // canonicalEventKinds is the unexported source of truth for the canonical set,
@@ -69,6 +72,7 @@ var canonicalEventKinds = [...]EventKind{
 	EventACAdded,
 	EventACUpdated,
 	EventACRemoved,
+	EventArtifactRemoved,
 }
 
 // EventKinds lists every canonical event kind, in stable order, for tests and
@@ -91,7 +95,8 @@ func (k EventKind) Valid() bool {
 	case EventCreated, EventUpdated, EventStatusChanged, EventClaimed,
 		EventReleased, EventHeartbeat, EventAssigned, EventNoted,
 		EventCommented, EventACToggled, EventArtifactAdded,
-		EventRelationChanged, EventACAdded, EventACUpdated, EventACRemoved:
+		EventRelationChanged, EventACAdded, EventACUpdated, EventACRemoved,
+		EventArtifactRemoved:
 		return true
 	default:
 		return false

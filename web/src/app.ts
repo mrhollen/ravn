@@ -52,6 +52,7 @@ import {
   isStalledExpired,
   localCalendarToday,
   initials,
+  isTextArtifact,
   needsAttention,
   parseChecklistText,
   priorityClass,
@@ -170,6 +171,10 @@ export function formatEventDetail(e?: { kind: string; before?: string; after?: s
       const kind = a?.kind || "artifact";
       const filename = a?.filename ? ` (${a.filename})` : "";
       return `attached ${kind}${filename}`;
+    }
+    case "artifact-removed": {
+      const kind = b?.kind || a?.kind || "artifact";
+      return `removed ${kind}`;
     }
     case "created": {
       return "task created";
@@ -5116,6 +5121,11 @@ export function ravnApp() {
     previewModal: { open: false, src: "", alt: "" },
     copiedArtifactId: null as string | null,
     copiedArtifactTimer: null as any,
+    deletingArtifactId: "" as string,
+    artifactTextExpanded: {} as Record<string, boolean>,
+    artifactTextContent: {} as Record<string, string>,
+    artifactTextLoading: {} as Record<string, boolean>,
+    artifactTextError: {} as Record<string, string>,
 
     onArtifactFileSelected(event: Event): void {
       const target = event.target as HTMLInputElement;
@@ -5289,6 +5299,67 @@ export function ravnApp() {
 
     isStoredNonImage(a: { kind: string; ref: string; summary?: string }): boolean {
       return this.isStoredArtifact(a.ref) && !this.isStoredImage(a) && !this.isStoredVideo(a) && !this.isStoredAudio(a);
+    },
+
+    isStoredText(a: { kind: string; ref: string; summary?: string }): boolean {
+      if (!a || !a.ref) return false;
+      const isFetchable = this.isStoredArtifact(a.ref) || this.isWebHref(a.ref);
+      return Boolean(isFetchable && isTextArtifact(a));
+    },
+
+    async toggleArtifactPreview(a: { id: string; ref: string }): Promise<void> {
+      const current = Boolean(this.artifactTextExpanded[a.id]);
+      this.artifactTextExpanded = {
+        ...this.artifactTextExpanded,
+        [a.id]: !current,
+      };
+      if (!current && this.artifactTextContent[a.id] === undefined && !this.artifactTextLoading[a.id]) {
+        this.artifactTextLoading = { ...this.artifactTextLoading, [a.id]: true };
+        this.artifactTextError = { ...this.artifactTextError, [a.id]: "" };
+        try {
+          const res = await fetch(a.ref);
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status} ${res.statusText}`);
+          }
+          const text = await res.text();
+          this.artifactTextContent = { ...this.artifactTextContent, [a.id]: text };
+        } catch (err: any) {
+          this.artifactTextError = {
+            ...this.artifactTextError,
+            [a.id]: err?.message || "Failed to load artifact content",
+          };
+        } finally {
+          this.artifactTextLoading = { ...this.artifactTextLoading, [a.id]: false };
+        }
+      }
+    },
+
+    async deleteArtifact(artifactId: string): Promise<void> {
+      const t = this.detail;
+      if (!t || this.deletingArtifactId) return;
+      if (!this.confirmDiscard("Are you sure you want to delete this artifact?")) return;
+      this.deletingArtifactId = artifactId;
+      try {
+        await api.deleteArtifact(t.id, artifactId, this.actor());
+        const d = this.detail;
+        if (d && d.id === t.id) {
+          this.detail = {
+            ...d,
+            artifacts: d.artifacts.filter((a) => a.id !== artifactId),
+          };
+        }
+        const nextExpanded = { ...this.artifactTextExpanded };
+        delete nextExpanded[artifactId];
+        this.artifactTextExpanded = nextExpanded;
+        const nextContent = { ...this.artifactTextContent };
+        delete nextContent[artifactId];
+        this.artifactTextContent = nextContent;
+        this.toast("Artifact deleted");
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+      } finally {
+        this.deletingArtifactId = "";
+      }
     },
 
     // ---------------------------------------------------------------- claims
@@ -5786,6 +5857,7 @@ export function ravnApp() {
     priorityName,
     commentKindClass,
     artifactKindClass,
+    isTextArtifact,
     isOverdue,
     dueLabel,
     claimHint,

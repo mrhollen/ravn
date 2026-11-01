@@ -461,4 +461,90 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
     await expect(drawer.locator('img[alt="pasted-capture.png"]')).toBeVisible({ timeout: 5000 });
     await expect(commentInput).toHaveValue(/!\[screenshot\]\(\/artifacts\//);
   });
+
+  test('inline collapsible preview for log artifact and artifact deletion', async ({ page, isolatedServer }) => {
+    serverUrl = isolatedServer.url;
+    const artifactsDir = isolatedServer.artifactsDir;
+    const { projectId, taskId } = await seedProjectAndTask(serverUrl);
+
+    // Write a sample log file to isolatedServer.dataDir and upload it via multipart API
+    const logFilePath = path.join(isolatedServer.dataDir, 'test-execution.log');
+    const logContent = '=== BUILD START ===\nStep 1: compile OK\nStep 2: tests passed\n=== BUILD SUCCESS ===';
+    fs.writeFileSync(logFilePath, logContent);
+
+    const fd = new FormData();
+    fd.append('file', new Blob([logContent], { type: 'text/plain' }), 'test-execution.log');
+    fd.append('kind', 'log');
+    fd.append('summary', 'Automated test execution logs');
+    fd.append('actor_name', 'ci-bot');
+    fd.append('actor_type', 'agent');
+
+    const uploadRes = await fetch(`${serverUrl}/api/v1/tasks/${taskId}/artifacts`, {
+      method: 'POST',
+      body: fd,
+    });
+    expect(uploadRes.ok).toBe(true);
+    const uploadedArt = await uploadRes.json();
+
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, projectId);
+
+    // Open task drawer
+    const taskCard = page.locator('article', { hasText: 'Task with Artifacts' });
+    await expect(taskCard).toBeVisible();
+    await taskCard.click();
+
+    const drawer = page.locator('aside');
+    await expect(drawer.getByRole('heading', { name: 'Task with Artifacts' })).toBeVisible();
+
+    const artifactsSection = drawer.locator('[data-testid="detail-artifacts-section"]');
+    await expect(artifactsSection).toBeVisible();
+
+    const logArtifactRow = artifactsSection.locator('li', { hasText: 'Automated test execution logs' });
+    await expect(logArtifactRow).toBeVisible();
+
+    // 1. Verify inline collapsible preview for log artifact
+    const previewBtn = logArtifactRow.locator('[data-testid="toggle-artifact-preview-btn"]');
+    await expect(previewBtn).toBeVisible();
+    await expect(previewBtn).toHaveText('Preview log / output');
+
+    // Click to expand preview
+    await previewBtn.click();
+    await expect(previewBtn).toHaveText('Hide preview');
+
+    const preViewer = logArtifactRow.locator('[data-testid="artifact-text-preview"]');
+    await expect(preViewer).toBeVisible();
+    await expect(preViewer).toContainText('Step 2: tests passed');
+
+    await page.screenshot({ path: 'test-results/log-artifact-preview.png' });
+
+    // Click to collapse preview
+    await previewBtn.click();
+    await expect(previewBtn).toHaveText('Preview log / output');
+    await expect(preViewer).toBeHidden();
+
+    // 2. Artifact deletion with confirmation dialog
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain('Are you sure you want to delete this artifact?');
+      await dialog.accept();
+    });
+
+    const deleteBtn = logArtifactRow.locator('[data-testid="delete-artifact-btn"]');
+    await expect(deleteBtn).toBeVisible();
+    await deleteBtn.click();
+
+    // Verify artifact is removed from the UI
+    await expect(artifactsSection.locator('text=Automated test execution logs')).toBeHidden();
+
+    // Verify artifact record is deleted on server
+    const getTaskRes = await fetch(`${serverUrl}/api/v1/tasks/${taskId}`);
+    expect(getTaskRes.ok).toBe(true);
+    const taskData = await getTaskRes.json();
+    const found = taskData.artifacts.some((a: any) => a.id === uploadedArt.id);
+    expect(found).toBe(false);
+
+    // Verify stored file on disk was removed
+    const storedFiles = fs.readdirSync(artifactsDir).filter((f) => f.startsWith(uploadedArt.id));
+    expect(storedFiles.length).toBe(0);
+  });
 });

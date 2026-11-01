@@ -556,6 +556,11 @@ type acReorderReq struct {
 	Seqs  []int      `json:"seqs"`
 }
 
+// artifactRemoveReq is DELETE /tasks/{id}/artifacts/{artifact_id}.
+type artifactRemoveReq struct {
+	Actor actorInput `json:"actor"`
+}
+
 // artifactReq is POST /tasks/{id}/artifacts. Kind must be one of
 // log|screenshot|command-output|trace|url|other (else 400); Ref is the URL or
 // filesystem path and must not be empty after trimming (else 400); Summary is
