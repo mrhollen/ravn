@@ -3941,7 +3941,7 @@ test("Notes Markdown preview, Activity feed diffs, subtask quick-create, and glo
   // Assignee change
   assert.equal(
     formatEventDetail({ kind: "assigned", after: JSON.stringify({ assignee: { name: "alice" } }) }),
-    "assigned to alice"
+    "assignee: alice"
   );
   // AC toggle
   assert.equal(
@@ -3951,7 +3951,7 @@ test("Notes Markdown preview, Activity feed diffs, subtask quick-create, and glo
   // AC added
   assert.equal(
     formatEventDetail({ kind: "ac-added", after: JSON.stringify({ seq: 3, text: "Add test" }) }),
-    'AC #3 added "Add test"'
+    "AC #3 added"
   );
   // Relation changed
   assert.equal(

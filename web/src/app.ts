@@ -116,8 +116,8 @@ export function formatEventDetail(e?: { kind: string; before?: string; after?: s
     }
     case "assigned": {
       const assigneeName = a?.assignee?.name || (typeof a?.assignee === "string" ? a.assignee : "");
-      if (assigneeName) return `assigned to ${assigneeName}`;
-      if (b?.assignee && !a?.assignee) return "unassigned";
+      if (assigneeName) return `assignee: ${assigneeName}`;
+      if (b?.assignee && !a?.assignee) return "owner removed";
       return "";
     }
     case "claimed": {
@@ -148,8 +148,7 @@ export function formatEventDetail(e?: { kind: string; before?: string; after?: s
     }
     case "ac-added": {
       const seq = a?.seq;
-      const text = a?.text ? ` "${a.text}"` : "";
-      return seq !== undefined ? `AC #${seq} added${text}` : "AC added";
+      return seq !== undefined ? `AC #${seq} added` : "AC added";
     }
     case "ac-updated": {
       if (a?.reorder || b?.reorder) return "ACs reordered";
