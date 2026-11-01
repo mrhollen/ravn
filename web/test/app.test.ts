@@ -4047,5 +4047,98 @@ test("Notes Markdown preview, Activity feed diffs, subtask quick-create, and glo
   assert.equal(app.showNewTask, false, "n ignored when ctrlKey is true");
 });
 
+test("Artifacts clipboard paste and drag-and-drop upload (01M5XTB1F8GFTEYPC2RDW6RFRQ)", async () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  // AC1 & AC2: Paste and drop handlers wired on detail drawer and artifacts section
+  assert.ok(html.includes('@paste="handlePaste($event)"'), "drawer paste handler wired");
+  assert.ok(html.includes('data-testid="detail-artifacts-section"'), "artifacts section testid present");
+  assert.ok(html.includes('@drop.prevent="handleArtifactDrop($event)"'), "artifacts drop handler wired");
+  assert.ok(html.includes('@dragover.prevent="artifactDragOver = true"'), "artifacts dragover handler wired");
+
+  const app = ravnApp();
+  app.detailOpen = true;
+  app.detailId = "01TASK_ART";
+  app.detail = { id: "01TASK_ART", title: "Task with Artifacts", artifacts: [], notes: "", comments: [] } as any;
+
+  let uploadCalled = false;
+  let uploadArgs: any = null;
+  const origUpload = api.uploadArtifact;
+  api.uploadArtifact = async (taskId: string, file: any, kind: any, summary: any, actor: any) => {
+    uploadCalled = true;
+    uploadArgs = { taskId, file, kind, summary, actor };
+    return {
+      id: "01ART_NEW",
+      task_id: taskId,
+      kind,
+      ref: `/artifacts/01ART_NEW`,
+      summary,
+      actor,
+      created_at: new Date().toISOString(),
+    } as any;
+  };
+
+  try {
+    // 1. uploadFileArtifact with screenshot
+    const fakeImageFile = new File(["fake image content"], "snapshot.png", { type: "image/png" });
+    const resImg = await app.uploadFileArtifact(fakeImageFile);
+    assert.ok(uploadCalled);
+    assert.equal(uploadArgs.taskId, "01TASK_ART");
+    assert.equal(uploadArgs.kind, "screenshot");
+    assert.equal(app.detail?.artifacts.length, 1);
+    assert.equal(app.detail?.artifacts[0].id, "01ART_NEW");
+
+    // 2. uploadFileArtifact with log file
+    uploadCalled = false;
+    const fakeLogFile = new File(["log line 1\nlog line 2"], "debug.log", { type: "text/plain" });
+    const resLog = await app.uploadFileArtifact(fakeLogFile);
+    assert.ok(uploadCalled);
+    assert.equal(uploadArgs.kind, "log");
+    assert.equal(app.detail?.artifacts.length, 2);
+
+    // 3. handleArtifactDrop
+    uploadCalled = false;
+    app.artifactDragOver = true;
+    await app.handleArtifactDrop({
+      dataTransfer: {
+        files: [new File(["dropped content"], "drop.png", { type: "image/png" })],
+      },
+    } as any);
+    assert.equal(app.artifactDragOver, false, "dragover state cleared on drop");
+    assert.ok(uploadCalled);
+    assert.equal(uploadArgs.file.name, "drop.png");
+
+    // 4. handlePaste with image into textarea
+    uploadCalled = false;
+    let defaultPrevented = false;
+    const fakeTextarea = {
+      tagName: "TEXTAREA",
+      value: "Initial comment",
+      selectionStart: 15,
+      selectionEnd: 15,
+      dispatchEvent: () => true,
+    } as any;
+
+    await app.handlePaste({
+      target: fakeTextarea,
+      preventDefault: () => { defaultPrevented = true; },
+      clipboardData: {
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => new File(["paste bytes"], "clipboard.png", { type: "image/png" }),
+          },
+        ],
+      },
+    } as any);
+
+    assert.ok(defaultPrevented, "default prevented for image paste");
+    assert.ok(uploadCalled, "uploaded image on paste");
+    assert.ok(fakeTextarea.value.includes("![screenshot](/artifacts/01ART_NEW)"), "markdown reference inserted into textarea");
+  } finally {
+    api.uploadArtifact = origUpload;
+  }
+});
+
 
 

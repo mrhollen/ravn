@@ -127,6 +127,7 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
       }
     });
     page.on('pageerror', (err) => {
+      console.log('PAGEERROR STACK:', err.stack);
       uncaughtConsoleErrors.push(`[uncaught pageerror] ${err.message}`);
     });
   });
@@ -381,5 +382,83 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
     await expect(pathRow.getByText('Copied!')).toBeVisible();
     const clipText = await page.evaluate(() => navigator.clipboard.readText());
     expect(clipText).toBe('/var/log/legacy.log');
+  });
+
+  test('clipboard image paste and drag-and-drop file upload (01M5XTB1F8GFTEYPC2RDW6RFRQ)', async ({ page, isolatedServer }) => {
+    serverUrl = isolatedServer.url;
+    const { projectId } = await seedProjectAndTask(serverUrl);
+
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, projectId);
+
+    const taskCard = page.locator('article', { hasText: 'Task with Artifacts' });
+    await taskCard.click();
+
+    const drawer = page.locator('#cb-detail-drawer');
+    await expect(drawer).toBeVisible();
+
+    // 1. AC2: Drag-and-drop file onto artifacts section
+    const artifactsSection = drawer.locator('[data-testid="detail-artifacts-section"]');
+    await expect(artifactsSection).toBeVisible();
+
+    // Dispatch drop event with a mock PNG file
+    const dropFilePayload = {
+      name: 'dropped-snapshot.png',
+      mimeType: 'image/png',
+      buffer: PNG_BYTES.toString('base64'),
+    };
+    await artifactsSection.evaluate((el, { name, mimeType, buffer }) => {
+      const byteChars = atob(buffer);
+      const byteNumbers = new Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) {
+        byteNumbers[i] = byteChars.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: mimeType });
+      const file = new File([blob], name, { type: mimeType });
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      const dropEvt = new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer,
+      });
+      el.dispatchEvent(dropEvt);
+    }, dropFilePayload);
+
+    // Verify artifact is attached and visible
+    await expect(drawer.locator('img[alt="dropped-snapshot.png"]')).toBeVisible({ timeout: 5000 });
+
+    // 2. AC1 & AC3: Clipboard image paste inside comment textarea
+    const commentInput = drawer.getByTestId('comment-textarea');
+    await commentInput.focus();
+
+    const pasteFilePayload = {
+      name: 'pasted-capture.png',
+      mimeType: 'image/png',
+      buffer: PNG_BYTES.toString('base64'),
+    };
+    await commentInput.evaluate((el, { name, mimeType, buffer }) => {
+      const byteChars = atob(buffer);
+      const byteNumbers = new Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) {
+        byteNumbers[i] = byteChars.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: mimeType });
+      const file = new File([blob], name, { type: mimeType });
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      const pasteEvt = new Event('paste', {
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(pasteEvt, 'clipboardData', { value: dataTransfer });
+      el.dispatchEvent(pasteEvt);
+    }, pasteFilePayload);
+
+    // Verify pasted image is attached and markdown reference is inserted into the textarea
+    await expect(drawer.locator('img[alt="pasted-capture.png"]')).toBeVisible({ timeout: 5000 });
+    await expect(commentInput).toHaveValue(/!\[screenshot\]\(\/artifacts\//);
   });
 });

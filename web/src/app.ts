@@ -5031,6 +5031,81 @@ export function ravnApp() {
       }
     },
 
+    artifactDragOver: false,
+
+    async uploadFileArtifact(file: File, summary?: string, kind?: ArtifactKind): Promise<ArtifactRow | null> {
+      const t = this.detail;
+      if (!t || this.attachingArtifact) return null;
+      this.attachingArtifact = true;
+      try {
+        let inferredKind: ArtifactKind = kind || "other";
+        if (!kind) {
+          if (file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(file.name)) {
+            inferredKind = "screenshot";
+          } else if (file.type.includes("text") || file.name.endsWith(".log")) {
+            inferredKind = "log";
+          }
+        }
+        const a = await api.uploadArtifact(
+          t.id,
+          file,
+          inferredKind,
+          summary || file.name,
+          this.actor(),
+        );
+        const d = this.detail;
+        if (d && d.id === t.id) this.detail = { ...d, artifacts: [...d.artifacts, a] };
+        this.toast(`Attached ${a.kind}: ${file.name}`);
+        return a;
+      } catch (e) {
+        this.toast(errMsg(e), "error");
+        return null;
+      } finally {
+        this.attachingArtifact = false;
+      }
+    },
+
+    async handleArtifactDrop(e: DragEvent): Promise<void> {
+      this.artifactDragOver = false;
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      for (let i = 0; i < files.length; i++) {
+        await this.uploadFileArtifact(files[i]);
+      }
+    },
+
+    async handlePaste(e: ClipboardEvent): Promise<void> {
+      if (!this.detailOpen || !this.detail) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (!file) continue;
+          const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+          const ext = item.type.split("/")[1] || "png";
+          const filename = file.name && file.name !== "image.png" ? file.name : `screenshot-${timestamp}.${ext}`;
+          const namedFile = new File([file], filename, {
+            type: item.type,
+          });
+          const a = await this.uploadFileArtifact(namedFile, filename, "screenshot");
+          const target = e.target as HTMLTextAreaElement | null;
+          if (target && target.tagName === "TEXTAREA" && a) {
+            const mdRef = `\n![screenshot](${a.ref})\n`;
+            const start = target.selectionStart ?? target.value.length;
+            const end = target.selectionEnd ?? target.value.length;
+            const val = target.value;
+            target.value = val.slice(0, start) + mdRef + val.slice(end);
+            target.selectionStart = target.selectionEnd = start + mdRef.length;
+            target.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          break;
+        }
+      }
+    },
+
     resetArtifactForm(): void {
       this.artifactForm = { open: false, kind: "url", ref: "", summary: "", file: null };
       const fileInput = document.getElementById("artifactFileInput") as HTMLInputElement | null;
