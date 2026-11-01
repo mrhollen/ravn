@@ -26,6 +26,7 @@
       x-data="app()"
       x-init="init()"
       @keydown.escape.window="dismissTop()"
+      @keydown.window="handleGlobalKeydown($event)"
       class="flex h-full min-h-screen flex-col"
     >
       <!-- ============================================================ toasts -->
@@ -433,7 +434,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <svg class="pointer-events-none absolute left-2 h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
                 </svg>
-                <input type="text" x-model="filterSearch" @input="syncUrlState()" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
+                <input type="text" x-model="filterSearch" @input="syncUrlState()" data-testid="board-search-input" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
                        class="field w-40 py-1 pl-7 pr-2 text-xs sm:w-52 md:w-60" />
               </span>
             </label>
@@ -779,7 +780,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     <svg class="pointer-events-none absolute left-2 h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
                     </svg>
-                    <input type="text" x-model="filterSearch" @input="syncUrlState()" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
+                    <input type="text" x-model="filterSearch" @input="syncUrlState()" data-testid="board-search-input" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
                            class="field w-full py-1 pl-7 pr-2 text-xs sm:w-56" />
                   </span>
                 </label>
@@ -1918,8 +1919,50 @@ DOM-placed after the collapsible strip: on md+ it renders flush
         </div>
       </div>
 
+      <!-- ================================================= shortcut help modal -->
+      <div id="cb-shortcut-help" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title"
+           data-testid="shortcut-help-modal"
+           x-show="showShortcutHelp" x-cloak
+           class="fixed inset-0 z-[70] overflow-y-auto modal-backdrop p-4 flex items-center justify-center"
+           @click.self="showShortcutHelp = false">
+        <div class="w-full max-w-md rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
+          <header class="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 px-5 py-3">
+            <h2 id="shortcut-help-title" class="text-base font-semibold flex items-center gap-2">
+              <svg class="h-4 w-4 text-zinc-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+                <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8" />
+              </svg>
+              <span>Keyboard Shortcuts</span>
+            </h2>
+            <button type="button" @click="showShortcutHelp = false" aria-label="Close" class="modal-close">&times;</button>
+          </header>
+          <div class="px-5 py-4 space-y-3 text-xs">
+            <div class="flex items-center justify-between py-1 border-b border-zinc-100 dark:border-zinc-800">
+              <span class="text-zinc-600 dark:text-zinc-400">New task</span>
+              <kbd class="rounded border border-zinc-200 bg-zinc-100 px-2 py-0.5 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-800">n</kbd>
+            </div>
+            <div class="flex items-center justify-between py-1 border-b border-zinc-100 dark:border-zinc-800">
+              <span class="text-zinc-600 dark:text-zinc-400">Focus search filter</span>
+              <kbd class="rounded border border-zinc-200 bg-zinc-100 px-2 py-0.5 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-800">/</kbd>
+            </div>
+            <div class="flex items-center justify-between py-1 border-b border-zinc-100 dark:border-zinc-800">
+              <span class="text-zinc-600 dark:text-zinc-400">Toggle shortcut help</span>
+              <kbd class="rounded border border-zinc-200 bg-zinc-100 px-2 py-0.5 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-800">?</kbd>
+            </div>
+            <div class="flex items-center justify-between py-1 border-b border-zinc-100 dark:border-zinc-800">
+              <span class="text-zinc-600 dark:text-zinc-400">Submit form (modal / notes / comment)</span>
+              <kbd class="rounded border border-zinc-200 bg-zinc-100 px-2 py-0.5 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-800">Cmd / Ctrl + Enter</kbd>
+            </div>
+            <div class="flex items-center justify-between py-1">
+              <span class="text-zinc-600 dark:text-zinc-400">Close overlay / cancel</span>
+              <kbd class="rounded border border-zinc-200 bg-zinc-100 px-2 py-0.5 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-800">Esc</kbd>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- ========================================================== new task -->
-      <div id="cb-new-task" role="dialog" aria-modal="true" aria-labelledby="new-task-title" x-show="showNewTask" x-cloak class="fixed inset-0 z-40 overflow-y-auto modal-backdrop p-4" @click.self="requestCloseNewTask()">
+      <div id="cb-new-task" role="dialog" aria-modal="true" aria-labelledby="new-task-title" x-show="showNewTask" x-cloak class="fixed inset-0 z-[70] overflow-y-auto modal-backdrop p-4" @click.self="requestCloseNewTask()">
         <div class="mx-auto mt-10 w-full max-w-lg rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
           <header class="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 px-5 py-3">
             <div class="flex items-center gap-2.5">
@@ -1933,6 +1976,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   New task
                   <span class="ml-1 text-xs font-normal text-zinc-600 dark:text-zinc-400" x-text="'→ ' + statusLabel(newTaskTarget)"></span>
                 </h2>
+                <div x-show="newTaskParentId" x-cloak data-testid="new-task-subtask-banner" class="mt-0.5 text-xs text-indigo-700 dark:text-indigo-400 flex items-center gap-1">
+                  <span>Subtask of:</span>
+                  <span class="font-medium truncate max-w-xs" x-text="detail?.title || shortId(newTaskParentId)"></span>
+                </div>
               </div>
             </div>
             <button type="button" @click="requestCloseNewTask()" aria-label="Close" class="modal-close">&times;</button>
@@ -2879,12 +2926,35 @@ DOM-placed after the collapsible strip: on md+ it renders flush
 
                 <!-- notes -->
                 <section>
-                  <h3 class="section-title">Notes <span class="font-normal normal-case tracking-normal">(resume scratchpad — replace-on-save)</span></h3>
-                  <textarea x-model="notesDraft" @input="notesDirty = true" rows="5" aria-label="Task notes"
+                  <div class="flex items-center justify-between mb-1.5">
+                    <h3 class="section-title mb-0">Notes <span class="font-normal normal-case tracking-normal">(resume scratchpad)</span></h3>
+                    <div role="group" aria-label="Notes input mode"
+                         class="inline-flex items-stretch rounded-md border border-zinc-300 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+                      <button type="button" @click="notesShowPreview = false" data-testid="notes-write-btn"
+                              :aria-pressed="String(!notesShowPreview)"
+                              class="rounded-l-md px-2 py-0.5 text-[11px] font-medium transition focus-ring"
+                              :class="!notesShowPreview ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-800'">Write</button>
+                      <span class="w-px self-stretch bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
+                      <button type="button" @click="notesShowPreview = true" data-testid="notes-preview-btn"
+                              :aria-pressed="String(notesShowPreview)"
+                              class="rounded-r-md px-2 py-0.5 text-[11px] font-medium transition focus-ring"
+                              :class="notesShowPreview ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-800'">Preview</button>
+                    </div>
+                  </div>
+                  <textarea x-show="!notesShowPreview" x-model="notesDraft"
+                            @input="notesDirty = true; saveNotesDraft()"
+                            rows="5" aria-label="Task notes"
+                            data-testid="notes-textarea"
                             @keydown.cmd.enter.prevent="if (!savingNotes && notesDirty) saveNotes()"
                             @keydown.ctrl.enter.prevent="if (!savingNotes && notesDirty) saveNotes()"
                             placeholder="Last run: …&#10;Next: …"
                             class="field w-full font-mono text-xs leading-relaxed"></textarea>
+                  <div x-show="notesShowPreview && notesDraft.trim()" x-cloak
+                       data-testid="notes-preview"
+                       class="md-body rounded-md border border-zinc-200 bg-white px-3 py-2 text-xs shadow-sm dark:border-zinc-700 dark:bg-zinc-950 min-h-[5rem]"
+                       x-html="md(notesDraft)"></div>
+                  <p data-testid="notes-preview-empty" x-show="notesShowPreview && !notesDraft.trim()" x-cloak
+                     class="mt-1 text-xs italic text-zinc-600 dark:text-zinc-400">Nothing to preview yet.</p>
                   <div class="mt-1.5 flex items-center justify-end gap-2">
                     <span x-show="notesDirty" x-cloak class="text-[11px] text-amber-800 dark:text-amber-400">Unsaved changes</span>
                     <button type="button" @click="saveNotes()" :disabled="savingNotes || !notesDirty"
@@ -3064,10 +3134,18 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <!-- relations -->
                 <section class="task-detail-sidebar-section" data-testid="detail-relations-section">
                   <div class="flex items-center justify-between mb-2">
-                    <h3 class="section-title mb-0">Relations</h3>
-                    <template x-if="relationRows().length > 0">
-                      <span class="text-xs text-zinc-500 dark:text-zinc-400" x-text="'(' + relationRows().length + ')'"></span>
-                    </template>
+                    <div class="flex items-center gap-1.5">
+                      <h3 class="section-title mb-0">Relations</h3>
+                      <template x-if="relationRows().length > 0">
+                        <span class="text-xs text-zinc-500 dark:text-zinc-400" x-text="'(' + relationRows().length + ')'"></span>
+                      </template>
+                    </div>
+                    <button type="button" @click="openNewSubtask(detail)"
+                            data-testid="add-subtask-btn"
+                            class="inline-flex items-center gap-1 rounded border border-zinc-200 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 focus-ring">
+                      <svg class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" /></svg>
+                      <span>Add subtask</span>
+                    </button>
                   </div>
 
                   <!-- Subtasks progress in detail if this task has children (AC2/AC3) -->
@@ -3197,12 +3275,18 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 <section x-show="(detail ? detail.events.length : 0) > 0" x-cloak
                          class="task-detail-sidebar-section">
                   <h3 class="section-title">Activity</h3>
-                  <ul class="text-xs text-zinc-600 dark:text-zinc-400">
+                  <ul class="text-xs text-zinc-600 dark:text-zinc-400" data-testid="activity-feed">
                     <template x-for="e in detail.events.slice(0, 12)" :key="e.id">
-                      <li class="flex items-center gap-2 border-b border-zinc-100 dark:border-zinc-800 py-1.5 last:border-0">
-                        <code class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] dark:bg-zinc-800" x-text="e.kind"></code>
-                        <span class="truncate" x-text="actorLabel(e.actor)"></span>
-                        <time class="ml-auto shrink-0" :title="e.at" x-text="relTime(e.at)"></time>
+                      <li class="flex flex-col gap-0.5 border-b border-zinc-100 dark:border-zinc-800 py-1.5 last:border-0" data-testid="activity-event-row">
+                        <div class="flex items-center gap-2">
+                          <code class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] dark:bg-zinc-800" x-text="e.kind"></code>
+                          <span class="truncate" x-text="actorLabel(e.actor)"></span>
+                          <time class="ml-auto shrink-0" :title="e.at" x-text="relTime(e.at)"></time>
+                        </div>
+                        <div x-show="formatEventDetail(e)" x-cloak
+                             data-testid="event-detail-diff"
+                             class="text-[11px] font-mono text-zinc-500 dark:text-zinc-400 pl-1"
+                             x-text="formatEventDetail(e)"></div>
                       </li>
                     </template>
                   </ul>

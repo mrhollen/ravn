@@ -20,6 +20,11 @@ export function descriptionDraftKey(taskId: string): string {
   return `${DRAFT_PREFIX}${taskId}.description`;
 }
 
+/** Key for a task's auto-saved notes draft. */
+export function notesDraftKey(taskId: string): string {
+  return `${DRAFT_PREFIX}${taskId}.notes`;
+}
+
 /** Key for a task's auto-saved comment draft (JSON body+kind). */
 export function commentDraftKey(taskId: string): string {
   return `${DRAFT_PREFIX}${taskId}.comment`;

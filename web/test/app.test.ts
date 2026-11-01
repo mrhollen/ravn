@@ -22,6 +22,7 @@ import {
   buildBoardQueryString,
   SEARCH_DEBOUNCE_MS,
   FULLTEXT_SEARCH_LIMIT,
+  formatEventDetail,
 } from "../src/app.ts";
 import { localYmd, withFetch, withWindow } from "./test-helpers.ts";
 
@@ -3868,6 +3869,182 @@ test("Relation combobox: search, exclusion of current & already-related, and blo
   app.selectRelationTarget(list[0]);
   assert.equal(app.relationForm.targetId, list[0].id);
   assert.equal(app.relationForm.open, false);
+});
+
+test("Notes Markdown preview, Activity feed diffs, subtask quick-create, and global shortcuts (01M5XSNPVT0ETYQH9R8Q5HNQSE)", async () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  // AC1: Notes write/preview buttons, preview container, and draft save
+  assert.ok(html.includes('data-testid="notes-write-btn"'), "notes write btn present");
+  assert.ok(html.includes('data-testid="notes-preview-btn"'), "notes preview btn present");
+  assert.ok(html.includes('data-testid="notes-preview"'), "notes preview container present");
+  assert.ok(html.includes('data-testid="notes-textarea"'), "notes textarea present");
+
+  // AC2: Activity feed diff element present
+  assert.ok(html.includes('data-testid="event-detail-diff"'), "event-detail-diff present in html");
+
+  // AC3: Subtask quick-create button and banner
+  assert.ok(html.includes('data-testid="add-subtask-btn"'), "add-subtask-btn present in html");
+  assert.ok(html.includes('data-testid="new-task-subtask-banner"'), "subtask banner in new task dialog present");
+
+  // AC4: Global shortcuts listener, search input testid, shortcut help modal
+  assert.ok(html.includes('@keydown.window="handleGlobalKeydown($event)"'), "global keydown listener present");
+  assert.ok(html.includes('data-testid="shortcut-help-modal"'), "shortcut help modal present");
+  assert.ok(html.includes('data-testid="board-search-input"'), "board-search-input present");
+
+  // --- AC1 Unit Tests: Notes Markdown toggle & localStorage draft persistence ---
+  const app = ravnApp();
+  const taskA = { id: "01TASK001", title: "Task A", notes: "Initial server notes", comments: [] };
+  app.detailOpen = true;
+  app.detailId = "01TASK001";
+  app.applyDetail(taskA as any);
+  assert.equal(app.notesDraft, "Initial server notes");
+  assert.equal(app.notesShowPreview, false);
+
+  // Toggle preview mode
+  app.notesShowPreview = true;
+  assert.equal(app.notesShowPreview, true);
+  app.notesShowPreview = false;
+
+  // Edit notes and save draft to safeStorage
+  app.notesDraft = "# Heading\n- [ ] Unfinished checklist";
+  app.notesDirty = true;
+  app.saveNotesDraft();
+  assert.equal(safeStorage.getItem("ravn.draft.task.01TASK001.notes"), "# Heading\n- [ ] Unfinished checklist");
+
+  // Re-opening taskA restores the unsaved local draft
+  const appFresh = ravnApp();
+  appFresh.detailOpen = true;
+  appFresh.detailId = "01TASK001";
+  appFresh.applyDetail(taskA as any);
+  assert.equal(appFresh.notesDraft, "# Heading\n- [ ] Unfinished checklist", "localStorage draft restored");
+  assert.equal(appFresh.notesDirty, true);
+
+  // Clean up storage
+  safeStorage.removeItem("ravn.draft.task.01TASK001.notes");
+
+  // --- AC2 Unit Tests: formatEventDetail diff parsing ---
+  // Status transition
+  assert.equal(
+    formatEventDetail({ kind: "status-changed", before: JSON.stringify({ status: "todo" }), after: JSON.stringify({ status: "doing" }) }),
+    "todo → doing"
+  );
+  // Priority update
+  assert.equal(
+    formatEventDetail({ kind: "updated", before: JSON.stringify({ priority: 2 }), after: JSON.stringify({ priority: 4 }) }),
+    "P2 → P4"
+  );
+  // Title and due update
+  assert.equal(
+    formatEventDetail({ kind: "updated", before: JSON.stringify({ title: "Old", due_at: "2026-01-01" }), after: JSON.stringify({ title: "New", due_at: null }) }),
+    "title updated, due date cleared"
+  );
+  // Assignee change
+  assert.equal(
+    formatEventDetail({ kind: "assigned", after: JSON.stringify({ assignee: { name: "alice" } }) }),
+    "assigned to alice"
+  );
+  // AC toggle
+  assert.equal(
+    formatEventDetail({ kind: "ac-toggled", before: JSON.stringify({ seq: 1, done: false }), after: JSON.stringify({ seq: 1, done: true }) }),
+    "AC #1 completed"
+  );
+  // AC added
+  assert.equal(
+    formatEventDetail({ kind: "ac-added", after: JSON.stringify({ seq: 3, text: "Add test" }) }),
+    'AC #3 added "Add test"'
+  );
+  // Relation changed
+  assert.equal(
+    formatEventDetail({ kind: "relation-changed", after: JSON.stringify({ action: "add", kind: "child", other_id: "01M5XTCCKRABBA2Y3N38V8RY63" }) }),
+    "add child 01M5XTCC…"
+  );
+  // Claimed / Released
+  assert.equal(
+    formatEventDetail({ kind: "claimed", after: JSON.stringify({ holder: { name: "bot-1" } }) }),
+    "claimed by bot-1"
+  );
+  assert.equal(
+    formatEventDetail({ kind: "released" }),
+    "claim released"
+  );
+
+  // --- AC3 Unit Tests: openNewSubtask & relationship creation ---
+  let addRelationCalled = false;
+  let relArgs: any = null;
+  const mockApi = {
+    createTask: async () => ({ task: { id: "01NEWCHILD", version: 1 } }),
+    addRelation: async (taskId: string, otherId: string, kind: string, actor: any) => {
+      addRelationCalled = true;
+      relArgs = { taskId, otherId, kind, actor };
+    },
+    loadProjects: async () => {},
+    loadBoard: async () => {},
+  };
+  (app as any).selectedProjectId = "p1";
+  (app as any).detail = { id: "01PARENT", title: "Parent Task", version: 1 };
+  app.openNewSubtask(app.detail as any);
+  assert.equal(app.showNewTask, true);
+  assert.equal(app.newTaskParentId, "01PARENT");
+
+  // Override api methods on global api object
+  const origCreate = api.createTask;
+  const origAddRel = api.addRelation;
+  api.createTask = mockApi.createTask as any;
+  api.addRelation = mockApi.addRelation as any;
+  try {
+    app.newTask.title = "Child Task";
+    await app.createTask();
+    assert.ok(addRelationCalled, "addRelation was called on subtask create");
+    assert.equal(relArgs.taskId, "01NEWCHILD");
+    assert.equal(relArgs.otherId, "01PARENT");
+    assert.equal(relArgs.kind, "child");
+    assert.equal(app.newTaskParentId, null, "newTaskParentId cleared after close");
+  } finally {
+    api.createTask = origCreate;
+    api.addRelation = origAddRel;
+  }
+
+  // --- AC4 Unit Tests: handleGlobalKeydown ---
+  app.showNewTask = false;
+  app.showShortcutHelp = false;
+
+  // '?' toggles shortcut help
+  let defaultPrevented = false;
+  app.handleGlobalKeydown({
+    key: "?",
+    preventDefault: () => { defaultPrevented = true; },
+  } as any);
+  assert.equal(app.showShortcutHelp, true, "? opened shortcut help");
+  assert.ok(defaultPrevented);
+
+  // Escape dismisses shortcut help
+  app.dismissTop();
+  assert.equal(app.showShortcutHelp, false, "dismissTop closed shortcut help");
+
+  // 'n' opens new task
+  app.handleGlobalKeydown({
+    key: "n",
+    preventDefault: () => {},
+  } as any);
+  assert.equal(app.showNewTask, true, "n opened new task modal");
+  app.closeNewTask();
+
+  // Ignored when focused in an input/textarea element
+  const fakeInput = { tagName: "INPUT", isContentEditable: false } as any;
+  app.handleGlobalKeydown({
+    key: "n",
+    target: fakeInput,
+    preventDefault: () => {},
+  } as any);
+  assert.equal(app.showNewTask, false, "n ignored when target is INPUT");
+
+  // Ignored when ctrlKey/metaKey pressed
+  app.handleGlobalKeydown({
+    key: "n",
+    ctrlKey: true,
+    preventDefault: () => {},
+  } as any);
+  assert.equal(app.showNewTask, false, "n ignored when ctrlKey is true");
 });
 
 

@@ -11,7 +11,7 @@ import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus }
 import { beginMove, canMove, endMove, friendlyTransitionError, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
 import { renderMarkdown } from "./md";
-import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, serializeCommentDraft } from "./drafts";
+import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
 import { dispatchRealtimeEvent, KNOWN_REALTIME_KINDS } from "./realtime";
 import type {
   AcRow,
@@ -68,6 +68,114 @@ export const LS_SORT = "ravn.sort";
 export const LS_HOIST_PARENTS = "ravn.hoist_parents";
 export const LS_CARD_DENSITY = "ravn.card_density";
 export const LS_THEME = "ravn_theme";
+
+/** Human-readable event diff formatter for the Task Detail Activity list. */
+export function formatEventDetail(e?: { kind: string; before?: string; after?: string } | null): string {
+  if (!e || !e.kind) return "";
+  let b: any = null;
+  let a: any = null;
+  if (e.before) {
+    try {
+      b = JSON.parse(e.before);
+    } catch {}
+  }
+  if (e.after) {
+    try {
+      a = JSON.parse(e.after);
+    } catch {}
+  }
+
+  switch (e.kind) {
+    case "status-changed": {
+      const from = b?.status;
+      const to = a?.status;
+      if (from && to) return `${from} → ${to}`;
+      if (to) return `status: ${to}`;
+      return "";
+    }
+    case "updated": {
+      const diffs: string[] = [];
+      if (b?.priority !== undefined && a?.priority !== undefined && b.priority !== a.priority) {
+        diffs.push(`P${b.priority} → P${a.priority}`);
+      } else if (a?.priority !== undefined && b?.priority === undefined) {
+        diffs.push(`priority P${a.priority}`);
+      }
+      if (b?.title !== undefined && a?.title !== undefined && b.title !== a.title) {
+        diffs.push("title updated");
+      }
+      if (b?.due_at !== undefined || a?.due_at !== undefined) {
+        if (!a?.due_at) diffs.push("due date cleared");
+        else diffs.push("due date updated");
+      }
+      if (b?.description !== undefined && a?.description !== undefined && b.description !== a.description) {
+        diffs.push("description updated");
+      }
+      return diffs.join(", ");
+    }
+    case "assigned": {
+      const assigneeName = a?.assignee?.name || (typeof a?.assignee === "string" ? a.assignee : "");
+      if (assigneeName) return `assigned to ${assigneeName}`;
+      if (b?.assignee && !a?.assignee) return "unassigned";
+      return "";
+    }
+    case "claimed": {
+      const holder = a?.holder?.name;
+      if (holder) return `claimed by ${holder}`;
+      return "claimed";
+    }
+    case "released": {
+      return "claim released";
+    }
+    case "heartbeat": {
+      return "lease extended";
+    }
+    case "noted": {
+      return "notes updated";
+    }
+    case "commented": {
+      const kind = a?.kind;
+      return kind ? `commented (${kind})` : "commented";
+    }
+    case "ac-toggled": {
+      const seq = a?.seq ?? b?.seq;
+      const done = a?.done;
+      if (seq !== undefined) {
+        return done ? `AC #${seq} completed` : `AC #${seq} reopened`;
+      }
+      return "";
+    }
+    case "ac-added": {
+      const seq = a?.seq;
+      const text = a?.text ? ` "${a.text}"` : "";
+      return seq !== undefined ? `AC #${seq} added${text}` : "AC added";
+    }
+    case "ac-updated": {
+      const seq = a?.seq ?? b?.seq;
+      return seq !== undefined ? `AC #${seq} updated` : "AC updated";
+    }
+    case "ac-removed": {
+      const seq = b?.seq ?? a?.seq;
+      return seq !== undefined ? `AC #${seq} removed` : "AC removed";
+    }
+    case "relation-changed": {
+      const target = a || b;
+      const action = target?.action || (a ? "added" : "removed");
+      const kind = target?.kind ? ` ${target.kind}` : "";
+      const other = target?.other_id ? ` ${shortId(target.other_id)}` : "";
+      return `${action}${kind}${other}`;
+    }
+    case "artifact-added": {
+      const kind = a?.kind || "artifact";
+      const filename = a?.filename ? ` (${a.filename})` : "";
+      return `attached ${kind}${filename}`;
+    }
+    case "created": {
+      return "task created";
+    }
+    default:
+      return "";
+  }
+}
 export { LS_TOKEN };
 export const DEFAULT_DONE_LIMIT = 20;
 /** Separator between the segments of a dynamic document.title (WCAG 2.4.2,
@@ -2999,6 +3107,14 @@ export function ravnApp() {
     duplicates: [] as TaskSummary[],
     /** Focus session for the new-task modal (trap + restore). */
     newTaskFocus: null as DialogFocus | null,
+    /** Parent task ID when creating a subtask via "+ Add subtask". */
+    newTaskParentId: null as string | null,
+
+    openNewSubtask(parentTask: { id: string } | null | undefined): void {
+      if (!parentTask) return;
+      this.openNewTask("todo");
+      this.newTaskParentId = parentTask.id;
+    },
 
     openNewTask(status: Status = "todo"): void {
       this.newTaskTarget = status;
@@ -3025,6 +3141,7 @@ export function ravnApp() {
       this.showNewTask = false;
       this.confirmNewTaskDiscard = false;
       this.duplicates = [];
+      this.newTaskParentId = null;
       this.newTask = {
         title: "",
         description: "",
@@ -3077,6 +3194,7 @@ export function ravnApp() {
       if (this.taskBusy || !title || !this.selectedProjectId) return;
       this.taskBusy = true;
       let created: TaskSummary | null = null;
+      const parentId = this.newTaskParentId;
       try {
         const assigneeName = this.newTask.assigneeName.trim();
         const res = await api.createTask({
@@ -3105,14 +3223,28 @@ export function ravnApp() {
             this.toast("New task changed elsewhere before the move — check its column.", "info");
           }
         }
+        if (parentId) {
+          try {
+            await api.addRelation(created.id, parentId, "child", this.actor());
+          } catch (relErr) {
+            this.toast("Task created, but failed to link subtask: " + errMsg(relErr), "error");
+          }
+        }
         this.duplicates = res.possible_duplicates ?? [];
         this.closeNewTask();
       } catch (e) {
         this.toast(errMsg(e), "error");
       } finally {
         this.taskBusy = false;
-        if (created) void Promise.all([this.loadProjects(), this.loadBoard(true)]);
-        else void this.loadBoard(true); // board may have changed even on failure paths we care about
+        if (created) {
+          const promises: Promise<unknown>[] = [this.loadProjects(), this.loadBoard(true)];
+          if (parentId && this.detail && this.detail.id === parentId) {
+            promises.push(this.refreshDetail(true));
+          }
+          void Promise.all(promises);
+        } else {
+          void this.loadBoard(true); // board may have changed even on failure paths we care about
+        }
       }
     },
 
@@ -3663,9 +3795,16 @@ export function ravnApp() {
       // belongs to a DIFFERENT task is discarded so drafts cannot leak across
       // tasks (AC 2).
       if (!(this.notesDirty && this.notesDraftOwner === t.id)) {
-        this.notesDraft = t.notes;
-        this.notesDirty = false;
+        const savedNotes = safeStorage.getItem(notesDraftKey(t.id));
+        if (savedNotes !== null && savedNotes.trim() !== "") {
+          this.notesDraft = savedNotes;
+          this.notesDirty = true;
+        } else {
+          this.notesDraft = t.notes;
+          this.notesDirty = false;
+        }
         this.notesDraftOwner = t.id;
+        this.notesShowPreview = false;
       }
     },
 
@@ -4488,6 +4627,7 @@ export function ravnApp() {
     notesDraftOwner: null as string | null,
     notesDirty: false,
     savingNotes: false,
+    notesShowPreview: false,
 
     /** The close/switch held behind the unsaved-notes confirmation — null when
      *  no prompt is on screen. */
@@ -4501,6 +4641,21 @@ export function ravnApp() {
       this.notesDirty = false;
       this.notesDraft = "";
       this.notesDraftOwner = null;
+      this.notesShowPreview = false;
+    },
+
+    saveNotesDraft(): void {
+      const id = this.detail?.id;
+      if (!id) return;
+      const raw = this.notesDraft ?? "";
+      if (raw.trim() !== "") safeStorage.setItem(notesDraftKey(id), raw);
+      else safeStorage.removeItem(notesDraftKey(id));
+    },
+
+    clearNotesDraft(id?: string): void {
+      const targetId = id || this.detail?.id;
+      if (!targetId) return;
+      safeStorage.removeItem(notesDraftKey(targetId));
     },
 
     /** Show the unsaved-notes confirm and open its focus session. "Keep
@@ -4526,6 +4681,9 @@ export function ravnApp() {
     async confirmUnsavedNotes(): Promise<void> {
       const action = this.unsavedNotesAction;
       this.unsavedNotesAction = null;
+      if (this.notesDraftOwner) {
+        safeStorage.removeItem(notesDraftKey(this.notesDraftOwner));
+      }
       this.resetNotesDraft();
       this.closeDialog(this.confirmNotesFocus);
       this.confirmNotesFocus = null;
@@ -4550,6 +4708,7 @@ export function ravnApp() {
       this.savingNotes = true;
       try {
         await api.putNotes(t.id, { actor: this.actor(), notes: this.notesDraft });
+        safeStorage.removeItem(notesDraftKey(t.id));
         this.notesDirty = false;
         await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
       } catch (e) {
@@ -5356,11 +5515,44 @@ export function ravnApp() {
       return window.confirm(message);
     },
 
+    showShortcutHelp: false,
+
+    handleGlobalKeydown(e: KeyboardEvent): void {
+      if (!e) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName ? target.tagName.toLowerCase() : "";
+        if (tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable) {
+          return;
+        }
+      }
+
+      if (e.key === "n" || e.key === "N") {
+        if (!this.showNewTask && !this.showProjectSettings && !this.showShortcutHelp) {
+          e.preventDefault();
+          this.openNewTask("todo");
+        }
+      } else if (e.key === "/") {
+        e.preventDefault();
+        const searchInput = document.querySelector('input[x-model="filterSearch"]') as HTMLInputElement | null;
+        if (searchInput) {
+          searchInput.focus();
+          searchInput.select();
+        }
+      } else if (e.key === "?") {
+        e.preventDefault();
+        this.showShortcutHelp = !this.showShortcutHelp;
+      }
+    },
+
     /** Escape key: close the top-most overlay or cancel edit mode. Dirty
      *  surfaces (task edit, new task, project settings) confirm first via
      *  confirmDiscard() — Escape never silently discards a draft. */
     dismissTop(): void {
-      if (this.previewModal && this.previewModal.open) this.closeImagePreview();
+      if (this.showShortcutHelp) this.showShortcutHelp = false;
+      else if (this.previewModal && this.previewModal.open) this.closeImagePreview();
       else if (this.unsavedNotesAction) this.cancelUnsavedNotes(); // Escape = "keep editing"
       else if (this.showAuthModal) this.closeAuthModal();
       else if (this.showProjectSettings) {
@@ -5429,6 +5621,7 @@ export function ravnApp() {
     initials,
     shortId,
     relTime,
+    formatEventDetail,
     /** Sanitized-markdown renderer (raw source → marked.parse → DOM-based
      *  sanitize in ./md), memoized so poll re-renders don't re-parse unchanged bodies. */
     _mdCache: new Map<string, string>(),

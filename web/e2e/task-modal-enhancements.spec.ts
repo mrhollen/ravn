@@ -288,4 +288,88 @@ test.describe('Task Modal Enhancements (Discard Confirmation & Double Column)', 
     // Verify comment posted
     await expect(drawer.getByText('Quick comment submission via hotkey')).toBeVisible();
   });
+
+  test('Notes Markdown preview, Activity feed diffs, subtask quick-create, and global shortcuts (01M5XSNPVT0ETYQH9R8Q5HNQSE)', async ({ page }) => {
+    await openBoard(page);
+
+    // 1. AC4: Global shortcuts on the board
+    // '/' focuses search
+    await page.keyboard.press('/');
+    const searchInput = page.getByTestId('board-search-input').first();
+    await expect(searchInput).toBeFocused();
+
+    // Blur search input and press '?' to open shortcut help modal
+    await searchInput.blur();
+    await page.keyboard.press('?');
+    const helpModal = page.getByTestId('shortcut-help-modal');
+    await expect(helpModal).toBeVisible();
+    await expect(helpModal).toContainText('Keyboard Shortcuts');
+
+    // Escape closes shortcut help modal
+    await page.keyboard.press('Escape');
+    await expect(helpModal).not.toBeVisible();
+
+    // 2. Open task detail
+    const card = page.locator('article', { hasText: 'Modal Enhancements Fixture' });
+    await card.click();
+    const drawer = page.locator('#cb-detail-drawer');
+    await expect(drawer).toBeVisible();
+
+    // AC1: Notes Write / Preview toggle
+    const notesTextarea = drawer.getByTestId('notes-textarea');
+    await expect(notesTextarea).toBeVisible();
+    await notesTextarea.fill('### Scratchpad Notes\n- [ ] Item 1\n- [x] Item 2');
+
+    const previewBtn = drawer.getByTestId('notes-preview-btn');
+    await previewBtn.click();
+    const previewContainer = drawer.getByTestId('notes-preview');
+    await expect(previewContainer).toBeVisible();
+    await expect(previewContainer).toContainText('Scratchpad Notes');
+
+    const writeBtn = drawer.getByTestId('notes-write-btn');
+    await writeBtn.click();
+    await expect(notesTextarea).toBeVisible();
+
+    // Save notes
+    const saveNotesBtn = drawer.getByRole('button', { name: 'Save notes' });
+    await saveNotesBtn.click();
+    await expect(saveNotesBtn).toBeDisabled();
+
+    // AC2: Activity feed shows concise diffs
+    const activityFeed = drawer.getByTestId('activity-feed');
+    await expect(activityFeed).toBeVisible();
+    await expect(drawer.getByTestId('event-detail-diff').first()).toBeVisible();
+
+    // AC3: Subtask quick-create
+    const addSubtaskBtn = drawer.getByTestId('add-subtask-btn');
+    await expect(addSubtaskBtn).toBeVisible();
+    await addSubtaskBtn.click();
+
+    // New task modal opens with subtask banner
+    const newTaskModal = page.locator('#cb-new-task');
+    await expect(newTaskModal).toBeVisible();
+    const subtaskBanner = newTaskModal.getByTestId('new-task-subtask-banner');
+    await expect(subtaskBanner).toBeVisible();
+    await expect(subtaskBanner).toContainText('Modal Enhancements Fixture');
+
+    // Create the subtask
+    const newTitle = newTaskModal.locator('input').first();
+    await newTitle.fill('Automated Child Subtask');
+    const createBtn = newTaskModal.getByTestId('new-task-create-btn');
+    await createBtn.click();
+    await expect(newTaskModal).not.toBeVisible();
+
+    // Verify subtask relation appears in parent task's relations
+    const relationsSection = drawer.getByTestId('detail-relations-section');
+    await expect(relationsSection.getByRole('button', { name: 'Automated Child Subtask' })).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(drawer).not.toBeVisible();
+
+    // 'n' shortcut opens New task modal
+    await page.keyboard.press('n');
+    await expect(newTaskModal).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(newTaskModal).not.toBeVisible();
+  });
 });
