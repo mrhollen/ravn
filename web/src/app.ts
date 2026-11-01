@@ -3196,6 +3196,8 @@ export function ravnApp() {
       this.detailLoadError = null;
       this.statusMenuOpen = false;
       this.ownerPopoverOpen = false;
+      this.priorityPopoverOpen = false;
+      this.duePopoverOpen = false;
       this.editingTask = false;
       // Write/Preview toggles never outlive an open: every drawer opens in
       // Write mode for both markdown fields (AC 1).
@@ -3255,6 +3257,8 @@ export function ravnApp() {
       const pushedEntry = this.fullPagePushed;
       this.statusMenuOpen = false;
       this.ownerPopoverOpen = false;
+      this.priorityPopoverOpen = false;
+      this.duePopoverOpen = false;
       this.editingTask = false;
       // The drawer's error state never outlives its drawer (same rule as the
       // notes scratchpad). openTask() also clears it, so a re-open starts clean.
@@ -3654,6 +3658,146 @@ export function ravnApp() {
         this.notesDraft = t.notes;
         this.notesDirty = false;
         this.notesDraftOwner = t.id;
+      }
+    },
+
+    // ------------------------------------------------------------ quick metadata (priority & due)
+    priorityPopoverOpen: false,
+    priorityBusy: false,
+    duePopoverOpen: false,
+    dueInputVal: "",
+    dueBusy: false,
+
+    togglePriorityPopover(): void {
+      this.priorityPopoverOpen = !this.priorityPopoverOpen;
+      this.duePopoverOpen = false;
+      this.statusMenuOpen = false;
+      this.ownerPopoverOpen = false;
+    },
+
+    toggleDuePopover(): void {
+      this.duePopoverOpen = !this.duePopoverOpen;
+      this.priorityPopoverOpen = false;
+      this.statusMenuOpen = false;
+      this.ownerPopoverOpen = false;
+      if (this.duePopoverOpen && this.detail) {
+        this.dueInputVal = this.detail.due_at ? dueCalendarDate(this.detail.due_at) : "";
+      }
+    },
+
+    async updatePriority(priority: number): Promise<void> {
+      this.priorityPopoverOpen = false;
+      const d = this.detail;
+      if (!d || this.priorityBusy || d.priority === priority) return;
+      this.priorityBusy = true;
+      const req: UpdateTaskReq = {
+        actor: this.actor(),
+        version: d.version,
+        priority,
+      };
+      try {
+        const updated = await api.updateTask(d.id, req);
+        if (this.detail && this.detail.id === d.id) {
+          this.detail.priority = updated.priority;
+          this.detail.version = updated.version;
+          this.detail.updated_at = updated.updated_at;
+        }
+        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+        this.toast(`Priority set to P${priority}`);
+      } catch (e) {
+        if (ApiError.isVersionConflict(e)) {
+          try {
+            const fresh = await api.getTask(d.id);
+            this.applyDetail(fresh);
+            const retryReq: UpdateTaskReq = {
+              actor: this.actor(),
+              version: fresh.version,
+              priority,
+            };
+            const updated = await api.updateTask(d.id, retryReq);
+            if (this.detail && this.detail.id === d.id) {
+              this.detail.priority = updated.priority;
+              this.detail.version = updated.version;
+              this.detail.updated_at = updated.updated_at;
+            }
+            await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+            this.toast(`Priority set to P${priority}`);
+          } catch (e2) {
+            this.toast(errMsg(e2), "error");
+          }
+        } else {
+          this.toast(errMsg(e), "error");
+        }
+      } finally {
+        this.priorityBusy = false;
+      }
+    },
+
+    async saveDueDate(): Promise<void> {
+      this.duePopoverOpen = false;
+      const d = this.detail;
+      if (!d || this.dueBusy) return;
+      const dueIso = dateInputToIso(this.dueInputVal);
+      await this.updateDueDate(dueIso);
+    },
+
+    async clearDueDate(): Promise<void> {
+      this.duePopoverOpen = false;
+      this.dueInputVal = "";
+      await this.updateDueDate(null);
+    },
+
+    async updateDueDate(dueIso?: string | null): Promise<void> {
+      const d = this.detail;
+      if (!d || this.dueBusy) return;
+      this.dueBusy = true;
+      const req: UpdateTaskReq = {
+        actor: this.actor(),
+        version: d.version,
+      };
+      if (dueIso) {
+        req.due_at = dueIso;
+      } else {
+        req.clear_due = true;
+      }
+      try {
+        const updated = await api.updateTask(d.id, req);
+        if (this.detail && this.detail.id === d.id) {
+          this.detail.due_at = updated.due_at;
+          this.detail.version = updated.version;
+          this.detail.updated_at = updated.updated_at;
+          this.dueInputVal = updated.due_at ? dueCalendarDate(updated.due_at) : "";
+        }
+        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+        this.toast(dueIso ? "Due date updated" : "Due date cleared");
+      } catch (e) {
+        if (ApiError.isVersionConflict(e)) {
+          try {
+            const fresh = await api.getTask(d.id);
+            this.applyDetail(fresh);
+            const retryReq: UpdateTaskReq = {
+              actor: this.actor(),
+              version: fresh.version,
+              due_at: dueIso || undefined,
+              clear_due: !dueIso,
+            };
+            const updated = await api.updateTask(d.id, retryReq);
+            if (this.detail && this.detail.id === d.id) {
+              this.detail.due_at = updated.due_at;
+              this.detail.version = updated.version;
+              this.detail.updated_at = updated.updated_at;
+              this.dueInputVal = updated.due_at ? dueCalendarDate(updated.due_at) : "";
+            }
+            await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
+            this.toast(dueIso ? "Due date updated" : "Due date cleared");
+          } catch (e2) {
+            this.toast(errMsg(e2), "error");
+          }
+        } else {
+          this.toast(errMsg(e), "error");
+        }
+      } finally {
+        this.dueBusy = false;
       }
     },
 
@@ -4303,11 +4447,15 @@ export function ravnApp() {
     toggleStatusMenu(): void {
       this.statusMenuOpen = !this.statusMenuOpen;
       this.ownerPopoverOpen = false;
+      this.priorityPopoverOpen = false;
+      this.duePopoverOpen = false;
     },
 
     toggleOwnerPopover(): void {
       this.ownerPopoverOpen = !this.ownerPopoverOpen;
       this.statusMenuOpen = false;
+      this.priorityPopoverOpen = false;
+      this.duePopoverOpen = false;
       if (this.ownerPopoverOpen && this.detail) {
         this.assigneeInputName = this.detail.assignee?.name ?? "";
         this.assigneeInputType = (this.detail.assignee?.type as "human" | "agent") || "human";
@@ -5121,6 +5269,8 @@ export function ravnApp() {
       else if (this.showTaskOpenCodeConfig) this.showTaskOpenCodeConfig = false;
       else if (this.statusMenuOpen) this.statusMenuOpen = false;
       else if (this.ownerPopoverOpen) this.ownerPopoverOpen = false;
+      else if (this.priorityPopoverOpen) this.priorityPopoverOpen = false;
+      else if (this.duePopoverOpen) this.duePopoverOpen = false;
       else if (this.batchMoveMenuOpen || this.batchPriorityMenuOpen || this.batchAssignMenuOpen) {
         // Batch dropdowns sit in the board layer: a first Escape closes just
         // the open menu — it never touches the selection itself.

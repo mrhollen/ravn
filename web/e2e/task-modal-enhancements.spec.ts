@@ -239,4 +239,53 @@ test.describe('Task Modal Enhancements (Discard Confirmation & Double Column)', 
     const rightBox768 = await rightCol.boundingBox();
     expect(leftBox768!.y + leftBox768!.height).toBeLessThanOrEqual(rightBox768!.y + 1);
   });
+
+  test('Inline quick-edit: Priority & Due Date popovers and Cmd/Ctrl+Enter submission (01M5XTB45H0SXWRAXS3490M00W)', async ({ page }) => {
+    await openBoard(page);
+    const card = page.locator('article', { hasText: 'Modal Enhancements Fixture' });
+    await card.click();
+
+    const drawer = page.locator('#cb-detail-drawer');
+    await expect(drawer).toBeVisible();
+
+    // AC1: Inline priority popover
+    const priTrigger = drawer.getByTestId('priority-popover-trigger');
+    await expect(priTrigger).toBeVisible();
+    await priTrigger.click();
+
+    const priOption0 = drawer.getByTestId('priority-option-0');
+    await expect(priOption0).toBeVisible();
+    await priOption0.click();
+
+    // Verify priority updated to P0
+    await expect(priTrigger).toContainText('P0');
+
+    // AC1: Inline due date popover
+    const dueTrigger = drawer.getByTestId('due-popover-trigger');
+    await expect(dueTrigger).toBeVisible();
+    await dueTrigger.click();
+
+    const dateInput = drawer.getByTestId('due-date-input');
+    await expect(dateInput).toBeVisible();
+    await dateInput.fill('2026-12-25');
+
+    const saveDueBtn = drawer.getByTestId('save-due-date-btn');
+    await saveDueBtn.click();
+
+    await expect(dueTrigger).toContainText('Dec 25');
+
+    // Clear due date
+    await dueTrigger.click();
+    const clearDueBtn = drawer.getByTestId('clear-due-date-btn');
+    await clearDueBtn.click();
+    await expect(dueTrigger).toContainText('+ Set due date');
+
+    // AC2: Cmd/Ctrl+Enter comment submission
+    const commentInput = drawer.getByTestId('comment-textarea');
+    await commentInput.fill('Quick comment submission via hotkey');
+    await commentInput.press('ControlOrMeta+Enter');
+
+    // Verify comment posted
+    await expect(drawer.getByText('Quick comment submission via hotkey')).toBeVisible();
+  });
 });

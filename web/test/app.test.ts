@@ -3739,3 +3739,67 @@ test("Artifacts: copyArtifactRef and external link cues (01M3MMX4P8K9VCFC4MZKHQ2
   }
 });
 
+test("Inline quick-edit: priority and due popovers, 409 rebase and Cmd/Ctrl+Enter (01M5XTB45H0SXWRAXS3490M00W)", async () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  // AC1: Priority & Due date popovers in header
+  assert.ok(html.includes('data-testid="priority-popover-trigger"'), "priority popover trigger present");
+  assert.ok(html.includes('data-testid="due-popover-trigger"'), "due date popover trigger present");
+  assert.ok(html.includes('data-testid="due-date-input"'), "due date input present");
+  assert.ok(html.includes('data-testid="clear-due-date-btn"'), "clear due date button present");
+  assert.ok(html.includes('data-testid="save-due-date-btn"'), "save due date button present");
+  assert.ok(html.includes(':data-testid="\'priority-option-\' + p"'), "priority option testids present");
+
+  // AC2: Cmd/Ctrl+Enter submission on comment, notes, edit form, new task form
+  assert.ok(html.includes('@keydown.cmd.enter.prevent="if (!postingComment && commentForm.body.trim()) postComment()"'), "cmd+enter on comment");
+  assert.ok(html.includes('@keydown.ctrl.enter.prevent="if (!postingComment && commentForm.body.trim()) postComment()"'), "ctrl+enter on comment");
+  assert.ok(html.includes('@keydown.cmd.enter.prevent="if (!savingNotes && notesDirty) saveNotes()"'), "cmd+enter on notes");
+  assert.ok(html.includes('@keydown.ctrl.enter.prevent="if (!savingNotes && notesDirty) saveNotes()"'), "ctrl+enter on notes");
+  assert.ok(html.includes('@keydown.cmd.enter.prevent="if (!savingEdit && editDraft.title.trim()) saveTaskEdit()"'), "cmd+enter on task edit form");
+  assert.ok(html.includes('@keydown.cmd.enter.prevent="if (!creatingTask && newTask.title.trim()) createTask()"'), "cmd+enter on new task form");
+
+  // AC3: 409 automatic rebase and retry on updatePriority
+  const app = ravnApp();
+  app.detail = {
+    id: "task-p-1",
+    title: "Test Task",
+    priority: 3,
+    version: 1,
+    status: "todo",
+    due_at: null,
+    assignee: undefined,
+  } as any;
+  app.refreshDetail = async () => {};
+  app.loadBoard = async () => {};
+
+  let updateCalls = 0;
+  const origUpdate = api.updateTask;
+  const origGet = api.getTask;
+  try {
+    api.updateTask = async (_id: string, req: any) => {
+      updateCalls++;
+      if (updateCalls === 1) {
+        throw new ApiError(409, { error: "version_conflict", message: "version conflict", current_version: 2 } as any);
+      }
+      return { id: "task-p-1", priority: req.priority ?? 3, due_at: req.due_at ?? null, version: 3, updated_at: "2026-11-01T20:00:00Z" } as any;
+    };
+    api.getTask = async (_id: string) => {
+      return { id: "task-p-1", title: "Test Task", priority: 3, version: 2, status: "todo" } as any;
+    };
+
+    await app.updatePriority(1);
+    assert.equal(updateCalls, 2, "updatePriority retried after 409 conflict");
+    assert.equal(app.detail?.priority, 1);
+    assert.equal(app.detail?.version, 3);
+
+    // Test updateDueDate with clear_due (and also verifies 409 retry)
+    updateCalls = 0;
+    await app.updateDueDate(null);
+    assert.equal(updateCalls, 2, "updateDueDate also retried after 409 conflict");
+    assert.equal(app.detail?.due_at, null);
+  } finally {
+    api.updateTask = origUpdate;
+    api.getTask = origGet;
+  }
+});
+
+
