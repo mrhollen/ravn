@@ -330,6 +330,25 @@ export function isMobileDetailViewport(width?: number): boolean {
   return w < MOBILE_DETAIL_MAX_WIDTH;
 }
 
+/** Copy text to clipboard using the Async Clipboard API, falling back to
+ *  hidden textarea + execCommand for plain-HTTP or unsupported environments. */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+  let copied = false;
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    } else {
+      copied = copyViaExecCommand(text);
+    }
+  } catch {
+    copied = false;
+  }
+  if (!copied) copied = copyViaExecCommand(text);
+  return copied;
+}
+
 /** Last-resort clipboard write for non-secure contexts (plain http on a LAN),
  *  where navigator.clipboard is unavailable: hidden textarea + execCommand.
  *  Returns true only when the browser reports the copy succeeded. */
@@ -3247,6 +3266,11 @@ export function ravnApp() {
       this.loadingOlderComments = false;
       this.startingOpenCode = false;
       this.showTaskOpenCodeConfig = false;
+      this.copiedArtifactId = null;
+      if (this.copiedArtifactTimer) {
+        clearTimeout(this.copiedArtifactTimer);
+        this.copiedArtifactTimer = null;
+      }
       // AC 1: the notes scratchpad never outlives its drawer — otherwise a
       // dirty draft would leak into whatever task is opened next.
       this.resetNotesDraft();
@@ -3489,22 +3513,29 @@ export function ravnApp() {
     // ------------------------------------------------------------------ copy id
     /** Copy the FULL task ID to the clipboard from the truncated header badge.
      *  Prefers the Async Clipboard API and falls back to execCommand for plain-
-     *  http deployments where it is unavailable (see copyViaExecCommand). */
+     *  http deployments where it is unavailable (see copyTextToClipboard). */
     async copyTaskId(id: string): Promise<void> {
       if (!id) return;
-      let copied = false;
-      try {
-        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(id);
-          copied = true;
-        } else {
-          copied = copyViaExecCommand(id);
-        }
-      } catch {
-        copied = false; // e.g. permission denied — try the legacy path once
-      }
-      if (!copied) copied = copyViaExecCommand(id);
+      const copied = await copyTextToClipboard(id);
       this.toast(copied ? "Copied task ID to clipboard" : "Couldn't copy the task ID", copied ? "info" : "error");
+    },
+
+    /** Copy an artifact ref (file path or URL) to clipboard with brief visual confirmation. */
+    async copyArtifactRef(ref: string, id?: string): Promise<void> {
+      if (!ref) return;
+      const copied = await copyTextToClipboard(ref);
+      if (copied) {
+        if (id) {
+          this.copiedArtifactId = id;
+          if (this.copiedArtifactTimer) clearTimeout(this.copiedArtifactTimer);
+          this.copiedArtifactTimer = setTimeout(() => {
+            if (this.copiedArtifactId === id) this.copiedArtifactId = null;
+          }, 2000);
+        }
+        this.toast("Copied artifact path to clipboard", "info");
+      } else {
+        this.toast("Failed to copy artifact path", "error");
+      }
     },
 
     /** Fetch GET /tasks/{id} (full resume payload, comment tail 50) and apply it.
@@ -4669,6 +4700,8 @@ export function ravnApp() {
     artifactForm: { open: false, kind: "url" as ArtifactKind, ref: "", summary: "", file: null as File | null },
     attachingArtifact: false,
     previewModal: { open: false, src: "", alt: "" },
+    copiedArtifactId: null as string | null,
+    copiedArtifactTimer: null as any,
 
     onArtifactFileSelected(event: Event): void {
       const target = event.target as HTMLInputElement;

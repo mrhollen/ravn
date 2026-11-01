@@ -2818,20 +2818,93 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                                 :class="artifactKindClass(a.kind)" x-text="a.kind"></span>
                           <!-- Non-image stored file: new tab link -->
                           <template x-if="isStoredNonImage(a)">
-                            <a :href="a.ref" target="_blank" rel="noreferrer noopener"
-                               class="focus-ring break-all font-mono text-xs text-sky-700 underline decoration-sky-300 hover:decoration-sky-500 dark:text-sky-400 dark:decoration-sky-700"
-                               x-text="a.ref"></a>
+                            <div class="inline-flex items-center gap-1.5">
+                              <a :href="a.ref" target="_blank" rel="noreferrer noopener"
+                                 class="focus-ring inline-flex items-center gap-1 break-all font-mono text-xs text-sky-700 underline decoration-sky-300 hover:decoration-sky-500 dark:text-sky-400 dark:decoration-sky-700">
+                                <span x-text="a.ref"></span>
+                                <svg class="h-3 w-3 shrink-0 opacity-70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                  <path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h4a.75.75 0 010 1.5h-4z" clip-rule="evenodd" />
+                                  <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06 1.06L15.5 5.56v3.69a.75.75 0 001.5 0v-6a.75.75 0 00-.75-.75h-6a.75.75 0 000 1.5h3.69l-7.746 7.753z" clip-rule="evenodd" />
+                                </svg>
+                              </a>
+                              <button type="button"
+                                      @click="copyArtifactRef(a.ref, a.id)"
+                                      data-testid="copy-artifact-btn"
+                                      :title="copiedArtifactId === a.id ? 'Copied!' : 'Copy link'"
+                                      :aria-label="copiedArtifactId === a.id ? 'Copied' : 'Copy link'"
+                                      class="inline-flex items-center gap-1 rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 focus-ring text-[11px]">
+                                <template x-if="copiedArtifactId === a.id">
+                                  <span class="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                                    <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>
+                                    <span>Copied!</span>
+                                  </span>
+                                </template>
+                                <template x-if="copiedArtifactId !== a.id">
+                                  <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M7 3.5A1.5 1.5 0 018.5 2h3.879a1.5 1.5 0 011.06.44l3.122 3.12a1.5 1.5 0 01.439 1.061V16.5A1.5 1.5 0 0115.5 18h-7A1.5 1.5 0 017 16.5v-13z" />
+                                    <path d="M4.5 6A1.5 1.5 0 003 7.5v11A1.5 1.5 0 004.5 20h7a1.5 1.5 0 001.5-1.5v-.5h-1.5v.5a.5.5 0 01-.5.5h-7a.5.5 0 01-.5-.5v-11a.5.5 0 01.5-.5h.5V6h-.5z" />
+                                  </svg>
+                                </template>
+                              </button>
+                            </div>
                           </template>
                           <!-- Back-compat: existing web hrefs (http/https/mailto) -->
                           <template x-if="!isStoredArtifact(a.ref) && isWebHref(a.ref)">
-                            <a :href="a.ref" target="_blank" rel="noreferrer noopener"
-                               class="focus-ring break-all font-mono text-xs text-sky-700 underline decoration-sky-300 hover:decoration-sky-500 dark:text-sky-400 dark:decoration-sky-700"
-                               x-text="a.ref"></a>
+                            <div class="inline-flex items-center gap-1.5">
+                              <a :href="a.ref" target="_blank" rel="noreferrer noopener"
+                                 class="focus-ring inline-flex items-center gap-1 break-all font-mono text-xs text-sky-700 underline decoration-sky-300 hover:decoration-sky-500 dark:text-sky-400 dark:decoration-sky-700">
+                                <span x-text="a.ref"></span>
+                                <svg class="h-3 w-3 shrink-0 opacity-70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                  <path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h4a.75.75 0 010 1.5h-4z" clip-rule="evenodd" />
+                                  <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06 1.06L15.5 5.56v3.69a.75.75 0 001.5 0v-6a.75.75 0 00-.75-.75h-6a.75.75 0 000 1.5h3.69l-7.746 7.753z" clip-rule="evenodd" />
+                                </svg>
+                              </a>
+                              <button type="button"
+                                      @click="copyArtifactRef(a.ref, a.id)"
+                                      data-testid="copy-artifact-btn"
+                                      :title="copiedArtifactId === a.id ? 'Copied!' : 'Copy link'"
+                                      :aria-label="copiedArtifactId === a.id ? 'Copied' : 'Copy link'"
+                                      class="inline-flex items-center gap-1 rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 focus-ring text-[11px]">
+                                <template x-if="copiedArtifactId === a.id">
+                                  <span class="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                                    <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>
+                                    <span>Copied!</span>
+                                  </span>
+                                </template>
+                                <template x-if="copiedArtifactId !== a.id">
+                                  <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M7 3.5A1.5 1.5 0 018.5 2h3.879a1.5 1.5 0 011.06.44l3.122 3.12a1.5 1.5 0 01.439 1.061V16.5A1.5 1.5 0 0115.5 18h-7A1.5 1.5 0 017 16.5v-13z" />
+                                    <path d="M4.5 6A1.5 1.5 0 003 7.5v11A1.5 1.5 0 004.5 20h7a1.5 1.5 0 001.5-1.5v-.5h-1.5v.5a.5.5 0 01-.5.5h-7a.5.5 0 01-.5-.5v-11a.5.5 0 01.5-.5h.5V6h-.5z" />
+                                  </svg>
+                                </template>
+                              </button>
+                            </div>
                           </template>
                           <!-- Back-compat: existing non-web ref (e.g. /home/... path) -->
                           <template x-if="!isStoredArtifact(a.ref) && !isWebHref(a.ref)">
-                            <code class="break-all rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300"
-                                  x-text="a.ref"></code>
+                            <div class="inline-flex items-center gap-1.5">
+                              <code class="break-all rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300"
+                                    x-text="a.ref"></code>
+                              <button type="button"
+                                      @click="copyArtifactRef(a.ref, a.id)"
+                                      data-testid="copy-artifact-btn"
+                                      :title="copiedArtifactId === a.id ? 'Copied!' : 'Copy path'"
+                                      :aria-label="copiedArtifactId === a.id ? 'Copied' : 'Copy path'"
+                                      class="inline-flex items-center gap-1 rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 focus-ring text-[11px]">
+                                <template x-if="copiedArtifactId === a.id">
+                                  <span class="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                                    <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>
+                                    <span>Copied!</span>
+                                  </span>
+                                </template>
+                                <template x-if="copiedArtifactId !== a.id">
+                                  <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M7 3.5A1.5 1.5 0 018.5 2h3.879a1.5 1.5 0 011.06.44l3.122 3.12a1.5 1.5 0 01.439 1.061V16.5A1.5 1.5 0 0115.5 18h-7A1.5 1.5 0 017 16.5v-13z" />
+                                    <path d="M4.5 6A1.5 1.5 0 003 7.5v11A1.5 1.5 0 004.5 20h7a1.5 1.5 0 001.5-1.5v-.5h-1.5v.5a.5.5 0 01-.5.5h-7a.5.5 0 01-.5-.5v-11a.5.5 0 01.5-.5h.5V6h-.5z" />
+                                  </svg>
+                                </template>
+                              </button>
+                            </div>
                           </template>
                           <span class="ml-auto"><span x-text="actorLabel(a.actor)"></span>
                             <time class="text-zinc-600 dark:text-zinc-400" :title="a.created_at" x-text="relTime(a.created_at)"></time></span>

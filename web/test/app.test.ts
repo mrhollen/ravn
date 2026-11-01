@@ -3701,3 +3701,41 @@ test("MultiSelect: index.html wires every batch-bar testid the E2E suite depends
   const css = fs.readFileSync(path.resolve(__dirname, "../src/style.css"), "utf-8");
   assert.match(css, /\.card-select-checkbox\s*{[^}]*opacity:\s*0/);
 });
+
+test("Artifacts: copyArtifactRef and external link cues (01M3MMX4P8K9VCFC4MZKHQ2404)", async () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  // AC1: Copy button for non-web and stored file artifacts
+  assert.ok(html.includes('data-testid="copy-artifact-btn"'), "copy artifact button testid present in HTML");
+  assert.ok(html.includes('@click="copyArtifactRef(a.ref, a.id)"'), "copyArtifactRef wired to artifact copy buttons");
+  // AC2: External link icon for web hrefs
+  assert.ok(html.includes('target="_blank"'), "target _blank present on artifact links");
+  assert.ok(html.includes('viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"'), "SVG icon present next to external links");
+  // AC3: Visual confirmation checkmark / tooltip
+  assert.ok(html.includes("copiedArtifactId === a.id"), "visual confirmation checkmark bound to copiedArtifactId");
+  assert.ok(html.includes("Copied!"), "Copied! text rendered on active copied state");
+
+  // Behavior: copyArtifactRef sets copiedArtifactId and toasts
+  const app = ravnApp();
+  let written = "";
+  const origClipboard = (globalThis.navigator as any)?.clipboard;
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    value: {
+      writeText: async (t: string) => { written = t; },
+    },
+    configurable: true,
+  });
+  try {
+    let toastMsg = "";
+    app.toast = (msg: string) => { toastMsg = msg; };
+    await app.copyArtifactRef("/home/user/project/build.log", "art-123");
+    assert.equal(written, "/home/user/project/build.log");
+    assert.equal(app.copiedArtifactId, "art-123");
+    assert.ok(toastMsg.includes("Copied artifact path"));
+  } finally {
+    if (app.copiedArtifactTimer) clearTimeout(app.copiedArtifactTimer);
+    if (origClipboard !== undefined) {
+      Object.defineProperty(globalThis.navigator, "clipboard", { value: origClipboard, configurable: true });
+    }
+  }
+});
+

@@ -352,4 +352,34 @@ test.describe('artifacts storage, inline images and new-tab files', () => {
     expect(serveRes.headers.get('content-type')).toContain('video/mp4');
     expect(serveRes.headers.get('content-disposition')).toBe('inline');
   });
+
+  test('copy button copies artifact path with visual feedback and external URL has icon (01M3MMX4P8K9VCFC4MZKHQ2404)', async ({ page, isolatedServer, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    serverUrl = isolatedServer.url;
+    const { projectId } = await seedProjectAndTask(serverUrl);
+
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, projectId);
+
+    const taskCard = page.locator('article', { hasText: 'Task with Artifacts' });
+    await taskCard.click();
+
+    const drawer = page.locator('aside');
+    // AC2: URL artifact has target="_blank" and external link icon
+    const urlLink = drawer.locator('a[href="https://example.com/docs/spec.pdf"]');
+    await expect(urlLink).toBeVisible();
+    await expect(urlLink).toHaveAttribute('target', '_blank');
+    await expect(urlLink.locator('svg')).toBeVisible();
+
+    // AC1: Copy button on non-web artifact
+    const pathRow = drawer.locator('li', { hasText: '/var/log/legacy.log' });
+    const copyBtn = pathRow.locator('[data-testid="copy-artifact-btn"]');
+    await expect(copyBtn).toBeVisible();
+    await copyBtn.click();
+
+    // AC3: Visual confirmation "Copied!" checkmark
+    await expect(pathRow.getByText('Copied!')).toBeVisible();
+    const clipText = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipText).toBe('/var/log/legacy.log');
+  });
 });
