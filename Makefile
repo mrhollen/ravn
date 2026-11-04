@@ -5,6 +5,8 @@
 GO      ?= go
 BIN_DIR := bin
 IMAGE   ?= ravn:latest
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: help fmt vet build test ui e2e up build-up down logs smoke
 
@@ -19,10 +21,10 @@ vet: ## go vet + gofmt check (gofmt -l must print nothing)
 	go vet ./...
 
 build: ## compile both static binaries into bin/ (ravn-server, ravn-mcp)
-	CGO_ENABLED=0 $(GO) build -trimpath -o $(BIN_DIR)/ravn-server ./cmd/ravn-server
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ravn-server ./cmd/ravn-server
 	@if [ -d cmd/ravn-mcp ]; then \
 		echo "building ravn-mcp"; \
-		CGO_ENABLED=0 $(GO) build -trimpath -o $(BIN_DIR)/ravn-mcp ./cmd/ravn-mcp; \
+		CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ravn-mcp ./cmd/ravn-mcp; \
 	else \
 		echo "cmd/ravn-mcp not present yet — skipping (later slice)"; \
 	fi
