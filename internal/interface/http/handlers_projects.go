@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"fmt"
 	"net/http"
 	"time"
 
@@ -222,12 +221,12 @@ func (a *App) handleProjectReport(w http.ResponseWriter, r *http.Request) {
 	}
 	var since *time.Time
 	if v := q.Get("since"); v != "" {
-		t, perr := time.Parse(time.RFC3339, v)
+		t, perr := parseTimeParam(v, "since")
 		if perr != nil {
-			writeAppError(w, fmt.Errorf("%w: since must be an RFC3339 timestamp, got %q", domain.ErrInvalid, v), "project", pid)
+			writeAppError(w, perr, "project", pid)
 			return
 		}
-		since = &t
+		since = t
 	}
 	rep, err := a.Projects.Report(ctx, pid, application.ReportOptions{StalledMinutes: stalledMinutes, Since: since})
 	if err != nil {

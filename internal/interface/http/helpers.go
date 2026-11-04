@@ -340,7 +340,10 @@ func parseTimeParam(v, name string) (*time.Time, error) {
 	if v == "" {
 		return nil, nil
 	}
-	t, err := time.Parse(time.RFC3339, v)
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, v)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s must be RFC3339 (e.g. 2026-09-25T18:00:00Z), got %q", domain.ErrInvalid, name, v)
 	}
