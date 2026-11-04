@@ -60,6 +60,16 @@ func ClaimFromStored(by *Actor, at, expiresAt *time.Time, ttlSeconds *int) Claim
 // source). On an all-or-nothing value this is equivalent to by != nil.
 func (c Claim) Present() bool { return c.by != nil }
 
+// Clone returns a deep copy of the claim lease with an independent holder pointer.
+func (c Claim) Clone() Claim {
+	out := c
+	if c.by != nil {
+		b := *c.by
+		out.by = &b
+	}
+	return out
+}
+
 // Released returns the zero value: the lease cleared and the task unclaimed.
 func (c Claim) Released() Claim { return Claim{} }
 

@@ -208,3 +208,136 @@ func TestRelationKindValidVsStored(t *testing.T) {
 }
 
 func timePtr(t time.Time) *time.Time { return &t }
+
+func TestTaskClone_DeepCopy(t *testing.T) {
+	due := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	completed := time.Date(2026, 10, 16, 14, 0, 0, 0, time.UTC)
+	assignee := Actor{Type: ActorAgent, Name: "worker-1"}
+	claimer := Actor{Type: ActorHuman, Name: "hollen"}
+	claimedAt := time.Date(2026, 10, 15, 8, 0, 0, 0, time.UTC)
+
+	orig := Task{
+		ID:          "TASK-1",
+		ProjectID:   "PROJ-1",
+		Title:       "Original Task",
+		Description: "Original Description",
+		Status:      StatusDone,
+		Priority:    3,
+		DueAt:       &due,
+		Assignee:    &assignee,
+		CompletedAt: &completed,
+		Claim:       NewClaim(claimer, claimedAt, 3600),
+	}
+
+	cloned := orig.Clone()
+
+	// Assert equality of values initially
+	if cloned.ID != orig.ID || cloned.Title != orig.Title || *cloned.DueAt != *orig.DueAt ||
+		*cloned.Assignee != *orig.Assignee || *cloned.CompletedAt != *orig.CompletedAt ||
+		*cloned.Claim.By() != *orig.Claim.By() {
+		t.Fatalf("cloned task values mismatch original: %+v vs %+v", cloned, orig)
+	}
+
+	// Assert pointer addresses are distinct (not aliased)
+	if cloned.DueAt == orig.DueAt {
+		t.Errorf("cloned DueAt pointer aliases original: %p == %p", cloned.DueAt, orig.DueAt)
+	}
+	if cloned.Assignee == orig.Assignee {
+		t.Errorf("cloned Assignee pointer aliases original: %p == %p", cloned.Assignee, orig.Assignee)
+	}
+	if cloned.CompletedAt == orig.CompletedAt {
+		t.Errorf("cloned CompletedAt pointer aliases original: %p == %p", cloned.CompletedAt, orig.CompletedAt)
+	}
+	if cloned.Claim.By() == orig.Claim.By() {
+		t.Errorf("cloned Claim.By pointer aliases original: %p == %p", cloned.Claim.By(), orig.Claim.By())
+	}
+
+	// Mutate pointers on cloned entity
+	*cloned.DueAt = time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)
+	cloned.Assignee.Name = "mutated-assignee"
+	*cloned.CompletedAt = time.Date(2029, 2, 2, 0, 0, 0, 0, time.UTC)
+	cloned.Claim.By().Name = "mutated-claimer"
+
+	// Assert original entity remains unchanged
+	if orig.DueAt.Equal(time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("mutating cloned DueAt affected original: got %v", orig.DueAt)
+	}
+	if orig.Assignee.Name != "worker-1" {
+		t.Errorf("mutating cloned Assignee affected original: got %s, want worker-1", orig.Assignee.Name)
+	}
+	if orig.CompletedAt.Equal(time.Date(2029, 2, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("mutating cloned CompletedAt affected original: got %v", orig.CompletedAt)
+	}
+	if orig.Claim.By().Name != "hollen" {
+		t.Errorf("mutating cloned Claim.By affected original: got %s, want hollen", orig.Claim.By().Name)
+	}
+
+	// Test nil pointers clone cleanly
+	emptyTask := Task{ID: "EMPTY"}
+	emptyCloned := emptyTask.Clone()
+	if emptyCloned.DueAt != nil || emptyCloned.Assignee != nil || emptyCloned.CompletedAt != nil || emptyCloned.Claim.By() != nil {
+		t.Errorf("cloning task with nil pointers produced non-nil pointers: %+v", emptyCloned)
+	}
+}
+
+func TestAcceptanceCriterionClone_DeepCopy(t *testing.T) {
+	completed := time.Date(2026, 10, 16, 14, 0, 0, 0, time.UTC)
+	actor := Actor{Type: ActorHuman, Name: "alice"}
+
+	orig := AcceptanceCriterion{
+		ID:          "AC-1",
+		TaskID:      "TASK-1",
+		Seq:         1,
+		Text:        "Criterion 1",
+		Done:        true,
+		Note:        "Verified",
+		CompletedBy: &actor,
+		CompletedAt: &completed,
+	}
+
+	cloned := orig.Clone()
+
+	if cloned.CompletedBy == orig.CompletedBy {
+		t.Errorf("cloned CompletedBy pointer aliases original: %p == %p", cloned.CompletedBy, orig.CompletedBy)
+	}
+	if cloned.CompletedAt == orig.CompletedAt {
+		t.Errorf("cloned CompletedAt pointer aliases original: %p == %p", cloned.CompletedAt, orig.CompletedAt)
+	}
+
+	// Mutate cloned pointers
+	cloned.CompletedBy.Name = "bob"
+	*cloned.CompletedAt = time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	if orig.CompletedBy.Name != "alice" {
+		t.Errorf("mutating cloned CompletedBy affected original: got %s, want alice", orig.CompletedBy.Name)
+	}
+	if orig.CompletedAt.Equal(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("mutating cloned CompletedAt affected original: got %v", orig.CompletedAt)
+	}
+
+	// Nil fields
+	emptyAC := AcceptanceCriterion{ID: "AC-2", Seq: 2}
+	emptyCloned := emptyAC.Clone()
+	if emptyCloned.CompletedBy != nil || emptyCloned.CompletedAt != nil {
+		t.Errorf("cloning AC with nil pointers produced non-nil pointers: %+v", emptyCloned)
+	}
+}
+
+func TestNewConflictError_ClonesCurrent(t *testing.T) {
+	due := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	assignee := Actor{Type: ActorHuman, Name: "alice"}
+	orig := Task{
+		ID:       "T-1",
+		DueAt:    &due,
+		Assignee: &assignee,
+	}
+
+	err := NewConflictError(orig)
+	if err.Current.DueAt == orig.DueAt {
+		t.Errorf("NewConflictError DueAt aliases original")
+	}
+	if err.Current.Assignee == orig.Assignee {
+		t.Errorf("NewConflictError Assignee aliases original")
+	}
+}
+

@@ -109,6 +109,25 @@ func (t Task) Claimed() bool { return t.HasLease() }
 // time.Now().
 func (t Task) IsClaimActive(now time.Time) bool { return t.Claim.Active(now) }
 
+// Clone returns a deep copy of the task with independent pointer fields.
+func (t Task) Clone() Task {
+	out := t
+	if t.DueAt != nil {
+		due := *t.DueAt
+		out.DueAt = &due
+	}
+	if t.Assignee != nil {
+		a := *t.Assignee
+		out.Assignee = &a
+	}
+	if t.CompletedAt != nil {
+		comp := *t.CompletedAt
+		out.CompletedAt = &comp
+	}
+	out.Claim = t.Claim.Clone()
+	return out
+}
+
 // Validate enforces the task's structural invariants:
 //
 //   - CompletedAt is non-nil if and only if Status == StatusDone — a done task

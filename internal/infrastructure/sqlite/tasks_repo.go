@@ -271,7 +271,7 @@ func (r *taskRepo) Update(ctx context.Context, t domain.Task) (domain.Task, erro
 		if gerr != nil {
 			return domain.Task{}, gerr // ErrNotFound when the row is gone entirely
 		}
-		return domain.Task{}, &domain.ConflictError{Current: current}
+		return domain.Task{}, domain.NewConflictError(current)
 	}
 	fresh, err := r.Get(ctx, t.ID) // read back the stored result of the guarded write
 	if err != nil {

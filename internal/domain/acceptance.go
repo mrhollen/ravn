@@ -52,6 +52,20 @@ func ValidateACNote(note string) error {
 	return nil
 }
 
+// Clone returns a deep copy of the acceptance criterion with independent pointers.
+func (c AcceptanceCriterion) Clone() AcceptanceCriterion {
+	out := c
+	if c.CompletedBy != nil {
+		actor := *c.CompletedBy
+		out.CompletedBy = &actor
+	}
+	if c.CompletedAt != nil {
+		t := *c.CompletedAt
+		out.CompletedAt = &t
+	}
+	return out
+}
+
 // Validate enforces the criterion's completion invariant: Done == true
 // requires BOTH CompletedBy and CompletedAt to be set (a check-off records who
 // and when); Done == false requires both to be nil (an uncheck clears the

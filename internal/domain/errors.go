@@ -46,6 +46,11 @@ type ConflictError struct {
 	Current Task
 }
 
+// NewConflictError returns a *ConflictError whose Current task is deep-copied via Clone().
+func NewConflictError(current Task) *ConflictError {
+	return &ConflictError{Current: current.Clone()}
+}
+
 func (e *ConflictError) Error() string {
 	return fmt.Sprintf("version conflict: stored version %d, updated at %s",
 		e.Current.Version, e.Current.UpdatedAt.UTC().Format(time.RFC3339))
