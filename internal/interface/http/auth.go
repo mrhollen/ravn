@@ -77,6 +77,9 @@ func isSSEEventRoute(r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
 	}
+	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		return true
+	}
 	p := path.Clean(r.URL.Path)
 	if p == "/api/v1/events" || p == "/api/events" {
 		return true

@@ -286,25 +286,31 @@ func TestIsSSEEventRoute(t *testing.T) {
 	tests := []struct {
 		method string
 		path   string
+		accept string
 		want   bool
 	}{
-		{"GET", "/api/v1/events", true},
-		{"GET", "/api/events", true},
-		{"GET", "/api/v1/projects/01JNONEXISTENT/events", true},
-		{"GET", "/api/projects/01JNONEXISTENT/events", true},
-		{"POST", "/api/v1/events", false},
-		{"POST", "/api/v1/projects/01JNONEXISTENT/events", false},
-		{"GET", "/api/v1/projects", false},
-		{"GET", "/api/v1/tasks/123", false},
-		{"GET", "/api/v1/projects/01JNONEXISTENT/events/sub", false},
-		{"GET", "/api/v1/tasks/01JNONEXISTENT/events", false},
+		{"GET", "/api/v1/events", "", true},
+		{"GET", "/api/events", "", true},
+		{"GET", "/api/v1/projects/01JNONEXISTENT/events", "", true},
+		{"GET", "/api/projects/01JNONEXISTENT/events", "", true},
+		{"GET", "/api/v1/custom-stream", "text/event-stream", true},
+		{"POST", "/api/v1/events", "", false},
+		{"POST", "/api/v1/custom-stream", "text/event-stream", false},
+		{"POST", "/api/v1/projects/01JNONEXISTENT/events", "", false},
+		{"GET", "/api/v1/projects", "", false},
+		{"GET", "/api/v1/tasks/123", "", false},
+		{"GET", "/api/v1/projects/01JNONEXISTENT/events/sub", "", false},
+		{"GET", "/api/v1/tasks/01JNONEXISTENT/events", "", false},
 	}
 
 	for _, tt := range tests {
 		req := httptest.NewRequest(tt.method, "http://ravn.test"+tt.path, nil)
+		if tt.accept != "" {
+			req.Header.Set("Accept", tt.accept)
+		}
 		got := isSSEEventRoute(req)
 		if got != tt.want {
-			t.Errorf("isSSEEventRoute(%s %q) = %v, want %v", tt.method, tt.path, got, tt.want)
+			t.Errorf("isSSEEventRoute(%s %q, accept=%q) = %v, want %v", tt.method, tt.path, tt.accept, got, tt.want)
 		}
 	}
 }

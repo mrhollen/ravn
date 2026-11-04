@@ -12,11 +12,16 @@ this file in the same commit.
   UTC (`2026-09-26T15:48:00Z`). IDs are ULID strings.
 - **Auth:** off by default — Rävn is a single-tenant, LAN-local service. When
   the server starts with `RAVN_TOKEN` set (env or `-token` flag), every route
-  under `/api/v1/*` (the SSE event streams included) requires the token, sent as
-  `Authorization: Bearer <token>` **or** `?token=<token>` on the query string
-  (the query form exists for EventSource/SSE clients that cannot set headers).
-  Absent or mismatched → `401` (below); unset token → nothing required.
-  `/healthz`, root-level `/metrics`, and the static UI are never gated.
+  under `/api/v1/*` requires the token sent as `Authorization: Bearer <token>`.
+  Query string token authentication (`?token=<token>`) is accepted **only** on
+  `GET` requests for SSE streams (`/api/v1/events`, `/api/v1/projects/{id}/events`,
+  or when `Accept: text/event-stream` is requested) due to browser EventSource
+  limitations. All mutating endpoints (`POST`, `PUT`, `PATCH`, `DELETE`) and
+  standard `GET` routes strictly require `Authorization: Bearer <token>` and reject
+  query string tokens with `401` to prevent token leakage in server access logs
+  and HTTP referer headers. Absent or mismatched token → `401` (below); unset
+  token → nothing required. `/healthz`, root-level `/metrics`, and the static UI
+  are never gated.
 
 ## Actor convention
 
@@ -70,7 +75,8 @@ relation pairs, and any other use-case validation failure. No `resource`/`id`.
 ### 401 unauthorized
 
 Only when the server has `RAVN_TOKEN` configured (see Auth above); returned
-by any `/api/v1/*` route on an absent or mismatched token:
+by any `/api/v1/*` route on an absent or mismatched token, or when query string
+token authentication is attempted on non-SSE or mutating endpoints:
 
 ```json
 { "error": "unauthorized", "message": "missing or invalid auth token" }
