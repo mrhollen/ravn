@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/mrhollen/ravn/internal/domain"
@@ -57,13 +56,7 @@ func (s *Artifacts) AttachWithID(ctx context.Context, id domain.ID, actor domain
 	if err != nil {
 		return domain.Artifact{}, err
 	}
-	if !kind.Valid() {
-		return domain.Artifact{}, fmt.Errorf("%w: unknown artifact kind %q", domain.ErrInvalid, kind)
-	}
 	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return domain.Artifact{}, fmt.Errorf("%w: artifact ref must not be empty", domain.ErrInvalid)
-	}
 	if id.IsZero() {
 		id = s.idgen.NewID()
 	}
@@ -77,6 +70,9 @@ func (s *Artifacts) AttachWithID(ctx context.Context, id domain.ID, actor domain
 		Summary:   summary, // optional one-liner; empty allowed
 		Actor:     a,
 		CreatedAt: now,
+	}
+	if err := art.Validate(); err != nil {
+		return domain.Artifact{}, err
 	}
 
 	var r Repos

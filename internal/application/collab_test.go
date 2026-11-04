@@ -658,12 +658,30 @@ func TestArtifactsAttach_Validation(t *testing.T) {
 	if _, err := arts.Attach(ctx, testAgent, task.ID, domain.ArtifactLog, "  ", ""); !errors.Is(err, domain.ErrInvalid) {
 		t.Errorf("empty ref → err = %v, want ErrInvalid", err)
 	}
+	if _, err := arts.Attach(ctx, testAgent, task.ID, domain.ArtifactURL, "ftp://example.com", "FTP URL"); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("invalid scheme ftp:// for ArtifactURL → err = %v, want ErrInvalid", err)
+	}
+	if _, err := arts.Attach(ctx, testAgent, task.ID, domain.ArtifactURL, "/local/path", "Local path for URL"); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("local path for ArtifactURL → err = %v, want ErrInvalid", err)
+	}
+	if _, err := arts.Attach(ctx, testAgent, task.ID, domain.ArtifactLog, "/var/log/app.log", "line 1\nline 2"); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("multiline summary with \\n → err = %v, want ErrInvalid", err)
+	}
+	if _, err := arts.Attach(ctx, testAgent, task.ID, domain.ArtifactLog, "/var/log/app.log", "line 1\rline 2"); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("multiline summary with \\r → err = %v, want ErrInvalid", err)
+	}
+	if _, err := arts.Attach(ctx, testAgent, task.ID, domain.ArtifactLog, "/var/log/app.log", strings.Repeat("a", domain.MaxArtifactSummaryLen+1)); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("oversized summary → err = %v, want ErrInvalid", err)
+	}
 	if _, err := arts.Attach(ctx, testAgent, domain.ID("no-such-task"), domain.ArtifactLog, "x", ""); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("unknown task → err = %v, want ErrNotFound", err)
 	}
-
 	if len(uow.artifacts.byTask[task.ID]) != 0 || len(uow.events.events) != 1 { // only the create event
 		t.Fatalf("failed attaches wrote state: artifacts=%d events=%d", len(uow.artifacts.byTask[task.ID]), len(uow.events.events))
+	}
+
+	if _, err := arts.Attach(ctx, testAgent, task.ID, domain.ArtifactURL, "https://example.com/spec", "Valid URL"); err != nil {
+		t.Errorf("valid https ArtifactURL failed: %v", err)
 	}
 }
 

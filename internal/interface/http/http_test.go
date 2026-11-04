@@ -1577,8 +1577,20 @@ func TestArtifactAttachAndErrors(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("empty artifact ref = %d, want 400", code)
 	}
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/artifacts", map[string]any{
+		"actor": actor("agent-a"), "kind": "url", "ref": "not-a-valid-url",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("malformed url artifact = %d, want 400", code)
+	}
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/artifacts", map[string]any{
+		"actor": actor("agent-a"), "kind": "log", "ref": "/tmp/out.log", "summary": "line 1\nline 2",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("multiline summary artifact = %d, want 400", code)
+	}
 	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/artifacts", map[string]any{
-		"actor": actor("agent-a"), "kind": "url", "ref": "x",
+		"actor": actor("agent-a"), "kind": "url", "ref": "https://example.com/x",
 	})
 	if code != http.StatusNotFound {
 		t.Fatalf("artifact on unknown task = %d, want 404", code)
