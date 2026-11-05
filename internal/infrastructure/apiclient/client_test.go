@@ -3,6 +3,7 @@ package apiclient
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1055,5 +1056,96 @@ func TestUpstream500Preserved(t *testing.T) {
 	e := wantAPIError(t, err, http.StatusInternalServerError)
 	if string(e.Body) != body {
 		t.Errorf("body not verbatim: %q", e.Body)
+	}
+}
+
+// --- Response size limit ----------------------------------------------------------------------
+
+// jsonOfLen returns a valid JSON object of EXACTLY n bytes (one string field
+// padded with 'a'), used for the at-limit boundary case.
+func jsonOfLen(n int) string {
+	const prefix = `{"pad":"`
+	const suffix = `"}`
+	return prefix + strings.Repeat("a", n-len(prefix)-len(suffix)) + suffix
+}
+
+// TestResponseBodySizeLimit pins over-limit detection in readBodyLimited: a
+// body larger than maxResponseBytes must surface the specific descriptive
+// error (never the opaque "unexpected end of JSON input" that decoding a
+// silently truncated body would produce), while bodies at-or-below the limit
+// keep decoding normally. Both read sites are covered: the shared doPath path
+// and UploadArtifact's own response read.
+func TestResponseBodySizeLimit(t *testing.T) {
+	oversized := strings.Repeat("a", maxResponseBytes+123)
+
+	limitErrors := []struct {
+		name    string
+		call    func(c *Client) error
+		wantErr string // exact expected message
+	}{
+		{
+			name: "over limit via doPath",
+			call: func(c *Client) error {
+				_, err := c.ListProjects(context.Background())
+				return err
+			},
+			wantErr: fmt.Sprintf("ListProjects: response body exceeded %d bytes limit; truncation avoided", maxResponseBytes),
+		},
+		{
+			name: "over limit via UploadArtifact",
+			call: func(c *Client) error {
+				_, err := c.UploadArtifact(context.Background(), "T1", "f.bin", strings.NewReader("x"), "other", "", Actor{Name: "ada"})
+				return err
+			},
+			wantErr: fmt.Sprintf("UploadArtifact: response body exceeded %d bytes limit; truncation avoided", maxResponseBytes),
+		},
+	}
+	for _, tc := range limitErrors {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newTestServer(t, "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				if _, err := w.Write([]byte(oversized)); err != nil {
+					t.Errorf("write oversized body: %v", err)
+				}
+			}))
+
+			err := tc.call(c)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			msg := err.Error()
+			if msg != tc.wantErr {
+				t.Errorf("error = %q, want exactly %q", msg, tc.wantErr)
+			}
+			if strings.Contains(msg, "unexpected end of JSON input") {
+				t.Errorf("truncated-JSON decode error leaked through: %s", msg)
+			}
+			if _, ok := AsAPIError(err); ok {
+				t.Errorf("size-limit failure must not be an *APIError: %v", err)
+			}
+		})
+	}
+
+	successes := []struct {
+		name      string
+		body      string
+		wantTotal int
+	}{
+		{"exactly at limit decodes", jsonOfLen(maxResponseBytes), 0},
+		{"normal size decodes", projectsBody, 2},
+	}
+	for _, tc := range successes {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newTestServer(t, "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeJSONTest(w, http.StatusOK, tc.body)
+			}))
+			list, err := c.ListProjects(context.Background())
+			if err != nil {
+				t.Fatalf("ListProjects: %v", err)
+			}
+			if list.Total != tc.wantTotal {
+				t.Errorf("total = %d, want %d", list.Total, tc.wantTotal)
+			}
+		})
 	}
 }

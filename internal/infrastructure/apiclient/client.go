@@ -21,6 +21,24 @@ const apiPrefix = "/api/v1"
 // this guards against pathological responses, not against limits in general.
 const maxResponseBytes = 1 << 20
 
+// readBodyLimited reads an upstream response body up to a hard cap of
+// maxResponseBytes. It reads ONE byte past the cap so an over-limit body is
+// detected instead of silently truncated: without that sentinel byte,
+// io.LimitReader would stop at exactly maxResponseBytes and the truncated JSON
+// would later fail json.Unmarshal with an opaque "unexpected end of JSON
+// input", hiding the real cause. The caller still closes resp.Body; the
+// unconsumed remainder simply marks the connection non-reusable.
+func readBodyLimited(op string, r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("%s: reading response: %w", op, err)
+	}
+	if len(data) == maxResponseBytes+1 {
+		return nil, fmt.Errorf("%s: response body exceeded %d bytes limit; truncation avoided", op, maxResponseBytes)
+	}
+	return data, nil
+}
+
 // Client is a typed REST client for one ravn-server instance. It is safe
 // for concurrent use (http.Client is; the fields are immutable after New).
 type Client struct {
@@ -361,9 +379,9 @@ func (c *Client) UploadArtifact(ctx context.Context, id string, filename string,
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	data, err := readBodyLimited("UploadArtifact", resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("UploadArtifact: reading response: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -471,9 +489,9 @@ func (c *Client) doPathWithHeaders(ctx context.Context, op, method, path string,
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	data, err := readBodyLimited(op, resp.Body)
 	if err != nil {
-		return fmt.Errorf("%s: reading response: %w", op, err)
+		return err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
