@@ -17,15 +17,20 @@ import (
 // the wire values are matched by clients (web/src/api.ts, docs/API.md), so a
 // change is a breaking API change.
 const (
-	ErrCodeNotFound             = "not_found"
-	ErrCodeInvalidInput         = "invalid_input"
-	ErrCodeUnauthorized         = "unauthorized"
-	ErrCodeInternal             = "internal"
-	ErrCodeVersionConflict      = "version_conflict"
-	ErrCodeClaimConflict        = "claim_conflict"
-	ErrCodeNotClaimed           = "not_claimed"
-	ErrCodeTaskBlocked          = "task_blocked"
-	ErrCodeParentConflict       = "parent_conflict"
+	ErrCodeNotFound        = "not_found"
+	ErrCodeInvalidInput    = "invalid_input"
+	ErrCodeUnauthorized    = "unauthorized"
+	ErrCodeInternal        = "internal"
+	ErrCodeVersionConflict = "version_conflict"
+	ErrCodeClaimConflict   = "claim_conflict"
+	ErrCodeNotClaimed      = "not_claimed"
+	ErrCodeTaskBlocked     = "task_blocked"
+	ErrCodeParentConflict  = "parent_conflict"
+	// ErrCodeConflict is a plain 409 for handler-level preflight rejections
+	// where no use-case error carries the reason — currently: opencode start
+	// on an archived or already-completed task (a foreign active lease is NOT
+	// this code; it surfaces as ErrCodeClaimConflict from the claim CAS).
+	ErrCodeConflict             = "conflict"
 	ErrCodeOpencodeError        = "opencode_error"
 	ErrCodeUnsupportedMediaType = "unsupported_media_type"
 	ErrCodePayloadTooLarge      = "payload_too_large"

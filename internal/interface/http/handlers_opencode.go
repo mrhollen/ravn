@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/mrhollen/ravn/internal/application"
 	"github.com/mrhollen/ravn/internal/domain"
@@ -170,8 +170,71 @@ func formatOpenCodePrompt(detail *application.TaskDetail) string {
 	return sb.String()
 }
 
+// openCodeDispatchActor owns the lease under which a dispatched autonomous
+// session works the task; re-claims, heartbeats and releases by that agent
+// must use the SAME identity (the dispatch prompt instructs it to).
+var openCodeDispatchActor = domain.Actor{Type: domain.ActorAgent, Name: "opencode"}
+
+// openCodeClaimTTL is the lease duration taken for a dispatched session.
+const openCodeClaimTTL = 3600
+
+// deleteOpenCodeSession best-effort DELETEs a previously created OpenCode
+// session so a failed start does not leak one on the external server
+// (01M3MMYRGQ4BAVT7XAM3YXB948 AC3). Fire-and-forget by design: it runs after
+// the handler has already decided its error response, so failures are logged
+// only and never alter the client-visible outcome.
+func (a *App) deleteOpenCodeSession(ctx context.Context, serverURL, dir, sessionID string) {
+	u, err := url.Parse(fmt.Sprintf("%s/session/%s", serverURL, sessionID))
+	if err != nil {
+		slog.Warn("opencode session cleanup: bad URL", "session_id", sessionID, "err", err)
+		return
+	}
+	q := u.Query()
+	q.Set("directory", dir)
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
+	if err != nil {
+		slog.Warn("opencode session cleanup: failed to build DELETE request", "session_id", sessionID, "err", err)
+		return
+	}
+	resp, err := a.HTTPClient.Do(req)
+	if err != nil {
+		slog.Warn("opencode session cleanup: DELETE failed", "session_id", sessionID, "err", err)
+		return
+	}
+	defer resp.Body.Close()
+	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		slog.Warn("opencode session cleanup: DELETE returned non-2xx", "session_id", sessionID, "status", resp.StatusCode, "snippet", string(snippet))
+		return
+	}
+	slog.Info("orphaned opencode session deleted after failed start", "session_id", sessionID)
+}
+
 // handleOpenCodeStart → POST /api/v1/tasks/{id}/opencode/start.
 // Dispatches an autonomous OpenCode session for the given task.
+//
+// Flow (order matters — 01M3MMYRGQ4BAVT7XAM3YXB948):
+//  1. load the full task detail and reject unworkable tasks BEFORE any side
+//     effect: archived or done → 409 "conflict". An active FOREIGN lease is
+//     deliberately NOT checked at read time: the Claim in step 2 re-checks it
+//     atomically (CAS) under the application clock and surfaces
+//     *domain.ClaimConflictError as 409 claim_conflict, so there is no TOCTOU
+//     window between a liveness read and the claim itself;
+//  2. acquire the lease for 'opencode' BEFORE any request reaches the
+//     OpenCode server (retry-safe renewal when opencode already holds it).
+//     Claim errors are NEVER ignored: they surface verbatim via the standard
+//     error contract (409 claim_conflict / task_blocked family, 400 invalid,
+//     500 unexpected) and abort before a session exists;
+//  3. create the session, then dispatch the prompt on the external server;
+//  4. if either step fails AFTER the claim was taken, roll back best-effort:
+//     HTTP DELETE the created session (once it exists) and release the
+//     opencode lease — a start that cannot prove a valid claim plus a
+//     successful dispatch never returns 200 with a session URL;
+//  5. only after a proven-good dispatch is the session URL attached as an
+//     artifact and 200 returned. (An artifact-attach failure AFTER a good
+//     dispatch surfaces as an error but does NOT kill the live session or
+//     release the lease: the agent is running and owns the task.)
 func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := pathID(w, r)
@@ -187,6 +250,29 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	detail, err := a.Tasks.GetDetail(ctx, id, 0, 0)
 	if err != nil {
 		writeAppError(w, err, "task", id)
+		return
+	}
+
+	// Preflight rejections — 409 conflict, no side effects (no claim yet, no
+	// OpenCode contact): an autonomous session is meaningless on a task that
+	// cannot be worked. See the doc comment for why the foreign-lease case is
+	// delegated to the Claim CAS below instead of a read-time liveness check.
+	if detail.Task.Archived {
+		writeJSONError(w, http.StatusConflict, map[string]any{
+			"error":    ErrCodeConflict,
+			"resource": "task",
+			"id":       string(id),
+			"message":  fmt.Sprintf("cannot start an OpenCode session for task %q: the task is archived", id),
+		})
+		return
+	}
+	if detail.Task.Status == domain.StatusDone {
+		writeJSONError(w, http.StatusConflict, map[string]any{
+			"error":    ErrCodeConflict,
+			"resource": "task",
+			"id":       string(id),
+			"message":  fmt.Sprintf("cannot start an OpenCode session for task %q: the task is already completed (done)", id),
+		})
 		return
 	}
 
@@ -248,9 +334,36 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 
 	promptText := formatOpenCodePrompt(&detail)
 
+	// Claim BEFORE any OpenCode request (AC2): an autonomous session must
+	// never run against a task the actor cannot prove it owns, and claim
+	// failures are fatal here — NEVER swallowed. overrideBlockers=true is
+	// deliberate: a human explicitly triggered this dispatch and the prompt
+	// itself lists the open blockers ("resolve or wait on them"), so letting
+	// the blocker gate veto the claim would make that documented resume-context
+	// section unreachable. Every OTHER claim failure — a live foreign lease
+	// (409 claim_conflict naming holder+expiry), an invalid-input race such as
+	// archived/done (400), or an unexpected error (500) — surfaces verbatim
+	// through writeAppError and aborts before any session is created.
+	if _, cerr := a.Tasks.Claim(ctx, openCodeDispatchActor, id, openCodeClaimTTL, true); cerr != nil {
+		slog.Warn("opencode start: failed to claim task", "task_id", id, "err", cerr)
+		writeAppError(w, cerr, "task", id)
+		return
+	}
+
+	// Best-effort rollback for every failure path below (AC3): release the
+	// lease taken above and — once a session exists — delete it. Rollback
+	// failures are logged only; they never alter the error already decided.
+	releaseClaim := func() {
+		if _, rerr := a.Tasks.Release(ctx, openCodeDispatchActor, id, "opencode start failed after claiming — rolling back lease"); rerr != nil {
+			slog.Warn("opencode start: failed to release claim on rollback", "task_id", id, "err", rerr)
+		}
+	}
+	var sessionID string // set once the session exists; empty = nothing to delete
+
 	// Step 1: Create OpenCode session
 	sessionURLParsed, err := url.Parse(serverURL + "/session")
 	if err != nil {
+		releaseClaim()
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
 			"error":   ErrCodeInvalidInput,
 			"message": fmt.Sprintf("invalid opencode server URL: %v", err),
@@ -281,6 +394,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionReqBody, err := json.Marshal(sessionCreateBody)
 	if err != nil {
+		releaseClaim()
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
 			"error":   ErrCodeInternal,
 			"message": "failed to encode session request body",
@@ -290,6 +404,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 
 	createReq, err := http.NewRequestWithContext(ctx, http.MethodPost, sessionURLParsed.String(), bytes.NewReader(sessionReqBody))
 	if err != nil {
+		releaseClaim()
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
 			"error":   ErrCodeInternal,
 			"message": fmt.Sprintf("failed to create http request: %v", err),
@@ -301,6 +416,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	resp, err := a.HTTPClient.Do(createReq)
 	if err != nil {
 		slog.Warn("failed to connect to opencode server", "err", err)
+		releaseClaim()
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
 			"error":   ErrCodeOpencodeError,
 			"message": "failed to connect to opencode server",
@@ -312,6 +428,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		slog.Warn("opencode create session returned non-2xx status", "status", resp.StatusCode, "snippet", string(bodySnippet))
+		releaseClaim()
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
 			"error":   ErrCodeOpencodeError,
 			"message": fmt.Sprintf("opencode create session returned status %d", resp.StatusCode),
@@ -323,17 +440,23 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		ID string `json:"id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&sessionResp); err != nil || sessionResp.ID == "" {
+		// No usable session ID was returned, so nothing can be deleted; the
+		// lease taken above still has to go back.
+		releaseClaim()
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
 			"error":   ErrCodeOpencodeError,
 			"message": "opencode returned invalid session response",
 		})
 		return
 	}
-	sessionID := sessionResp.ID
+	sessionID = sessionResp.ID
 
-	// Step 2: Dispatch prompt asynchronously
+	// Step 2: Dispatch prompt asynchronously. Every failure from here on runs
+	// the FULL rollback (delete the created session AND release the lease).
 	promptURLParsed, err := url.Parse(fmt.Sprintf("%s/session/%s/prompt_async", serverURL, sessionID))
 	if err != nil {
+		a.deleteOpenCodeSession(ctx, serverURL, dir, sessionID)
+		releaseClaim()
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
 			"error":   ErrCodeInternal,
 			"message": fmt.Sprintf("invalid prompt URL: %v", err),
@@ -358,6 +481,8 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	}
 	promptReqBody, err := json.Marshal(promptMap)
 	if err != nil {
+		a.deleteOpenCodeSession(ctx, serverURL, dir, sessionID)
+		releaseClaim()
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
 			"error":   ErrCodeInternal,
 			"message": "failed to encode prompt request body",
@@ -367,6 +492,8 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 
 	dispatchReq, err := http.NewRequestWithContext(ctx, http.MethodPost, promptURLParsed.String(), bytes.NewReader(promptReqBody))
 	if err != nil {
+		a.deleteOpenCodeSession(ctx, serverURL, dir, sessionID)
+		releaseClaim()
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
 			"error":   ErrCodeInternal,
 			"message": fmt.Sprintf("failed to create prompt request: %v", err),
@@ -378,6 +505,8 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	dispatchResp, err := a.HTTPClient.Do(dispatchReq)
 	if err != nil {
 		slog.Warn("failed to dispatch prompt to opencode", "err", err)
+		a.deleteOpenCodeSession(ctx, serverURL, dir, sessionID)
+		releaseClaim()
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
 			"error":   ErrCodeOpencodeError,
 			"message": "failed to dispatch prompt to opencode",
@@ -389,6 +518,8 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	if dispatchResp.StatusCode < 200 || dispatchResp.StatusCode >= 300 {
 		bodySnippet, _ := io.ReadAll(io.LimitReader(dispatchResp.Body, 1024))
 		slog.Warn("opencode prompt_async returned non-2xx status", "status", dispatchResp.StatusCode, "snippet", string(bodySnippet))
+		a.deleteOpenCodeSession(ctx, serverURL, dir, sessionID)
+		releaseClaim()
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
 			"error":   ErrCodeOpencodeError,
 			"message": fmt.Sprintf("opencode prompt_async returned status %d", dispatchResp.StatusCode),
@@ -396,24 +527,19 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 3: Attach session URL artifact to task
+	// Step 3: Attach session URL artifact to task — only AFTER a proven-good
+	// dispatch. An attach failure here does NOT roll back: the agent is live
+	// and owns the lease, so killing the session over bookkeeping would be
+	// worse than surfacing the error (see the doc comment).
 	openCodeSessionURL := fmt.Sprintf("%s/session/%s", serverURL, sessionID)
-	opencodeActor := domain.Actor{Type: domain.ActorAgent, Name: "opencode"}
-	if _, err := a.Artifacts.Attach(ctx, opencodeActor, detail.Task.ID, domain.ArtifactURL, openCodeSessionURL, "OpenCode autonomous session"); err != nil {
+	if _, err := a.Artifacts.Attach(ctx, openCodeDispatchActor, detail.Task.ID, domain.ArtifactURL, openCodeSessionURL, "OpenCode autonomous session"); err != nil {
 		writeAppError(w, err, "task", detail.Task.ID)
 		return
 	}
 
-	// Step 4: If no ACTIVE lease is attached (unclaimed or zombie), claim it for opencode with TTL 3600.
-	// No blocker override: a task with open blockers fails the gate and simply
-	// stays unclaimed here (the error is deliberately swallowed, as before).
-	now := time.Now()
-	isClaimed := detail.Task.IsClaimActive(now) // liveness check; an expired lease is takeover-eligible by Claim
-	if !isClaimed {
-		_, _ = a.Tasks.Claim(ctx, opencodeActor, detail.Task.ID, 3600, false)
-	}
-
-	// Step 5: Return 200 with session_id, session_url, agent, model, variant
+	// Step 4: Return 200 with session_id, session_url, agent, model, variant.
+	// The claim was already acquired (and proven) in the pre-dispatch step —
+	// no post-hoc claim and never a 200 for an unclaimed task.
 	writeJSON(w, http.StatusOK, openCodeStartResponse{
 		SessionID:  sessionID,
 		SessionURL: openCodeSessionURL,

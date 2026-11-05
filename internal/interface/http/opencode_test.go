@@ -269,8 +269,17 @@ func TestOpenCodeStart_Success(t *testing.T) {
 	}
 }
 
-func TestOpenCodeStart_DoesNotOverwriteExistingClaim(t *testing.T) {
+// TestOpenCodeStart_RejectsForeignLeaseBeforeAnyOpenCodeContact covers
+// 01M3MMYRGQ4BAVT7XAM3YXB948 AC1: a task whose lease is actively held by
+// ANOTHER actor is rejected with 409 BEFORE any request reaches the OpenCode
+// server — no session created, no prompt dispatched, no artifact attached,
+// and the foreign claim stays intact. (Pre-epic behavior: the autonomous
+// prompt was still dispatched against the claimed task; only the lease was
+// preserved afterward.)
+func TestOpenCodeStart_RejectsForeignLeaseBeforeAnyOpenCodeContact(t *testing.T) {
+	var openCodeContacts atomic.Int32
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openCodeContacts.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": "sess-existing-claim"})
 	}))
@@ -288,7 +297,7 @@ func TestOpenCodeStart_DoesNotOverwriteExistingClaim(t *testing.T) {
 
 	taskID := makeTask(t, stk, p.ID, "Task already claimed", nil).ID
 
-	// Claim task as agent-backend
+	// Claim task as agent-backend (active foreign lease)
 	code, _ := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskID+"/claim", map[string]any{
 		"actor":   map[string]any{"type": "agent", "name": "agent-backend"},
 		"ttl_sec": 900,
@@ -297,24 +306,33 @@ func TestOpenCodeStart_DoesNotOverwriteExistingClaim(t *testing.T) {
 		t.Fatalf("POST /tasks/%s/claim = %d", taskID, code)
 	}
 
-	// Start OpenCode
+	// Start OpenCode → rejected BEFORE any session/dispatch attempt.
 	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskID+"/opencode/start", nil)
-	if code != http.StatusOK {
-		t.Fatalf("POST /tasks/%s/opencode/start = %d (body %s)", taskID, code, string(body))
+	if code != http.StatusConflict {
+		t.Fatalf("POST /tasks/%s/opencode/start = %d, want 409 (body %s)", taskID, code, string(body))
+	}
+	errDTO := mustDecode[errResp](t, body)
+	if errDTO.Error != "claim_conflict" || errDTO.Holder == nil || errDTO.Holder.Name != "agent-backend" {
+		t.Errorf("error body = %+v, want claim_conflict naming holder agent-backend", errDTO)
 	}
 
-	// Verify task detail: claim should STILL belong to agent-backend
+	// The rejection happens before ANY OpenCode contact: no session created,
+	// no prompt dispatched.
+	if n := openCodeContacts.Load(); n != 0 {
+		t.Errorf("OpenCode server contacts = %d, want 0 (rejection must precede any upstream call)", n)
+	}
+
+	// Task detail: claim STILL belongs to agent-backend and nothing was attached.
 	code, body = doReq(t, stk.Handler, "GET", "/api/v1/tasks/"+taskID, nil)
 	if code != http.StatusOK {
 		t.Fatalf("GET /tasks/%s = %d", taskID, code)
 	}
 	detail := mustDecode[taskDetailDTO](t, body)
 	if detail.ClaimedBy == nil || detail.ClaimedBy.Name != "agent-backend" {
-		t.Errorf("claim was overwritten! ClaimedBy = %+v, want agent-backend", detail.ClaimedBy)
+		t.Errorf("claim was clobbered! ClaimedBy = %+v, want agent-backend", detail.ClaimedBy)
 	}
-	// Artifact should still be attached
-	if len(detail.Artifacts) != 1 {
-		t.Errorf("artifacts count = %d, want 1", len(detail.Artifacts))
+	if len(detail.Artifacts) != 0 {
+		t.Errorf("artifacts count = %d, want 0 (dispatch never happened)", len(detail.Artifacts))
 	}
 }
 
