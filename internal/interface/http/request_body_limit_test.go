@@ -70,8 +70,8 @@ func TestRequestBodyLimit_ExactBoundary(t *testing.T) {
 		t.Fatalf("POST /tasks with %d-byte valid body = %d, want 413 (body: %.300s)", len(oversized), code, string(body))
 	}
 	e := mustDecode[errResp](t, body)
-	if e.Error != "payload too large" {
-		t.Errorf("error = %q, want 'payload too large'", e.Error)
+	if e.Error != "payload_too_large" {
+		t.Errorf("error = %q, want 'payload_too_large'", e.Error)
 	}
 	if !strings.Contains(e.Message, "1048576") {
 		t.Errorf("message = %q, want it to mention the %d byte limit", e.Message, maxJSONBodyBytes)
@@ -80,7 +80,7 @@ func TestRequestBodyLimit_ExactBoundary(t *testing.T) {
 
 // TestRequestBodyLimit_OversizedValidJSON_Returns413NotMalformed drives both
 // decode paths with VALID JSON that exceeds the cap: they must fail with 413
-// "payload too large", never with the old LimitReader symptom of a 400
+// "payload_too_large", never with the old LimitReader symptom of a 400
 // "malformed JSON body: unexpected EOF" caused by truncation.
 func TestRequestBodyLimit_OversizedValidJSON_Returns413NotMalformed(t *testing.T) {
 	t.Parallel()
@@ -93,8 +93,8 @@ func TestRequestBodyLimit_OversizedValidJSON_Returns413NotMalformed(t *testing.T
 		t.Fatalf("POST /projects with %d-byte valid JSON = %d, want 413 (body: %s)", len(raw), code, string(body))
 	}
 	e := mustDecode[errResp](t, body)
-	if e.Error != "payload too large" {
-		t.Errorf("error = %q, want 'payload too large'", e.Error)
+	if e.Error != "payload_too_large" {
+		t.Errorf("error = %q, want 'payload_too_large'", e.Error)
 	}
 	if strings.Contains(e.Message, "malformed JSON") {
 		t.Errorf("message = %q: old LimitReader behavior (truncated into 400 'malformed JSON') regressed", e.Message)
@@ -118,8 +118,8 @@ func TestRequestBodyLimit_OversizedValidJSON_Returns413NotMalformed(t *testing.T
 		t.Fatalf("DELETE AC with %d-byte body = %d, want 413 (body: %s)", len(rawRemove), code, string(body))
 	}
 	e = mustDecode[errResp](t, body)
-	if e.Error != "payload too large" {
-		t.Errorf("error = %q, want 'payload too large'", e.Error)
+	if e.Error != "payload_too_large" {
+		t.Errorf("error = %q, want 'payload_too_large'", e.Error)
 	}
 
 	// decodeJSON on a different endpoint: POST /tasks with the title just over 1MB.
@@ -129,8 +129,8 @@ func TestRequestBodyLimit_OversizedValidJSON_Returns413NotMalformed(t *testing.T
 		t.Fatalf("POST /tasks with %d-byte body = %d, want 413 (body: %s)", len(rawTask), code, string(body))
 	}
 	e = mustDecode[errResp](t, body)
-	if e.Error != "payload too large" {
-		t.Errorf("error = %q, want 'payload too large'", e.Error)
+	if e.Error != "payload_too_large" {
+		t.Errorf("error = %q, want 'payload_too_large'", e.Error)
 	}
 }
 

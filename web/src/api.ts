@@ -139,17 +139,17 @@ export class ApiError extends Error {
   }
 
   static isClaimConflict(e: unknown): boolean {
-    return e instanceof ApiError && e.status === 409 && e.body.error === "claim conflict";
+    return e instanceof ApiError && e.status === 409 && e.body.error === "claim_conflict";
   }
 
   /** 409 heartbeat on a task with no lease at all — recovery is claim first,
    *  never a conflict with a live holder (see NotClaimedBody in types.ts). */
   static isNotClaimed(e: unknown): boolean {
-    return e instanceof ApiError && e.status === 409 && e.body.error === "not claimed";
+    return e instanceof ApiError && e.status === 409 && e.body.error === "not_claimed";
   }
 
   static isParentConflict(e: unknown): boolean {
-    return e instanceof ApiError && e.status === 409 && e.body.error === "parent conflict";
+    return e instanceof ApiError && e.status === 409 && e.body.error === "parent_conflict";
   }
 
   static isUnauthorized(e: unknown): boolean {

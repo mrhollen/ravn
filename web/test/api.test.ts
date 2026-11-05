@@ -54,7 +54,7 @@ test("API: errMsg keeps the precedence of the existing mappings (ApiError, TypeE
   const { ApiError } = await import("../src/api.ts");
   // ApiError → its body message/error verbatim, exactly as before this task.
   assert.equal(apiErrMsg(new ApiError(409, { error: "version_conflict", current_version: 7 })), "version_conflict");
-  assert.equal(apiErrMsg(new ApiError(400, { error: "invalid input", message: 'cannot transition status from "todo" to "done"' })), 'cannot transition status from "todo" to "done"');
+  assert.equal(apiErrMsg(new ApiError(400, { error: "invalid_input", message: 'cannot transition status from "todo" to "done"' })), 'cannot transition status from "todo" to "done"');
   // TypeError = fetch network failure → the "is it running?" message.
   assert.equal(apiErrMsg(new TypeError("fetch failed")), "cannot reach the ravn server (/api/v1) — is it running?");
 });
@@ -123,10 +123,10 @@ test("ArchiveMgmt: api.listProjects(true) targets /projects?archived=true; listT
 
 test("API: ApiError from a 4xx JSON body carries status + exact server message", async () => {
   await withFetch(
-    captureFetch([], () => jsonResp(400, { error: "invalid input", message: 'cannot transition status from "todo" to "done"', resource: "task" })),
+    captureFetch([], () => jsonResp(400, { error: "invalid_input", message: 'cannot transition status from "todo" to "done"', resource: "task" })),
     async () => {
       const e = await expectApiError(api.listTasks(), 400, {
-        error: "invalid input",
+        error: "invalid_input",
         message: 'cannot transition status from "todo" to "done"',
         resource: "task",
       });
@@ -178,16 +178,16 @@ test("API: a JSON-declared body that fails to parse becomes an `internal` ApiErr
 test("API: ApiError static predicates match exactly their 409/401 shapes", () => {
   const vconf = new ApiError(409, { error: "version_conflict", current_version: 7 } as any);
   assert.equal(ApiError.isVersionConflict(vconf), true, "version_conflict with a numeric current_version");
-  assert.equal(ApiError.isVersionConflict(new ApiError(409, { error: "claim conflict" })), false, "other 409 kinds");
+  assert.equal(ApiError.isVersionConflict(new ApiError(409, { error: "claim_conflict" })), false, "other 409 kinds");
   assert.equal(ApiError.isVersionConflict(new ApiError(400, { error: "version_conflict", current_version: 7 } as any)), false, "non-409");
   assert.equal(ApiError.isVersionConflict(new ApiError(409, { error: "version_conflict" } as any)), false, "missing current_version");
   assert.equal(ApiError.isVersionConflict(new Error("nope")), false, "not an ApiError at all");
 
-  assert.equal(ApiError.isClaimConflict(new ApiError(409, { error: "claim conflict", message: "held by x" })), true);
-  assert.equal(ApiError.isClaimConflict(new ApiError(500, { error: "claim conflict" })), false);
-  assert.equal(ApiError.isNotClaimed(new ApiError(409, { error: "not claimed" })), true);
-  assert.equal(ApiError.isNotClaimed(new ApiError(409, { error: "claim conflict" })), false);
-  assert.equal(ApiError.isParentConflict(new ApiError(409, { error: "parent conflict" })), true);
+  assert.equal(ApiError.isClaimConflict(new ApiError(409, { error: "claim_conflict", message: "held by x" })), true);
+  assert.equal(ApiError.isClaimConflict(new ApiError(500, { error: "claim_conflict" })), false);
+  assert.equal(ApiError.isNotClaimed(new ApiError(409, { error: "not_claimed" })), true);
+  assert.equal(ApiError.isNotClaimed(new ApiError(409, { error: "claim_conflict" })), false);
+  assert.equal(ApiError.isParentConflict(new ApiError(409, { error: "parent_conflict" })), true);
   assert.equal(ApiError.isParentConflict(vconf), false);
   assert.equal(ApiError.isUnauthorized(new ApiError(401, { error: "unauthorized", message: "bad token" })), true);
   assert.equal(ApiError.isUnauthorized(new ApiError(403, { error: "forbidden" })), false);

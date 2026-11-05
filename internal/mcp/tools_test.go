@@ -43,7 +43,7 @@ const mockBriefBody = `{"id":"TBRIEF","title":"Handoff resume brief task","statu
 
 // The exact 409 claim-conflict body a foreign active lease produces (API.md).
 // Compared byte-for-byte against the isError text to prove VERBATIM propagation.
-const mockConflictBody = `{"error":"claim conflict","resource":"task","id":"HOLDING","holder":{"type":"agent","name":"runner-2"},"expires_at":"2026-09-26T15:53:00Z","message":"\"HOLDING\" is held by agent (runner-2) until 2026-09-26T15:53:00Z — wait for the lease to expire or work another task"}`
+const mockConflictBody = `{"error":"claim_conflict","resource":"task","id":"HOLDING","holder":{"type":"agent","name":"runner-2"},"expires_at":"2026-09-26T15:53:00Z","message":"\"HOLDING\" is held by agent (runner-2) until 2026-09-26T15:53:00Z — wait for the lease to expire or work another task"}`
 
 // The summary row of T1 at its stored version 4 (matches mockDetailBody's row).
 const mockTaskRowV4 = `{"id":"T1","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z"}`
@@ -53,7 +53,7 @@ const mockTaskRowV4 = `{"id":"T1","title":"Fix login bug","status":"doing","prio
 const mockVersionConflictBody = `{"error":"version_conflict","resource":"task","id":"T1","current_version":4,"updated_at":"2026-09-26T15:48:03Z","message":"task \"T1\" is at version 4 — re-read it and retry with that version","current":{"id":"T1","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z"}}`
 
 // The exact 409 parent-conflict body (API.md): a second, different parent.
-const mockParentConflictBody = `{"error":"parent conflict","resource":"task","id":"TPARENT","message":"task already has a parent: task TPARENT already has a parent (TOTHER)"}`
+const mockParentConflictBody = `{"error":"parent_conflict","resource":"task","id":"TPARENT","message":"task already has a parent: task TPARENT already has a parent (TOTHER)"}`
 
 type claimCall struct {
 	path      string
@@ -165,7 +165,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 	mux.HandleFunc("GET /api/v1/projects/{id}", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 		if r.PathValue("id") != "P1" {
-			writeJSON(w, http.StatusNotFound, `{"error":"not found","resource":"project","id":`+jsonString(r.PathValue("id"))+`,"message":"unknown project"}`)
+			writeJSON(w, http.StatusNotFound, `{"error":"not_found","resource":"project","id":`+jsonString(r.PathValue("id"))+`,"message":"unknown project"}`)
 			return
 		}
 		writeJSON(w, http.StatusOK, mockGetProjectBody)
@@ -244,7 +244,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 			}
 			writeJSON(w, http.StatusOK, mockBriefBody)
 		default:
-			writeJSON(w, http.StatusNotFound, `{"error":"not found","resource":"task","id":`+jsonString(r.PathValue("id"))+`,"message":"unknown task"}`)
+			writeJSON(w, http.StatusNotFound, `{"error":"not_found","resource":"task","id":`+jsonString(r.PathValue("id"))+`,"message":"unknown task"}`)
 		}
 	})
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -661,7 +661,7 @@ func TestGetTaskBrief(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("get_task_brief (unknown id) expected isError, got: %s", firstText(t, res))
 	}
-	want404 := `{"error":"not found","resource":"task","id":"NOPE","message":"unknown task"}`
+	want404 := `{"error":"not_found","resource":"task","id":"NOPE","message":"unknown task"}`
 	if text := firstText(t, res); text != want404 {
 		t.Errorf("404 body not verbatim:\n got  %s\n want %s", text, want404)
 	}
@@ -922,7 +922,7 @@ func TestGetProjectRoundTrip(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("get_project (unknown id) expected isError, got: %s", firstText(t, res))
 	}
-	want404 := `{"error":"not found","resource":"project","id":"NOPE","message":"unknown project"}`
+	want404 := `{"error":"not_found","resource":"project","id":"NOPE","message":"unknown project"}`
 	if text := firstText(t, res); text != want404 {
 		t.Errorf("404 body not verbatim:\n got  %s\n want %s", text, want404)
 	}
@@ -1207,7 +1207,7 @@ func TestProjectReportRoundTrip(t *testing.T) {
 	// Empty project_id is rejected locally — no round-trip.
 	before := len(*calls)
 	res = callTool(t, c, ctx, "project_report", map[string]any{"project_id": "  "})
-	if !res.IsError || !strings.Contains(firstText(t, res), "invalid input") {
+	if !res.IsError || !strings.Contains(firstText(t, res), "invalid_input") {
 		t.Errorf("empty project_id: want invalid-input isError, got %s", firstText(t, res))
 	}
 	if len(*calls) != before {
@@ -1593,7 +1593,7 @@ func TestUpdateTaskArchivedCoercion(t *testing.T) {
 		if !res.IsError {
 			t.Fatalf("expected isError for archived: \"not-a-bool\", got success: %s", firstText(t, res))
 		}
-		wantMsg := `{"error":"invalid input","message":"update_task: \"archived\" must be a boolean"}`
+		wantMsg := `{"error":"invalid_input","message":"update_task: \"archived\" must be a boolean"}`
 		if got := firstText(t, res); got != wantMsg {
 			t.Errorf("validation error message mismatch:\n got  %s\n want %s", got, wantMsg)
 		}
@@ -1608,7 +1608,7 @@ func TestUpdateTaskArchivedCoercion(t *testing.T) {
 		if !res.IsError {
 			t.Fatalf("expected isError for non-boolean type, got success: %s", firstText(t, res))
 		}
-		wantMsg := `{"error":"invalid input","message":"update_task: \"archived\" must be a boolean"}`
+		wantMsg := `{"error":"invalid_input","message":"update_task: \"archived\" must be a boolean"}`
 		if got := firstText(t, res); got != wantMsg {
 			t.Errorf("validation error message mismatch:\n got  %s\n want %s", got, wantMsg)
 		}

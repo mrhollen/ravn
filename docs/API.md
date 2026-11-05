@@ -39,7 +39,7 @@ trusts it):
 | `type`  | Optional. `"human"` \| `"agent"`. **Defaults to `"human"`** when omitted (a bare name from a browser/curl is usually human; agents should send `"agent"` explicitly). Anything else → `400`. |
 
 An invalid actor — empty/oversized/control-char name, unknown type — fails
-with `400 invalid input` on every mutation endpoint before anything is written.
+with `400 invalid_input` on every mutation endpoint before anything is written.
 
 ### Lease-holder identity
 
@@ -56,15 +56,18 @@ buy no protection while breaking clients that omit `type` on some calls.
 ## Error contract
 
 Every error body on `/api/v1/*` is JSON with the exact shapes below. The
+`error` code is ONE **snake_case** token per condition (`claim_conflict`, not
+`claim conflict`; `internal`, not `internal error`) — clients may match on it
+exactly. The
 `message` field doubles as the **agent-readable recovery hint** — the MCP layer
 propagates these bodies verbatim, so treat `message` as instructions, not as a
 log line. (Key order in real responses is sorted by key; examples are shown in
 logical order.)
 
-### 400 invalid input
+### 400 invalid_input
 
 ```json
-{ "error": "invalid input", "message": "comment body must not be empty" }
+{ "error": "invalid_input", "message": "comment body must not be empty" }
 ```
 
 Emitted for: malformed JSON (`"malformed JSON body: …"`), missing path id,
@@ -82,11 +85,11 @@ token authentication is attempted on non-SSE or mutating endpoints:
 { "error": "unauthorized", "message": "missing or invalid auth token" }
 ```
 
-### 404 not found
+### 404 not_found
 
 ```json
 {
-  "error": "not found",
+  "error": "not_found",
   "resource": "task",
   "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
   "message": "task \"01J3ZK8WQ9X7M2P4R6S8T0U2V4\" does not exist — check the id (use the list endpoint)"
@@ -97,7 +100,7 @@ token authentication is attempted on non-SSE or mutating endpoints:
 A `PATCH …/acceptance-criteria/{seq}` with an unknown seq also returns 404 in
 this shape (`resource: "task"`, the task id echoed).
 
-### 409 version conflict
+### 409 version_conflict
 
 Returned by `PATCH /tasks/{id}` when the caller's `version` is stale — checked
 **inside the write transaction**, so it holds even under concurrency — and by
@@ -117,7 +120,7 @@ everything needed to rebase **without a separate read**:
 }
 ```
 
-### 409 claim conflict
+### 409 claim_conflict
 
 Returned by `claim` / `release` / `heartbeat` on a coordination collision. The
 holder + expiry name who holds the lease and when it lapses — **not** an
@@ -125,7 +128,7 @@ instruction to wait for them:
 
 ```json
 {
-  "error": "claim conflict",
+  "error": "claim_conflict",
   "resource": "task",
   "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
   "holder": { "type": "agent", "name": "runner-2" },
@@ -138,7 +141,7 @@ Cases that produce it: `claim` on a foreign active lease; `release` by anyone
 but the active holder (an unclaimed task is an idempotent no-op, not an error);
 `heartbeat` by a non-holder or after expiry. The body ALWAYS names a live
 foreign holder — a heartbeat on a task with **no lease at all** is NOT a claim
-conflict; see `409 not claimed` below.
+conflict; see `409 not_claimed` below.
 
 > [!NOTE]
 > **For agents — holder-gated vs version-guarded.** Only the *lease* operations
@@ -146,12 +149,12 @@ conflict; see `409 not claimed` below.
 > active lease. All other task mutations — comments, notes, status, priority,
 > due date, assignee, archived, acceptance criteria — are **version-guarded only**
 > (optimistic concurrency via `version`) and are open to non-holders. A `409
-> claim conflict` therefore never requires sleeping, polling, or waiting for the
+> claim_conflict` therefore never requires sleeping, polling, or waiting for the
 > lease to expire: if you have explicit permission (from the holder or a human)
 > to work that task, proceed with those version-guarded mutations directly;
 > otherwise stop and report. Idling until `expires_at` is never correct.
 
-### 409 not claimed
+### 409 not_claimed
 
 Returned by `heartbeat` when the task has no lease at all (there is nobody to
 wait for — the recovery instruction is “claim it first”). Same 409 family as
@@ -160,20 +163,20 @@ body tag names the real state.
 
 ```json
 {
-  "error": "not claimed",
+  "error": "not_claimed",
   "resource": "task",
   "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
   "message": "not claimed: task 01J3ZK8WQ9X7M2P4R6S8T0U2V4 has no claim lease — call claim first"
 }
 ```
 
-### 409 parent conflict
+### 409 parent_conflict
 
 One task may have at most one parent. Adding a *second, different* parent:
 
 ```json
 {
-  "error": "parent conflict",
+  "error": "parent_conflict",
   "resource": "task",
   "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
   "message": "task already has a parent: task 01J3ZK8WQ9X7M2P4R6S8T0U2V4 already has a parent (01J3YV2NMB4D9C6K8F0H3L5P7R)"
@@ -183,12 +186,12 @@ One task may have at most one parent. Adding a *second, different* parent:
 Re-adding the *same* parent is not an error — it is the idempotent no-op
 described under relations.
 
-### 415 unsupported media type
+### 415 unsupported_media_type
 
 Returned when a request body is supplied with a missing or mismatched `Content-Type` header (must be `application/json`):
 
 ```json
-{ "error": "unsupported media type", "message": "Content-Type must be application/json" }
+{ "error": "unsupported_media_type", "message": "Content-Type must be application/json" }
 ```
 
 ### 500 internal
@@ -399,7 +402,7 @@ Request: `{ "actor": {"name":"ada"}, "name": "Website Redesign", "description": 
 
 ### GET /projects/{id} (UI) · PUT /projects/{id} (UI)
 
-Get returns the project row; `404 not found` (`resource: "project"`) when
+Get returns the project row; `404 not_found` (`resource: "project"`) when
 unknown. Put takes `{ "actor": …, "name"?: …, "description"?: …,
 "opencode_server_url"?: …, "opencode_directory"?: …, "opencode_model"?: …, "archived"?: … }`
 with pointer semantics — omitted = unchanged, at least one field required (else
@@ -455,9 +458,9 @@ Events (`Content-Type: text/event-stream`; headers `Cache-Control: no-cache`,
 the path form.
 
 - `GET /api/v1/projects/{id}/events` — project from the path. Unknown project →
-  `404 not found` (`resource: "project"`) before the stream opens.
+  `404 not_found` (`resource: "project"`) before the stream opens.
 - `GET /api/v1/events?project_id=…` — project from the query string; a missing
-  or empty `project_id` → `400 invalid input`
+  or empty `project_id` → `400 invalid_input`
   (`missing required query parameter "project_id"`).
 
 Stream framing (both endpoints): an initial comment line `: connected`, then a
@@ -574,7 +577,7 @@ All other fields optional (omitted = unchanged):
 {
   "actor": { "name": "eve" },
   "version": 3,
-  "status": "doing",           // validated against the transition map → 400 invalid input naming from→to when illegal
+  "status": "doing",           // validated against the transition map → 400 invalid_input naming from→to when illegal
   "title": null,               // any of: title, description, status, priority (0–5),
   "priority": 2,
   "due_at": "2026-10-02T00:00:00Z",   // RFC3339 to set…
@@ -589,8 +592,8 @@ All other fields optional (omitted = unchanged):
 events; this is the only field that touches `completed_at`.
 
 Transitioning to `status: "done"` validates that:
-1. The task has no open blockers (`blocked-by` targets that are not done and not archived). If open blockers exist and `override_blockers` is false, returns `409` (`{"error": "task blocked", "blockers": [...]}`).
-2. All acceptance criteria on the task are satisfied (`done: true`). If any criterion is incomplete, returns `400` (`{"error": "invalid input"}`) with a message naming the count and seq of every unmet criterion — e.g. `"…has 2 incomplete acceptance criteria (seq 1, 2) — reopen or complete acceptance criteria first"`. **There is no override flag**: complete the criteria (or reopen a task that was completed with them left open). A task with zero criteria passes vacuously. The blocker gate is checked first when both would fire.
+1. The task has no open blockers (`blocked-by` targets that are not done and not archived). If open blockers exist and `override_blockers` is false, returns `409` (`{"error": "task_blocked", "blockers": [...]}`).
+2. All acceptance criteria on the task are satisfied (`done: true`). If any criterion is incomplete, returns `400` (`{"error": "invalid_input"}`) with a message naming the count and seq of every unmet criterion — e.g. `"…has 2 incomplete acceptance criteria (seq 1, 2) — reopen or complete acceptance criteria first"`. **There is no override flag**: complete the criteria (or reopen a task that was completed with them left open). A task with zero criteria passes vacuously. The blocker gate is checked first when both would fire.
 
 
 ### POST /tasks/{id}/claim → `claim_task`
@@ -598,7 +601,7 @@ Transitioning to `status: "done"` validates that:
 Acquires or renews the **lease** (the ephemeral `claimed_by`, never the durable
 assignee). One atomic CAS: wins when the lease is free, expired (takeover —
 including taking over your own zombie lease), or held by you (renewal); a
-foreign active lease loses with `409 claim conflict` and nothing is mutated.
+foreign active lease loses with `409 claim_conflict` and nothing is mutated.
 
 ```json
 { "actor": { "name": "runner-2", "type": "agent" }, "ttl_sec": 1800 }
@@ -633,7 +636,7 @@ task → `404`.
 ```
 
 **Holder-only against an active lease** — anyone else (or you, after expiry)
-gets `409 claim conflict` naming the real holder. A task with **no lease at
+gets `409 claim_conflict` naming the real holder. A task with **no lease at
 all** is an idempotent no-op returning the fresh row (retry-safe). Success:
 lease cleared, `status→todo`, version bumped; the optional `note` rides on the
 released event (it is NOT posted as a comment). `200` fresh summary row.
@@ -648,7 +651,7 @@ Keep-alive for the active self-holder: extends `claim_expires_at` by the
 **stored** ttl. Deliberately **does not bump the version and does not touch
 `updated_at`** — a heartbeat is not a state change, so it never invalidates a
 working agent's read base. Foreign holder / expired lease → `409 claim
-conflict`; **no lease at all** → `409 not claimed` (recovery: claim first).
+conflict`; **no lease at all** → `409 not_claimed` (recovery: claim first).
 The fresh row doubles as the liveness answer: `200` summary row.
 
 ### POST /tasks/{id}/comments → `add_comment`
@@ -712,7 +715,7 @@ task → `404`.
 **Settled-parent rule (applies to EVERY criterion mutation on this and the
 following AC endpoints — toggle, reword, add, remove):** while the parent task
 is completed (`status: "done"`) or archived, all of them are refused with
-`400` (`{"error": "invalid input"}`) naming the recovery —
+`400` (`{"error": "invalid_input"}`) naming the recovery —
 `"…completed task <id> — reopen the task first"` / `"…archived task <id> —
 unarchive it first"`. Nothing is written and no event is emitted. Reopening
 (`done→todo`) or unarchiving restores full mutability. Note: re-checking an
@@ -823,7 +826,7 @@ Security & Validation:
 - Response Leakage: non-2xx responses from upstream OpenCode servers sanitize errors and do not echo raw upstream response body snippets.
 
 Errors: unknown task or project → `404`; malformed model ref (must look like
-`"providerID/modelID"`), prohibited/malformed server URL, or path traversal directory → `400 invalid input`; unreachable
+`"providerID/modelID"`), prohibited/malformed server URL, or path traversal directory → `400 invalid_input`; unreachable
 OpenCode server, non-2xx upstream response, or an unparsable session reply →
 `502 {"error": "opencode_error", "message": "…"}`.
 
@@ -862,13 +865,13 @@ removing `"child"` from the other side.
 
 The body is optional JSON but **must carry a valid `actor`** when present — a
 removal appends an event that records *who* removed it, so no-body/empty-actor
-→ `400 invalid input` rather than a fabricated identity in the audit log:
+→ `400 invalid_input` rather than a fabricated identity in the audit log:
 
 ```json
 { "actor": { "name": "eve" } }
 ```
 
-`204 No Content` on success (no body). Missing edge → `404 not found`. Invalid
+`204 No Content` on success (no body). Missing edge → `404 not_found`. Invalid
 kind / self-relation / unknown task → `400`/`404` per the usual mapping.
 
 ## Version-bump policy (summary)

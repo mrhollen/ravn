@@ -58,7 +58,7 @@ func TestHandoffREST_ClaimThenHandOffThenForeignConflict(t *testing.T) {
 	}
 
 	// The handoff cleared the lease. Re-claim by A so a NON-holder (b) now faces a
-	// live foreign lease → genuine 409 claim conflict naming the holder.
+	// live foreign lease → genuine 409 claim_conflict naming the holder.
 	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
 		"actor": handoffAgent("worker-a"), "ttl_sec": 3600,
 	})
@@ -73,8 +73,8 @@ func TestHandoffREST_ClaimThenHandOffThenForeignConflict(t *testing.T) {
 		t.Fatalf("non-holder handoff = %d, want 409 (body %s)", code, string(body))
 	}
 	errBody := mustDecode[errResp](t, body)
-	if errBody.Error != "claim conflict" {
-		t.Errorf("409 error = %q, want \"claim conflict\"", errBody.Error)
+	if errBody.Error != "claim_conflict" {
+		t.Errorf("409 error = %q, want \"claim_conflict\"", errBody.Error)
 	}
 	if errBody.Holder == nil || errBody.Holder.Name != "worker-a" {
 		t.Errorf("conflict holder = %+v, want worker-a (the live lease holder)", errBody.Holder)

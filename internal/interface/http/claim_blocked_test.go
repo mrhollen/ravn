@@ -50,8 +50,8 @@ func TestClaimBlocked_FreshClaimOnBlockedTask_409BodyShape(t *testing.T) {
 		t.Fatalf("claim on blocked task = %d, want 409 (body %s)", code, string(body))
 	}
 	e := mustDecode[blockedErr](t, body)
-	if e.Error != "task blocked" {
-		t.Errorf("error code = %q, want \"task blocked\"", e.Error)
+	if e.Error != "task_blocked" {
+		t.Errorf("error code = %q, want \"task_blocked\"", e.Error)
 	}
 	if e.Resource != "task" || e.ID != blocked.ID {
 		t.Errorf("envelope = (resource %q id %q), want (task %s)", e.Resource, e.ID, blocked.ID)

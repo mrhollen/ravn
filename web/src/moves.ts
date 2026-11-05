@@ -50,7 +50,7 @@ export function legalTargets(from: string): Status[] {
 /** Maps the server's transition rejection onto a friendly client message
  *  (task 01M3QWNGTJAKEAE05S5C8CDBD5, added scope). Server shape —
  *  internal/application/tasks.go returns domain.TransitionError{From, To},
- *  surfaced as a 400 `invalid input` ApiError:
+ *  surfaced as a 400 `invalid_input` ApiError:
  *    "cannot transition status from \"todo\" to \"done\""
  *  This fires when the card's state changed mid-drag (another agent moved it),
  *  i.e. when a visually-legal drop becomes illegal server-side. Returns null

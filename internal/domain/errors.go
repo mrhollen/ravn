@@ -71,7 +71,7 @@ func (e *ConflictError) Is(target error) bool {
 // heartbeat — collides with a live lease held by someone else. Holder and
 // ExpiresAt double as the recovery instruction for agents ("wait until <expiry>,
 // or work another task"), so they always travel with the error. The REST
-// adapter maps it to 409 with error="claim conflict". A ClaimConflictError
+// adapter maps it to 409 with error="claim_conflict". A ClaimConflictError
 // ALWAYS names a live foreign holder (zero-value Holder/ExpiresAt are never
 // constructed — an operation on a task with no lease at all is ErrNotClaimed).
 type ClaimConflictError struct {
@@ -104,7 +104,7 @@ func (e *ClaimConflictError) Is(target error) bool {
 //
 //	fmt.Errorf("%w: task %s has no claim lease — call claim first", ErrNotClaimed, id)
 //
-// The REST adapter maps it to 409 with error="not claimed" (same status family
+// The REST adapter maps it to 409 with error="not_claimed" (same status family
 // as the claim conflicts; MCP propagates the body verbatim as the agent's
 // recovery hint).
 var ErrNotClaimed = errors.New("not claimed")
@@ -133,7 +133,7 @@ func (e *TransitionError) Error() string {
 // guard encodes). Renewals by the current active lease holder are exempt: the
 // claim gate only guards fresh starts. BlockerIDs carries the open blocker IDs in
 // edge-creation order; it is the machine-readable "why" that travels with the
-// error. The REST adapter maps it to 409 with error="task blocked" plus the blocker list.
+// error. The REST adapter maps it to 409 with error="task_blocked" plus the blocker list.
 type TaskBlockedError struct {
 	TaskID     ID
 	BlockerIDs []ID

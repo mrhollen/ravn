@@ -243,7 +243,7 @@ func TestDecodeJSON_ContentTypeEnforcement(t *testing.T) {
 			body:           `{"name":"test"}`,
 			wantStatus:     http.StatusUnsupportedMediaType,
 			wantSuccess:    false,
-			wantErrKeyword: "unsupported media type",
+			wantErrKeyword: "unsupported_media_type",
 		},
 		{
 			name:           "text/plain on non-empty body (simple request)",
@@ -252,7 +252,7 @@ func TestDecodeJSON_ContentTypeEnforcement(t *testing.T) {
 			body:           `{"name":"test"}`,
 			wantStatus:     http.StatusUnsupportedMediaType,
 			wantSuccess:    false,
-			wantErrKeyword: "unsupported media type",
+			wantErrKeyword: "unsupported_media_type",
 		},
 		{
 			name:           "text/plain with charset on non-empty body",
@@ -261,7 +261,7 @@ func TestDecodeJSON_ContentTypeEnforcement(t *testing.T) {
 			body:           `{"name":"test"}`,
 			wantStatus:     http.StatusUnsupportedMediaType,
 			wantSuccess:    false,
-			wantErrKeyword: "unsupported media type",
+			wantErrKeyword: "unsupported_media_type",
 		},
 		{
 			name:           "application/x-www-form-urlencoded on non-empty body",
@@ -270,7 +270,7 @@ func TestDecodeJSON_ContentTypeEnforcement(t *testing.T) {
 			body:           `name=test`,
 			wantStatus:     http.StatusUnsupportedMediaType,
 			wantSuccess:    false,
-			wantErrKeyword: "unsupported media type",
+			wantErrKeyword: "unsupported_media_type",
 		},
 		{
 			name:           "multipart/form-data on non-empty body",
@@ -279,7 +279,7 @@ func TestDecodeJSON_ContentTypeEnforcement(t *testing.T) {
 			body:           `--xyz...`,
 			wantStatus:     http.StatusUnsupportedMediaType,
 			wantSuccess:    false,
-			wantErrKeyword: "unsupported media type",
+			wantErrKeyword: "unsupported_media_type",
 		},
 		{
 			name:           "invalid media type format",
@@ -288,7 +288,7 @@ func TestDecodeJSON_ContentTypeEnforcement(t *testing.T) {
 			body:           `{"name":"test"}`,
 			wantStatus:     http.StatusUnsupportedMediaType,
 			wantSuccess:    false,
-			wantErrKeyword: "unsupported media type",
+			wantErrKeyword: "unsupported_media_type",
 		},
 		{
 			name:           "empty body with Content-Type application/json returns 400 not 415",
@@ -297,7 +297,7 @@ func TestDecodeJSON_ContentTypeEnforcement(t *testing.T) {
 			body:           "",
 			wantStatus:     http.StatusBadRequest,
 			wantSuccess:    false,
-			wantErrKeyword: "invalid input",
+			wantErrKeyword: "invalid_input",
 		},
 		{
 			name:           "empty body with text/plain returns 400 not 415",
@@ -306,7 +306,7 @@ func TestDecodeJSON_ContentTypeEnforcement(t *testing.T) {
 			body:           "",
 			wantStatus:     http.StatusBadRequest,
 			wantSuccess:    false,
-			wantErrKeyword: "invalid input",
+			wantErrKeyword: "invalid_input",
 		},
 		{
 			name:           "empty body without Content-Type returns 400 not 415",
@@ -314,7 +314,7 @@ func TestDecodeJSON_ContentTypeEnforcement(t *testing.T) {
 			body:           "",
 			wantStatus:     http.StatusBadRequest,
 			wantSuccess:    false,
-			wantErrKeyword: "invalid input",
+			wantErrKeyword: "invalid_input",
 		},
 	}
 

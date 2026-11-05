@@ -222,7 +222,7 @@ func TestProjectReport_EndToEnd(t *testing.T) {
 		t.Fatalf("report for unknown project = %d, want 404 (body %s)", code, string(body))
 	}
 	e := mustDecode[errResp](t, body)
-	if e.Error != "not found" || e.Resource != "project" {
+	if e.Error != "not_found" || e.Resource != "project" {
 		t.Errorf("404 body = %+v, want error \"not found\" resource \"project\"", e)
 	}
 	for _, q := range []string{"?since=not-a-date", "?stalled_minutes=-5", "?stalled_minutes=abc"} {
@@ -231,8 +231,8 @@ func TestProjectReport_EndToEnd(t *testing.T) {
 			t.Fatalf("GET report%s = %d, want 400 (body %s)", q, code, string(b))
 		}
 		e = mustDecode[errResp](t, b)
-		if e.Error != "invalid input" {
-			t.Errorf("GET report%s error = %+v, want \"invalid input\"", q, e)
+		if e.Error != "invalid_input" {
+			t.Errorf("GET report%s error = %+v, want \"invalid_input\"", q, e)
 		}
 	}
 }

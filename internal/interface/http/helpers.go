@@ -25,8 +25,8 @@ const maxJSONBodyBytes = 1 << 20
 
 // decodeJSON decodes the request body into v. Non-empty bodies must have
 // Content-Type: application/json (or media type application/json with parameters),
-// returning 415 ({"error":"unsupported media type"}) if mismatched.
-// Malformed JSON or a missing body is a 400 ({"error":"invalid input"})
+// returning 415 ({"error":"unsupported_media_type"}) if mismatched.
+// Malformed JSON or a missing body is a 400 ({"error":"invalid_input"})
 // and the handler returns false.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	if r.Body != nil && r.Body != http.NoBody {
@@ -55,7 +55,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 
 	if !hasBody {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "malformed JSON body: unexpected EOF",
 		})
 		return false
@@ -65,7 +65,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	mediaType, _, err := mime.ParseMediaType(ct)
 	if err != nil || mediaType != "application/json" {
 		writeJSONError(w, http.StatusUnsupportedMediaType, map[string]any{
-			"error":   "unsupported media type",
+			"error":   ErrCodeUnsupportedMediaType,
 			"message": "Content-Type must be application/json",
 		})
 		return false
@@ -77,13 +77,13 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeJSONError(w, http.StatusRequestEntityTooLarge, map[string]any{
-				"error":   "payload too large",
+				"error":   ErrCodePayloadTooLarge,
 				"message": fmt.Sprintf("request body exceeds the %d byte limit", maxJSONBodyBytes),
 			})
 			return false
 		}
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "malformed JSON body: " + err.Error(),
 		})
 		return false
@@ -95,8 +95,8 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 // body is empty (nil, http.NoBody, or 0 bytes / whitespace only), it returns
 // (false, true) without modifying v. If a non-empty body is present, it enforces
 // that Content-Type is application/json (or media type application/json with parameters),
-// returning 415 ({"error":"unsupported media type"}) if mismatched.
-// Misspelled or unknown fields, or malformed JSON return 400 ({"error":"invalid input"})
+// returning 415 ({"error":"unsupported_media_type"}) if mismatched.
+// Misspelled or unknown fields, or malformed JSON return 400 ({"error":"invalid_input"})
 // and the function returns (false, false). On success, it returns (true, true).
 func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any) (hasBody bool, ok bool) {
 	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
@@ -109,13 +109,13 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any) (hasBody 
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeJSONError(w, http.StatusRequestEntityTooLarge, map[string]any{
-				"error":   "payload too large",
+				"error":   ErrCodePayloadTooLarge,
 				"message": fmt.Sprintf("request body exceeds the %d byte limit", maxJSONBodyBytes),
 			})
 			return false, false
 		}
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "unreadable request body: " + err.Error(),
 		})
 		return false, false
@@ -129,7 +129,7 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any) (hasBody 
 	mediaType, _, err := mime.ParseMediaType(ct)
 	if err != nil || mediaType != "application/json" {
 		writeJSONError(w, http.StatusUnsupportedMediaType, map[string]any{
-			"error":   "unsupported media type",
+			"error":   ErrCodeUnsupportedMediaType,
 			"message": "Content-Type must be application/json",
 		})
 		return false, false
@@ -139,7 +139,7 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any) (hasBody 
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "malformed JSON body: " + err.Error(),
 		})
 		return false, false
@@ -155,7 +155,7 @@ func pathID(w http.ResponseWriter, r *http.Request) (domain.ID, bool) {
 	id := domain.ID(r.PathValue("id"))
 	if id.IsZero() {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "missing path id",
 		})
 		return "", false

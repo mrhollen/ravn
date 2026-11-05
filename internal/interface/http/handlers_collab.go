@@ -30,7 +30,7 @@ import (
 // ACTIVE lease loses with 409 whose holder+expiry ARE the recovery
 // instruction ("wait until X, or work another task"). A FRESH claim on a task
 // with open blockers (outgoing blocked-by edges to not-done, non-archived
-// tasks) loses with 409 {"error":"task blocked"} carrying the blocker IDs —
+// tasks) loses with 409 {"error":"task_blocked"} carrying the blocker IDs —
 // override_blockers=true bypasses that gate for emergency unblocking. ttl_sec
 // omitted/0 → server default (900s); negative → 400; values above the cap are
 // clamped to 3600 by the use case. Claiming never touches the durable assignee.
@@ -111,8 +111,8 @@ func (a *App) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 // active self-holder: extends claim_expires_at by the STORED ttl without
 // bumping the version and without touching updated_at — a heartbeat is not a
 // state change, so it never disturbs a working agent's read base. Foreign or
-// expired holder → 409 claim conflict (holder + expiry); no lease at all →
-// 409 "not claimed" (domain.ErrNotClaimed — the recovery is "claim first",
+// expired holder → 409 claim_conflict (holder + expiry); no lease at all →
+// 409 "not_claimed" (domain.ErrNotClaimed — the recovery is "claim first",
 // and there is nobody to wait for). The fresh row doubles as the liveness
 // answer.
 func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +132,7 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	fresh, err := a.Tasks.Heartbeat(ctx, actor, id)
 	if err != nil {
-		writeAppError(w, err, "task", id) // ClaimConflictError → 409 holder+expiry; ErrNotClaimed → 409 not claimed
+		writeAppError(w, err, "task", id) // ClaimConflictError → 409 holder+expiry; ErrNotClaimed → 409 not_claimed
 		return
 	}
 	writeJSON(w, http.StatusOK, toSummary(fresh))
@@ -144,7 +144,7 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 // appends exactly one comment (kind defaults to "handoff"; only "handoff"|"question"
 // — anything else → 400), clears the lease and moves status to todo, bumping the
 // version once. 200 {task, comment}; foreign active lease → 409 holder+expiry; no
-// active lease → 409 "not claimed"; invalid kind/receiver/over-long body → 400.
+// active lease → 409 "not_claimed"; invalid kind/receiver/over-long body → 400.
 func (a *App) handleHandoffTask(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := pathID(w, r)
@@ -176,7 +176,7 @@ func (a *App) handleHandoffTask(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := a.Tasks.HandOff(ctx, actor, id, in)
 	if err != nil {
-		writeAppError(w, err, "task", id) // ClaimConflictError → 409 holder+expiry; ErrNotClaimed → 409 not claimed; bad kind/over-long body → 400
+		writeAppError(w, err, "task", id) // ClaimConflictError → 409 holder+expiry; ErrNotClaimed → 409 not_claimed; bad kind/over-long body → 400
 		return
 	}
 	writeJSON(w, http.StatusOK, handoffResp{Task: toSummary(res.Task), Comment: toComment(res.Comment)})
@@ -290,7 +290,7 @@ func parseACSeq(w http.ResponseWriter, r *http.Request) (int, bool) {
 	seq, err := strconv.Atoi(rawSeq)
 	if err != nil || seq < 1 {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": fmt.Sprintf("acceptance-criteria seq must be a positive integer, got %q", rawSeq),
 		})
 		return 0, false
@@ -388,7 +388,7 @@ func (a *App) handleRemoveAC(w http.ResponseWriter, r *http.Request) {
 	actorIn, hasActor := extractActor(r, req.Actor)
 	if !hasActor {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": `actor is required for AC removal: send a JSON body with {"actor":{"name":"..."}}, X-Actor-Name header, or ?actor_name query parameter`,
 		})
 		return
@@ -426,7 +426,7 @@ func (a *App) handleReorderAC(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Seqs) == 0 {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "reorder seqs must not be empty",
 		})
 		return
@@ -626,7 +626,7 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 	r.Body = http.MaxBytesReader(w, r.Body, maxArtifactUploadSize)
 	if err := r.ParseMultipartForm(maxArtifactUploadSize); err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "upload exceeds maximum size limit (10MB) or malformed multipart data",
 		})
 		return
@@ -635,7 +635,7 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "missing file field in upload request",
 		})
 		return
@@ -644,7 +644,7 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 
 	if header.Size == 0 {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "uploaded file is empty",
 		})
 		return
@@ -655,7 +655,7 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 	n, readErr := file.Read(buf)
 	if (readErr == io.EOF && n == 0) || (readErr == nil && n == 0) {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "uploaded file is empty",
 		})
 		return
@@ -697,7 +697,7 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 	}
 	if !kind.Valid() {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": fmt.Sprintf("unknown artifact kind %q", kindStr),
 		})
 		return
@@ -716,7 +716,7 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 
 	if err := os.MkdirAll(a.ArtifactsDir, 0755); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
-			"error":   "internal error",
+			"error":   ErrCodeInternal,
 			"message": "cannot create artifacts directory",
 		})
 		return
@@ -729,7 +729,7 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 	dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
-			"error":   "internal error",
+			"error":   ErrCodeInternal,
 			"message": "failed to store artifact file",
 		})
 		return
@@ -739,7 +739,7 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 		dst.Close()
 		_ = os.Remove(destPath)
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
-			"error":   "internal error",
+			"error":   ErrCodeInternal,
 			"message": "failed to write file content",
 		})
 		return
@@ -749,7 +749,7 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 		dst.Close()
 		_ = os.Remove(destPath)
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "failed reading upload content or exceeds maximum size limit",
 		})
 		return
@@ -777,7 +777,7 @@ func (a *App) handleRemoveArtifact(w http.ResponseWriter, r *http.Request) {
 	artifactIDStr := r.PathValue("artifact_id")
 	if !validArtifactID(artifactIDStr) {
 		writeJSONError(w, http.StatusNotFound, map[string]any{
-			"error":   "not found",
+			"error":   ErrCodeNotFound,
 			"message": "artifact not found",
 		})
 		return
@@ -791,7 +791,7 @@ func (a *App) handleRemoveArtifact(w http.ResponseWriter, r *http.Request) {
 	actorIn, hasActor := extractActor(r, req.Actor)
 	if !hasActor {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": `actor is required for artifact removal: send a JSON body with {"actor":{"name":"..."}}, X-Actor-Name header, or ?actor_name query parameter`,
 		})
 		return
@@ -822,7 +822,7 @@ func (a *App) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !validArtifactID(id) {
 		writeJSONError(w, http.StatusNotFound, map[string]any{
-			"error":   "not found",
+			"error":   ErrCodeNotFound,
 			"message": "artifact not found",
 		})
 		return
@@ -831,7 +831,7 @@ func (a *App) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 	filePath, err := findArtifactFile(a.ArtifactsDir, id)
 	if err != nil || filePath == "" {
 		writeJSONError(w, http.StatusNotFound, map[string]any{
-			"error":   "not found",
+			"error":   ErrCodeNotFound,
 			"message": "artifact not found",
 		})
 		return
@@ -843,7 +843,7 @@ func (a *App) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 	rel, err := filepath.Rel(cleanDir, cleanPath)
 	if err != nil || strings.HasPrefix(rel, "..") || strings.Contains(rel, "/") || strings.Contains(rel, "\\") {
 		writeJSONError(w, http.StatusNotFound, map[string]any{
-			"error":   "not found",
+			"error":   ErrCodeNotFound,
 			"message": "artifact not found",
 		})
 		return
@@ -852,7 +852,7 @@ func (a *App) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 	info, err := os.Stat(cleanPath)
 	if err != nil || info.IsDir() {
 		writeJSONError(w, http.StatusNotFound, map[string]any{
-			"error":   "not found",
+			"error":   ErrCodeNotFound,
 			"message": "artifact not found",
 		})
 		return
@@ -861,7 +861,7 @@ func (a *App) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 	f, err := os.Open(cleanPath)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
-			"error":   "internal error",
+			"error":   ErrCodeInternal,
 			"message": "failed to read artifact",
 		})
 		return
@@ -916,7 +916,7 @@ func (a *App) handleAddRelation(w http.ResponseWriter, r *http.Request) {
 	otherID := domain.ID(req.OtherID)
 	if otherID.IsZero() {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "other_id is required: the task this edge points at",
 		})
 		return
@@ -951,7 +951,7 @@ func (a *App) handleRemoveRelation(w http.ResponseWriter, r *http.Request) {
 	otherID := domain.ID(r.PathValue("other_id"))
 	if otherID.IsZero() {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "missing path other_id",
 		})
 		return
@@ -965,7 +965,7 @@ func (a *App) handleRemoveRelation(w http.ResponseWriter, r *http.Request) {
 	actorIn, hasActor := extractActor(r, req.Actor)
 	if !hasActor {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": `actor is required for relation removal: send a JSON body with {"actor":{"name":"..."}}, X-Actor-Name header, or ?actor_name query parameter`,
 		})
 		return

@@ -304,7 +304,7 @@ func TestProjectsLifecycleAndCounts(t *testing.T) {
 		t.Fatalf("GET unknown project = %d, want 404 (body %s)", code, string(body))
 	}
 	e := mustDecode[errResp](t, body)
-	if e.Error != "not found" || e.Resource != "project" {
+	if e.Error != "not_found" || e.Resource != "project" {
 		t.Fatalf("404 body = %+v, want error \"not found\" resource \"project\"", e)
 	}
 
@@ -599,8 +599,8 @@ func TestTaskListFiltersPaginationAndOrder(t *testing.T) {
 			t.Fatalf("GET /tasks%s = %d, want 400 (body %s)", q, code, string(b))
 		}
 		e := mustDecode[errResp](t, b)
-		if e.Error != "invalid input" {
-			t.Fatalf("GET /tasks%s error code = %q, want \"invalid input\"", q, e.Error)
+		if e.Error != "invalid_input" {
+			t.Fatalf("GET /tasks%s error code = %q, want \"invalid_input\"", q, e.Error)
 		}
 	}
 }
@@ -649,8 +649,8 @@ func TestTaskPatchVersionSemantics(t *testing.T) {
 		t.Fatalf("PATCH without version = %d, want 400 (body %s)", code, string(body))
 	}
 	e = mustDecode[errResp](t, body)
-	if e.Error != "invalid input" {
-		t.Fatalf("missing-version error code = %q, want \"invalid input\"", e.Error)
+	if e.Error != "invalid_input" {
+		t.Fatalf("missing-version error code = %q, want \"invalid_input\"", e.Error)
 	}
 
 	// Unknown task id → 404 with the resource named.
@@ -659,7 +659,7 @@ func TestTaskPatchVersionSemantics(t *testing.T) {
 		t.Fatalf("GET unknown task = %d, want 404 (body %s)", code, string(body))
 	}
 	e = mustDecode[errResp](t, body)
-	if e.Error != "not found" || e.Resource != "task" {
+	if e.Error != "not_found" || e.Resource != "task" {
 		t.Fatalf("404 body = %+v, want error \"not found\" resource \"task\"", e)
 	}
 }
@@ -705,8 +705,8 @@ func TestErrorMappingBasics(t *testing.T) {
 		t.Fatalf("POST /tasks with broken JSON = %d, want 400 (body %s)", code, string(body))
 	}
 	e := mustDecode[errResp](t, body)
-	if e.Error != "invalid input" || e.Message == "" {
-		t.Fatalf("broken-JSON error = %+v, want invalid input with a message", e)
+	if e.Error != "invalid_input" || e.Message == "" {
+		t.Fatalf("broken-JSON error = %+v, want invalid_input with a message", e)
 	}
 }
 
@@ -754,7 +754,7 @@ func TestClaimLifecycle(t *testing.T) {
 		t.Fatalf("default claim ttl = %d, want 900", d.ClaimTTLSeconds)
 	}
 
-	// B claims → 409 claim conflict with holder=A and the expiry.
+	// B claims → 409 claim_conflict with holder=A and the expiry.
 	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
 		"actor": actor("agent-b"),
 	})
@@ -762,8 +762,8 @@ func TestClaimLifecycle(t *testing.T) {
 		t.Fatalf("B claim (held by A) = %d, want 409 (body %s)", code, string(body))
 	}
 	e := mustDecode[errResp](t, body)
-	if e.Error != "claim conflict" || e.Holder == nil || e.Holder.Name != "agent-a" || e.ExpiresAt == "" {
-		t.Fatalf("409 claim body = %+v, want error \"claim conflict\" holder agent-a with expiry", e)
+	if e.Error != "claim_conflict" || e.Holder == nil || e.Holder.Name != "agent-a" || e.ExpiresAt == "" {
+		t.Fatalf("409 claim body = %+v, want error \"claim_conflict\" holder agent-a with expiry", e)
 	}
 	// The message must carry the no-wait clarification (never sleep/poll for a
 	// lease expiry; close-out mutations are version-guarded, not claim-gated) —
@@ -877,7 +877,7 @@ func TestRelease_ExpiredLeaseAndForce_HTTP(t *testing.T) {
 		t.Fatalf("B release of expired lease = %d, want 409 (body %s)", code, string(body))
 	}
 	errDTO := mustDecode[errResp](t, body)
-	if errDTO.Error != "claim conflict" || errDTO.Holder == nil || errDTO.Holder.Name != "agent-a" {
+	if errDTO.Error != "claim_conflict" || errDTO.Holder == nil || errDTO.Holder.Name != "agent-a" {
 		t.Fatalf("expected conflict holding agent-a, got %+v", errDTO)
 	}
 
@@ -969,7 +969,7 @@ func TestClaimAndHeartbeat_DoneAndArchived_HTTP(t *testing.T) {
 		t.Fatalf("patch done: %d", code)
 	}
 
-	// Claiming done task returns 400 invalid input and does not mutate status
+	// Claiming done task returns 400 invalid_input and does not mutate status
 	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskDone.ID+"/claim", map[string]any{
 		"actor": actor("agent-b"),
 	})
@@ -981,7 +981,7 @@ func TestClaimAndHeartbeat_DoneAndArchived_HTTP(t *testing.T) {
 		t.Errorf("status = %q, want done", d.Status)
 	}
 
-	// Heartbeat on done task returns 400 invalid input
+	// Heartbeat on done task returns 400 invalid_input
 	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskDone.ID+"/heartbeat", map[string]any{
 		"actor": actor("agent-a"),
 	})
@@ -1000,7 +1000,7 @@ func TestClaimAndHeartbeat_DoneAndArchived_HTTP(t *testing.T) {
 		t.Fatalf("patch archived: %d", code)
 	}
 
-	// Claiming archived task returns 400 invalid input
+	// Claiming archived task returns 400 invalid_input
 	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskArchived.ID+"/claim", map[string]any{
 		"actor": actor("agent-a"),
 	})
@@ -1008,7 +1008,7 @@ func TestClaimAndHeartbeat_DoneAndArchived_HTTP(t *testing.T) {
 		t.Fatalf("claim archived task = %d, want 400 (body %s)", code, string(body))
 	}
 
-	// Heartbeat on archived task returns 400 invalid input
+	// Heartbeat on archived task returns 400 invalid_input
 	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+taskArchived.ID+"/heartbeat", map[string]any{
 		"actor": actor("agent-a"),
 	})
@@ -1024,7 +1024,7 @@ func TestTransitionRejectionAndUnclaimedHeartbeat_Bodies(t *testing.T) {
 	task := newTask(t, stk, p.ID, "body shapes")
 
 	// 1. Illegal status move (todo → done, skipping doing) — the SAME 400
-	//    "invalid input" shape as before the structured TransitionError, with
+	//    "invalid_input" shape as before the structured TransitionError, with
 	//    the message naming both endpoints (web/src/moves.ts pattern-matches it).
 	code, body := doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+task.ID, map[string]any{
 		"actor":   actor("eve"),
@@ -1036,12 +1036,12 @@ func TestTransitionRejectionAndUnclaimedHeartbeat_Bodies(t *testing.T) {
 	}
 	e := mustDecode[errResp](t, body)
 	wantMsg := `cannot transition status from "todo" to "done"`
-	if e.Error != "invalid input" || e.Message != wantMsg {
-		t.Fatalf("400 body = %+v, want error \"invalid input\" message %q", e, wantMsg)
+	if e.Error != "invalid_input" || e.Message != wantMsg {
+		t.Fatalf("400 body = %+v, want error \"invalid_input\" message %q", e, wantMsg)
 	}
 
 	// 2. Heartbeat on an UNCLAIMED task — NOT a claim conflict with an empty
-	//    holder ("claimed by \"\" until 0001-…"), but 409 "not claimed" telling
+	//    holder ("claimed by \"\" until 0001-…"), but 409 "not_claimed" telling
 	//    the agent to claim first (MCP propagates this body verbatim).
 	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/heartbeat", map[string]any{
 		"actor": actor("agent-b"),
@@ -1050,8 +1050,8 @@ func TestTransitionRejectionAndUnclaimedHeartbeat_Bodies(t *testing.T) {
 		t.Fatalf("unclaimed heartbeat = %d, want 409 (body %s)", code, string(body))
 	}
 	e = mustDecode[errResp](t, body)
-	if e.Error != "not claimed" || e.Resource != "task" || e.ID != task.ID {
-		t.Fatalf("409 body = %+v, want error \"not claimed\" resource task id %s", e, task.ID)
+	if e.Error != "not_claimed" || e.Resource != "task" || e.ID != task.ID {
+		t.Fatalf("409 body = %+v, want error \"not_claimed\" resource task id %s", e, task.ID)
 	}
 	if e.Holder != nil {
 		t.Errorf("not-claimed body carries a holder (%+v); the tag IS the signal now", e.Holder)
@@ -1060,7 +1060,7 @@ func TestTransitionRejectionAndUnclaimedHeartbeat_Bodies(t *testing.T) {
 		t.Errorf("not-claimed message = %q, want it to say claim first", e.Message)
 	}
 
-	// 3. A FOREIGN holder still gets the classic 409 claim conflict (unchanged).
+	// 3. A FOREIGN holder still gets the classic 409 claim_conflict (unchanged).
 	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+task.ID+"/claim", map[string]any{
 		"actor": actor("agent-a"),
 	})
@@ -1074,8 +1074,8 @@ func TestTransitionRejectionAndUnclaimedHeartbeat_Bodies(t *testing.T) {
 		t.Fatalf("foreign heartbeat = %d, want 409 (body %s)", code, string(body))
 	}
 	e = mustDecode[errResp](t, body)
-	if e.Error != "claim conflict" || e.Holder == nil || e.Holder.Name != "agent-a" {
-		t.Fatalf("foreign heartbeat 409 = %+v, want claim conflict naming agent-a", e)
+	if e.Error != "claim_conflict" || e.Holder == nil || e.Holder.Name != "agent-a" {
+		t.Fatalf("foreign heartbeat 409 = %+v, want claim_conflict naming agent-a", e)
 	}
 }
 
@@ -1234,7 +1234,7 @@ func TestNotesReplaceOnWrite(t *testing.T) {
 		t.Fatalf("PUT /notes unknown task = %d, want 404", code)
 	}
 	e := mustDecode[errResp](t, body)
-	if e.Error != "not found" || e.Resource != "task" {
+	if e.Error != "not_found" || e.Resource != "task" {
 		t.Fatalf("notes 404 body = %+v, want not found / task", e)
 	}
 }
@@ -1634,7 +1634,7 @@ func TestRelationsLifecycle(t *testing.T) {
 		t.Fatalf("upsert response = %+v, want the existing stored row", got)
 	}
 
-	// A SECOND different parent → 409 parent conflict.
+	// A SECOND different parent → 409 parent_conflict.
 	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child.ID+"/relations", map[string]any{
 		"actor": actor("eve"), "other_id": secondParent.ID, "kind": "child",
 	})
@@ -1642,8 +1642,8 @@ func TestRelationsLifecycle(t *testing.T) {
 		t.Fatalf("second parent = %d, want 409 (body %s)", code, string(body))
 	}
 	e := mustDecode[errResp](t, body)
-	if e.Error != "parent conflict" || !strings.Contains(e.Message, "already has a parent") {
-		t.Fatalf("409 parent-conflict body = %+v, want error \"parent conflict\" naming the existing parent", e)
+	if e.Error != "parent_conflict" || !strings.Contains(e.Message, "already has a parent") {
+		t.Fatalf("409 parent-conflict body = %+v, want error \"parent_conflict\" naming the existing parent", e)
 	}
 
 	// Self-relation → 400; invalid kind → 400; unknown task (either end) → 404.
@@ -1831,7 +1831,7 @@ func TestBoardSnapshot(t *testing.T) {
 		t.Fatalf("GET board for unknown project = %d, want 404 (body %s)", code, string(body))
 	}
 	e := mustDecode[errResp](t, body)
-	if e.Error != "not found" || e.Resource != "project" {
+	if e.Error != "not_found" || e.Resource != "project" {
 		t.Fatalf("board 404 = %+v, want not found / project", e)
 	}
 }

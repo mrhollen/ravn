@@ -22,10 +22,10 @@ const apiPrefix = "/api/v1"
 //	POST  /api/v1/tasks                 create task (+ACs) → 201 with possible_duplicates advisory
 //	GET   /api/v1/tasks/{id}            one-call resume payload (task+ACs+comments+artifacts+relations+events+blocked)
 //	PATCH /api/v1/tasks/{id}            version-guarded partial update → 200 fresh task; 409 with current_version + current task
-//	POST  /api/v1/tasks/{id}/claim      claim lease (CAS) → 200 fresh task doing; 409 claim conflict (holder+expiry); 409 task blocked (open blockers, override_blockers=true to bypass)
+//	POST  /api/v1/tasks/{id}/claim      claim lease (CAS) → 200 fresh task doing; 409 claim_conflict (holder+expiry); 409 task_blocked (open blockers, override_blockers=true to bypass)
 //	POST  /api/v1/tasks/{id}/release    release lease (holder-only) → 200 fresh task todo; 409 not the holder
 //	POST  /api/v1/tasks/{id}/heartbeat  extend lease (keep-alive, no version bump) → 200 fresh task; 409 conflict
-//	POST  /api/v1/tasks/{id}/handoff    atomic lease-conditional handoff (notes/assignee + one comment + release) → 200 {task,comment}; 409 claim conflict / not claimed; 400 bad kind
+//	POST  /api/v1/tasks/{id}/handoff    atomic lease-conditional handoff (notes/assignee + one comment + release) → 200 {task,comment}; 409 claim_conflict / not_claimed; 400 bad kind
 //	POST  /api/v1/tasks/{id}/comments   append typed comment → 201 comment
 //	GET   /api/v1/tasks/{id}/comments   paged thread newest first + total (UI extra)
 //	PUT   /api/v1/tasks/{id}/notes      replace notes blob (no base-version check) → 200 fresh task
@@ -35,7 +35,7 @@ const apiPrefix = "/api/v1"
 //	PUT   /api/v1/tasks/{id}/acceptance-criteria/reorder reorder criteria seqs → 200 updated rows; 400 invalid seqs
 //	POST  /api/v1/tasks/{id}/artifacts  attach evidence → 201 artifact
 //	POST  /api/v1/tasks/{id}/opencode/start  dispatch OpenCode autonomous session → 200 session_id + session_url
-//	POST  /api/v1/tasks/{id}/relations  add edge (upsert) → 201 new / 200 re-add; 409 parent conflict
+//	POST  /api/v1/tasks/{id}/relations  add edge (upsert) → 201 new / 200 re-add; 409 parent_conflict
 //	DELETE /api/v1/tasks/{id}/relations/{other_id}/{kind}   remove edge → 204; 404 missing edge
 func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("GET "+apiPrefix+"/projects", app.handleListProjects)

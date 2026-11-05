@@ -444,7 +444,7 @@ func (r *taskRepo) Heartbeat(ctx context.Context, taskID domain.ID, actor domain
 	if holder == nil || ttl == nil { // row exists but carries no lease at all
 		// NOT a claim conflict — nobody holds the lease, there is nothing to wait
 		// for. ErrNotClaimed names the recovery: claim it first (REST 409
-		// "not claimed"; MCP propagates the body verbatim).
+		// "not_claimed"; MCP propagates the body verbatim).
 		return domain.Task{}, fmt.Errorf("%w: task %s has no claim lease — call claim first", domain.ErrNotClaimed, taskID)
 	}
 	newExpiry := formatTS(now.Add(time.Duration(*ttl) * time.Second))

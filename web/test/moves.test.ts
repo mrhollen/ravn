@@ -111,10 +111,10 @@ test("Moves: legalTargets returns each status' allowed destinations (server orde
 
 test("Moves: friendlyTransitionError maps the server's ErrInvalid message to a friendly toast", () => {
   // Exact server shape — internal/application/tasks.go wraps domain.ErrInvalid:
-  const e = new Error('invalid input: cannot transition status from "todo" to "done"');
+  const e = new Error('invalid_input: cannot transition status from "todo" to "done"');
   assert.equal(friendlyTransitionError(e), "Can't move To Do → Done — that's not an allowed step.");
 
-  const e2 = new Error('invalid input: cannot transition status from "done" to "doing"');
+  const e2 = new Error('invalid_input: cannot transition status from "done" to "doing"');
   assert.equal(friendlyTransitionError(e2), "Can't move Done → Doing — that's not an allowed step.");
 
   // Anything else (network errors, version conflicts, plain failures) passes through untouched.

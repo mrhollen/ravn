@@ -273,7 +273,7 @@ func TestGetProject_DecodesFields(t *testing.T) {
 }
 
 func TestGetProject_404PreservesBody(t *testing.T) {
-	notFound := `{"error":"not found","resource":"project","id":"NOPE","message":"project not found"}`
+	notFound := `{"error":"not_found","resource":"project","id":"NOPE","message":"project not found"}`
 	c, _ := newTestServer(t, "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSONTest(w, http.StatusNotFound, notFound)
 	}))
@@ -523,7 +523,7 @@ func TestGetTask_ZeroLimitsSendNoQuery(t *testing.T) {
 }
 
 func TestGetTask_404PreservesBody(t *testing.T) {
-	notFound := `{"error":"not found","resource":"task","id":"NOPE","message":"task \"NOPE\" does not exist — check the id (use the list endpoint)"}`
+	notFound := `{"error":"not_found","resource":"task","id":"NOPE","message":"task \"NOPE\" does not exist — check the id (use the list endpoint)"}`
 	c, _ := newTestServer(t, "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSONTest(w, http.StatusNotFound, notFound)
 	}))
@@ -656,7 +656,7 @@ func TestUpdateTask_PointerSemantics(t *testing.T) {
 // --- ClaimTask -----------------------------------------------------------------------------
 
 const claimConflictBody = `{
-  "error": "claim conflict",
+  "error": "claim_conflict",
   "resource": "task",
   "id": "T1",
   "holder": { "type": "agent", "name": "runner-2" },
@@ -707,7 +707,7 @@ func TestClaimTask_ConflictBodyPreservedVerbatim(t *testing.T) {
 	if string(e.Body) != claimConflictBody {
 		t.Errorf("conflict body not preserved verbatim:\n got %q\nwant %q", e.Body, claimConflictBody)
 	}
-	if !strings.Contains(e.Error(), "409") || !strings.Contains(e.Error(), "claim conflict") {
+	if !strings.Contains(e.Error(), "409") || !strings.Contains(e.Error(), "claim_conflict") {
 		t.Errorf("Error() should carry status + body: %v", err)
 	}
 }

@@ -466,8 +466,11 @@ func TestWriteJSONMarshalError(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("writeJSON(marshal-failing value) status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "marshal health response") {
+	if !strings.Contains(rec.Body.String(), "failed to marshal response") {
 		t.Errorf("error body = %q, want it to name the marshal failure", rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("marshal-fallback Content-Type = %q, want application/json (every response body is JSON)", ct)
 	}
 
 	ok := httptest.NewRecorder()

@@ -52,7 +52,7 @@ func AuthMiddleware(expectedToken string) func(http.Handler) http.Handler {
 					}
 				}
 				writeJSONError(w, http.StatusUnauthorized, map[string]any{
-					"error":   "unauthorized",
+					"error":   ErrCodeUnauthorized,
 					"message": "missing or invalid auth token",
 				})
 				return

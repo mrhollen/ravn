@@ -84,7 +84,7 @@ func TestProjectReport_OmitsParamsWhenNotMeaningful(t *testing.T) {
 
 func TestProjectReport_NonOKSurfacesAPIError(t *testing.T) {
 	c, _ := newTestServer(t, "", capturing(t, func(cap *capture, w http.ResponseWriter) {
-		writeJSONTest(w, http.StatusNotFound, `{"error":"not found","resource":"project","id":"PRJ1","message":"project not found"}`)
+		writeJSONTest(w, http.StatusNotFound, `{"error":"not_found","resource":"project","id":"PRJ1","message":"project not found"}`)
 	}))
 	if _, err := c.ProjectReport(context.Background(), "NOPE", 0, ""); err == nil {
 		t.Fatal("ProjectReport: expected error for non-2xx, got nil")

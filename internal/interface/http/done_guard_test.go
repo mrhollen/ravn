@@ -35,8 +35,8 @@ func TestUpdateDone_BlockedTask_409BodyShape(t *testing.T) {
 		t.Fatalf("update to done on blocked task = %d, want 409 (body %s)", code, string(body))
 	}
 	e := mustDecode[blockedErr](t, body)
-	if e.Error != "task blocked" {
-		t.Errorf("error code = %q, want \"task blocked\"", e.Error)
+	if e.Error != "task_blocked" {
+		t.Errorf("error code = %q, want \"task_blocked\"", e.Error)
 	}
 	if e.Resource != "task" || e.ID != blocked.ID {
 		t.Errorf("envelope = (resource %q id %q), want (task %s)", e.Resource, e.ID, blocked.ID)
@@ -96,7 +96,7 @@ func TestUpdateDone_IncompleteACs_400InvalidInput(t *testing.T) {
 	}
 	doingSummary := mustDecode[taskSummaryDTO](t, body)
 
-	// (a) Attempt move to done with both ACs incomplete -> 400 invalid input
+	// (a) Attempt move to done with both ACs incomplete -> 400 invalid_input
 	code, body = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/"+created.Task.ID, map[string]any{
 		"actor":   actor("alice"),
 		"version": doingSummary.Version,
@@ -106,8 +106,8 @@ func TestUpdateDone_IncompleteACs_400InvalidInput(t *testing.T) {
 		t.Fatalf("update to done with unmet ACs = %d, want 400 (body %s)", code, string(body))
 	}
 	e := mustDecode[errResp](t, body)
-	if e.Error != "invalid input" {
-		t.Errorf("error = %q, want \"invalid input\"", e.Error)
+	if e.Error != "invalid_input" {
+		t.Errorf("error = %q, want \"invalid_input\"", e.Error)
 	}
 	for _, frag := range []string{
 		"2 incomplete acceptance criteria (seq 1, 2)",

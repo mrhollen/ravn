@@ -127,7 +127,7 @@ func fail(c Client, err error) *mcpgo.CallToolResult {
 // would use, for required arguments we can reject before any round-trip.
 func invalidInput(tool, arg string) *mcpgo.CallToolResult {
 	return mcpgo.NewToolResultError(fmt.Sprintf(
-		`{"error":"invalid input","message":"%s: missing or empty required argument %q"}`, tool, arg))
+		`{"error":"invalid_input","message":"%s: missing or empty required argument %q"}`, tool, arg))
 }
 
 // actorShapedProp builds the shared {name, type} object property used by the
@@ -322,7 +322,7 @@ func registerGetProject(s *mcpsrv.MCPServer, c Client) {
 func registerUpdateProject(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("update_project",
 		mcpgo.WithDescription(
-			"Partially update an existing project: set any of name (rename) or description (full markdown replace; an empty string clears it). Omitted fields are unchanged. At least one field is required — a call with neither fails as invalid input, exactly like the API's 400 for an empty update. Returns the updated project row as compact JSON."+actorHint),
+			"Partially update an existing project: set any of name (rename) or description (full markdown replace; an empty string clears it). Omitted fields are unchanged. At least one field is required — a call with neither fails as invalid_input, exactly like the API's 400 for an empty update. Returns the updated project row as compact JSON."+actorHint),
 		mcpgo.WithString("id", mcpgo.Required(),
 			mcpgo.Description("Project ULID to update.")),
 		mcpgo.WithString("name",
@@ -351,7 +351,7 @@ func registerUpdateProject(s *mcpsrv.MCPServer, c Client, defaultActor apiclient
 			body.Description = &s
 		}
 		if body.Name == nil && body.Description == nil {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"update_project: set at least one of \"name\" or \"description\" — there is nothing to update"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"update_project: set at least one of \"name\" or \"description\" — there is nothing to update"}`), nil
 		}
 		row, err := c.UpdateProject(ctx, id, body)
 		if err != nil {
@@ -574,7 +574,7 @@ func registerProjectReport(s *mcpsrv.MCPServer, c Client) {
 		since := strings.TrimSpace(req.GetString("since", "")) // empty = server default now-24h
 		stalledMinutes := req.GetInt("stalled_minutes", 0)     // <= 0 = server default 60
 		if stalledMinutes < 0 {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"project_report: \"stalled_minutes\" must be a non-negative integer"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"project_report: \"stalled_minutes\" must be a non-negative integer"}`), nil
 		}
 		report, err := c.ProjectReport(ctx, projectID, stalledMinutes, since)
 		if err != nil {
@@ -696,7 +696,7 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		}
 		version := req.GetInt("version", 0)
 		if version <= 0 {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"update_task: \"version\" is required — read the current version with get_task first"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"update_task: \"version\" is required — read the current version with get_task first"}`), nil
 		}
 		args := req.GetArguments()
 		body := apiclient.UpdateTaskRequest{
@@ -729,7 +729,7 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		if v, ok := args["archived"]; ok {
 			b, ok := toBool(v)
 			if !ok {
-				return mcpgo.NewToolResultError(`{"error":"invalid input","message":"update_task: \"archived\" must be a boolean"}`), nil
+				return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"update_task: \"archived\" must be a boolean"}`), nil
 			}
 			body.Archived = &b
 		}
@@ -792,7 +792,7 @@ func registerReleaseTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 func registerHeartbeatTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("heartbeat_task",
 		mcpgo.WithDescription(
-			"Keep-alive for YOUR active claim lease during long silent work — call it regularly while working so the lease does not expire mid-task. Deliberately bumps NO version and touches NO updated_at (a heartbeat never invalidates a working agent's read base). The returned fresh summary row doubles as a health/state check: it shows status, claimed_by, and the new claim_expires_at. If you are not the holder, or your lease expired → isError with the 409 claim-conflict body verbatim naming the real holder and expiry; if the task has NO lease at all → isError with a 409 \"not claimed\" body — call claim_task first."+actorHint),
+			"Keep-alive for YOUR active claim lease during long silent work — call it regularly while working so the lease does not expire mid-task. Deliberately bumps NO version and touches NO updated_at (a heartbeat never invalidates a working agent's read base). The returned fresh summary row doubles as a health/state check: it shows status, claimed_by, and the new claim_expires_at. If you are not the holder, or your lease expired → isError with the 409 claim-conflict body verbatim naming the real holder and expiry; if the task has NO lease at all → isError with a 409 \"not_claimed\" body — call claim_task first."+actorHint),
 		mcpgo.WithString("id", mcpgo.Required(),
 			mcpgo.Description("Task ULID whose lease you hold.")),
 		actorProp(),
@@ -813,11 +813,11 @@ func registerHeartbeatTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient
 func registerHandoffTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
 	tool := mcpgo.NewTool("handoff_task",
 		mcpgo.WithDescription(
-			"Atomically hand off a task you hold to its next actor in ONE call, replacing the fragile update_notes + add_comment + assign + release sequence. You must hold the ACTIVE claim lease: an active lease held by someone else → isError with the 409 claim-conflict body verbatim naming the real holder and expiry; no active lease at all → isError with a 409 \"not claimed\" body (claim_task first). On success it, in one transaction: optionally replaces notes, sets/clears the durable assignee, appends exactly ONE comment (kind defaults to \"handoff\"; only \"handoff\"|\"question\" — anything else → 400), clears the lease and moves status back to todo, bumping the version once. Returns compact JSON {\"task\":<fresh row>,\"comment\":<created comment>}. "+actorHint),
+			"Atomically hand off a task you hold to its next actor in ONE call, replacing the fragile update_notes + add_comment + assign + release sequence. You must hold the ACTIVE claim lease: an active lease held by someone else → isError with the 409 claim-conflict body verbatim naming the real holder and expiry; no active lease at all → isError with a 409 \"not_claimed\" body (claim_task first). On success it, in one transaction: optionally replaces notes, sets/clears the durable assignee, appends exactly ONE comment (kind defaults to \"handoff\"; only \"handoff\"|\"question\" — anything else → 400), clears the lease and moves status back to todo, bumping the version once. Returns compact JSON {\"task\":<fresh row>,\"comment\":<created comment>}. "+actorHint),
 		mcpgo.WithString("id", mcpgo.Required(),
 			mcpgo.Description("Task ULID you currently hold a claim lease on.")),
 		mcpgo.WithString("kind",
-			mcpgo.Description("Comment kind to post: \"handoff\" (default) or \"question\". Any other value → 400 invalid input.")),
+			mcpgo.Description("Comment kind to post: \"handoff\" (default) or \"question\". Any other value → 400 invalid_input.")),
 		mcpgo.WithString("body",
 			mcpgo.Description("Optional handoff comment markdown. Omit/empty → a concise synthesized default (e.g. \"Handed off to <receiver> by <actor>\").")),
 		mcpgo.WithString("notes",
@@ -870,7 +870,7 @@ func registerAddComment(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 			return invalidInput("add_comment", "id"), nil
 		}
 		if body == "" {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"add_comment: \"body\" must not be empty (markdown)"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"add_comment: \"body\" must not be empty (markdown)"}`), nil
 		}
 		comment, err := c.AddComment(ctx, id, apiclient.CommentRequest{
 			Actor: resolveActor(req.GetArguments(), defaultActor),
@@ -904,7 +904,7 @@ func registerUpdateNotes(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 		// scratchpad (the server imposes no empty check on notes).
 		nstr, ok := args["notes"].(string)
 		if !ok {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"update_notes: \"notes\" is required (markdown)"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"update_notes: \"notes\" is required (markdown)"}`), nil
 		}
 		row, err := c.UpdateNotes(ctx, id, resolveActor(args, defaultActor), nstr)
 		if err != nil {
@@ -937,7 +937,7 @@ func registerCompleteAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		}
 		seq := req.GetInt("seq", 0)
 		if seq < 1 {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"complete_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"complete_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
 		}
 		var textPtr *string
 		if t := strings.TrimSpace(req.GetString("text", "")); t != "" {
@@ -973,7 +973,7 @@ func registerAddAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) 
 			return invalidInput("add_ac", "id"), nil
 		}
 		if text == "" {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"add_ac: \"text\" must not be empty"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"add_ac: \"text\" must not be empty"}`), nil
 		}
 		row, err := c.AddAC(ctx, id, apiclient.ACAddRequest{
 			Actor: resolveActor(req.GetArguments(), defaultActor),
@@ -1003,7 +1003,7 @@ func registerRemoveAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Acto
 		}
 		seq := req.GetInt("seq", 0)
 		if seq < 1 {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"remove_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"remove_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
 		}
 		actor := resolveActor(req.GetArguments(), defaultActor)
 		if err := c.RemoveAC(ctx, id, seq, actor); err != nil {
@@ -1037,10 +1037,10 @@ func registerEditAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor)
 		}
 		seq := req.GetInt("seq", 0)
 		if seq < 1 {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"edit_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"edit_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
 		}
 		if text == "" {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"edit_ac: \"text\" must not be empty"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"edit_ac: \"text\" must not be empty"}`), nil
 		}
 		row, err := c.EditACText(ctx, id, seq, apiclient.ACEditTextRequest{
 			Actor: resolveActor(req.GetArguments(), defaultActor),
@@ -1091,7 +1091,7 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 		}
 
 		if dataBase64 == "" && ref == "" {
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"attach_artifact: either \"data_base64\" or \"ref\" must be provided"}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"attach_artifact: either \"data_base64\" or \"ref\" must be provided"}`), nil
 		}
 
 		var row *apiclient.Artifact
@@ -1133,7 +1133,7 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 				var urlErr error
 				raw, urlErr = base64.URLEncoding.DecodeString(dataBase64)
 				if urlErr != nil {
-					return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid input","message":"attach_artifact: invalid base64 in data_base64: %s"}`, decErr.Error())), nil
+					return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid_input","message":"attach_artifact: invalid base64 in data_base64: %s"}`, decErr.Error())), nil
 				}
 			}
 
@@ -1167,7 +1167,7 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 				Summary: summary,
 			})
 		} else {
-			return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid input","message":"attach_artifact: local file %q not found on the MCP server filesystem. The Rävn MCP server runs in a remote container environment and cannot access files on your machine. For screenshots and workspace evidence files, you MUST encode the file to base64 and pass 'data_base64' (along with 'filename') so the server can store and display it as an inline image/video."}`, ref)), nil
+			return mcpgo.NewToolResultError(fmt.Sprintf(`{"error":"invalid_input","message":"attach_artifact: local file %q not found on the MCP server filesystem. The Rävn MCP server runs in a remote container environment and cannot access files on your machine. For screenshots and workspace evidence files, you MUST encode the file to base64 and pass 'data_base64' (along with 'filename') so the server can store and display it as an inline image/video."}`, ref)), nil
 		}
 
 		if err != nil {
@@ -1227,7 +1227,7 @@ func registerRelateTasks(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 				"kind":          kind,
 			})
 		default:
-			return mcpgo.NewToolResultError(`{"error":"invalid input","message":"relate_tasks: \"action\" must be \"add\" or \"remove\""}`), nil
+			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"relate_tasks: \"action\" must be \"add\" or \"remove\""}`), nil
 		}
 	})
 }

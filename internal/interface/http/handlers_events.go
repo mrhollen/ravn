@@ -27,7 +27,7 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 	raw := r.URL.Query().Get("project_id")
 	if raw == "" {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "missing required query parameter \"project_id\"",
 		})
 		return
@@ -45,7 +45,7 @@ func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID dom
 
 	if _, ok := w.(http.Flusher); !ok {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
-			"error":   "internal",
+			"error":   ErrCodeInternal,
 			"message": "streaming unsupported",
 		})
 		return

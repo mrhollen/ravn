@@ -164,7 +164,7 @@ func (a *App) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Version < 1 { // tasks start at version 1, so 0 always means "missing"
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": "version is required: the stored version of the task you last read (fresh tasks are version 1)",
 		})
 		return

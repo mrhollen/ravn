@@ -477,7 +477,7 @@ type heartbeatReq struct {
 // blob (omitted/empty leaves it untouched — never a clear). ToAssignee sets the
 // durable assignee to the receiver; ClearAssignee takes precedence over ToAssignee
 // when true (the task returns unassigned). On success → 200 with {task, comment};
-// 409 claim-conflict names the real holder+expiry; 409 "not claimed" = no active
+// 409 claim-conflict names the real holder+expiry; 409 "not_claimed" = no active
 // lease.
 type handoffReq struct {
 	Actor         actorInput  `json:"actor"`

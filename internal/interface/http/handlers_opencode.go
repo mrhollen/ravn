@@ -199,7 +199,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	serverURL := resolveOpenCodeServerURL(proj.OpenCodeServerURL)
 	if err := application.ValidateOpenCodeServerURL(serverURL); err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": fmt.Sprintf("invalid opencode server URL: %v", err),
 		})
 		return
@@ -207,7 +207,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	dir := resolveOpenCodeDirectory(proj.OpenCodeDirectory)
 	if err := application.ValidateOpenCodeDirectory(dir); err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": fmt.Sprintf("invalid opencode directory: %v", err),
 		})
 		return
@@ -216,7 +216,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	agentName := resolveOpenCodeAgent(req.Agent, proj.OpenCodeAgent)
 	if err := domain.ValidateOpenCodeAgent(agentName); err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": fmt.Sprintf("invalid opencode agent: %v", err),
 		})
 		return
@@ -228,7 +228,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		modelProviderID, modelID, err = parseOpenCodeModel(modelRef)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, map[string]any{
-				"error":   "invalid input",
+				"error":   ErrCodeInvalidInput,
 				"message": fmt.Sprintf("invalid opencode model: %v", err),
 			})
 			return
@@ -239,7 +239,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	if variant != "" {
 		if err := domain.ValidateOpenCodeVariant(variant); err != nil {
 			writeJSONError(w, http.StatusBadRequest, map[string]any{
-				"error":   "invalid input",
+				"error":   ErrCodeInvalidInput,
 				"message": fmt.Sprintf("invalid opencode variant: %v", err),
 			})
 			return
@@ -252,7 +252,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	sessionURLParsed, err := url.Parse(serverURL + "/session")
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": fmt.Sprintf("invalid opencode server URL: %v", err),
 		})
 		return
@@ -282,7 +282,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	sessionReqBody, err := json.Marshal(sessionCreateBody)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
-			"error":   "internal",
+			"error":   ErrCodeInternal,
 			"message": "failed to encode session request body",
 		})
 		return
@@ -291,7 +291,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	createReq, err := http.NewRequestWithContext(ctx, http.MethodPost, sessionURLParsed.String(), bytes.NewReader(sessionReqBody))
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
-			"error":   "internal",
+			"error":   ErrCodeInternal,
 			"message": fmt.Sprintf("failed to create http request: %v", err),
 		})
 		return
@@ -302,7 +302,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Warn("failed to connect to opencode server", "err", err)
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
-			"error":   "opencode_error",
+			"error":   ErrCodeOpencodeError,
 			"message": "failed to connect to opencode server",
 		})
 		return
@@ -313,7 +313,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		slog.Warn("opencode create session returned non-2xx status", "status", resp.StatusCode, "snippet", string(bodySnippet))
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
-			"error":   "opencode_error",
+			"error":   ErrCodeOpencodeError,
 			"message": fmt.Sprintf("opencode create session returned status %d", resp.StatusCode),
 		})
 		return
@@ -324,7 +324,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&sessionResp); err != nil || sessionResp.ID == "" {
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
-			"error":   "opencode_error",
+			"error":   ErrCodeOpencodeError,
 			"message": "opencode returned invalid session response",
 		})
 		return
@@ -335,7 +335,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	promptURLParsed, err := url.Parse(fmt.Sprintf("%s/session/%s/prompt_async", serverURL, sessionID))
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
-			"error":   "internal",
+			"error":   ErrCodeInternal,
 			"message": fmt.Sprintf("invalid prompt URL: %v", err),
 		})
 		return
@@ -359,7 +359,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	promptReqBody, err := json.Marshal(promptMap)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
-			"error":   "internal",
+			"error":   ErrCodeInternal,
 			"message": "failed to encode prompt request body",
 		})
 		return
@@ -368,7 +368,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	dispatchReq, err := http.NewRequestWithContext(ctx, http.MethodPost, promptURLParsed.String(), bytes.NewReader(promptReqBody))
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, map[string]any{
-			"error":   "internal",
+			"error":   ErrCodeInternal,
 			"message": fmt.Sprintf("failed to create prompt request: %v", err),
 		})
 		return
@@ -379,7 +379,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Warn("failed to dispatch prompt to opencode", "err", err)
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
-			"error":   "opencode_error",
+			"error":   ErrCodeOpencodeError,
 			"message": "failed to dispatch prompt to opencode",
 		})
 		return
@@ -390,7 +390,7 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		bodySnippet, _ := io.ReadAll(io.LimitReader(dispatchResp.Body, 1024))
 		slog.Warn("opencode prompt_async returned non-2xx status", "status", dispatchResp.StatusCode, "snippet", string(bodySnippet))
 		writeJSONError(w, http.StatusBadGateway, map[string]any{
-			"error":   "opencode_error",
+			"error":   ErrCodeOpencodeError,
 			"message": fmt.Sprintf("opencode prompt_async returned status %d", dispatchResp.StatusCode),
 		})
 		return
@@ -456,14 +456,14 @@ func (a *App) handleOpenCodeOptions(w http.ResponseWriter, r *http.Request) {
 
 	if err := application.ValidateOpenCodeServerURL(serverURL); err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": fmt.Sprintf("invalid opencode server URL: %v", err),
 		})
 		return
 	}
 	if err := application.ValidateOpenCodeDirectory(dir); err != nil {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": fmt.Sprintf("invalid opencode directory: %v", err),
 		})
 		return

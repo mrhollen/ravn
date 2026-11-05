@@ -10,22 +10,43 @@ import (
 	"github.com/mrhollen/ravn/internal/domain"
 )
 
+// Error codes: the value of the "error" field in every JSON error envelope.
+// Unified convention (01M3MMXQH5M82C7BETZY9QMG6P): ONE snake_case token per
+// code — no space-separated phrases ("claim conflict"), no multi-word
+// variants ("internal error"). Centralized here so call sites cannot drift;
+// the wire values are matched by clients (web/src/api.ts, docs/API.md), so a
+// change is a breaking API change.
+const (
+	ErrCodeNotFound             = "not_found"
+	ErrCodeInvalidInput         = "invalid_input"
+	ErrCodeUnauthorized         = "unauthorized"
+	ErrCodeInternal             = "internal"
+	ErrCodeVersionConflict      = "version_conflict"
+	ErrCodeClaimConflict        = "claim_conflict"
+	ErrCodeNotClaimed           = "not_claimed"
+	ErrCodeTaskBlocked          = "task_blocked"
+	ErrCodeParentConflict       = "parent_conflict"
+	ErrCodeOpencodeError        = "opencode_error"
+	ErrCodeUnsupportedMediaType = "unsupported_media_type"
+	ErrCodePayloadTooLarge      = "payload_too_large"
+)
+
 // Error contract (locked in slice 3a — the MCP layer propagates these bodies
 // verbatim, so "message" doubles as the agent-readable recovery hint):
 //
-//	domain.ErrNotFound        → 404 {"error":"not found","resource":<type>,...}
-//	domain.ErrInvalid         → 400 {"error":"invalid input","message":<detail>}
-//	*domain.TransitionError   → 400 {"error":"invalid input","message":"cannot
+//	domain.ErrNotFound        → 404 {"error":"not_found","resource":<type>,...}
+//	domain.ErrInvalid         → 400 {"error":"invalid_input","message":<detail>}
+//	*domain.TransitionError   → 400 {"error":"invalid_input","message":"cannot
 //	                            transition status from \"…\" to \"…\""} — an
 //	                            illegal status move IS malformed caller input, so
-//	                            it keeps the SAME 400 "invalid input" shape the old
+//	                            it keeps the SAME 400 invalid_input shape the old
 //	                            wrapped-ErrInvalid form produced (the message is
 //	                            pattern-matched by web/src/moves.ts)
 //	*domain.ConflictError     → 409 version conflict: the body carries
 //	                            "current_version" AND the fresh current task as a
 //	                            summary row under "current", so a stale caller can
 //	                            rebase without a separate read
-//	*domain.ClaimConflictError→ 409 {"error":"claim conflict","holder":{...},
+//	*domain.ClaimConflictError→ 409 {"error":"claim_conflict","holder":{...},
 //	                            "expires_at":...} — holder + expiry name the live
 //	                            foreign holder; the message tells agents NOT to
 //	                            wait for expiry (only acquiring a lease is
@@ -33,17 +54,19 @@ import (
 //	                            non-holders with explicit permission). Always names
 //	                            a LIVE foreign holder (a no-lease heartbeat is
 //	                            ErrNotClaimed below)
-//	domain.ErrNotClaimed      → 409 {"error":"not claimed","resource":<type>,
+//	domain.ErrNotClaimed      → 409 {"error":"not_claimed","resource":<type>,
 //	                            "id":...} — the operation needs an ACTIVE lease but
 //	                            the task has none at all; recovery is "claim first"
-//	*domain.TaskBlockedError  → 409 {"error":"task blocked","blockers":[<id>...]}
+//	*domain.TaskBlockedError  → 409 {"error":"task_blocked","blockers":[<id>...]}
 //	                            — a claim or completion (transition to done) on
 //	                            a task with open blockers; the IDs name what to
 //	                            complete or archive first (or override_blockers)
-//	domain.ErrParentConflict  → 409 {"error":"parent conflict",...}
+//	domain.ErrParentConflict  → 409 {"error":"parent_conflict",...}
 //	anything else             → 500 {"error":"internal"} (logged)
 //
-// Every /api/v1 response body is JSON — errors included.
+// Every /api/v1 response body is JSON — errors included, INCLUDING the
+// marshal-failure fallback in responses.go (raw JSON bytes, never http.Error's
+// text/plain). Every error envelope carries BOTH "error" and "message".
 
 // writeAppError maps a use-case failure to its HTTP error envelope. resource
 // names the affected entity type ("project"/"task") for the 404/409 bodies;
@@ -55,7 +78,7 @@ import (
 // PATCH contract).
 func writeVersionConflict(w http.ResponseWriter, id domain.ID, cur domain.Task) {
 	writeJSONError(w, http.StatusConflict, map[string]any{
-		"error":           "version_conflict",
+		"error":           ErrCodeVersionConflict,
 		"resource":        "task",
 		"id":              string(id),
 		"current_version": cur.Version,
@@ -81,7 +104,7 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 			holder.Name = claim.Holder.Name
 		}
 		writeJSONError(w, http.StatusConflict, map[string]any{
-			"error":      "claim conflict",
+			"error":      ErrCodeClaimConflict,
 			"resource":   resource,
 			"id":         string(id),
 			"holder":     holder,
@@ -98,7 +121,7 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 		// Same 409 family as the claim conflicts so callers that branch on
 		// status handle it alongside them; the body tag names the real state.
 		writeJSONError(w, http.StatusConflict, map[string]any{
-			"error":    "not claimed",
+			"error":    ErrCodeNotClaimed,
 			"resource": resource,
 			"id":       string(id),
 			"message":  err.Error(),
@@ -108,11 +131,11 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 
 	var transition *domain.TransitionError
 	if errors.As(err, &transition) {
-		// Illegal status move: malformed caller input — the SAME 400 "invalid
-		// input" shape the old wrapped-ErrInvalid form produced (status code
-		// unchanged; web/src/moves.ts pattern-matches the message text).
+		// Illegal status move: malformed caller input — the SAME 400
+		// invalid_input shape the old wrapped-ErrInvalid form produced (status
+		// code unchanged; web/src/moves.ts pattern-matches the message text).
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": err.Error(),
 		})
 		return
@@ -125,7 +148,7 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 			ids = append(ids, string(b))
 		}
 		writeJSONError(w, http.StatusConflict, map[string]any{
-			"error":    "task blocked",
+			"error":    ErrCodeTaskBlocked,
 			"resource": resource,
 			"id":       string(id),
 			"blockers": ids, // machine-readable: the open blocker IDs (edge-creation order)
@@ -138,7 +161,7 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 
 	if errors.Is(err, domain.ErrParentConflict) {
 		writeJSONError(w, http.StatusConflict, map[string]any{
-			"error":    "parent conflict",
+			"error":    ErrCodeParentConflict,
 			"resource": resource,
 			"id":       string(id),
 			"message":  err.Error(),
@@ -148,7 +171,7 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 
 	if errors.Is(err, domain.ErrNotFound) {
 		writeJSONError(w, http.StatusNotFound, map[string]any{
-			"error":    "not found",
+			"error":    ErrCodeNotFound,
 			"resource": resource,
 			"id":       string(id),
 			"message":  fmt.Sprintf("%s %q does not exist — check the id (use the list endpoint)", resource, string(id)),
@@ -158,7 +181,7 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 
 	if errors.Is(err, domain.ErrInvalid) {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
-			"error":   "invalid input",
+			"error":   ErrCodeInvalidInput,
 			"message": err.Error(),
 		})
 		return
@@ -166,7 +189,7 @@ func writeAppError(w http.ResponseWriter, err error, resource string, id domain.
 
 	slog.Error("unmapped error from application layer", "err", err, "resource", resource)
 	writeJSONError(w, http.StatusInternalServerError, map[string]any{
-		"error":   "internal",
+		"error":   ErrCodeInternal,
 		"message": "unexpected server error",
 	})
 }

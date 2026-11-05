@@ -53,7 +53,7 @@ func TestHTTPCreateTask_InvalidParent(t *testing.T) {
 		t.Fatalf("POST /tasks (unknown parent) = %d, want 400 (body %s)", code, string(body))
 	}
 	env := mustDecode[errResp](t, body)
-	if env.Error != "invalid input" || !strings.Contains(env.Message, "does not exist") {
+	if env.Error != "invalid_input" || !strings.Contains(env.Message, "does not exist") {
 		t.Errorf("envelope = %+v, want invalid-input naming the missing parent", env)
 	}
 	if rows, total := listTasks(t, stk, "?project_id="+url.QueryEscape(p.ID)); total != 1 || len(rows) != 1 {
@@ -71,7 +71,7 @@ func TestHTTPCreateTask_InvalidParent(t *testing.T) {
 		t.Fatalf("POST /tasks (cross-project parent) = %d, want 400 (body %s)", code, string(body))
 	}
 	env = mustDecode[errResp](t, body)
-	if env.Error != "invalid input" || !strings.Contains(env.Message, "belongs to project") {
+	if env.Error != "invalid_input" || !strings.Contains(env.Message, "belongs to project") {
 		t.Errorf("envelope = %+v, want invalid-input naming the project mismatch", env)
 	}
 
@@ -145,7 +145,7 @@ func TestHTTPListTasks_MalformedFilterParams(t *testing.T) {
 		if code != http.StatusBadRequest {
 			t.Errorf("GET /tasks%s = %d, want 400 (body %s)", q, code, string(body))
 		}
-		if !strings.Contains(string(body), "invalid input") {
+		if !strings.Contains(string(body), "invalid_input") {
 			t.Errorf("GET /tasks%s envelope %q missing invalid-input error", q, string(body))
 		}
 	}
@@ -341,7 +341,7 @@ func TestHTTPCreateTask_InvalidBlockedBy(t *testing.T) {
 			t.Fatalf("%s: POST /tasks = %d, want 400 (body %s)", tc.name, code, string(resp))
 		}
 		env := mustDecode[errResp](t, resp)
-		if env.Error != "invalid input" || !strings.Contains(env.Message, tc.wantSub) {
+		if env.Error != "invalid_input" || !strings.Contains(env.Message, tc.wantSub) {
 			t.Errorf("%s: envelope = %+v, want invalid-input containing %q", tc.name, env, tc.wantSub)
 		}
 		// Nothing written on rejection (the original row only).
@@ -361,7 +361,7 @@ func TestHTTPCreateTask_InvalidBlockedBy(t *testing.T) {
 		t.Fatalf("POST /tasks (cross-project blocker) = %d, want 400 (body %s)", code, string(resp))
 	}
 	env := mustDecode[errResp](t, resp)
-	if env.Error != "invalid input" || !strings.Contains(env.Message, "belongs to project") {
+	if env.Error != "invalid_input" || !strings.Contains(env.Message, "belongs to project") {
 		t.Errorf("cross-project envelope = %+v, want invalid-input naming the project mismatch", env)
 	}
 

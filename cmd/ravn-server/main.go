@@ -354,10 +354,18 @@ func parseLogLevel(s string) slog.Level {
 	}
 }
 
+// writeJSON serializes v as a JSON response with the given status. A marshal
+// failure is a bug (healthResponse cannot fail to marshal); it degrades to a
+// 500 with the standard JSON error envelope — raw bytes with Content-Type
+// application/json, NOT http.Error's text/plain + trailing newline, because
+// every server response body is JSON (API.md contract).
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("marshal health response: %v", err), http.StatusInternalServerError)
+		slog.Error("marshal response failed; writing JSON fallback", "err", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"internal","message":"failed to marshal response"}`)) //nolint:errcheck
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

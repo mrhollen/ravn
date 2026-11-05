@@ -216,7 +216,7 @@ func (c *Client) HeartbeatTask(ctx context.Context, id string, actor Actor) (*Ta
 // HandoffTask → POST /tasks/{id}/handoff. The atomic lease-conditional handoff:
 // notes/assignee change + exactly one comment + the claim release land in a single
 // transaction (200 {task,comment}). A foreign active lease → 409 naming the real
-// holder+expiry; no active lease → 409 "not claimed"; bad kind/receiver → 400.
+// holder+expiry; no active lease → 409 "not_claimed"; bad kind/receiver → 400.
 func (c *Client) HandoffTask(ctx context.Context, id string, req HandoffRequest) (*HandoffResult, error) {
 	var out HandoffResult
 	path := "/tasks/" + url.PathEscape(id) + "/handoff"
@@ -379,7 +379,7 @@ func (c *Client) UploadArtifact(ctx context.Context, id string, filename string,
 
 // RelateTasks → POST /tasks/{id}/relations (add). Upsert: a brand-new edge →
 // 201; re-adding an existing identical edge → 200 with the same stored row and
-// no event. A second, different parent → 409 parent conflict.
+// no event. A second, different parent → 409 parent_conflict.
 func (c *Client) RelateTasks(ctx context.Context, id string, req RelationRequest) (*Relation, error) {
 	var out Relation
 	path := "/tasks/" + url.PathEscape(id) + "/relations"

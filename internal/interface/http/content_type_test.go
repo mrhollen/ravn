@@ -162,8 +162,8 @@ func TestContentTypeEnforcement_MutatingEndpoints(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
 				t.Fatalf("unmarshal error resp: %v", err)
 			}
-			if res.Error != "unsupported media type" {
-				t.Errorf("error = %q, want 'unsupported media type'", res.Error)
+			if res.Error != "unsupported_media_type" {
+				t.Errorf("error = %q, want 'unsupported_media_type'", res.Error)
 			}
 		})
 
@@ -176,8 +176,8 @@ func TestContentTypeEnforcement_MutatingEndpoints(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
 				t.Fatalf("unmarshal error resp: %v", err)
 			}
-			if res.Error != "unsupported media type" {
-				t.Errorf("error = %q, want 'unsupported media type'", res.Error)
+			if res.Error != "unsupported_media_type" {
+				t.Errorf("error = %q, want 'unsupported_media_type'", res.Error)
 			}
 		})
 
@@ -190,8 +190,8 @@ func TestContentTypeEnforcement_MutatingEndpoints(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
 				t.Fatalf("unmarshal error resp: %v", err)
 			}
-			if res.Error != "unsupported media type" {
-				t.Errorf("error = %q, want 'unsupported media type'", res.Error)
+			if res.Error != "unsupported_media_type" {
+				t.Errorf("error = %q, want 'unsupported_media_type'", res.Error)
 			}
 		})
 
@@ -360,8 +360,8 @@ func TestDisallowUnknownFields_RejectsMisspelledOrUnknownFields(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
 				t.Fatalf("unmarshal error resp: %v", err)
 			}
-			if res.Error != "invalid input" {
-				t.Errorf("error = %q, want 'invalid input'", res.Error)
+			if res.Error != "invalid_input" {
+				t.Errorf("error = %q, want 'invalid_input'", res.Error)
 			}
 			expectedMsgPart := `unknown field "` + tc.unknownField + `"`
 			if !strings.Contains(res.Message, expectedMsgPart) {

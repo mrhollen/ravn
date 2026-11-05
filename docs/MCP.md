@@ -152,7 +152,7 @@ back as `isError` with validation details — fix the argument shape and retry.
 | `list_projects` | All projects newest-first, each with id, name, description and per-status open task counts (todo/doing/done; zero when empty). Use it to find a `project_id`. | *(none)* | `{"projects":[…], "total":N}` |
 | `create_project` | Create a project. | `name` (required), `description?` (markdown), `actor?` | Fresh project row (`id`, `name`, …) |
 | `get_project` | One project by ULID: the single row — **no** per-status task counts (those come from `list_projects`). Read-only, so no `actor` argument. Unknown id → 404 body verbatim. | `id` (required; ULID from `list_projects`) | Project row (`id`, `name`, `description`, `archived` flag, timestamps) |
-| `update_project` | **Partial** update of one project mirroring REST pointer semantics: set any of `name` (rename; must be non-empty after trimming) or `description` (full markdown replace; an empty string clears it). Omitted fields are unchanged; at least one field is required — a call with neither fails as invalid input, exactly like the API's 400 for an empty update. | `id` (required), `name?`, `description?`, `actor?` | Updated project row |
+| `update_project` | **Partial** update of one project mirroring REST pointer semantics: set any of `name` (rename; must be non-empty after trimming) or `description` (full markdown replace; an empty string clears it). Omitted fields are unchanged; at least one field is required — a call with neither fails as invalid_input, exactly like the API's 400 for an empty update. | `id` (required), `name?`, `description?`, `actor?` | Updated project row |
 | `list_tasks` | **The "what should I work on?" call.** Task summary rows in canonical order (priority ↓ → due ↑ with undated last → created ↑) inside the pagination envelope. Every argument is an OPTIONAL filter — combine them to narrow (e.g. `project_id` + `unblocked`, or `search`). Rows are summaries only: pick one and call `get_task` for its full resume context. | All 20 optional — see [list_tasks filter arguments](#list_tasks-filter-arguments) below | `{"tasks":[summary rows], "total":N, "limit":N, "offset":N}` |
 | `get_task` | One-call resume payload: every field (including the current `version` — you'll need it for `update_task`), notes, acceptance criteria, comments tail, blockers/relations, artifacts, recent events. Unknown id → not-found naming the id; re-check ids with `list_projects`/`list_tasks`. | `id` (required), `comment_limit?` (int 0–50; default 10), `event_limit?` (int 0–100; default 20); larger values are clamped server-side | Task detail row (see API.md) |
 | `get_task_brief` | A **compact, token-optimized** resume/handoff brief for one task — the lightweight alternative to `get_task` when you only need to pick up where a previous agent stopped. Returns exactly: `title`; `description` (trimmed); the durable `notes` blob **VERBATIM** (this is the resume context); and the LAST ≤2 comments whose kind is `"handoff"` as `handoff_comments[]` (`body`, `by`, `created_at`). Everything else — events, artifacts, acceptance criteria, blockers, relations, the full comment list — is omitted to stay small. Read-only: `actor` is accepted for interface parity but not attributed. Unknown id → not-found naming the id. | `id` (required), `actor?` | `{"title":…, "description"?, "notes":…, "handoff_comments":[…]}` |
@@ -161,8 +161,8 @@ back as `isError` with validation details — fix the argument shape and retry.
 | `update_task` | **Version-guarded** partial update of one task; omitted fields unchanged. A STALE `version` returns isError with the 409 body VERBATIM — it carries `current_version` plus a fresh `"current"` row, so retry your update with that version WITHOUT re-reading. **Clear semantics:** `clear_due` (boolean) removes the deadline and takes precedence over `due_at` when both are given in one call (an empty-string `due_at` is a no-op that keeps the current deadline); `clear_assignee` (boolean) removes the durable assignee and takes precedence over `assignee`. | `id`, `version` (int ≥ 1; both required — optimistic-concurrency guard, 1 on a fresh task), any of: `title?`, `description?` (present = full replace, even to empty), `status?` (todo\|doing\|done; transition-validated), `priority?` (int 0–5), `due_at?` (RFC3339), `clear_due?` (bool), `assignee?` {name,type}, `clear_assignee?` (bool), `archived?` (bool), `override_blockers?` (bool — bypass the unresolved-blocker check when transitioning to done), `actor?` | Fresh summary row (version bumped) |
 | `claim_task` | Atomically take a TTL lease and move the task to doing. Retry-safe: if YOU already hold the active lease, re-claiming just refreshes it. A foreign active lease → 409 naming holder + expiry — don't wait/sleep/poll for expiry; comments/notes/status/AC mutations are open to non-holders only with explicit permission. | `id` (required), `actor?`, `ttl_sec?` (int 0–3600; default 900 when omitted or zero, >3600 clamped server-side) | Fresh summary row with `claimed_by` + `claim_expires_at` |
 | `release_task` | Give up YOUR claim lease (status → todo). Holder-only: another holder's active lease → 409 naming the real holder and expiry. Releasing a task with no lease at all is an idempotent no-op. The note rides on the released event — it is NOT posted as a comment. | `id` (required), `note?`, `actor?` | Fresh summary row (lease cleared) |
-| `heartbeat_task` | Keep-alive for YOUR active claim lease during long silent work — call it regularly so the lease doesn't expire mid-task. Deliberately bumps NO version and touches NO `updated_at` (a heartbeat never invalidates a working agent's read base). The fresh row doubles as a health/state check. Non-holder or expired → 409 naming the real holder + expiry; NO lease at all → 409 "not claimed" — call `claim_task` first. | `id` (required), `actor?` | Fresh summary row (new `claim_expires_at`) |
-| `handoff_task` | **Atomically hand off a task you hold** to its next actor in ONE call, replacing the fragile update_notes + add_comment + assign + release sequence. You must hold the ACTIVE claim lease (a foreign active lease → 409; none at all → 409 "not claimed" — `claim_task` first). On success, in one transaction: optionally replaces notes, sets/clears the durable assignee, appends exactly ONE comment (kind `"handoff"` default or `"question"` — anything else → 400), clears the lease and moves status back to todo; version bumped once. | `id` (required), `kind?` ("handoff" \| "question"), `body?` (markdown; omitted/empty → a concise synthesized default like "Handed off to \<receiver\> by \<actor\>"), `notes?` (REPLACE-ON-WRITE; omitted/empty leaves the stored notes untouched — it is never a clear), `to_assignee?` {name,type} (sets the receiver as durable assignee; omit = unchanged), `clear_assignee?` (bool; takes precedence over `to_assignee`), `actor?` | `{"task": fresh row, "comment": created comment}` |
+| `heartbeat_task` | Keep-alive for YOUR active claim lease during long silent work — call it regularly so the lease doesn't expire mid-task. Deliberately bumps NO version and touches NO `updated_at` (a heartbeat never invalidates a working agent's read base). The fresh row doubles as a health/state check. Non-holder or expired → 409 naming the real holder + expiry; NO lease at all → 409 "not_claimed" — call `claim_task` first. | `id` (required), `actor?` | Fresh summary row (new `claim_expires_at`) |
+| `handoff_task` | **Atomically hand off a task you hold** to its next actor in ONE call, replacing the fragile update_notes + add_comment + assign + release sequence. You must hold the ACTIVE claim lease (a foreign active lease → 409; none at all → 409 "not_claimed" — `claim_task` first). On success, in one transaction: optionally replaces notes, sets/clears the durable assignee, appends exactly ONE comment (kind `"handoff"` default or `"question"` — anything else → 400), clears the lease and moves status back to todo; version bumped once. | `id` (required), `kind?` ("handoff" \| "question"), `body?` (markdown; omitted/empty → a concise synthesized default like "Handed off to \<receiver\> by \<actor\>"), `notes?` (REPLACE-ON-WRITE; omitted/empty leaves the stored notes untouched — it is never a clear), `to_assignee?` {name,type} (sets the receiver as durable assignee; omit = unchanged), `clear_assignee?` (bool; takes precedence over `to_assignee`), `actor?` | `{"task": fresh row, "comment": created comment}` |
 | `add_comment` | Append a typed markdown comment to the task thread (a child-row mutation: **NO** task version bump). `kind: "question"` signals you need HUMAN INPUT; `"handoff"` = stepping away from the task. Not idempotent — after a timeout error, check the comment tail via `get_task` before re-posting or you may duplicate. | `id`, `kind` (required; progress\|question\|decision\|handoff\|note), `body` (required markdown, non-empty), `actor?` | The created comment row |
 | `update_notes` | Replace the task's DURABLE resume-context blob in WHOLE — the "write down what you found / what's next" call so a fresh session can pick up where you stopped. **Replace-on-write**: send the complete new notes, not an append; presence counts (an intentional empty string clears the scratchpad). Deliberately NO version field (single-writer scratchpad): identical content is a no-op; a genuinely concurrent write can surface as 409 `version_conflict` — handle it like any 409. | `id`, `notes` (both required), `actor?` | Fresh summary row (read notes back via `get_task`) |
 | `complete_ac` | Check or uncheck ONE acceptance criterion by its 1-based `seq` (from `get_task`'s `acceptance_criteria`), **or reword it**: optional `text` sets the new wording and takes precedence over `done`/`note`. `done=true` records `completed_by`/`completed_at`; `done=false` un-checks, clearing both (free). Child-row mutation: NO version bump. Unknown task OR unknown seq → not-found verbatim. **Adding / editing / removing criteria are SEPARATE tools** — `add_ac`, `edit_ac`, `remove_ac`. | `id`, `seq` (int ≥ 1), `done` (bool) — all three required — plus `note?`, `text?` (reword; wins over done/note), `actor?` | The updated AC row |
@@ -190,9 +190,9 @@ All twenty arguments are optional and combine as AND filters:
 | `archived` | boolean | `true` = list archived tasks; default/omitted (`false`) lists open (non-archived) tasks only. |
 | `unblocked` | boolean | `true` = keep only tasks with no open blocker — the ready-to-work set. |
 | `parent_id` | string (ULID) | Children of one task: only tasks filed under this parent match. |
-| `claimed` | boolean, **tri-state** | On the EPHEMERAL claim lease: `true` = a lease row is present (live or stale), `false` = unclaimed, omitted = any. A non-boolean value → invalid input. |
+| `claimed` | boolean, **tri-state** | On the EPHEMERAL claim lease: `true` = a lease row is present (live or stale), `false` = unclaimed, omitted = any. A non-boolean value → invalid_input. |
 | `claimed_by` | string | Exact match on the EPHEMERAL claim-holder name (not the durable assignee). |
-| `expired_claim` | boolean, **tri-state** | Lease lapse: `true` = stale lease (expiry in the past — anyone may claim), `false` = unclaimed or still active, omitted = any. A non-boolean value → invalid input. |
+| `expired_claim` | boolean, **tri-state** | Lease lapse: `true` = stale lease (expiry in the past — anyone may claim), `false` = unclaimed or still active, omitted = any. A non-boolean value → invalid_input. |
 | `search` | string | Case-insensitive substring over title + description + notes. |
 | `priority` | integer | Exact priority match, 0–5 (schema-enforced). |
 | `due_before` | RFC3339 string | due_at **strictly before** this (undated tasks never match). |
@@ -391,7 +391,7 @@ Every upstream failure arrives **verbatim** as the `isError` text — a JSON bod
 whose `message` field is your next instruction. Treat it that way; don't retry
 blindly.
 
-**409 version conflict** (`update_task`, and rarely `update_notes`) — you read
+**409 version_conflict** (`update_task`, and rarely `update_notes`) — you read
 an old version; someone else wrote in between. The body already carries the
 fresh row, so retry immediately with the new version — no re-read needed:
 
@@ -410,34 +410,35 @@ fresh row, so retry immediately with the new version — no re-read needed:
 → Re-send your `update_task` with `"version": 3`. If you were changing a field
 that also changed in `current`, fold that in and retry once more.
 
-**409 claim conflict** (`claim_task` / `release_task` / `heartbeat_task` /
-`handoff_task`) — the holder and expiry **are** the instruction: wait for
-expiry, or work another task.
+**409 claim_conflict** (`claim_task` / `release_task` / `heartbeat_task` /
+`handoff_task`) — the holder and expiry name the LIVE foreign lease. Do not
+wait for expiry: close-out mutations (comments/notes/status/ACs) are open to
+non-holders with explicit permission — otherwise stop and report.
 
 ```json
 {
-  "error": "claim conflict",
+  "error": "claim_conflict",
   "resource": "task",
   "id": "…",
   "holder": { "type": "agent", "name": "runner-2" },
   "expires_at": "2026-09-26T15:53:00Z",
-  "message": "\"…\" is held by agent (runner-2) until 2026-09-26T15:53:00Z — wait for the lease to expire or work another task"
+  "message": "\"…\" is held by agent (runner-2) until 2026-09-26T15:53:00Z — do not wait for the lease to expire: close-out mutations (comments/notes/status/ACs) are open to non-holders, but only with explicit permission (from the holder or a human) to work that task; otherwise stop and report"
 }
 ```
 
-A `heartbeat_task` with **no lease at all** also gets this shape with an empty
-holder name (`"holder": { "type": "" }`) — it means *claim the task first*.
+A `heartbeat_task` on a task with **no lease at all** does NOT get this shape —
+it gets 409 `not_claimed` instead (recovery: `claim_task` first).
 
-**409 parent conflict** (`relate_tasks` add) — a task already has a different
+**409 parent_conflict** (`relate_tasks` add) — a task already has a different
 parent; one task may have at most one. Pick a different relation kind (e.g.
 `related`) or fix the hierarchy.
 
-**404 not found** — unknown id: a task ULID, a project ULID
+**404 not_found** — unknown id: a task ULID, a project ULID
 (`get_project` / `update_project` / `project_report`), or an AC `seq` for
 `complete_ac` / `remove_ac` / `edit_ac`. Re-check with `list_projects` /
 `list_tasks`.
 
-**400 invalid input** — bad actor, unknown enum value, out-of-range priority,
+**400 invalid_input** — bad actor, unknown enum value, out-of-range priority,
 non-RFC3339 timestamp, self-relation, empty comment body, an `update_project`
 with no fields to set, … The message names the fix. Note that arguments
 violating a tool's *input schema* (wrong types, missing required args,
