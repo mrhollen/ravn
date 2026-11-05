@@ -440,7 +440,7 @@ func TestOpenCodeStart_ErrorHandling(t *testing.T) {
 	stk := newStack(t)
 
 	// 1. Task not found -> 404
-	code, _ := doReq(t, stk.Handler, "POST", "/api/v1/tasks/01HNONEXISTENT00000000000000/opencode/start", nil)
+	code, _ := doReq(t, stk.Handler, "POST", "/api/v1/tasks/01A2B3C4D5E6F7G8H9J0K1M2N3/opencode/start", nil)
 	if code != http.StatusNotFound {
 		t.Fatalf("POST non-existent task = %d, want 404", code)
 	}

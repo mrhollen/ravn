@@ -288,9 +288,9 @@ func TestProjectResourceRead(t *testing.T) {
 		},
 		getProjectFunc: func(ctx context.Context, id string) (*apiclient.Project, error) {
 			getProjectCalledWith = id
-			if id == "PROJ-1" {
+			if id == "01AA11BB22CC33DD44EE55FF66" {
 				return &apiclient.Project{
-					ID:          "PROJ-1",
+					ID:          "01AA11BB22CC33DD44EE55FF66",
 					Name:        "Core Engine",
 					Description: "Engine work",
 					TaskCounts:  &apiclient.StatusCounts{Todo: 5, Doing: 2, Done: 10},
@@ -306,13 +306,13 @@ func TestProjectResourceRead(t *testing.T) {
 	mcs := mcpsrv.NewMCPServer("ravn", "test-version")
 	RegisterResources(mcs, mock)
 
-	// 1. Success read via ravn://project/PROJ-1
+	// 1. Success read via ravn://project/01AA11BB22CC33DD44EE55FF66
 	readMsg := `{
 		"jsonrpc": "2.0",
 		"id": 30,
 		"method": "resources/read",
 		"params": {
-			"uri": "ravn://project/PROJ-1"
+			"uri": "ravn://project/01AA11BB22CC33DD44EE55FF66"
 		}
 	}`
 	resp := mcs.HandleMessage(context.Background(), json.RawMessage(readMsg))
@@ -328,14 +328,14 @@ func TestProjectResourceRead(t *testing.T) {
 	if !strings.Contains(txtContent.Text, "Core Engine") || !strings.Contains(txtContent.Text, `"todo":5`) {
 		t.Errorf("project resource content missing expected fields: %s", txtContent.Text)
 	}
-	if getProjectCalledWith != "PROJ-1" {
-		t.Errorf("GetProject called with %q, want PROJ-1", getProjectCalledWith)
+	if getProjectCalledWith != "01AA11BB22CC33DD44EE55FF66" {
+		t.Errorf("GetProject called with %q, want 01AA11BB22CC33DD44EE55FF66", getProjectCalledWith)
 	}
 	if listProjectsCalled {
 		t.Errorf("ListProjects must NOT be called when reading project resource")
 	}
 
-	// 2. Reading crowban://project/PROJ-1 does not fetch all projects in the system (AC 3)
+	// 2. Reading crowban://project/01AA11BB22CC33DD44EE55FF66 does not fetch all projects in the system (AC 3)
 	getProjectCalledWith = ""
 	listProjectsCalled = false
 	crowbanMsg := `{
@@ -343,7 +343,7 @@ func TestProjectResourceRead(t *testing.T) {
 		"id": 31,
 		"method": "resources/read",
 		"params": {
-			"uri": "crowban://project/PROJ-1"
+			"uri": "crowban://project/01AA11BB22CC33DD44EE55FF66"
 		}
 	}`
 	resp = mcs.HandleMessage(context.Background(), json.RawMessage(crowbanMsg))
@@ -359,8 +359,8 @@ func TestProjectResourceRead(t *testing.T) {
 	if !strings.Contains(txtContent.Text, "Core Engine") || !strings.Contains(txtContent.Text, `"todo":5`) {
 		t.Errorf("crowban project resource content missing expected fields: %s", txtContent.Text)
 	}
-	if getProjectCalledWith != "PROJ-1" {
-		t.Errorf("GetProject called with %q for crowban scheme, want PROJ-1", getProjectCalledWith)
+	if getProjectCalledWith != "01AA11BB22CC33DD44EE55FF66" {
+		t.Errorf("GetProject called with %q for crowban scheme, want 01AA11BB22CC33DD44EE55FF66", getProjectCalledWith)
 	}
 	if listProjectsCalled {
 		t.Errorf("ListProjects must NOT be called when reading crowban://project/<id>")
@@ -372,7 +372,7 @@ func TestProjectResourceRead(t *testing.T) {
 		"id": 32,
 		"method": "resources/read",
 		"params": {
-			"uri": "ravn://project/UNKNOWN-PROJECT"
+			"uri": "ravn://project/01Q2W3E4R5T6Y7K8M9N0P1A2B3"
 		}
 	}`
 	resp = mcs.HandleMessage(context.Background(), json.RawMessage(unknownMsg))

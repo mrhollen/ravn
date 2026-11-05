@@ -113,7 +113,7 @@ func TestUpdateTask_ConflictingClearAndSetInputsDeterministic(t *testing.T) {
 	t.Run("conflict_clear_due_with_due_at", func(t *testing.T) {
 		callCountBefore := len(*calls)
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":        "T1",
+			"id":        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":   4,
 			"clear_due": true,
 			"due_at":    "2026-10-15T00:00:00Z",
@@ -142,7 +142,7 @@ func TestUpdateTask_ConflictingClearAndSetInputsDeterministic(t *testing.T) {
 	t.Run("conflict_clear_assignee_with_assignee", func(t *testing.T) {
 		callCountBefore := len(*calls)
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":             "T1",
+			"id":             "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":        4,
 			"clear_assignee": true,
 			"assignee":       map[string]any{"name": "ada", "type": "human"},

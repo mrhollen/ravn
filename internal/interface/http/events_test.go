@@ -448,7 +448,7 @@ func TestEvents_SSE_QueryParamEndpoint(t *testing.T) {
 func TestEvents_SSE_UnknownProjectReturns404(t *testing.T) {
 	_, _, srv := newRealtimeStack(t)
 
-	res, err := srv.Client().Get(srv.URL + "/api/v1/projects/01JNONEXISTENTPROJECT0000000/events")
+	res, err := srv.Client().Get(srv.URL + "/api/v1/projects/01A2B3C4D5E6F7G8H9J0K1M2N3/events")
 	if err != nil {
 		t.Fatalf("GET /events: %v", err)
 	}

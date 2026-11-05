@@ -33,6 +33,20 @@ func TestNewIDIsUniqueAndWellFormed(t *testing.T) {
 	}
 }
 
+// TestNewIDAlwaysPassesDomainValidation locks the alphabet alignment that
+// boundary validation (domain.ID.Valid, REST/MCP) relies on: EVERY id minted
+// by the production generator must pass the format check, or valid clients
+// would be rejected at the boundary.
+func TestNewIDAlwaysPassesDomainValidation(t *testing.T) {
+	gen := New()
+	for i := 0; i < 200; i++ {
+		id := gen.NewID()
+		if !id.Valid() {
+			t.Fatalf("minted %q fails domain.ID.Valid — the generator and boundary validation disagree", id.String())
+		}
+	}
+}
+
 func TestNewIDIsSortable(t *testing.T) {
 	gen := New()
 	prev := gen.NewID()

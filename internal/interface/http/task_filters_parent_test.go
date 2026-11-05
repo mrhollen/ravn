@@ -8,11 +8,14 @@ package httpapi
 // composition with each other, and total-count agreement).
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 func TestHTTPCreateTask_WithParentID(t *testing.T) {
@@ -47,7 +50,7 @@ func TestHTTPCreateTask_InvalidParent(t *testing.T) {
 	// Unknown parent: 400 + message names the problem; NOTHING is written.
 	code, body := doReq(t, stk.Handler, "POST", "/api/v1/tasks", map[string]any{
 		"actor": actor("eve"), "title": "orphan", "project_id": p.ID,
-		"parent_id": "01JMISSINGPARENT00000000000000",
+		"parent_id": "01B2C3D4E5F6A7B8C9D0E1F2A3",
 	})
 	if code != http.StatusBadRequest {
 		t.Fatalf("POST /tasks (unknown parent) = %d, want 400 (body %s)", code, string(body))
@@ -209,19 +212,33 @@ func TestParseTaskFilter_NewParams(t *testing.T) {
 		}
 	}
 	strCase("claimed_by", "ada")
-	strCase("parent_id", "01JABCXYZ")
+	strCase("parent_id", "01A2B3C4D5E6F7G8H9J0K1M2N3")
+
+	// Malformed ULIDs in the id-typed filters are boundary-invalid (ErrInvalid),
+	// not silently forwarded to storage.
+	for _, bad := range []struct{ name, val string }{
+		{"parent_id", "01JABCXYZ"},                // too short
+		{"project_id", "not-a-ulid"},              // not base32
+		{"parent_id", strings.Repeat("A", 1<<20)}, // oversized hostile input
+	} {
+		vb := url.Values{}
+		vb.Set(bad.name, bad.val)
+		if _, perr := parseTaskFilter(vb); !errors.Is(perr, domain.ErrInvalid) {
+			t.Errorf("parse %s=%q: err = %v, want wrapped domain.ErrInvalid", bad.name, bad.val[:min(len(bad.val), 16)], perr)
+		}
+	}
 
 	// Composes with existing params.
 	v = url.Values{}
-	v.Set("project_id", "p")
+	v.Set("project_id", "01A2B3C4D5E6F7G8H9J0K1M2N3")
 	v.Set("priority", "5")
 	v.Set("claimed", "false")
 	flt, err = parseTaskFilter(v)
 	if err != nil {
 		t.Fatalf("parse combined: %v", err)
 	}
-	if flt.ProjectID != "p" || flt.Priority == nil || *flt.Priority != 5 || flt.Claimed == nil || *flt.Claimed {
-		t.Errorf("combined parse => %+v, want p + priority 5 + claimed=false", flt)
+	if flt.ProjectID.String() != "01A2B3C4D5E6F7G8H9J0K1M2N3" || flt.Priority == nil || *flt.Priority != 5 || flt.Claimed == nil || *flt.Claimed {
+		t.Errorf("combined parse => %+v, want valid project + priority 5 + claimed=false", flt)
 	}
 }
 
@@ -328,8 +345,8 @@ func TestHTTPCreateTask_InvalidBlockedBy(t *testing.T) {
 		blocked map[string]any
 		wantSub string
 	}{
-		{"unknown blocker", map[string]any{"blocked_by": []string{"01JMISSINGBLOCKER0000000000000"}}, "does not exist"},
-		{"blank entry rejected", map[string]any{"blocked_by": []string{seeded.ID, ""}}, "empty task id"},
+		{"unknown blocker", map[string]any{"blocked_by": []string{"01C2D3E4F5A6B7C8D9E0F1A2B3"}}, "does not exist"},
+		{"blank entry rejected at the boundary", map[string]any{"blocked_by": []string{seeded.ID, ""}}, `malformed id ""`},
 	}
 	for _, tc := range cases {
 		body := map[string]any{"actor": actor("eve"), "title": "orphan blocked", "project_id": p.ID}

@@ -26,34 +26,34 @@ import (
 
 // --- deterministic mock upstream (simulates ravn-server; fixed data, no sleeps) ---
 
-const mockProjectsBody = `{"projects":[{"id":"P1","name":"Website Redesign","description":"MVP landing page work","created_at":"2026-09-20T09:00:00Z","updated_at":"2026-09-20T09:00:00Z","task_counts":{"todo":3,"doing":1,"done":5}},{"id":"P2","name":"Agent Ops","created_at":"2026-09-19T09:00:00Z","updated_at":"2026-09-19T09:00:00Z","task_counts":{"todo":0,"doing":0,"done":0}}],"total":2}`
+const mockProjectsBody = `{"projects":[{"id":"01C2D3E4F5A6B7C8D9E0F1A2B3","name":"Website Redesign","description":"MVP landing page work","created_at":"2026-09-20T09:00:00Z","updated_at":"2026-09-20T09:00:00Z","task_counts":{"todo":3,"doing":1,"done":5}},{"id":"01D2E3F4A5B6C7D8E9F0A1B2C3","name":"Agent Ops","created_at":"2026-09-19T09:00:00Z","updated_at":"2026-09-19T09:00:00Z","task_counts":{"todo":0,"doing":0,"done":0}}],"total":2}`
 
-// The single GET /api/v1/projects/P1 row: like every bare get/create response,
+// The single GET /api/v1/projects/01C2D3E4F5A6B7C8D9E0F1A2B3 row: like every bare get/create response,
 // it carries NO task_counts (those ride only on list rows).
-const mockGetProjectBody = `{"id":"P1","name":"Website Redesign","description":"MVP landing page work","created_at":"2026-09-20T09:00:00Z","updated_at":"2026-09-20T09:00:00Z"}`
+const mockGetProjectBody = `{"id":"01C2D3E4F5A6B7C8D9E0F1A2B3","name":"Website Redesign","description":"MVP landing page work","created_at":"2026-09-20T09:00:00Z","updated_at":"2026-09-20T09:00:00Z"}`
 
-const mockDetailBody = `{"id":"T1","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","assignee":{"type":"human","name":"ada"},"claimed_by":{"type":"agent","name":"runner-2"},"claim_expires_at":"2026-09-26T15:53:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z","project_id":"P1","description":"Users cannot log in after the password reset flow.","notes":"Last run: migration half-applied, rolled back.","archived":false,"blocked":true,"blockers":[{"id":"T2","title":"Fix DB migration","status":"doing"}],"claimed_at":"2026-09-26T15:48:03Z","claim_ttl_seconds":900,"acceptance_criteria":[{"seq":1,"text":"login works","done":true,"note":"manual test passed","completed_by":{"type":"human","name":"ada"},"completed_at":"2026-09-26T15:40:12Z"}],"comments":[{"id":"C1","kind":"progress","body":"ran the build — green","actor":{"type":"human","name":"ada"},"created_at":"2026-09-26T15:47:55Z"}],"artifacts":[],"relations":[{"task_id":"T1","other_task_id":"T2","kind":"blocked-by","created_at":"2026-09-26T15:49:30Z"}],"events":[{"id":"E1","kind":"claimed","actor":{"type":"agent","name":"runner-2"},"after":"{\"claim\":\"fresh\"}","at":"2026-09-26T15:48:03Z"}]}`
+const mockDetailBody = `{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","assignee":{"type":"human","name":"ada"},"claimed_by":{"type":"agent","name":"runner-2"},"claim_expires_at":"2026-09-26T15:53:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z","project_id":"01C2D3E4F5A6B7C8D9E0F1A2B3","description":"Users cannot log in after the password reset flow.","notes":"Last run: migration half-applied, rolled back.","archived":false,"blocked":true,"blockers":[{"id":"01B2C3D4E5F6A7B8C9D0E1F2A3","title":"Fix DB migration","status":"doing"}],"claimed_at":"2026-09-26T15:48:03Z","claim_ttl_seconds":900,"acceptance_criteria":[{"seq":1,"text":"login works","done":true,"note":"manual test passed","completed_by":{"type":"human","name":"ada"},"completed_at":"2026-09-26T15:40:12Z"}],"comments":[{"id":"C1","kind":"progress","body":"ran the build — green","actor":{"type":"human","name":"ada"},"created_at":"2026-09-26T15:47:55Z"}],"artifacts":[],"relations":[{"task_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","other_task_id":"01B2C3D4E5F6A7B8C9D0E1F2A3","kind":"blocked-by","created_at":"2026-09-26T15:49:30Z"}],"events":[{"id":"E1","kind":"claimed","actor":{"type":"agent","name":"runner-2"},"after":"{\"claim\":\"fresh\"}","at":"2026-09-26T15:48:03Z"}]}`
 
 // A second full task detail, used by get_task_brief. Its comments are newest-first
 // and interleave THREE handoff comments with non-handoff kinds, so the brief must
 // surface exactly the two most-recent handoffs (CH3, CH2) and drop the older one
 // (CH1) plus every non-handoff body. The description carries surrounding
 // whitespace to prove trimming; notes is the verbatim resume blob.
-const mockBriefBody = `{"id":"TBRIEF","title":"Handoff resume brief task","status":"doing","priority":2,"assignee":{"type":"agent","name":"runner-9"},"version":7,"created_at":"2026-09-25T10:00:00Z","updated_at":"2026-09-26T18:00:00Z","project_id":"P1","description":"   Trim the leading and trailing whitespace on this description.   ","notes":"RESUME BLOB (verbatim): step 4 done, flaky test in internal/application/claim_test.go; next: add a repro at line 120 and re-run ./...","archived":false,"blocked":false,"blockers":[],"acceptance_criteria":[{"seq":1,"text":"brief works","done":true,"note":"verified"}],"comments":[{"id":"CN4","kind":"progress","body":"newest progress note that is NOT a handoff","actor":{"type":"agent","name":"runner-9"},"created_at":"2026-09-26T18:00:00Z"},{"id":"CH3","kind":"handoff","body":"H3 — most recent handoff: wrapped up the sqlite migration work","actor":{"type":"agent","name":"runner-8"},"created_at":"2026-09-26T17:40:00Z"},{"id":"CN5","kind":"note","body":"a non-handoff note in between","actor":{"type":"human","name":"ada"},"created_at":"2026-09-26T17:30:00Z"},{"id":"CH2","kind":"handoff","body":"H2 — second most recent handoff: notes on the claim race","actor":{"type":"agent","name":"runner-7"},"created_at":"2026-09-26T17:10:00Z"},{"id":"CN6","kind":"decision","body":"a non-handoff decision comment","actor":{"type":"human","name":"ada"},"created_at":"2026-09-26T16:50:00Z"},{"id":"CH1","kind":"handoff","body":"H1 — oldest handoff of the three, must be dropped by the two-cap","actor":{"type":"agent","name":"runner-6"},"created_at":"2026-09-26T16:30:00Z"}],"artifacts":[{"id":"A1","kind":"log","ref":"/artifacts/A1","summary":"a log artifact that must be omitted"}],"relations":[],"events":[{"id":"E1","kind":"claimed","actor":{"type":"agent","name":"runner-9"},"at":"2026-09-26T18:00:00Z"}]}`
+const mockBriefBody = `{"id":"01TBR1EFDEADBEEFCAFE00000000","title":"Handoff resume brief task","status":"doing","priority":2,"assignee":{"type":"agent","name":"runner-9"},"version":7,"created_at":"2026-09-25T10:00:00Z","updated_at":"2026-09-26T18:00:00Z","project_id":"01C2D3E4F5A6B7C8D9E0F1A2B3","description":"   Trim the leading and trailing whitespace on this description.   ","notes":"RESUME BLOB (verbatim): step 4 done, flaky test in internal/application/claim_test.go; next: add a repro at line 120 and re-run ./...","archived":false,"blocked":false,"blockers":[],"acceptance_criteria":[{"seq":1,"text":"brief works","done":true,"note":"verified"}],"comments":[{"id":"CN4","kind":"progress","body":"newest progress note that is NOT a handoff","actor":{"type":"agent","name":"runner-9"},"created_at":"2026-09-26T18:00:00Z"},{"id":"CH3","kind":"handoff","body":"H3 — most recent handoff: wrapped up the sqlite migration work","actor":{"type":"agent","name":"runner-8"},"created_at":"2026-09-26T17:40:00Z"},{"id":"CN5","kind":"note","body":"a non-handoff note in between","actor":{"type":"human","name":"ada"},"created_at":"2026-09-26T17:30:00Z"},{"id":"CH2","kind":"handoff","body":"H2 — second most recent handoff: notes on the claim race","actor":{"type":"agent","name":"runner-7"},"created_at":"2026-09-26T17:10:00Z"},{"id":"CN6","kind":"decision","body":"a non-handoff decision comment","actor":{"type":"human","name":"ada"},"created_at":"2026-09-26T16:50:00Z"},{"id":"CH1","kind":"handoff","body":"H1 — oldest handoff of the three, must be dropped by the two-cap","actor":{"type":"agent","name":"runner-6"},"created_at":"2026-09-26T16:30:00Z"}],"artifacts":[{"id":"A1","kind":"log","ref":"/artifacts/A1","summary":"a log artifact that must be omitted"}],"relations":[],"events":[{"id":"E1","kind":"claimed","actor":{"type":"agent","name":"runner-9"},"at":"2026-09-26T18:00:00Z"}]}`
 
 // The exact 409 claim-conflict body a foreign active lease produces (API.md).
 // Compared byte-for-byte against the isError text to prove VERBATIM propagation.
-const mockConflictBody = `{"error":"claim_conflict","resource":"task","id":"HOLDING","holder":{"type":"agent","name":"runner-2"},"expires_at":"2026-09-26T15:53:00Z","message":"\"HOLDING\" is held by agent (runner-2) until 2026-09-26T15:53:00Z — wait for the lease to expire or work another task"}`
+const mockConflictBody = `{"error":"claim_conflict","resource":"task","id":"01C3D4E5F6A7B8C9D0E1F2A3B4","holder":{"type":"agent","name":"runner-2"},"expires_at":"2026-09-26T15:53:00Z","message":"\"HOLDING\" is held by agent (runner-2) until 2026-09-26T15:53:00Z — wait for the lease to expire or work another task"}`
 
-// The summary row of T1 at its stored version 4 (matches mockDetailBody's row).
-const mockTaskRowV4 = `{"id":"T1","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z"}`
+// The summary row of 01ARZ3NDEKTSV4RRFFQ69G5FAV at its stored version 4 (matches mockDetailBody's row).
+const mockTaskRowV4 = `{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z"}`
 
 // The exact 409 version-conflict body (API.md) a stale PATCH produces:
 // current_version + fresh "current" row so the agent can rebase without re-reading.
-const mockVersionConflictBody = `{"error":"version_conflict","resource":"task","id":"T1","current_version":4,"updated_at":"2026-09-26T15:48:03Z","message":"task \"T1\" is at version 4 — re-read it and retry with that version","current":{"id":"T1","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z"}}`
+const mockVersionConflictBody = `{"error":"version_conflict","resource":"task","id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","current_version":4,"updated_at":"2026-09-26T15:48:03Z","message":"task \"01ARZ3NDEKTSV4RRFFQ69G5FAV\" is at version 4 — re-read it and retry with that version","current":{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","title":"Fix login bug","status":"doing","priority":3,"due_at":"2026-10-01T00:00:00Z","version":4,"created_at":"2026-09-25T18:02:11Z","updated_at":"2026-09-26T15:48:03Z"}}`
 
 // The exact 409 parent-conflict body (API.md): a second, different parent.
-const mockParentConflictBody = `{"error":"parent_conflict","resource":"task","id":"TPARENT","message":"task already has a parent: task TPARENT already has a parent (TOTHER)"}`
+const mockParentConflictBody = `{"error":"parent_conflict","resource":"task","id":"01F6A7B8C9D0E1F2A3B4C5D6E7","message":"task already has a parent: task 01F6A7B8C9D0E1F2A3B4C5D6E7 already has a parent (01F8C9D0E1F2A3B4C5D6E7A8B9)"}`
 
 type claimCall struct {
 	path      string
@@ -75,16 +75,16 @@ type capturedCall struct {
 
 // newMockUpstream stands up a fake ravn-server. Every route answers with
 // fixed data:
-//   - GET /api/v1/projects/{id} answers with the fixed P1 row for id "P1" and
+//   - GET /api/v1/projects/{id} answers with the fixed 01C2D3E4F5A6B7C8D9E0F1A2B3 row for id "01C2D3E4F5A6B7C8D9E0F1A2B3" and
 //     a 404 body verbatim for anything else; PUT /api/v1/projects/{id} applies
 //     the partial update (pointer fields) onto the base row.
-//   - POST /tasks/{id}/claim returns the conflict body verbatim for id "HOLDING"
+//   - POST /tasks/{id}/claim returns the conflict body verbatim for id "01C3D4E5F6A7B8C9D0E1F2A3B4"
 //     and echoes the requesting actor as claimed_by otherwise (and records every
 //     claim call).
 //   - PATCH /tasks/{id} treats version 4 as current: any other version → 409
 //     version_conflict verbatim; version 4 → fresh row at version 5.
 //   - POST /tasks/{id}/relations normalizes kind "parent" to the inverse child
-//     edge (server rule) and 409s on a second parent for id "TPARENT".
+//     edge (server rule) and 409s on a second parent for id "01F6A7B8C9D0E1F2A3B4C5D6E7".
 func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedCall) {
 	t.Helper()
 
@@ -135,12 +135,12 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 		row := map[string]any{
 			"project_id":         r.PathValue("id"),
 			"counts":             map[string]any{"by_status": map[string]int{"todo": 1, "doing": 1, "done": 1}, "by_priority": map[string]int{"0": 3}},
-			"active_claims":      []map[string]any{{"id": "T1", "title": "Live", "claimed_by": map[string]string{"type": "agent", "name": "a"}, "claim_expires_at": "2026-09-26T17:48:03Z", "remaining_sec": 600}},
-			"expired_claims":     []map[string]any{{"id": "T2", "title": "Zombie"}},
-			"stalled_tasks":      []map[string]any{{"id": "T3", "title": "Stuck", "last_activity_at": "2026-09-26T14:48:03Z", "idle_minutes": 180}},
-			"bottlenecks":        []map[string]any{{"id": "T2", "title": "Zombie", "blocks": 1}},
-			"open_blocked_by":    []map[string]any{{"blocker": map[string]string{"id": "T2", "title": "Zombie"}, "blocked": []map[string]any{{"id": "T3", "title": "Stuck"}}}},
-			"recently_completed": []map[string]any{{"id": "T4", "title": "Shipped", "completed_at": "2026-09-26T15:48:03Z"}},
+			"active_claims":      []map[string]any{{"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "title": "Live", "claimed_by": map[string]string{"type": "agent", "name": "a"}, "claim_expires_at": "2026-09-26T17:48:03Z", "remaining_sec": 600}},
+			"expired_claims":     []map[string]any{{"id": "01B2C3D4E5F6A7B8C9D0E1F2A3", "title": "Zombie"}},
+			"stalled_tasks":      []map[string]any{{"id": "01A5B6C7D8E9F0A1B2C3D4E5F6", "title": "Stuck", "last_activity_at": "2026-09-26T14:48:03Z", "idle_minutes": 180}},
+			"bottlenecks":        []map[string]any{{"id": "01B2C3D4E5F6A7B8C9D0E1F2A3", "title": "Zombie", "blocks": 1}},
+			"open_blocked_by":    []map[string]any{{"blocker": map[string]string{"id": "01B2C3D4E5F6A7B8C9D0E1F2A3", "title": "Zombie"}, "blocked": []map[string]any{{"id": "01A5B6C7D8E9F0A1B2C3D4E5F6", "title": "Stuck"}}}},
+			"recently_completed": []map[string]any{{"id": "01B6C7D8E9F0A1B2C3D4E5F6A7", "title": "Shipped", "completed_at": "2026-09-26T15:48:03Z"}},
 			"workload":           map[string]int{"a": 1, "": 2},
 		}
 		data, _ := json.Marshal(row)
@@ -153,7 +153,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 			t.Errorf("upstream: POST /projects body not JSON: %v (%s)", err, b)
 		}
 		row := map[string]any{
-			"id": "PNEW", "name": req.Name,
+			"id": "01C7D8E9F0A1B2C3D4E5F6A7B8", "name": req.Name,
 			"created_at": "2026-09-26T15:48:03Z", "updated_at": "2026-09-26T15:48:03Z",
 		}
 		if req.Description != "" {
@@ -164,7 +164,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 	})
 	mux.HandleFunc("GET /api/v1/projects/{id}", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
-		if r.PathValue("id") != "P1" {
+		if r.PathValue("id") != "01C2D3E4F5A6B7C8D9E0F1A2B3" {
 			writeJSON(w, http.StatusNotFound, `{"error":"not_found","resource":"project","id":`+jsonString(r.PathValue("id"))+`,"message":"unknown project"}`)
 			return
 		}
@@ -177,7 +177,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 			t.Errorf("upstream: PUT /projects body not JSON: %v (%s)", err, b)
 			return
 		}
-		row := map[string]any{ // the partial update applied onto the stored P1 row
+		row := map[string]any{ // the partial update applied onto the stored 01C2D3E4F5A6B7C8D9E0F1A2B3 row
 			"id": r.PathValue("id"), "name": "Website Redesign",
 			"created_at": "2026-09-20T09:00:00Z", "updated_at": "2026-09-26T16:03:00Z",
 		}
@@ -210,7 +210,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 			t.Errorf("upstream: POST /tasks body not JSON: %v (%s)", err, b)
 		}
 		task := map[string]any{
-			"id": "TNEW", "title": req.Title, "status": "todo", "priority": req.Priority,
+			"id": "01E3F4A5B6C7D8E9F0A1B2C3D4", "title": req.Title, "status": "todo", "priority": req.Priority,
 			"version": 1, "created_at": "2026-09-26T15:48:03Z", "updated_at": "2026-09-26T15:48:03Z",
 		}
 		if req.DueAt != nil {
@@ -222,7 +222,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 		resp := map[string]any{ // advisory duplicates: never an error (API.md)
 			"task": task,
 			"possible_duplicates": []map[string]any{{
-				"id": "TDUP", "title": strings.ToLower(req.Title) + " (dup)", "status": "todo",
+				"id": "01F4A5B6C7D8E9F0A1B2C3D4E5", "title": strings.ToLower(req.Title) + " (dup)", "status": "todo",
 				"priority": req.Priority, "version": 2,
 				"created_at": "2026-09-20T09:00:00Z", "updated_at": "2026-09-20T09:00:00Z",
 			}},
@@ -233,14 +233,14 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 	mux.HandleFunc("GET /api/v1/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 		switch r.PathValue("id") {
-		case "T1":
+		case "01ARZ3NDEKTSV4RRFFQ69G5FAV":
 			if q := r.URL.Query().Get("comment_limit"); q != "" && q != "5" {
 				t.Errorf("upstream: comment_limit = %q, want 5", q)
 			}
 			writeJSON(w, http.StatusOK, mockDetailBody)
-		case "TBRIEF": // get_task_brief must request a generous recent tail (server max 50)
+		case "01TBR1EFDEADBEEFCAFE00000000": // get_task_brief must request a generous recent tail (server max 50)
 			if q := r.URL.Query().Get("comment_limit"); q != "50" {
-				t.Errorf("upstream: TBRIEF comment_limit = %q, want 50", q)
+				t.Errorf("upstream: 01TBR1EFDEADBEEFCAFE00000000 comment_limit = %q, want 50", q)
 			}
 			writeJSON(w, http.StatusOK, mockBriefBody)
 		default:
@@ -277,7 +277,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 		b := record(r)
 		id := r.PathValue("id")
 		claims = append(claims, claimCall{path: r.URL.Path, body: string(b), authorize: r.Header.Get("Authorization")})
-		if id == "HOLDING" {
+		if id == "01C3D4E5F6A7B8C9D0E1F2A3B4" {
 			writeJSON(w, http.StatusConflict, mockConflictBody)
 			return
 		}
@@ -324,7 +324,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 	mux.HandleFunc("POST /api/v1/tasks/{id}/handoff", func(w http.ResponseWriter, r *http.Request) {
 		b := record(r)
 		id := r.PathValue("id")
-		if id == "HOLDING" {
+		if id == "01C3D4E5F6A7B8C9D0E1F2A3B4" {
 			writeJSON(w, http.StatusConflict, mockConflictBody) // foreign active lease → verbatim 409
 			return
 		}
@@ -442,7 +442,7 @@ func newMockUpstream(t *testing.T) (*httptest.Server, *[]claimCall, *[]capturedC
 			"created_at": "2026-09-26T15:49:30Z",
 		}
 		switch {
-		case req.Kind == "parent" && id == "TPARENT": // second different parent → 409 (API.md)
+		case req.Kind == "parent" && id == "01F6A7B8C9D0E1F2A3B4C5D6E7": // second different parent → 409 (API.md)
 			writeJSON(w, http.StatusConflict, mockParentConflictBody)
 			return
 		case req.Kind == "parent": // input alias: stored as the inverse child edge
@@ -583,7 +583,7 @@ func TestGetTaskBrief(t *testing.T) {
 	defer func() { _ = c.Close() }()
 
 	// (a) The brief carries title + verbatim notes + the two most-recent handoffs.
-	res := callTool(t, c, ctx, "get_task_brief", map[string]any{"id": "TBRIEF"})
+	res := callTool(t, c, ctx, "get_task_brief", map[string]any{"id": "01TBR1EFDEADBEEFCAFE00000000"})
 	if res.IsError {
 		t.Fatalf("get_task_brief returned isError: %s", firstText(t, res))
 	}
@@ -645,23 +645,23 @@ func TestGetTaskBrief(t *testing.T) {
 		t.Errorf("brief payload (%d bytes) is not smaller than the full detail body (%d bytes)", len(text), len(mockBriefBody))
 	}
 
-	// Routing: the tool reused apiclient GetTask (no new endpoint) via GET /tasks/TBRIEF.
-	findCall(t, *calls, http.MethodGet, "/api/v1/tasks/TBRIEF")
+	// Routing: the tool reused apiclient GetTask (no new endpoint) via GET /tasks/01TBR1EFDEADBEEFCAFE00000000.
+	findCall(t, *calls, http.MethodGet, "/api/v1/tasks/01TBR1EFDEADBEEFCAFE00000000")
 
 	// An explicit actor is accepted for interface parity (the read does not attribute it).
 	if res := callTool(t, c, ctx, "get_task_brief", map[string]any{
-		"id":    "TBRIEF",
+		"id":    "01TBR1EFDEADBEEFCAFE00000000",
 		"actor": map[string]any{"name": "eve", "type": "agent"},
 	}); res.IsError {
 		t.Errorf("get_task_brief with explicit actor returned isError: %s", firstText(t, res))
 	}
 
 	// Unknown id → the 404 body arrives verbatim (same recovery-hint contract as get_task).
-	res = callTool(t, c, ctx, "get_task_brief", map[string]any{"id": "NOPE"})
+	res = callTool(t, c, ctx, "get_task_brief", map[string]any{"id": "01E9F0A1B2C3D4E5F6A7B8C9D0"})
 	if !res.IsError {
 		t.Fatalf("get_task_brief (unknown id) expected isError, got: %s", firstText(t, res))
 	}
-	want404 := `{"error":"not_found","resource":"task","id":"NOPE","message":"unknown task"}`
+	want404 := `{"error":"not_found","resource":"task","id":"01E9F0A1B2C3D4E5F6A7B8C9D0","message":"unknown task"}`
 	if text := firstText(t, res); text != want404 {
 		t.Errorf("404 body not verbatim:\n got  %s\n want %s", text, want404)
 	}
@@ -756,7 +756,7 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 	// get_task returns the mock's resume payload (JSON-equivalent).
 	res, err := c.CallTool(ctx, mcpgo.CallToolRequest{Params: mcpgo.CallToolParams{
 		Name:      "get_task",
-		Arguments: map[string]any{"id": "T1", "comment_limit": 5},
+		Arguments: map[string]any{"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "comment_limit": 5},
 	}})
 	if err != nil {
 		t.Fatalf("tools/call get_task: %v", err)
@@ -774,7 +774,7 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 	res, err = c.CallTool(ctx, mcpgo.CallToolRequest{Params: mcpgo.CallToolParams{
 		Name: "claim_task",
 		Arguments: map[string]any{
-			"id":      "T1",
+			"id":      "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"actor":   map[string]any{"name": "runner-2", "type": "agent"},
 			"ttl_sec": 1800,
 		},
@@ -795,7 +795,7 @@ func TestStreamableHTTPRoundTrip(t *testing.T) {
 	// body must arrive VERBATIM as the isError text (the recovery instruction).
 	res, err = c.CallTool(ctx, mcpgo.CallToolRequest{Params: mcpgo.CallToolParams{
 		Name:      "claim_task",
-		Arguments: map[string]any{"id": "HOLDING"},
+		Arguments: map[string]any{"id": "01C3D4E5F6A7B8C9D0E1F2A3B4"},
 	}})
 	if err != nil {
 		t.Fatalf("tools/call claim_task (conflict): %v", err)
@@ -885,7 +885,7 @@ func TestCreateProjectRoundTrip(t *testing.T) {
 		t.Fatalf("create_project returned isError: %s", firstText(t, res))
 	}
 	row := asMap(t, firstText(t, res))
-	if row["id"] != "PNEW" || row["name"] != "Website Redesign" || row["description"] != "MVP landing page work" {
+	if row["id"] != "01C7D8E9F0A1B2C3D4E5F6A7B8" || row["name"] != "Website Redesign" || row["description"] != "MVP landing page work" {
 		t.Errorf("create_project result = %s", firstText(t, res))
 	}
 
@@ -907,22 +907,22 @@ func TestGetProjectRoundTrip(t *testing.T) {
 	c := dial(t, startMCPStack(t, upstream.URL).URL, ctx)
 	defer func() { _ = c.Close() }()
 
-	res := callTool(t, c, ctx, "get_project", map[string]any{"id": "P1"})
+	res := callTool(t, c, ctx, "get_project", map[string]any{"id": "01C2D3E4F5A6B7C8D9E0F1A2B3"})
 	if res.IsError {
 		t.Fatalf("get_project returned isError: %s", firstText(t, res))
 	}
 	row := asMap(t, firstText(t, res))
-	if row["id"] != "P1" || row["name"] != "Website Redesign" || row["description"] != "MVP landing page work" {
+	if row["id"] != "01C2D3E4F5A6B7C8D9E0F1A2B3" || row["name"] != "Website Redesign" || row["description"] != "MVP landing page work" {
 		t.Errorf("get_project result = %s", firstText(t, res))
 	}
-	findCall(t, *calls, http.MethodGet, "/api/v1/projects/P1") // routing; record() enforces Bearer auth
+	findCall(t, *calls, http.MethodGet, "/api/v1/projects/01C2D3E4F5A6B7C8D9E0F1A2B3") // routing; record() enforces Bearer auth
 
 	// Unknown id → the 404 body arrives verbatim (its message IS the recovery hint).
-	res = callTool(t, c, ctx, "get_project", map[string]any{"id": "NOPE"})
+	res = callTool(t, c, ctx, "get_project", map[string]any{"id": "01E9F0A1B2C3D4E5F6A7B8C9D0"})
 	if !res.IsError {
 		t.Fatalf("get_project (unknown id) expected isError, got: %s", firstText(t, res))
 	}
-	want404 := `{"error":"not_found","resource":"project","id":"NOPE","message":"unknown project"}`
+	want404 := `{"error":"not_found","resource":"project","id":"01E9F0A1B2C3D4E5F6A7B8C9D0","message":"unknown project"}`
 	if text := firstText(t, res); text != want404 {
 		t.Errorf("404 body not verbatim:\n got  %s\n want %s", text, want404)
 	}
@@ -952,7 +952,7 @@ func TestUpdateProjectRoundTrip(t *testing.T) {
 	// Full: rename + description replace in one call.
 	res := callTool(t, c, ctx, "update_project", map[string]any{
 		"actor":       map[string]any{"name": "ada", "type": "human"},
-		"id":          "P1",
+		"id":          "01C2D3E4F5A6B7C8D9E0F1A2B3",
 		"name":        "Website Redesign v2",
 		"description": "MVP landing page, second pass",
 	})
@@ -960,11 +960,11 @@ func TestUpdateProjectRoundTrip(t *testing.T) {
 		t.Fatalf("update_project returned isError: %s", firstText(t, res))
 	}
 	row := asMap(t, firstText(t, res))
-	if row["id"] != "P1" || row["name"] != "Website Redesign v2" || row["description"] != "MVP landing page, second pass" {
+	if row["id"] != "01C2D3E4F5A6B7C8D9E0F1A2B3" || row["name"] != "Website Redesign v2" || row["description"] != "MVP landing page, second pass" {
 		t.Errorf("update_project result = %s", firstText(t, res))
 	}
 
-	cc := findCall(t, *calls, http.MethodPut, "/api/v1/projects/P1")
+	cc := findCall(t, *calls, http.MethodPut, "/api/v1/projects/01C2D3E4F5A6B7C8D9E0F1A2B3")
 	var sent apiclient.UpdateProjectRequest
 	if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 		t.Fatalf("update_project upstream body not JSON: %v (%s)", err, cc.body)
@@ -982,15 +982,15 @@ func TestUpdateProjectRoundTrip(t *testing.T) {
 	// Partial: an EXPLICIT empty description is a valid clear — presence on the
 	// wire is the signal. The omitted name must stay nil (absent from the body).
 	res = callTool(t, c, ctx, "update_project", map[string]any{
-		"id":          "P1",
+		"id":          "01C2D3E4F5A6B7C8D9E0F1A2B3",
 		"description": "",
 	})
 	if res.IsError {
 		t.Fatalf("update_project (clear description) returned isError: %s", firstText(t, res))
 	}
 	cc = (*calls)[len(*calls)-1] // the LAST upstream call (same route as the full update)
-	if cc.method != http.MethodPut || cc.path != "/api/v1/projects/P1" {
-		t.Fatalf("last upstream call = %s %s, want PUT /api/v1/projects/P1", cc.method, cc.path)
+	if cc.method != http.MethodPut || cc.path != "/api/v1/projects/01C2D3E4F5A6B7C8D9E0F1A2B3" {
+		t.Fatalf("last upstream call = %s %s, want PUT /api/v1/projects/01C2D3E4F5A6B7C8D9E0F1A2B3", cc.method, cc.path)
 	}
 	var partial apiclient.UpdateProjectRequest
 	if err := json.Unmarshal([]byte(cc.body), &partial); err != nil {
@@ -1004,7 +1004,7 @@ func TestUpdateProjectRoundTrip(t *testing.T) {
 	}
 
 	// A no-field update → rejected locally, no round-trip (the API 400s it).
-	res = callTool(t, c, ctx, "update_project", map[string]any{"id": "P1"})
+	res = callTool(t, c, ctx, "update_project", map[string]any{"id": "01C2D3E4F5A6B7C8D9E0F1A2B3"})
 	if !res.IsError {
 		t.Fatalf("update_project (no fields) expected isError, got: %s", firstText(t, res))
 	}
@@ -1013,7 +1013,7 @@ func TestUpdateProjectRoundTrip(t *testing.T) {
 	}
 
 	// A whitespace name → same local rejection the API's 400 would be.
-	res = callTool(t, c, ctx, "update_project", map[string]any{"id": "P1", "name": "   "})
+	res = callTool(t, c, ctx, "update_project", map[string]any{"id": "01C2D3E4F5A6B7C8D9E0F1A2B3", "name": "   "})
 	if !res.IsError {
 		t.Fatalf("update_project (empty name) expected isError, got: %s", firstText(t, res))
 	}
@@ -1044,7 +1044,7 @@ func TestListTasksFilterPassthrough(t *testing.T) {
 
 	// Every optional filter at once: the mock must see exactly these params.
 	res := callTool(t, c, ctx, "list_tasks", map[string]any{
-		"project_id":       "P1",
+		"project_id":       "01C2D3E4F5A6B7C8D9E0F1A2B3",
 		"status":           "todo",
 		"assignee_name":    "ada",
 		"assignee_type":    "agent",
@@ -1075,7 +1075,7 @@ func TestListTasksFilterPassthrough(t *testing.T) {
 
 	cc := findCall(t, *calls, http.MethodGet, "/api/v1/tasks")
 	wantQ := url.Values{
-		"project_id":     {"P1"},
+		"project_id":     {"01C2D3E4F5A6B7C8D9E0F1A2B3"},
 		"status":         {"todo"},
 		"assignee_name":  {"ada"},
 		"assignee_type":  {"agent"},
@@ -1110,8 +1110,8 @@ func TestListTasks_ClaimAndParentFilterPassthrough(t *testing.T) {
 	// The epic pair: parent_id + claimed/claimed_by + the expired_claim tri-state.
 	// A "false" must still be transmitted — presence is the tri-state signal.
 	res := callTool(t, c, ctx, "list_tasks", map[string]any{
-		"project_id":    "P1",
-		"parent_id":     "PEP",
+		"project_id":    "01C2D3E4F5A6B7C8D9E0F1A2B3",
+		"parent_id":     "01D8E9F0A1B2C3D4E5F6A7B8C9",
 		"claimed":       true,
 		"claimed_by":    "agent-a",
 		"expired_claim": false,
@@ -1121,8 +1121,8 @@ func TestListTasks_ClaimAndParentFilterPassthrough(t *testing.T) {
 	}
 	cc := findCall(t, *calls, http.MethodGet, "/api/v1/tasks")
 	wantQ := url.Values{
-		"project_id":    {"P1"},
-		"parent_id":     {"PEP"},
+		"project_id":    {"01C2D3E4F5A6B7C8D9E0F1A2B3"},
+		"parent_id":     {"01D8E9F0A1B2C3D4E5F6A7B8C9"},
 		"claimed":       {"true"},
 		"claimed_by":    {"agent-a"},
 		"expired_claim": {"false"},
@@ -1142,7 +1142,7 @@ func TestListTasks_OmittedTriStateSendsNothing(t *testing.T) {
 
 	// Omitted tri-state params send nothing — the REST layer must see them as
 	// unset (nil), not as "false".
-	res := callTool(t, c, ctx, "list_tasks", map[string]any{"project_id": "P1"})
+	res := callTool(t, c, ctx, "list_tasks", map[string]any{"project_id": "01C2D3E4F5A6B7C8D9E0F1A2B3"})
 	if res.IsError {
 		t.Fatalf("list_tasks returned isError: %s", firstText(t, res))
 	}
@@ -1152,8 +1152,8 @@ func TestListTasks_OmittedTriStateSendsNothing(t *testing.T) {
 			t.Errorf("query %s = %q after plain list_tasks, want key absent", k, v)
 		}
 	}
-	if cc.query.Get("project_id") != "P1" {
-		t.Errorf("query project_id = %q, want P1 (all: %s)", cc.query.Get("project_id"), cc.query.Encode())
+	if cc.query.Get("project_id") != "01C2D3E4F5A6B7C8D9E0F1A2B3" {
+		t.Errorf("query project_id = %q, want 01C2D3E4F5A6B7C8D9E0F1A2B3 (all: %s)", cc.query.Get("project_id"), cc.query.Encode())
 	}
 }
 
@@ -1169,7 +1169,7 @@ func TestProjectReportRoundTrip(t *testing.T) {
 	defer func() { _ = c.Close() }()
 
 	res := callTool(t, c, ctx, "project_report", map[string]any{
-		"project_id":      "P1",
+		"project_id":      "01C2D3E4F5A6B7C8D9E0F1A2B3",
 		"stalled_minutes": 90,
 		"since":           "2026-10-01T00:00:00Z",
 	})
@@ -1177,10 +1177,10 @@ func TestProjectReportRoundTrip(t *testing.T) {
 		t.Fatalf("project_report returned isError: %s", firstText(t, res))
 	}
 	env := asMap(t, firstText(t, res))
-	if env["project_id"] != "P1" {
-		t.Errorf("report project_id = %v, want P1 (%s)", env["project_id"], firstText(t, res))
+	if env["project_id"] != "01C2D3E4F5A6B7C8D9E0F1A2B3" {
+		t.Errorf("report project_id = %v, want 01C2D3E4F5A6B7C8D9E0F1A2B3 (%s)", env["project_id"], firstText(t, res))
 	}
-	cc := findCall(t, *calls, http.MethodGet, "/api/v1/projects/P1/report")
+	cc := findCall(t, *calls, http.MethodGet, "/api/v1/projects/01C2D3E4F5A6B7C8D9E0F1A2B3/report")
 	if got := cc.query.Get("stalled_minutes"); got != "90" {
 		t.Errorf("forwarded stalled_minutes = %q, want 90", got)
 	}
@@ -1190,15 +1190,15 @@ func TestProjectReportRoundTrip(t *testing.T) {
 
 	// Omitted tuning args (and stalled_minutes=0) send NO query params at all.
 	res = callTool(t, c, ctx, "project_report", map[string]any{
-		"project_id":      "P1",
+		"project_id":      "01C2D3E4F5A6B7C8D9E0F1A2B3",
 		"stalled_minutes": 0,
 	})
 	if res.IsError {
 		t.Fatalf("project_report (defaults) returned isError: %s", firstText(t, res))
 	}
 	last := (*calls)[len(*calls)-1] // the defaults call is the most recent upstream hit
-	if last.method != http.MethodGet || last.path != "/api/v1/projects/P1/report" {
-		t.Fatalf("defaults call upstream = %s %s, want GET /api/v1/projects/P1/report", last.method, last.path)
+	if last.method != http.MethodGet || last.path != "/api/v1/projects/01C2D3E4F5A6B7C8D9E0F1A2B3/report" {
+		t.Fatalf("defaults call upstream = %s %s, want GET /api/v1/projects/01C2D3E4F5A6B7C8D9E0F1A2B3/report", last.method, last.path)
 	}
 	if len(last.query) != 0 {
 		t.Errorf("omitted tuning args still forwarded query %s, want none (server applies its own defaults)", last.query.Encode())
@@ -1226,8 +1226,8 @@ func TestCreateTask_ParentIDPassthrough(t *testing.T) {
 	res := callTool(t, c, ctx, "create_task", map[string]any{
 		"actor":      map[string]any{"name": "eve", "type": "agent"},
 		"title":      "child of epic",
-		"project_id": "P1",
-		"parent_id":  "PEP",
+		"project_id": "01C2D3E4F5A6B7C8D9E0F1A2B3",
+		"parent_id":  "01D8E9F0A1B2C3D4E5F6A7B8C9",
 	})
 	if res.IsError {
 		t.Fatalf("create_task returned isError: %s", firstText(t, res))
@@ -1237,7 +1237,7 @@ func TestCreateTask_ParentIDPassthrough(t *testing.T) {
 	if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 		t.Fatalf("create_task upstream body not JSON: %v (%s)", err, cc.body)
 	}
-	if sent.ParentID != "PEP" {
+	if sent.ParentID != "01D8E9F0A1B2C3D4E5F6A7B8C9" {
 		t.Errorf("parent_id = %q, want PEP (body %s)", sent.ParentID, cc.body)
 	}
 }
@@ -1253,8 +1253,8 @@ func TestCreateTask_BlockedByPassthrough(t *testing.T) {
 	res := callTool(t, c, ctx, "create_task", map[string]any{
 		"actor":      map[string]any{"name": "eve", "type": "agent"},
 		"title":      "behind two blockers",
-		"project_id": "P1",
-		"blocked_by": []any{"B1", "B2"},
+		"project_id": "01C2D3E4F5A6B7C8D9E0F1A2B3",
+		"blocked_by": []any{"01F0A1B2C3D4E5F6A7B8C9D0E1", "01A1B2C3D4E5F6A7B8C9D0E1F2"},
 	})
 	if res.IsError {
 		t.Fatalf("create_task returned isError: %s", firstText(t, res))
@@ -1272,7 +1272,7 @@ func TestCreateTask_BlockedByPassthrough(t *testing.T) {
 	if err := json.Unmarshal(bb, &items); err != nil {
 		t.Fatalf("blocked_by not a string array: %v (%s)", err, bb)
 	}
-	if len(items) != 2 || items[0] != "B1" || items[1] != "B2" {
+	if len(items) != 2 || items[0] != "01F0A1B2C3D4E5F6A7B8C9D0E1" || items[1] != "01A1B2C3D4E5F6A7B8C9D0E1F2" {
 		t.Errorf("blocked_by = %v, want [B1 B2] forwarded verbatim in order (body %s)", items, cc.body)
 	}
 
@@ -1284,7 +1284,7 @@ func TestCreateTask_BlockedByPassthrough(t *testing.T) {
 	res = callTool(t, c2, ctx, "create_task", map[string]any{
 		"actor":      map[string]any{"name": "eve", "type": "agent"},
 		"title":      "plain task",
-		"project_id": "P1",
+		"project_id": "01C2D3E4F5A6B7C8D9E0F1A2B3",
 	})
 	if res.IsError {
 		t.Fatalf("create_task (no blocked_by) returned isError: %s", firstText(t, res))
@@ -1311,7 +1311,7 @@ func TestCreateTaskRoundTrip(t *testing.T) {
 		"actor":               map[string]any{"name": "eve", "type": "agent"},
 		"title":               "Fix login bug",
 		"description":         "Users cannot log in after the password reset flow.",
-		"project_id":          "P1",
+		"project_id":          "01C2D3E4F5A6B7C8D9E0F1A2B3",
 		"priority":            3,
 		"due_at":              "2026-10-01T00:00:00Z",
 		"assignee":            map[string]any{"name": "ada", "type": "human"},
@@ -1323,14 +1323,14 @@ func TestCreateTaskRoundTrip(t *testing.T) {
 	resp := asMap(t, firstText(t, res))
 	task, _ := resp["task"].(map[string]any)
 	dups, _ := resp["possible_duplicates"].([]any)
-	if task == nil || task["id"] != "TNEW" || task["version"] != float64(1) {
+	if task == nil || task["id"] != "01E3F4A5B6C7D8E9F0A1B2C3D4" || task["version"] != float64(1) {
 		t.Errorf("create_task.task = %v", resp["task"])
 	}
 	if len(dups) != 1 {
 		t.Fatalf("possible_duplicates = %v, want the advisory duplicate row", dups)
 	}
 	dup, _ := dups[0].(map[string]any)
-	if dup["id"] != "TDUP" {
+	if dup["id"] != "01F4A5B6C7D8E9F0A1B2C3D4E5" {
 		t.Errorf("possible_duplicates[0] = %v", dup)
 	}
 
@@ -1339,7 +1339,7 @@ func TestCreateTaskRoundTrip(t *testing.T) {
 	if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 		t.Fatalf("create_task upstream body not JSON: %v (%s)", err, cc.body)
 	}
-	if sent.Actor.Name != "eve" || sent.Title != "Fix login bug" || sent.ProjectID != "P1" ||
+	if sent.Actor.Name != "eve" || sent.Title != "Fix login bug" || sent.ProjectID != "01C2D3E4F5A6B7C8D9E0F1A2B3" ||
 		sent.Priority != 3 || sent.DueAt == nil || *sent.DueAt != "2026-10-01T00:00:00Z" {
 		t.Errorf("create_task upstream body = %s", cc.body)
 	}
@@ -1362,7 +1362,7 @@ func TestUpdateTaskRoundTrip(t *testing.T) {
 	// STALE version (3 vs stored 4) → isError with the 409 body VERBATIM — it
 	// carries current_version + a fresh "current" row for rebasing without re-reading.
 	res := callTool(t, c, ctx, "update_task", map[string]any{
-		"id":      "T1",
+		"id":      "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 		"actor":   map[string]any{"name": "runner-2", "type": "agent"},
 		"version": 3,
 		"status":  "done",
@@ -1376,7 +1376,7 @@ func TestUpdateTaskRoundTrip(t *testing.T) {
 
 	// FRESH version (4) → success with the bumped row.
 	res = callTool(t, c, ctx, "update_task", map[string]any{
-		"id":       "T1",
+		"id":       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 		"version":  4,
 		"title":    "Fix login bug (again)",
 		"priority": 2,
@@ -1391,12 +1391,12 @@ func TestUpdateTaskRoundTrip(t *testing.T) {
 
 	var patches []capturedCall
 	for _, cc := range *calls {
-		if cc.method == http.MethodPatch && cc.path == "/api/v1/tasks/T1" {
+		if cc.method == http.MethodPatch && cc.path == "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV" {
 			patches = append(patches, cc)
 		}
 	}
 	if len(patches) != 2 {
-		t.Fatalf("upstream saw %d PATCH /tasks/T1 calls, want 2: %+v", len(patches), patches)
+		t.Fatalf("upstream saw %d PATCH /tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV calls, want 2: %+v", len(patches), patches)
 	}
 	var stale apiclient.UpdateTaskRequest
 	if err := json.Unmarshal([]byte(patches[0].body), &stale); err != nil {
@@ -1424,7 +1424,7 @@ func TestUpdateTaskClearDueAndAssigneeRoundTrip(t *testing.T) {
 
 	// Call update_task with clear_due: true, clear_assignee: true
 	res := callTool(t, c, ctx, "update_task", map[string]any{
-		"id":             "T1",
+		"id":             "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 		"version":        4,
 		"clear_due":      true,
 		"clear_assignee": true,
@@ -1435,12 +1435,12 @@ func TestUpdateTaskClearDueAndAssigneeRoundTrip(t *testing.T) {
 
 	var patches []capturedCall
 	for _, cc := range *calls {
-		if cc.method == http.MethodPatch && cc.path == "/api/v1/tasks/T1" {
+		if cc.method == http.MethodPatch && cc.path == "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV" {
 			patches = append(patches, cc)
 		}
 	}
 	if len(patches) != 1 {
-		t.Fatalf("expected 1 PATCH /tasks/T1 call, got %d", len(patches))
+		t.Fatalf("expected 1 PATCH /tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV call, got %d", len(patches))
 	}
 	var sent apiclient.UpdateTaskRequest
 	if err := json.Unmarshal([]byte(patches[0].body), &sent); err != nil {
@@ -1458,7 +1458,7 @@ func TestUpdateTaskClearDueAndAssigneeRoundTrip(t *testing.T) {
 
 	// Verify that when clear_due and clear_assignee are omitted, they default to false
 	resDefault := callTool(t, c, ctx, "update_task", map[string]any{
-		"id":      "T1",
+		"id":      "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 		"version": 4,
 		"title":   "New Title",
 	})
@@ -1467,12 +1467,12 @@ func TestUpdateTaskClearDueAndAssigneeRoundTrip(t *testing.T) {
 	}
 	patches = nil
 	for _, cc := range *calls {
-		if cc.method == http.MethodPatch && cc.path == "/api/v1/tasks/T1" {
+		if cc.method == http.MethodPatch && cc.path == "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV" {
 			patches = append(patches, cc)
 		}
 	}
 	if len(patches) != 2 {
-		t.Fatalf("expected 2 PATCH /tasks/T1 calls, got %d", len(patches))
+		t.Fatalf("expected 2 PATCH /tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV calls, got %d", len(patches))
 	}
 	var sentDefault apiclient.UpdateTaskRequest
 	if err := json.Unmarshal([]byte(patches[1].body), &sentDefault); err != nil {
@@ -1487,7 +1487,7 @@ func TestUpdateTaskClearDueAndAssigneeRoundTrip(t *testing.T) {
 
 	// Schema validation: non-boolean passed to clear_due should return isError
 	resInvalid := callTool(t, c, ctx, "update_task", map[string]any{
-		"id":        "T1",
+		"id":        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 		"version":   4,
 		"clear_due": "not-a-bool",
 	})
@@ -1507,14 +1507,14 @@ func TestUpdateTaskArchivedCoercion(t *testing.T) {
 	t.Run("passing archived \"true\" sends Archived: &true in upstream request", func(t *testing.T) {
 		*calls = nil
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":       "T1",
+			"id":       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":  4,
 			"archived": "true",
 		})
 		if res.IsError {
 			t.Fatalf("update_task with archived: \"true\" returned isError: %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV")
 		var sent apiclient.UpdateTaskRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
@@ -1527,14 +1527,14 @@ func TestUpdateTaskArchivedCoercion(t *testing.T) {
 	t.Run("passing archived true sends Archived: &true in upstream request", func(t *testing.T) {
 		*calls = nil
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":       "T1",
+			"id":       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":  4,
 			"archived": true,
 		})
 		if res.IsError {
 			t.Fatalf("update_task with archived: true returned isError: %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV")
 		var sent apiclient.UpdateTaskRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
@@ -1547,14 +1547,14 @@ func TestUpdateTaskArchivedCoercion(t *testing.T) {
 	t.Run("passing archived \"false\" sends Archived: &false in upstream request", func(t *testing.T) {
 		*calls = nil
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":       "T1",
+			"id":       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":  4,
 			"archived": "false",
 		})
 		if res.IsError {
 			t.Fatalf("update_task with archived: \"false\" returned isError: %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV")
 		var sent apiclient.UpdateTaskRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
@@ -1567,14 +1567,14 @@ func TestUpdateTaskArchivedCoercion(t *testing.T) {
 	t.Run("passing archived false sends Archived: &false in upstream request", func(t *testing.T) {
 		*calls = nil
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":       "T1",
+			"id":       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":  4,
 			"archived": false,
 		})
 		if res.IsError {
 			t.Fatalf("update_task with archived: false returned isError: %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV")
 		var sent apiclient.UpdateTaskRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
@@ -1586,7 +1586,7 @@ func TestUpdateTaskArchivedCoercion(t *testing.T) {
 
 	t.Run("passing archived \"not-a-bool\" returns isError with validation error message", func(t *testing.T) {
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":       "T1",
+			"id":       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":  4,
 			"archived": "not-a-bool",
 		})
@@ -1601,7 +1601,7 @@ func TestUpdateTaskArchivedCoercion(t *testing.T) {
 
 	t.Run("passing invalid non-boolean type returns isError with validation error message", func(t *testing.T) {
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":       "T1",
+			"id":       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":  4,
 			"archived": 12345,
 		})
@@ -1626,14 +1626,14 @@ func TestUpdateTaskDescriptionHandling(t *testing.T) {
 	t.Run("passing description: \"\" sets Description: &\"\" in upstream PATCH request (clearing description)", func(t *testing.T) {
 		*calls = nil
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":          "T1",
+			"id":          "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":     4,
 			"description": "",
 		})
 		if res.IsError {
 			t.Fatalf("update_task with description: \"\" returned isError: %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV")
 		var sent apiclient.UpdateTaskRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
@@ -1649,14 +1649,14 @@ func TestUpdateTaskDescriptionHandling(t *testing.T) {
 	t.Run("passing description with whitespace only sets Description: &\"\" in upstream PATCH request", func(t *testing.T) {
 		*calls = nil
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":          "T1",
+			"id":          "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":     4,
 			"description": "   ",
 		})
 		if res.IsError {
 			t.Fatalf("update_task with description: \"   \" returned isError: %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV")
 		var sent apiclient.UpdateTaskRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
@@ -1672,14 +1672,14 @@ func TestUpdateTaskDescriptionHandling(t *testing.T) {
 	t.Run("omitting description leaves Description: nil in upstream PATCH request (preserving description)", func(t *testing.T) {
 		*calls = nil
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":      "T1",
+			"id":      "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version": 4,
 			"title":   "New Title",
 		})
 		if res.IsError {
 			t.Fatalf("update_task without description returned isError: %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV")
 		var sent apiclient.UpdateTaskRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
@@ -1692,14 +1692,14 @@ func TestUpdateTaskDescriptionHandling(t *testing.T) {
 	t.Run("passing description: \"new text\" sets Description: &\"new text\"", func(t *testing.T) {
 		*calls = nil
 		res := callTool(t, c, ctx, "update_task", map[string]any{
-			"id":          "T1",
+			"id":          "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"version":     4,
 			"description": "new text",
 		})
 		if res.IsError {
 			t.Fatalf("update_task with description: \"new text\" returned isError: %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1")
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV")
 		var sent apiclient.UpdateTaskRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("failed to unmarshal PATCH body: %v (%s)", err, cc.body)
@@ -1767,7 +1767,7 @@ func TestReleaseAndHeartbeatRoundTrip(t *testing.T) {
 	// release: routes to POST /tasks/{id}/release with actor+note; returns the
 	// fresh row (status → todo, lease cleared).
 	res := callTool(t, c, ctx, "release_task", map[string]any{
-		"id":    "T1",
+		"id":    "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 		"actor": map[string]any{"name": "runner-2", "type": "agent"},
 		"note":  "stalled on the DB migration",
 	})
@@ -1781,7 +1781,7 @@ func TestReleaseAndHeartbeatRoundTrip(t *testing.T) {
 	if _, hasLease := row["claimed_by"]; hasLease {
 		t.Errorf("released row still carries claimed_by: %s", firstText(t, res))
 	}
-	ccRel := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/release")
+	ccRel := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/release")
 	var rel apiclient.ReleaseTaskRequest
 	if err := json.Unmarshal([]byte(ccRel.body), &rel); err != nil {
 		t.Fatalf("release upstream body not JSON: %v (%s)", err, ccRel.body)
@@ -1793,7 +1793,7 @@ func TestReleaseAndHeartbeatRoundTrip(t *testing.T) {
 	// heartbeat: routes to POST /tasks/{id}/heartbeat with actor only; returns
 	// the fresh row that doubles as the liveness answer (version NOT bumped).
 	res = callTool(t, c, ctx, "heartbeat_task", map[string]any{
-		"id":    "T1",
+		"id":    "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 		"actor": map[string]any{"name": "runner-2", "type": "agent"},
 	})
 	if res.IsError {
@@ -1807,7 +1807,7 @@ func TestReleaseAndHeartbeatRoundTrip(t *testing.T) {
 	if row["claim_expires_at"] == nil {
 		t.Errorf("heartbeat row missing claim_expires_at: %s", firstText(t, res))
 	}
-	ccHb := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/heartbeat")
+	ccHb := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/heartbeat")
 	var hb apiclient.HeartbeatRequest
 	if err := json.Unmarshal([]byte(ccHb.body), &hb); err != nil {
 		t.Fatalf("heartbeat upstream body not JSON: %v (%s)", err, ccHb.body)
@@ -1832,7 +1832,7 @@ func TestHandoffTaskRoundTrip(t *testing.T) {
 	// Success: full handoff with kind + body + to_assignee + notes. The tool must
 	// route these into the request body and render the {task, comment} result.
 	res := callTool(t, c, ctx, "handoff_task", map[string]any{
-		"id":          "T1",
+		"id":          "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 		"kind":        "handoff",
 		"body":        "Handing off to ada; migration finished, see notes.",
 		"notes":       "Next: verify the rollback script.",
@@ -1854,7 +1854,7 @@ func TestHandoffTaskRoundTrip(t *testing.T) {
 	if comment["kind"] != "handoff" || comment["body"] != "Handing off to ada; migration finished, see notes." {
 		t.Errorf("handoff comment row = %v", comment)
 	}
-	cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/handoff")
+	cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/handoff")
 	var ho apiclient.HandoffRequest
 	if err := json.Unmarshal([]byte(cc.body), &ho); err != nil {
 		t.Fatalf("handoff upstream body not JSON: %v (%s)", err, cc.body)
@@ -1868,7 +1868,7 @@ func TestHandoffTaskRoundTrip(t *testing.T) {
 
 	// Foreign active lease: the tool must surface the 409 body byte-for-byte.
 	res = callTool(t, c, ctx, "handoff_task", map[string]any{
-		"id":    "HOLDING",
+		"id":    "01C3D4E5F6A7B8C9D0E1F2A3B4",
 		"actor": map[string]any{"name": "other-agent", "type": "agent"},
 	})
 	if !res.IsError {
@@ -1889,7 +1889,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 
 	t.Run("add_comment", func(t *testing.T) {
 		res := callTool(t, c, ctx, "add_comment", map[string]any{
-			"id":    "T1",
+			"id":    "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"actor": map[string]any{"name": "ada", "type": "human"},
 			"kind":  "question",
 			"body":  "Which migration order is correct?",
@@ -1901,7 +1901,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 		if row["id"] != "CNEW" || row["kind"] != "question" || row["body"] != "Which migration order is correct?" {
 			t.Errorf("add_comment result = %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/comments")
+		cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/comments")
 		var sent apiclient.CommentRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("add_comment upstream body not JSON: %v (%s)", err, cc.body)
@@ -1913,7 +1913,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 
 	t.Run("complete_ac", func(t *testing.T) {
 		res := callTool(t, c, ctx, "complete_ac", map[string]any{
-			"id":   "T1",
+			"id":   "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"seq":  2,
 			"done": true,
 			"note": "manual test passed",
@@ -1926,7 +1926,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 		if int(seq) != 2 || row["done"] != true || row["note"] != "manual test passed" {
 			t.Errorf("complete_ac result = %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1/acceptance-criteria/2")
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/acceptance-criteria/2")
 		var sent apiclient.ACToggleRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("complete_ac upstream body not JSON: %v (%s)", err, cc.body)
@@ -1938,7 +1938,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 
 	t.Run("complete_ac_text", func(t *testing.T) {
 		res := callTool(t, c, ctx, "complete_ac", map[string]any{
-			"id":   "T1",
+			"id":   "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"seq":  2,
 			"done": false,
 			"text": "reworded via complete_ac",
@@ -1954,7 +1954,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 
 	t.Run("add_ac", func(t *testing.T) {
 		res := callTool(t, c, ctx, "add_ac", map[string]any{
-			"id":    "T1",
+			"id":    "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"actor": map[string]any{"name": "runner-2", "type": "agent"},
 			"text":  "verify logout works",
 		})
@@ -1966,7 +1966,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 		if int(seq) != 2 || row["text"] != "verify logout works" || row["done"] != false {
 			t.Errorf("add_ac result = %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/acceptance-criteria")
+		cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/acceptance-criteria")
 		var sent apiclient.ACAddRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("add_ac upstream body not JSON: %v (%s)", err, cc.body)
@@ -1978,7 +1978,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 
 	t.Run("remove_ac", func(t *testing.T) {
 		res := callTool(t, c, ctx, "remove_ac", map[string]any{
-			"id":    "T1",
+			"id":    "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"seq":   2,
 			"actor": map[string]any{"name": "runner-2", "type": "agent"},
 		})
@@ -1986,10 +1986,10 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 			t.Fatalf("remove_ac returned isError: %s", firstText(t, res))
 		}
 		row := asMap(t, firstText(t, res))
-		if row["removed"] != true || row["task_id"] != "T1" || int(row["seq"].(float64)) != 2 {
+		if row["removed"] != true || row["task_id"] != "01ARZ3NDEKTSV4RRFFQ69G5FAV" || int(row["seq"].(float64)) != 2 {
 			t.Errorf("remove_ac result = %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodDelete, "/api/v1/tasks/T1/acceptance-criteria/2")
+		cc := findCall(t, *calls, http.MethodDelete, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/acceptance-criteria/2")
 		var sent apiclient.ACRemoveRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("remove_ac upstream body not JSON: %v (%s)", err, cc.body)
@@ -2001,7 +2001,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 
 	t.Run("edit_ac", func(t *testing.T) {
 		res := callTool(t, c, ctx, "edit_ac", map[string]any{
-			"id":    "T1",
+			"id":    "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"seq":   1,
 			"actor": map[string]any{"name": "runner-2", "type": "agent"},
 			"text":  "login works flawlessly",
@@ -2013,7 +2013,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 		if row["text"] != "login works flawlessly" || int(row["seq"].(float64)) != 1 {
 			t.Errorf("edit_ac result = %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/T1/acceptance-criteria/1")
+		cc := findCall(t, *calls, http.MethodPatch, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/acceptance-criteria/1")
 		var sent apiclient.ACEditTextRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("edit_ac upstream body not JSON: %v (%s)", err, cc.body)
@@ -2025,7 +2025,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 
 	t.Run("attach_artifact", func(t *testing.T) {
 		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
-			"id":      "T1",
+			"id":      "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"actor":   map[string]any{"name": "runner-2", "type": "agent"},
 			"kind":    "url",
 			"ref":     "https://example.com/reports/deploy.json",
@@ -2039,7 +2039,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 			row["ref"] != "https://example.com/reports/deploy.json" || row["summary"] != "deploy report for the fix" {
 			t.Errorf("attach_artifact result = %s", firstText(t, res))
 		}
-		cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/artifacts")
+		cc := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/artifacts")
 		var sent apiclient.ArtifactRequest
 		if err := json.Unmarshal([]byte(cc.body), &sent); err != nil {
 			t.Fatalf("attach_artifact upstream body not JSON: %v (%s)", err, cc.body)
@@ -2052,7 +2052,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 	t.Run("attach_artifact_base64", func(t *testing.T) {
 		payload := base64.StdEncoding.EncodeToString([]byte("fake-image-bytes"))
 		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
-			"id":          "T1",
+			"id":          "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"actor":       map[string]any{"name": "runner-2", "type": "agent"},
 			"kind":        "screenshot",
 			"ref":         "evidence.png",
@@ -2078,7 +2078,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 		_ = tmpFile.Close()
 
 		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
-			"id":      "T1",
+			"id":      "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"actor":   map[string]any{"name": "runner-2", "type": "agent"},
 			"kind":    "screenshot",
 			"ref":     tmpFile.Name(),
@@ -2097,7 +2097,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 	t.Run("attach_artifact_base64_filename_only", func(t *testing.T) {
 		payload := base64.StdEncoding.EncodeToString([]byte("fake-video-bytes"))
 		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
-			"id":          "T1",
+			"id":          "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"actor":       map[string]any{"name": "runner-2", "type": "agent"},
 			"kind":        "other",
 			"filename":    "recording.mp4",
@@ -2116,7 +2116,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 	t.Run("attach_artifact_data_uri", func(t *testing.T) {
 		payload := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("fake-png-bytes"))
 		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
-			"id":          "T1",
+			"id":          "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"kind":        "screenshot",
 			"data_base64": payload,
 			"summary":     "data uri screenshot",
@@ -2132,7 +2132,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 
 	t.Run("attach_artifact_missing_inputs", func(t *testing.T) {
 		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
-			"id":   "T1",
+			"id":   "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"kind": "screenshot",
 		})
 		if !res.IsError {
@@ -2145,7 +2145,7 @@ func TestAddCommentCompleteACAttachArtifactRoundTrip(t *testing.T) {
 
 	t.Run("attach_artifact_unreachable_local_path", func(t *testing.T) {
 		res := callTool(t, c, ctx, "attach_artifact", map[string]any{
-			"id":   "T1",
+			"id":   "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			"kind": "screenshot",
 			"ref":  "/path/does/not/exist/screenshot.png",
 		})
@@ -2169,31 +2169,31 @@ func TestRelateTasksAddRemoveRoundTrip(t *testing.T) {
 	// ADD (action defaults to "add"): routes POST /tasks/{id}/relations with
 	// other_id+kind; returns the stored edge row.
 	res := callTool(t, c, ctx, "relate_tasks", map[string]any{
-		"id":       "T1",
-		"other_id": "T2",
+		"id":       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		"other_id": "01B2C3D4E5F6A7B8C9D0E1F2A3",
 		"kind":     "blocked-by",
 	})
 	if res.IsError {
 		t.Fatalf("relate_tasks(add) returned isError: %s", firstText(t, res))
 	}
 	row := asMap(t, firstText(t, res))
-	if row["task_id"] != "T1" || row["other_task_id"] != "T2" || row["kind"] != "blocked-by" {
+	if row["task_id"] != "01ARZ3NDEKTSV4RRFFQ69G5FAV" || row["other_task_id"] != "01B2C3D4E5F6A7B8C9D0E1F2A3" || row["kind"] != "blocked-by" {
 		t.Errorf("relate_tasks(add) result = %s", firstText(t, res))
 	}
-	ccAdd := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/T1/relations")
+	ccAdd := findCall(t, *calls, http.MethodPost, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/relations")
 	var add apiclient.RelationRequest
 	if err := json.Unmarshal([]byte(ccAdd.body), &add); err != nil {
 		t.Fatalf("relate_tasks(add) upstream body not JSON: %v (%s)", err, ccAdd.body)
 	}
-	if add.OtherID != "T2" || add.Kind != "blocked-by" {
+	if add.OtherID != "01B2C3D4E5F6A7B8C9D0E1F2A3" || add.Kind != "blocked-by" {
 		t.Errorf("relate_tasks(add) upstream body = %s", ccAdd.body)
 	}
 
 	// REMOVE: routes DELETE /tasks/{id}/relations/{other_id}/{kind}; the 204
 	// No-Content answer becomes a compact removed:true confirmation.
 	res = callTool(t, c, ctx, "relate_tasks", map[string]any{
-		"id":       "T1",
-		"other_id": "T2",
+		"id":       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		"other_id": "01B2C3D4E5F6A7B8C9D0E1F2A3",
 		"kind":     "blocked-by",
 		"action":   "remove",
 	})
@@ -2201,10 +2201,10 @@ func TestRelateTasksAddRemoveRoundTrip(t *testing.T) {
 		t.Fatalf("relate_tasks(remove) returned isError: %s", firstText(t, res))
 	}
 	rem := asMap(t, firstText(t, res))
-	if rem["removed"] != true || rem["task_id"] != "T1" || rem["other_task_id"] != "T2" || rem["kind"] != "blocked-by" {
+	if rem["removed"] != true || rem["task_id"] != "01ARZ3NDEKTSV4RRFFQ69G5FAV" || rem["other_task_id"] != "01B2C3D4E5F6A7B8C9D0E1F2A3" || rem["kind"] != "blocked-by" {
 		t.Errorf("relate_tasks(remove) result = %s", firstText(t, res))
 	}
-	ccDel := findCall(t, *calls, http.MethodDelete, "/api/v1/tasks/T1/relations/T2/blocked-by")
+	ccDel := findCall(t, *calls, http.MethodDelete, "/api/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV/relations/01B2C3D4E5F6A7B8C9D0E1F2A3/blocked-by")
 	var del apiclient.UnrelateTaskRequest
 	if err := json.Unmarshal([]byte(ccDel.body), &del); err != nil {
 		t.Fatalf("relate_tasks(remove) upstream body not JSON: %v (%s)", err, ccDel.body)
@@ -2215,8 +2215,8 @@ func TestRelateTasksAddRemoveRoundTrip(t *testing.T) {
 
 	// A second, different parent → isError with the 409 body VERBATIM.
 	res = callTool(t, c, ctx, "relate_tasks", map[string]any{
-		"id":       "TPARENT",
-		"other_id": "TOTHER2",
+		"id":       "01F6A7B8C9D0E1F2A3B4C5D6E7",
+		"other_id": "01F7B8C9D0E1F2A3B4C5D6E7A8",
 		"kind":     "parent",
 	})
 	if !res.IsError {
@@ -2359,7 +2359,7 @@ func TestMCPServerNameAndActorFallback(t *testing.T) {
 
 	// Assert actor fallback uses RAVN_AGENT_NAME
 	res := callTool(t, c, ctx, "claim_task", map[string]any{
-		"id": "T1",
+		"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 	})
 	if res.IsError {
 		t.Fatalf("claim_task returned error: %s", firstText(t, res))
@@ -2469,10 +2469,10 @@ func TestNumericParamSchemasAreIntegerWithBounds(t *testing.T) {
 	if res := callTool(t, c, ctx, "list_tasks", map[string]any{"priority": 2.5}); !res.IsError {
 		t.Errorf("list_tasks priority=2.5: want schema-validation error, got success: %s", firstText(t, res))
 	}
-	if res := callTool(t, c, ctx, "claim_task", map[string]any{"id": "T1", "ttl_sec": -5}); !res.IsError {
+	if res := callTool(t, c, ctx, "claim_task", map[string]any{"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "ttl_sec": -5}); !res.IsError {
 		t.Errorf("claim_task ttl_sec=-5: want schema-validation error, got success: %s", firstText(t, res))
 	}
-	if res := callTool(t, c, ctx, "update_task", map[string]any{"id": "T1", "version": 0.5}); !res.IsError {
+	if res := callTool(t, c, ctx, "update_task", map[string]any{"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "version": 0.5}); !res.IsError {
 		t.Errorf("update_task version=0.5: want schema-validation error, got success: %s", firstText(t, res))
 	}
 }

@@ -55,16 +55,36 @@ func (a *App) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Boundary format checks on every ID field BEFORE the use case — malformed
+	// ids (including oversized ones) 400 here and never reach storage.
+	projectID, err := domain.ParseID(req.ProjectID)
+	if err != nil {
+		writeAppError(w, err, "task", "")
+		return
+	}
+	var parentID domain.ID // "" = no parent edge
+	if p := strings.TrimSpace(req.ParentID); p != "" {
+		parentID, err = domain.ParseID(p)
+		if err != nil {
+			writeAppError(w, err, "task", "")
+			return
+		}
+	}
 	in := application.TaskInput{
 		Title:       req.Title,
 		Description: req.Description,
-		ProjectID:   domain.ID(req.ProjectID),
+		ProjectID:   projectID,
 		Priority:    domain.Priority(req.Priority),
 		ACs:         req.AcceptanceCriteria,
-		ParentID:    domain.ID(strings.TrimSpace(req.ParentID)), // "" = no parent edge
+		ParentID:    parentID,
 	}
 	for _, b := range req.BlockedBy {
-		in.BlockedBy = append(in.BlockedBy, domain.ID(strings.TrimSpace(b))) // whitespace-only → rejected upstream (invalid input)
+		bid, err := domain.ParseID(strings.TrimSpace(b)) // blank/malformed entry → 400 here (was rejected upstream)
+		if err != nil {
+			writeAppError(w, err, "task", "")
+			return
+		}
+		in.BlockedBy = append(in.BlockedBy, bid)
 	}
 	if req.DueAt != nil {
 		t, err := parseTimeParam(*req.DueAt, "due_at")

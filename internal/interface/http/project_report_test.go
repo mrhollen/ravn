@@ -217,7 +217,7 @@ func TestProjectReport_EndToEnd(t *testing.T) {
 	}
 
 	// --- error envelopes ------------------------------------------------------------------
-	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects/0734567890abcdefghij00000000/report", nil)
+	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects/01A2B3C4D5E6F7G8H9J0K1M2N3/report", nil)
 	if code != http.StatusNotFound {
 		t.Fatalf("report for unknown project = %d, want 404 (body %s)", code, string(body))
 	}

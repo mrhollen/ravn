@@ -148,9 +148,28 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any) (hasBody 
 	return true, true
 }
 
+// parseBoundaryID validates a non-empty ID-shaped boundary value (path
+// segment, query param, body field) with the domain format check BEFORE it can
+// reach a use case or storage. Malformed values get a 400 invalid_input whose
+// message is domain.ParseID's verbatim; call sites keep their own "missing"
+// handling for empty values (their messages name the specific parameter).
+func parseBoundaryID(w http.ResponseWriter, raw string) (domain.ID, bool) {
+	id, err := domain.ParseID(raw)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, map[string]any{
+			"error":   ErrCodeInvalidInput,
+			"message": err.Error(),
+		})
+		return "", false
+	}
+	return id, true
+}
+
 // pathID extracts and validates the {id} path parameter. ULIDs are plain
-// strings on the wire; a missing id is malformed input (400), while any other
-// value is passed through to the use case, which answers 404 when unknown.
+// strings on the wire; a missing id is malformed input (400), as is one that
+// fails the domain format check (boundary validation — never forwarded to
+// storage), while any other unknown-but-well-formed value reaches the use
+// case, which answers 404 when unknown.
 func pathID(w http.ResponseWriter, r *http.Request) (domain.ID, bool) {
 	id := domain.ID(r.PathValue("id"))
 	if id.IsZero() {
@@ -160,7 +179,7 @@ func pathID(w http.ResponseWriter, r *http.Request) (domain.ID, bool) {
 		})
 		return "", false
 	}
-	return id, true
+	return parseBoundaryID(w, string(id))
 }
 
 // --- list_tasks query parameters --------------------------------------------------
@@ -230,7 +249,11 @@ func parseTaskFilter(q urlValues) (application.TaskFilter, error) {
 	f := application.TaskFilter{}
 
 	if v := q.Get("project_id"); v != "" {
-		f.ProjectID = domain.ID(v)
+		pid, err := domain.ParseID(v) // boundary format check before the use case
+		if err != nil {
+			return f, err
+		}
+		f.ProjectID = pid
 	}
 	if v := q.Get("status"); v != "" {
 		st := domain.Status(v)
@@ -258,7 +281,11 @@ func parseTaskFilter(q urlValues) (application.TaskFilter, error) {
 
 	var err error
 	if v := q.Get("parent_id"); v != "" { // children of one task (stored 'child' edge)
-		f.ParentID = domain.ID(v)
+		pid, perr := domain.ParseID(v) // boundary format check before the use case
+		if perr != nil {
+			return f, perr
+		}
+		f.ParentID = pid
 	}
 	if f.Claimed, err = parseTristateBool(q, "claimed"); err != nil {
 		return f, err

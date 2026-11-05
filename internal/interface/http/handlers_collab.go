@@ -913,12 +913,15 @@ func (a *App) handleAddRelation(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	otherID := domain.ID(req.OtherID)
-	if otherID.IsZero() {
+	if req.OtherID == "" {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
 			"error":   ErrCodeInvalidInput,
 			"message": "other_id is required: the task this edge points at",
 		})
+		return
+	}
+	otherID, ok := parseBoundaryID(w, req.OtherID) // boundary format check before the use case
+	if !ok {
 		return
 	}
 	kind := domain.RelationKind(req.Kind)
@@ -948,12 +951,15 @@ func (a *App) handleRemoveRelation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	otherID := domain.ID(r.PathValue("other_id"))
-	if otherID.IsZero() {
+	if r.PathValue("other_id") == "" {
 		writeJSONError(w, http.StatusBadRequest, map[string]any{
 			"error":   ErrCodeInvalidInput,
 			"message": "missing path other_id",
 		})
+		return
+	}
+	otherID, ok := parseBoundaryID(w, r.PathValue("other_id")) // boundary format check before the use case
+	if !ok {
 		return
 	}
 	kind := domain.RelationKind(r.PathValue("kind"))

@@ -32,7 +32,10 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	id := domain.ID(raw)
+	id, ok := parseBoundaryID(w, raw) // boundary format check before the broker/DB read
+	if !ok {
+		return
+	}
 	a.streamEvents(w, r, id)
 }
 
@@ -149,7 +152,7 @@ func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID dom
 	}
 	var replayed map[domain.ID]struct{} // ids already emitted to this client (replay window)
 	if rawCursor != "" {
-		if !isULID(rawCursor) {
+		if !domain.ID(rawCursor).Valid() {
 			slog.Warn("sse: ignoring invalid Last-Event-ID; serving live-only",
 				"value", rawCursor, "project", projectID.String())
 		} else if a.Events == nil {
@@ -214,28 +217,4 @@ func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID dom
 			}
 		}
 	}
-}
-
-// isULID reports whether s is syntactically a 26-character Crockford-base32
-// ULID — the id scheme ravn mints (see infrastructure/idgen). Case-
-// insensitive so a client that lowercased its cursor still round-trips.
-// Deliberately stdlib-only: the http adapter must not import the idgen
-// package, and an invalid cursor degrades to live-only rather than failing.
-func isULID(s string) bool {
-	if len(s) != 26 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'a' && c <= 'z' {
-			c -= 'a' - 'A' // compare case-insensitively (Crockford is uppercase)
-		}
-		switch {
-		case c >= '0' && c <= '9':
-		case (c >= 'A' && c <= 'Z') && c != 'I' && c != 'L' && c != 'O' && c != 'U':
-		default:
-			return false
-		}
-	}
-	return true
 }

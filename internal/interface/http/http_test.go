@@ -299,7 +299,7 @@ func TestProjectsLifecycleAndCounts(t *testing.T) {
 		t.Fatalf("GET /projects/%s = %+v, want Alpha with seeded description", p1.ID, got)
 	}
 
-	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects/0734567890abcdefghij00000000", nil)
+	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects/01A2B3C4D5E6F7G8H9J0K1M2N3", nil)
 	if code != http.StatusNotFound {
 		t.Fatalf("GET unknown project = %d, want 404 (body %s)", code, string(body))
 	}
@@ -654,7 +654,7 @@ func TestTaskPatchVersionSemantics(t *testing.T) {
 	}
 
 	// Unknown task id → 404 with the resource named.
-	code, body = doReq(t, stk.Handler, "GET", "/api/v1/tasks/0734567890abcdefghij00000000", nil)
+	code, body = doReq(t, stk.Handler, "GET", "/api/v1/tasks/01A2B3C4D5E6F7G8H9J0K1M2N3", nil)
 	if code != http.StatusNotFound {
 		t.Fatalf("GET unknown task = %d, want 404 (body %s)", code, string(body))
 	}
@@ -693,7 +693,7 @@ func TestErrorMappingBasics(t *testing.T) {
 		t.Fatalf("POST /tasks with blank title = %d, want 400", code)
 	}
 	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks", map[string]any{
-		"actor": actor("eve"), "title": "orphan", "project_id": "0734567890abcdefghij00000000",
+		"actor": actor("eve"), "title": "orphan", "project_id": "01A2B3C4D5E6F7G8H9J0K1M2N3",
 	})
 	if code != http.StatusBadRequest {
 		t.Fatalf("POST /tasks for unknown project = %d, want 400", code)
@@ -842,7 +842,7 @@ func TestClaimLifecycle(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("claim with negative ttl = %d, want 400", code)
 	}
-	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/claim", map[string]any{
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/01A2B3C4D5E6F7G8H9J0K1M2N3/claim", map[string]any{
 		"actor": actor("agent-a"),
 	})
 	if code != http.StatusNotFound {
@@ -1168,13 +1168,13 @@ func TestCommentsAddListAndErrors(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("bad comment kind = %d, want 400", code)
 	}
-	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/comments", map[string]any{
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/01A2B3C4D5E6F7G8H9J0K1M2N3/comments", map[string]any{
 		"actor": actor("ada"), "kind": "note", "body": "x",
 	})
 	if code != http.StatusNotFound {
 		t.Fatalf("comment on unknown task = %d, want 404", code)
 	}
-	code, _ = doReq(t, stk.Handler, "GET", "/api/v1/tasks/0734567890abcdefghij00000000/comments", nil)
+	code, _ = doReq(t, stk.Handler, "GET", "/api/v1/tasks/01A2B3C4D5E6F7G8H9J0K1M2N3/comments", nil)
 	if code != http.StatusNotFound {
 		t.Fatalf("list comments of unknown task = %d, want 404", code)
 	}
@@ -1227,7 +1227,7 @@ func TestNotesReplaceOnWrite(t *testing.T) {
 	}
 
 	// Unknown task → 404.
-	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/tasks/0734567890abcdefghij00000000/notes", map[string]any{
+	code, body = doReq(t, stk.Handler, "PUT", "/api/v1/tasks/01A2B3C4D5E6F7G8H9J0K1M2N3/notes", map[string]any{
 		"actor": actor("ada"), "notes": "x",
 	})
 	if code != http.StatusNotFound {
@@ -1297,7 +1297,7 @@ func TestAcceptanceToggleAndErrors(t *testing.T) {
 			t.Fatalf("PATCH ac seq %q = %d, want 400", bad, code)
 		}
 	}
-	code, _ = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/0734567890abcdefghij00000000/acceptance-criteria/1", map[string]any{
+	code, _ = doReq(t, stk.Handler, "PATCH", "/api/v1/tasks/01A2B3C4D5E6F7G8H9J0K1M2N3/acceptance-criteria/1", map[string]any{
 		"actor": actor("ada"), "done": true,
 	})
 	if code != http.StatusNotFound {
@@ -1421,7 +1421,7 @@ func TestAcceptanceCriteriaEditingEndpoints(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("POST ac empty text = %d, want 400 (body %s)", code, string(body))
 	}
-	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/acceptance-criteria", map[string]any{
+	code, body = doReq(t, stk.Handler, "POST", "/api/v1/tasks/01A2B3C4D5E6F7G8H9J0K1M2N3/acceptance-criteria", map[string]any{
 		"actor": actor("ada"), "text": "x",
 	})
 	if code != http.StatusNotFound {
@@ -1589,7 +1589,7 @@ func TestArtifactAttachAndErrors(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("multiline summary artifact = %d, want 400", code)
 	}
-	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/artifacts", map[string]any{
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/01A2B3C4D5E6F7G8H9J0K1M2N3/artifacts", map[string]any{
 		"actor": actor("agent-a"), "kind": "url", "ref": "https://example.com/x",
 	})
 	if code != http.StatusNotFound {
@@ -1660,12 +1660,12 @@ func TestRelationsLifecycle(t *testing.T) {
 		t.Fatalf("invalid relation kind = %d, want 400", code)
 	}
 	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/"+child.ID+"/relations", map[string]any{
-		"actor": actor("eve"), "other_id": "0734567890abcdefghij00000000", "kind": "related",
+		"actor": actor("eve"), "other_id": "01A2B3C4D5E6F7G8H9J0K1M2N3", "kind": "related",
 	})
 	if code != http.StatusNotFound {
 		t.Fatalf("relation to unknown task = %d, want 404", code)
 	}
-	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/0734567890abcdefghij00000000/relations", map[string]any{
+	code, _ = doReq(t, stk.Handler, "POST", "/api/v1/tasks/01A2B3C4D5E6F7G8H9J0K1M2N3/relations", map[string]any{
 		"actor": actor("eve"), "other_id": child.ID, "kind": "related",
 	})
 	if code != http.StatusNotFound {
@@ -1826,7 +1826,7 @@ func TestBoardSnapshot(t *testing.T) {
 	}
 
 	// Unknown project → 404 (project checked before the task table).
-	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects/0734567890abcdefghij00000000/board", nil)
+	code, body = doReq(t, stk.Handler, "GET", "/api/v1/projects/01A2B3C4D5E6F7G8H9J0K1M2N3/board", nil)
 	if code != http.StatusNotFound {
 		t.Fatalf("GET board for unknown project = %d, want 404 (body %s)", code, string(body))
 	}

@@ -26,6 +26,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mrhollen/ravn/internal/domain"
 	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
 )
 
@@ -128,6 +129,51 @@ func fail(c Client, err error) *mcpgo.CallToolResult {
 func invalidInput(tool, arg string) *mcpgo.CallToolResult {
 	return mcpgo.NewToolResultError(fmt.Sprintf(
 		`{"error":"invalid_input","message":"%s: missing or empty required argument %q"}`, tool, arg))
+}
+
+// invalidInputDetail wraps a domain-level invalid-input error (a malformed
+// ULID is the main case) into the same local isError shape, prefixed with the
+// tool name. The detail message is domain.ParseID's verbatim — the exact text
+// ravn-server puts in its 400 body for that value, so local and upstream
+// rejections read identically to clients.
+func invalidInputDetail(tool string, err error) *mcpgo.CallToolResult {
+	return mcpgo.NewToolResultError(fmt.Sprintf(
+		`{"error":"invalid_input","message":"%s: %s"}`, tool, err.Error()))
+}
+
+// toolID decodes and format-validates a REQUIRED id-valued tool argument (task
+// or project ULID) BEFORE any upstream round-trip: absent/empty → the standard
+// missing-argument error; present but malformed → the invalid_input message
+// ravn-server would produce for that value. Both are local isError results, so
+// a malformed id never reaches storage through this adapter. The (id, nil)
+// return means "proceed with this raw string" — callers keep passing strings
+// to the REST client unchanged.
+func toolID(req mcpgo.CallToolRequest, tool, arg string) (string, *mcpgo.CallToolResult) {
+	raw := strings.TrimSpace(req.GetString(arg, ""))
+	if raw == "" {
+		return "", invalidInput(tool, arg)
+	}
+	id, err := domain.ParseID(raw)
+	if err != nil {
+		return "", invalidInputDetail(tool, err)
+	}
+	return string(id), nil
+}
+
+// optionalULID is the optional-filter twin of toolID (list_tasks' project_id /
+// parent_id, create_task's parent_id): "" passes through as "absent"; a
+// present value that fails the ULID check is rejected locally with the same
+// message ravn-server would produce.
+func optionalULID(req mcpgo.CallToolRequest, tool, arg string) (string, *mcpgo.CallToolResult) {
+	raw := strings.TrimSpace(req.GetString(arg, ""))
+	if raw == "" {
+		return "", nil
+	}
+	id, err := domain.ParseID(raw)
+	if err != nil {
+		return "", invalidInputDetail(tool, err)
+	}
+	return string(id), nil
 }
 
 // actorShapedProp builds the shared {name, type} object property used by the
@@ -302,9 +348,9 @@ func registerGetProject(s *mcpsrv.MCPServer, c Client) {
 			mcpgo.Description("Project ULID to fetch (from list_projects).")),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("get_project", "id"), nil
+		id, res := toolID(req, "get_project", "id")
+		if res != nil {
+			return res, nil
 		}
 		row, err := c.GetProject(ctx, id)
 		if err != nil {
@@ -332,9 +378,9 @@ func registerUpdateProject(s *mcpsrv.MCPServer, c Client, defaultActor apiclient
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("update_project", "id"), nil
+		id, res := toolID(req, "update_project", "id")
+		if res != nil {
+			return res, nil
 		}
 		args := req.GetArguments()
 		body := apiclient.UpdateProjectRequest{Actor: resolveActor(args, defaultActor)}
@@ -408,13 +454,21 @@ func registerListTasks(s *mcpsrv.MCPServer, c Client) {
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		args := req.GetArguments()
 		var f apiclient.TaskFilter
-		f.ProjectID = strings.TrimSpace(req.GetString("project_id", ""))
+		if pid, res := optionalULID(req, "list_tasks", "project_id"); res != nil {
+			return res, nil
+		} else {
+			f.ProjectID = pid
+		}
 		f.Status = strings.TrimSpace(req.GetString("status", ""))
 		f.AssigneeName = strings.TrimSpace(req.GetString("assignee_name", ""))
 		f.AssigneeType = strings.TrimSpace(req.GetString("assignee_type", ""))
 		f.Archived = req.GetBool("archived", false)
 		f.Unblocked = req.GetBool("unblocked", false)
-		f.ParentID = strings.TrimSpace(req.GetString("parent_id", ""))
+		if pid, res := optionalULID(req, "list_tasks", "parent_id"); res != nil {
+			return res, nil
+		} else {
+			f.ParentID = pid
+		}
 		f.ClaimedBy = strings.TrimSpace(req.GetString("claimed_by", ""))
 		// Tri-state booleans need PRESENCE detection (false is a real
 		// constraint, unlike the GetBool default), so they read args directly.
@@ -464,9 +518,9 @@ func registerGetTask(s *mcpsrv.MCPServer, c Client) {
 			mcpgo.Description("How many recent events to include (default 20, max 100; omitted = default).")),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("get_task", "id"), nil
+		id, res := toolID(req, "get_task", "id")
+		if res != nil {
+			return res, nil
 		}
 		detail, err := c.GetTask(ctx, id, req.GetInt("comment_limit", 0), req.GetInt("event_limit", 0))
 		if err != nil {
@@ -567,9 +621,9 @@ func registerProjectReport(s *mcpsrv.MCPServer, c Client) {
 			mcpgo.Description("RFC3339 timestamp: recently_completed shows tasks finished at or after it (default now-24h when omitted, e.g. 2026-10-01T00:00:00Z).")),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		projectID := strings.TrimSpace(req.GetString("project_id", ""))
-		if projectID == "" {
-			return invalidInput("project_report", "project_id"), nil
+		projectID, res := toolID(req, "project_report", "project_id")
+		if res != nil {
+			return res, nil
 		}
 		since := strings.TrimSpace(req.GetString("since", "")) // empty = server default now-24h
 		stalledMinutes := req.GetInt("stalled_minutes", 0)     // <= 0 = server default 60
@@ -609,12 +663,12 @@ func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		title := strings.TrimSpace(req.GetString("title", ""))
-		projectID := strings.TrimSpace(req.GetString("project_id", ""))
 		if title == "" {
 			return invalidInput("create_task", "title"), nil
 		}
-		if projectID == "" {
-			return invalidInput("create_task", "project_id"), nil
+		projectID, res := toolID(req, "create_task", "project_id")
+		if res != nil {
+			return res, nil
 		}
 		args := req.GetArguments()
 		body := apiclient.CreateTaskRequest{
@@ -640,14 +694,22 @@ func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 				}
 			}
 		}
-		body.ParentID = strings.TrimSpace(req.GetString("parent_id", "")) // empty = no parent edge
+		if pid, res := optionalULID(req, "create_task", "parent_id"); res != nil {
+			return res, nil
+		} else {
+			body.ParentID = pid // empty = no parent edge
+		}
 		if v, ok := args["blocked_by"]; ok {
 			if items, ok := v.([]any); ok {
-				// Forward verbatim (including blank entries) so the server's
-				// invalid-input rejection — not a silent skip — surfaces bad ids.
+				// Each entry is format-checked locally so malformed ids never
+				// reach storage — same rejection text the server would produce.
 				for _, it := range items {
 					if s, ok := it.(string); ok {
-						body.BlockedBy = append(body.BlockedBy, s)
+						id, err := domain.ParseID(strings.TrimSpace(s))
+						if err != nil {
+							return invalidInputDetail("create_task", err), nil
+						}
+						body.BlockedBy = append(body.BlockedBy, string(id))
 					}
 				}
 			}
@@ -690,9 +752,9 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("update_task", "id"), nil
+		id, res := toolID(req, "update_task", "id")
+		if res != nil {
+			return res, nil
 		}
 		version := req.GetInt("version", 0)
 		if version <= 0 {
@@ -753,9 +815,9 @@ func registerClaimTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Act
 			mcpgo.Description("Lease length in seconds (default 900 when omitted or zero; max 3600, values above are clamped server-side).")),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("claim_task", "id"), nil
+		id, res := toolID(req, "claim_task", "id")
+		if res != nil {
+			return res, nil
 		}
 		actor := resolveActor(req.GetArguments(), defaultActor)
 		row, err := c.ClaimTask(ctx, id, actor, req.GetInt("ttl_sec", 0))
@@ -777,9 +839,9 @@ func registerReleaseTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("release_task", "id"), nil
+		id, res := toolID(req, "release_task", "id")
+		if res != nil {
+			return res, nil
 		}
 		row, err := c.ReleaseTask(ctx, id, resolveActor(req.GetArguments(), defaultActor), strings.TrimSpace(req.GetString("note", "")))
 		if err != nil {
@@ -798,9 +860,9 @@ func registerHeartbeatTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("heartbeat_task", "id"), nil
+		id, res := toolID(req, "heartbeat_task", "id")
+		if res != nil {
+			return res, nil
 		}
 		row, err := c.HeartbeatTask(ctx, id, resolveActor(req.GetArguments(), defaultActor))
 		if err != nil {
@@ -828,9 +890,9 @@ func registerHandoffTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("handoff_task", "id"), nil
+		id, res := toolID(req, "handoff_task", "id")
+		if res != nil {
+			return res, nil
 		}
 		args := req.GetArguments()
 		body := apiclient.HandoffRequest{
@@ -864,11 +926,11 @@ func registerAddComment(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		body := strings.TrimSpace(req.GetString("body", ""))
-		if id == "" {
-			return invalidInput("add_comment", "id"), nil
+		id, res := toolID(req, "add_comment", "id")
+		if res != nil {
+			return res, nil
 		}
+		body := strings.TrimSpace(req.GetString("body", ""))
 		if body == "" {
 			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"add_comment: \"body\" must not be empty (markdown)"}`), nil
 		}
@@ -895,9 +957,9 @@ func registerUpdateNotes(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("update_notes", "id"), nil
+		id, res := toolID(req, "update_notes", "id")
+		if res != nil {
+			return res, nil
 		}
 		args := req.GetArguments()
 		// Presence, not non-emptiness: an intentional empty blob clears the
@@ -931,9 +993,9 @@ func registerCompleteAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("complete_ac", "id"), nil
+		id, res := toolID(req, "complete_ac", "id")
+		if res != nil {
+			return res, nil
 		}
 		seq := req.GetInt("seq", 0)
 		if seq < 1 {
@@ -967,11 +1029,11 @@ func registerAddAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) 
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		text := strings.TrimSpace(req.GetString("text", ""))
-		if id == "" {
-			return invalidInput("add_ac", "id"), nil
+		id, res := toolID(req, "add_ac", "id")
+		if res != nil {
+			return res, nil
 		}
+		text := strings.TrimSpace(req.GetString("text", ""))
 		if text == "" {
 			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"add_ac: \"text\" must not be empty"}`), nil
 		}
@@ -997,9 +1059,9 @@ func registerRemoveAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Acto
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		if id == "" {
-			return invalidInput("remove_ac", "id"), nil
+		id, res := toolID(req, "remove_ac", "id")
+		if res != nil {
+			return res, nil
 		}
 		seq := req.GetInt("seq", 0)
 		if seq < 1 {
@@ -1030,11 +1092,11 @@ func registerEditAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor)
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		text := strings.TrimSpace(req.GetString("text", ""))
-		if id == "" {
-			return invalidInput("edit_ac", "id"), nil
+		id, res := toolID(req, "edit_ac", "id")
+		if res != nil {
+			return res, nil
 		}
+		text := strings.TrimSpace(req.GetString("text", ""))
 		seq := req.GetInt("seq", 0)
 		if seq < 1 {
 			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"edit_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
@@ -1072,17 +1134,16 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
+		id, res := toolID(req, "attach_artifact", "id")
+		if res != nil {
+			return res, nil
+		}
 		ref := strings.TrimSpace(req.GetString("ref", ""))
 		dataBase64 := strings.TrimSpace(req.GetString("data_base64", ""))
 		filename := strings.TrimSpace(req.GetString("filename", ""))
 		kind := strings.TrimSpace(req.GetString("kind", ""))
 		summary := strings.TrimSpace(req.GetString("summary", ""))
 		actor := resolveActor(req.GetArguments(), defaultActor)
-
-		if id == "" {
-			return invalidInput("attach_artifact", "id"), nil
-		}
 
 		// Support data URI passed via ref if data_base64 was omitted
 		if dataBase64 == "" && strings.HasPrefix(ref, "data:") {
@@ -1192,15 +1253,15 @@ func registerRelateTasks(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 		actorProp(),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := strings.TrimSpace(req.GetString("id", ""))
-		otherID := strings.TrimSpace(req.GetString("other_id", ""))
+		id, res := toolID(req, "relate_tasks", "id")
+		if res != nil {
+			return res, nil
+		}
+		otherID, res := toolID(req, "relate_tasks", "other_id")
+		if res != nil {
+			return res, nil
+		}
 		kind := strings.TrimSpace(req.GetString("kind", ""))
-		if id == "" {
-			return invalidInput("relate_tasks", "id"), nil
-		}
-		if otherID == "" {
-			return invalidInput("relate_tasks", "other_id"), nil
-		}
 		if kind == "" {
 			return invalidInput("relate_tasks", "kind"), nil
 		}

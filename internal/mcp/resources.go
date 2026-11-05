@@ -10,6 +10,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mrhollen/ravn/internal/domain"
 	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
 )
 
@@ -47,6 +48,9 @@ func registerTaskResource(s *mcpsrv.MCPServer, c Client) {
 		}
 		if id == "" || id == "{id}" {
 			return nil, fmt.Errorf("task ID required: specify a task ULID in URI (e.g. ravn://task/<id>)")
+		}
+		if _, perr := domain.ParseID(id); perr != nil { // boundary format check before the REST round-trip
+			return nil, fmt.Errorf("task %s", perr.Error())
 		}
 
 		detail, err := c.GetTask(ctx, id, 0, 0)
@@ -108,6 +112,9 @@ func registerProjectResource(s *mcpsrv.MCPServer, c Client) {
 		}
 		if id == "" || id == "{id}" {
 			return nil, fmt.Errorf("project ID required: specify a project ULID in URI (e.g. ravn://project/<id>)")
+		}
+		if _, perr := domain.ParseID(id); perr != nil { // boundary format check before the REST round-trip
+			return nil, fmt.Errorf("project %s", perr.Error())
 		}
 
 		p, err := c.GetProject(ctx, id)
