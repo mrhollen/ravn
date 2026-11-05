@@ -113,8 +113,10 @@ func TestBroker_ProjectScopingAndFanOut(t *testing.T) {
 }
 
 func TestBroker_NonBlockingSlowClientDropped(t *testing.T) {
-	// Small buffer of size 2
-	b := NewBroker(WithBufferSize(2))
+	// Small buffer of size 2 and a tight eviction tolerance: this test exercises
+	// the EVICTION PATH (sustained saturation), so it opts into short grace
+	// instead of the production defaults (16 consecutive full publishes / 1s).
+	b := NewBroker(WithBufferSize(2), WithSlowClientTolerance(2))
 	p1 := domain.ID("P1")
 
 	// Slow client: never reads from channel
@@ -472,7 +474,9 @@ func TestBroker_SlowSubscriberDropLoggingAndMetrics(t *testing.T) {
 	var logBuf strings.Builder
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	b := NewBroker(WithBufferSize(2), WithLogger(logger))
+	// Tight tolerance: this test pins the EVICTION path (warning + metrics), not
+	// the production default of 16 consecutive full publishes before eviction.
+	b := NewBroker(WithBufferSize(2), WithSlowClientTolerance(2), WithLogger(logger))
 	p1 := domain.ID("P_SLOW_LOG")
 
 	// Slow client: never reads
@@ -541,8 +545,8 @@ func TestBroker_SlowSubscriberDropLoggingAndMetrics(t *testing.T) {
 	if !strings.Contains(logOutput, "level=WARN") {
 		t.Errorf("expected level=WARN in log output, got: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, "pubsub: slow subscriber buffer overflow, dropping subscriber") {
-		t.Errorf("expected drop message in log output, got: %s", logOutput)
+	if !strings.Contains(logOutput, "pubsub: slow subscriber buffer saturation sustained, evicting subscriber") {
+		t.Errorf("expected eviction message in log output, got: %s", logOutput)
 	}
 	if !strings.Contains(logOutput, "buffer_capacity=2") {
 		t.Errorf("expected buffer_capacity=2 in log output, got: %s", logOutput)
@@ -553,6 +557,13 @@ func TestBroker_SlowSubscriberDropLoggingAndMetrics(t *testing.T) {
 	if !strings.Contains(logOutput, "task_id=T_TASK_1") {
 		t.Errorf("expected task_id in log output, got: %s", logOutput)
 	}
+	// AC-3 detail: the warning must also carry saturation + event-drop counters.
+	if !strings.Contains(logOutput, "consecutive_full=") {
+		t.Errorf("expected consecutive_full in eviction warning, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "events_dropped=") {
+		t.Errorf("expected events_dropped in eviction warning, got: %s", logOutput)
+	}
 }
 
 func TestBroker_SlowSubscriberDropDefaultLogger(t *testing.T) {
@@ -562,8 +573,9 @@ func TestBroker_SlowSubscriberDropDefaultLogger(t *testing.T) {
 	slog.SetDefault(testLogger)
 	defer slog.SetDefault(origDefault)
 
-	// Broker constructed without WithLogger uses slog.Default()
-	b := NewBroker(WithBufferSize(2))
+	// Broker constructed without WithLogger uses slog.Default(). Tight tolerance:
+	// pins the eviction path (see TestBroker_NonBlockingSlowClientDropped).
+	b := NewBroker(WithBufferSize(2), WithSlowClientTolerance(2))
 	p := domain.ID("P_DEFAULT_LOG")
 
 	slowSub, cancel := b.Subscribe(p)
@@ -593,7 +605,293 @@ func TestBroker_SlowSubscriberDropDefaultLogger(t *testing.T) {
 		t.Errorf("DroppedCount = %d, want 1", drops)
 	}
 
-	if !strings.Contains(logBuf.String(), "pubsub: slow subscriber buffer overflow, dropping subscriber") {
-		t.Errorf("expected default logger to record drop warning, got: %s", logBuf.String())
+	if !strings.Contains(logBuf.String(), "pubsub: slow subscriber buffer saturation sustained, evicting subscriber") {
+		t.Errorf("expected default logger to record eviction warning, got: %s", logBuf.String())
+	}
+}
+
+// --- Graduated slow-client handling (bursts must not evict abruptly) -----------
+
+// soleSubscriber returns the broker's only active subscriber (whitebox test helper).
+func soleSubscriber(b *Broker) *subscriber {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for sub := range b.subscribers {
+		return sub
+	}
+	return nil
+}
+
+// drainNonBlocking reads every event currently pending on ch without ever blocking.
+func drainNonBlocking(ch <-chan domain.Event) []domain.Event {
+	var out []domain.Event
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return out
+			}
+			out = append(out, ev)
+		default:
+			return out
+		}
+	}
+}
+
+// TestBroker_GraduatedBurstHandling is the AC-2 core proof: a burst that fills a
+// subscriber's buffer does NOT close+delete it on the first full tick. The
+// subscriber is retained (with per-event drops) until saturation is sustained —
+// either the fail streak reaches the tolerance (count dimension) — at which point
+// it is evicted with a warning — and only then. No sleeps: the time dimension is
+// disabled, so every outcome is decided by event counts alone.
+func TestBroker_GraduatedBurstHandling(t *testing.T) {
+	p := domain.ID("P_GRAD")
+	cases := []struct {
+		name          string
+		bufferSize    int
+		tolerance     int
+		burst         int // events published to a never-reading subscriber
+		wantEvicted   bool
+		wantDroppedEv uint64
+	}{
+		{name: "first_full_tick_retains_subscriber", bufferSize: 4, tolerance: 16, burst: 5, wantDroppedEv: 1},
+		{name: "burst_just_within_tolerance_retains_subscriber", bufferSize: 4, tolerance: 16, burst: 19, wantDroppedEv: 15},
+		{name: "burst_reaching_tolerance_evicts_subscriber", bufferSize: 4, tolerance: 16, burst: 20, wantEvicted: true, wantDroppedEv: 16},
+		{name: "tolerance_1_restores_legacy_immediate_eviction", bufferSize: 2, tolerance: 1, burst: 3, wantEvicted: true, wantDroppedEv: 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var logBuf strings.Builder
+			logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+			b := NewBroker(WithBufferSize(tc.bufferSize), WithSlowClientTolerance(tc.tolerance),
+				WithSlowClientGrace(0), WithLogger(logger))
+
+			sub, cancel := b.Subscribe(p)
+			defer cancel()
+
+			for i := 1; i <= tc.burst; i++ {
+				b.Publish(domain.Event{
+					ID:        domain.ID(fmt.Sprintf("EV-%d", i)),
+					ProjectID: &p,
+					Kind:      domain.EventUpdated,
+					At:        time.Now().UTC(),
+				})
+			}
+
+			if got := b.DroppedEventCount(); got != tc.wantDroppedEv {
+				t.Errorf("DroppedEventCount = %d, want %d", got, tc.wantDroppedEv)
+			}
+			if evicted := b.DroppedCount() == 1; evicted != tc.wantEvicted {
+				t.Fatalf("evicted = %v, want %v", evicted, tc.wantEvicted)
+			}
+			wantSubs := 1
+			if tc.wantEvicted {
+				wantSubs = 0
+			}
+			if got := b.SubscriberCount(); got != wantSubs {
+				t.Errorf("SubscriberCount = %d, want %d", got, wantSubs)
+			}
+
+			pending := drainNonBlocking(sub)
+			if tc.wantEvicted {
+				// Channel must be closed; only what fit the buffer was delivered.
+				select {
+				case _, ok := <-sub:
+					if ok {
+						t.Errorf("expected closed channel, got an event after draining %d", len(pending))
+					}
+				case <-time.After(20 * time.Millisecond):
+					t.Error("expected closed channel, but reads still block")
+				}
+				if got := len(pending); got != tc.bufferSize {
+					t.Errorf("delivered before eviction = %d, want %d (full buffer)", got, tc.bufferSize)
+				}
+				// AC-3: the warning names the subscriber AND carries event + drop details.
+				logOut := logBuf.String()
+				if !strings.Contains(logOut, "pubsub: slow subscriber buffer saturation sustained, evicting subscriber") {
+					t.Errorf("expected eviction warning, got: %q", logOut)
+				}
+				for _, want := range []string{"subscriber_id=1", "event_id=EV-", "events_dropped=", "consecutive_full="} {
+					if !strings.Contains(logOut, want) {
+						t.Errorf("eviction warning missing %q: %q", want, logOut)
+					}
+				}
+			} else {
+				// Retained: exactly the buffered events are pending, nothing dropped-and-lost
+				// beyond that, and the channel is provably OPEN (a new publish delivers).
+				if got := len(pending); got != tc.bufferSize {
+					t.Errorf("pending = %d, want %d (full buffer, nothing evicted)", got, tc.bufferSize)
+				}
+				b.Publish(domain.Event{ID: domain.ID("EV-PROBE"), ProjectID: &p, Kind: domain.EventUpdated, At: time.Now().UTC()})
+				if len(drainNonBlocking(sub)) != 1 {
+					t.Error("probe event not delivered — channel appears closed on a retained subscriber")
+				}
+				if logOut := logBuf.String(); logOut != "" {
+					t.Errorf("no warning expected while a subscriber is merely saturated, got: %q", logOut)
+				}
+			}
+		})
+	}
+}
+
+// TestBroker_SustainedSaturationEvictsAfterGraceWindow proves the TIME dimension
+// of graduated handling: with the count tolerance effectively unreachable, a
+// subscriber whose buffer has been continuously full for longer than slowGrace is
+// evicted — even though its fail streak is tiny. The grace window is simulated by
+// rewinding the whitebox overdueSince clock, so the test needs no real sleep.
+func TestBroker_SustainedSaturationEvictsAfterGraceWindow(t *testing.T) {
+	const grace = 500 * time.Millisecond // explicit option (also exercises the positive WithSlowClientGrace branch)
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	b := NewBroker(WithBufferSize(2), WithSlowClientTolerance(1_000_000), WithSlowClientGrace(grace), WithLogger(logger))
+	p := domain.ID("P_GRACE")
+
+	sub, cancel := b.Subscribe(p)
+	defer cancel()
+	mk := func(n int) domain.Event {
+		return domain.Event{ID: domain.ID(fmt.Sprintf("G-%d", n)), ProjectID: &p, Kind: domain.EventUpdated, At: time.Now().UTC()}
+	}
+
+	b.Publish(mk(1)) // buffered
+	b.Publish(mk(2)) // buffer full
+	b.Publish(mk(3)) // fail #1 (streak 1 << tolerance); overdueSince starts now
+
+	state := soleSubscriber(b)
+	if state == nil {
+		t.Fatal("expected one active subscriber")
+	}
+	// Rewind the saturation start past the configured grace window: wall time has
+	// passed with the buffer continuously full, streak still far below tolerance.
+	state.overdueSince.Store(time.Now().Add(-2 * grace).UnixNano())
+
+	b.Publish(mk(4)) // still full; elapsed >= slowGrace => evicted via TIME dimension
+
+	if got := b.DroppedCount(); got != 1 {
+		t.Fatalf("DroppedCount = %d, want 1 (time-dimension eviction)", got)
+	}
+	if got := b.SubscriberCount(); got != 0 {
+		t.Errorf("SubscriberCount = %d, want 0", got)
+	}
+	drainNonBlocking(sub) // consume the 2 buffered events before probing for close
+	select {
+	case _, ok := <-sub:
+		if ok {
+			t.Error("expected closed channel after time-dimension eviction")
+		}
+	case <-time.After(20 * time.Millisecond):
+		t.Error("channel not closed after time-dimension eviction")
+	}
+	logOut := logBuf.String()
+	if !strings.Contains(logOut, "evicting subscriber") {
+		t.Errorf("expected eviction warning, got: %q", logOut)
+	}
+	if !strings.Contains(logOut, "consecutive_full=2") {
+		t.Errorf("warning should show the low streak (time, not count, tripped it); got: %q", logOut)
+	}
+}
+
+// TestBroker_SlowClientRecoversWhenItDrains proves the graduated design is
+// RECOVERABLE: a subscriber that falls behind during a burst but then drains
+// again has its fail streak reset — it survives what would have been eviction
+// under a non-resetting counter (tolerance here is deliberately 2). No sleeps.
+func TestBroker_SlowClientRecoversWhenItDrains(t *testing.T) {
+	b := NewBroker(WithBufferSize(2), WithSlowClientTolerance(2), WithSlowClientGrace(0))
+	p := domain.ID("P_RECOVER")
+
+	sub, cancel := b.Subscribe(p)
+	defer cancel()
+	mk := func(n string) domain.Event {
+		return domain.Event{ID: domain.ID("EV-" + n), ProjectID: &p, Kind: domain.EventUpdated, At: time.Now().UTC()}
+	}
+	readOne := func(want string) bool {
+		select {
+		case ev := <-sub:
+			if string(ev.ID) != want {
+				return false
+			}
+			return true
+		default:
+			return false
+		}
+	}
+
+	b.Publish(mk("1")) // buffered
+	b.Publish(mk("2")) // buffer full
+	b.Publish(mk("3")) // full => fail #1 (dropped; recoverable via Last-Event-ID replay)
+	if !readOne("EV-1") || !readOne("EV-2") {
+		t.Fatal("subscriber failed to drain after the hiccup")
+	}
+	b.Publish(mk("4")) // delivered => streak resets to 0
+	b.Publish(mk("5")) // buffered (room available)
+	b.Publish(mk("6")) // full => fail #1 of a FRESH streak; without the reset above this would be #2 => eviction
+	if !readOne("EV-4") || !readOne("EV-5") {
+		t.Fatal("drain failed after recovery")
+	}
+
+	if got := b.DroppedCount(); got != 0 {
+		t.Errorf("DroppedCount = %d, want 0 (recovered subscriber must not be evicted)", got)
+	}
+	if got := b.SubscriberCount(); got != 1 {
+		t.Errorf("SubscriberCount = %d, want 1", got)
+	}
+	if got := b.DroppedEventCount(); got != 2 {
+		t.Errorf("DroppedEventCount = %d, want 2 (EV-3 and EV-6 were the only drops)", got)
+	}
+	// Probe that the channel is still open and delivering.
+	b.Publish(domain.Event{ID: domain.ID("EV-PROBE"), ProjectID: &p, Kind: domain.EventUpdated, At: time.Now().UTC()})
+	if !readOne("EV-PROBE") {
+		t.Error("probe event not delivered — subscriber no longer functional")
+	}
+}
+
+// TestBroker_ConcurrentPublishGraduatedHandling is a -race smoke test for the
+// graduated path: many concurrent publishers hammer one starved (never-reading)
+// subscriber. It must be evicted exactly once — never double-evicted, never
+// re-sent to after close — and metrics must stay consistent under concurrent
+// atomic counter churn (every publisher may detect saturation on the same tick).
+func TestBroker_ConcurrentPublishGraduatedHandling(t *testing.T) {
+	b := NewBroker(WithBufferSize(8)) // production-style defaults for tolerance/grace
+	p := domain.ID("P_CHURN")
+
+	slow, cancelSlow := b.Subscribe(p)
+	defer cancelSlow()
+
+	const workers = 8
+	const perWorker = 200
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < perWorker; i++ {
+				b.Publish(domain.Event{
+					ID:        domain.ID(fmt.Sprintf("W%d-E%d", w, i)),
+					ProjectID: &p,
+					Kind:      domain.EventUpdated,
+					At:        time.Now().UTC(),
+				})
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	if got := b.DroppedCount(); got != 1 {
+		t.Errorf("DroppedCount = %d, want 1 (starved subscriber evicted exactly once)", got)
+	}
+	if got := b.SubscriberCount(); got != 0 {
+		t.Errorf("SubscriberCount = %d, want 0 (the only subscriber was evicted)", got)
+	}
+	if got := b.DroppedEventCount(); got < 16 {
+		t.Errorf("DroppedEventCount = %d, want >= 16 (buffer 8 + tolerance 16 before eviction)", got)
+	}
+	drainNonBlocking(slow) // consume the 8 buffered events before probing for close
+	select {
+	case _, ok := <-slow:
+		if ok {
+			t.Error("starved subscriber's channel should be closed")
+		}
+	case <-time.After(20 * time.Millisecond):
+		t.Error("starved subscriber's channel not closed")
 	}
 }
