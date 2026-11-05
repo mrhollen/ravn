@@ -7,7 +7,9 @@
 // ready-made use-case structs and never sees the database. Slice 3a routes
 // Projects + Task-core + the board snapshot; Comments/Artifacts/Acceptance/
 // Relations are already constructed so slice 3b only adds routes. RAVN_TOKEN
-// gates the /api/v1 routes with bearer auth when set (auth is disabled when unset). Slice 5a
+// gates the /api/v1 routes AND root /metrics with bearer auth when set (auth
+// is disabled when unset); RAVN_PUBLIC_METRICS=true opts root /metrics back out
+// of that gate for public Prometheus scraping. Slice 5a
 // serves the built web UI from RAVN_STATIC_DIR (stdlib fs, SPA fallback);
 // a missing dist degrades to the placeholder root instead of failing to boot.
 package main
@@ -26,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -60,7 +63,8 @@ func run(args []string, errW io.Writer) int {
 	var (
 		addr   = fs.String("addr", envOr("RAVN_ADDR", ":8080"), "listen address, e.g. :8080")
 		data   = fs.String("data", envOr("RAVN_DATA", "/data/ravn.db"), "path of the SQLite database file")
-		token  = fs.String("token", os.Getenv("RAVN_TOKEN"), "bearer token gating /api/v1 routes; empty disables auth (dev default)")
+		token  = fs.String("token", os.Getenv("RAVN_TOKEN"),
+			"bearer token gating /api/v1 routes and root /metrics (opt the latter back out with RAVN_PUBLIC_METRICS=true); empty disables auth (dev default)")
 		static = fs.String("static", envOr("RAVN_STATIC_DIR", "./web/dist"),
 			"directory holding the built web UI (Vite dist); placeholder root is served when it has no index.html")
 		artifacts = fs.String("artifacts-dir", envOr("RAVN_ARTIFACTS_DIR", defaultArtifactsDir()),
@@ -81,7 +85,8 @@ func run(args []string, errW io.Writer) int {
 	}))
 	slog.SetDefault(logger)
 	logger.Info("ravn-server starting",
-		"version", version, "addr", *addr, "data", *data, "token_set", *token != "", "static_dir", *static, "artifacts_dir", *artifacts, "log_level", lvl.String(), "cors_origins", *corsOrigins)
+		"version", version, "addr", *addr, "data", *data, "token_set", *token != "",
+		"public_metrics", envBool("RAVN_PUBLIC_METRICS"), "static_dir", *static, "artifacts_dir", *artifacts, "log_level", lvl.String(), "cors_origins", *corsOrigins)
 
 	if err := os.MkdirAll(*artifacts, 0o755); err != nil {
 		logger.Error("failed to create artifacts dir", "dir", *artifacts, "err", err)
@@ -189,6 +194,11 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 		broker = pubsub.NewBroker()
 	}
 
+	// RAVN_PUBLIC_METRICS=true opts root /metrics back out of the bearer gate
+	// when a token is set (Prometheus scrapers that cannot send Authorization
+	// headers). Empty/false/unset → default: gated whenever a token is set.
+	publicMetrics := envBool("RAVN_PUBLIC_METRICS")
+
 	var (
 		writerDB *sql.DB
 		readerDB *sql.DB
@@ -235,8 +245,14 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 	})
 	httpapi.RegisterRoutes(mux, app)
 
-	mux.Handle("GET /metrics", metrics.Handler())
-	mux.Handle("GET /api/v1/metrics", metrics.Handler())
+	metricsHandler := metrics.Handler()
+	// Root /metrics lives OUTSIDE the /api prefix, so AuthMiddleware never sees
+	// it: gate it explicitly with the same bearer requirement as /api/v1/metrics
+	// whenever a token is set. RAVN_PUBLIC_METRICS=true (explicit opt-in) keeps
+	// it publicly scrapable for Prometheus clients that cannot send an
+	// Authorization header; the empty-token local default stays open, as before.
+	mux.Handle("GET /metrics", gateRootMetrics(token, publicMetrics)(metricsHandler))
+	mux.Handle("GET /api/v1/metrics", metricsHandler)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		dbStatus := sqlite.HealthPool(r.Context(), pool)
@@ -379,6 +395,30 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBool reports whether the environment variable key is set to a truthy
+// boolean value (strconv.ParseBool semantics: "1", "t", "true" etc., case
+// insensitive). Unset, empty, or unparseable values yield false — fail closed.
+func envBool(key string) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	return err == nil && b
+}
+
+// gateRootMetrics returns the middleware applied to root /metrics: bearer auth
+// (the same 401 contract as AuthMiddleware) whenever a token is configured,
+// unless RAVN_PUBLIC_METRICS explicitly opted the route in for public scraping.
+// With no token it returns next untouched — the zero-config local default keeps
+// /metrics openly scrapable, preserving existing local Prometheus setups.
+func gateRootMetrics(token string, publicMetrics bool) func(http.Handler) http.Handler {
+	if token == "" || publicMetrics {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return httpapi.BearerGate(token)
 }
 
 const (

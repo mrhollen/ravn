@@ -68,6 +68,35 @@ func WithAuth(expectedToken string, handler http.Handler) http.Handler {
 	return AuthMiddleware(expectedToken)(handler)
 }
 
+// BearerGate returns middleware that requires `Authorization: Bearer <token>`
+// on EVERY request regardless of path — the route-independent counterpart of
+// AuthMiddleware, which only gates the /api prefix. It exists so non-API
+// routes (notably root GET /metrics) can carry the same bearer gate as the API
+// when a token is configured. With an empty expectedToken it returns next
+// untouched, matching the zero-config local-dev default of AuthMiddleware.
+//
+// Missing or incorrect tokens are rejected with HTTP 401 Unauthorized and the
+// exact same JSON error body as AuthMiddleware:
+//
+//	{"error":"unauthorized","message":"missing or invalid auth token"}
+func BearerGate(expectedToken string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if expectedToken == "" {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if validBearerToken(r.Header.Get("Authorization"), expectedToken) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeJSONError(w, http.StatusUnauthorized, map[string]any{
+				"error":   ErrCodeUnauthorized,
+				"message": "missing or invalid auth token",
+			})
+		})
+	}
+}
+
 func isAPIRoute(p string) bool {
 	cleaned := path.Clean(p)
 	return cleaned == "/api" || strings.HasPrefix(cleaned, "/api/")

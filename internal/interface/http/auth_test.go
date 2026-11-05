@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mrhollen/ravn/internal/application"
@@ -391,5 +392,57 @@ func TestAuthMiddleware_QueryParamToken(t *testing.T) {
 		if res.Code != http.StatusOK || !called {
 			t.Fatalf("%s %s with Bearer = %d, want 200 (called=%v)", tc.method, tc.url, res.Code, called)
 		}
+	}
+}
+
+func TestBearerGate(t *testing.T) {
+	t.Parallel()
+	const secret = "gate-secret"
+	const wantErr = `{"error":"unauthorized","message":"missing or invalid auth token"}`
+
+	tests := []struct {
+		name     string
+		path     string // path-independence is the point: non-API paths are gated too
+		token    string
+		auth     string // Authorization header; "" = absent
+		wantCode int
+		wantBody string
+	}{
+		{"empty token passes through (auth disabled)", "/metrics", "", "", http.StatusOK, "ok"},
+		{"non-api path missing header is 401", "/metrics", secret, "", http.StatusUnauthorized, wantErr},
+		{"wrong token is 401", "/metrics", secret, "Bearer nope", http.StatusUnauthorized, wantErr},
+		{"wrong scheme is 401", "/metrics", secret, "Basic abc123", http.StatusUnauthorized, wantErr},
+		{"valid bearer accepted on non-api path", "/metrics", secret, "Bearer "+secret, http.StatusOK, "ok"},
+		{"bearer scheme is case-insensitive", "/metrics", secret, "bearer "+secret, http.StatusOK, "ok"},
+		{"api path gated identically (path-independent)", "/api/v1/projects", secret, "", http.StatusUnauthorized, wantErr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			dummy := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				called = true
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("ok")) //nolint:errcheck
+			})
+			handler := BearerGate(tt.token)(dummy)
+
+			req := httptest.NewRequest("GET", "http://ravn.test"+tt.path, nil)
+			if tt.auth != "" {
+				req.Header.Set("Authorization", tt.auth)
+			}
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+
+			if res.Code != tt.wantCode {
+				t.Fatalf("status = %d, want %d (body %q)", res.Code, tt.wantCode, res.Body.String())
+			}
+			if got := strings.TrimSpace(res.Body.String()); got != tt.wantBody {
+				t.Errorf("body = %q, want %q", got, tt.wantBody)
+			}
+			if called != (tt.wantCode == http.StatusOK) {
+				t.Errorf("next handler called = %v, want %v", called, tt.wantCode == http.StatusOK)
+			}
+		})
 	}
 }

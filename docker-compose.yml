@@ -29,6 +29,7 @@ services:
       RAVN_STATIC_DIR: "/app/public" # UI is baked into the image (web-build stage)
       RAVN_ARTIFACTS_DIR: "/artifacts"
       RAVN_TOKEN: "${RAVN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
+      RAVN_PUBLIC_METRICS: "${RAVN_PUBLIC_METRICS:-}" # optional; true keeps root /metrics publicly scrapable when RAVN_TOKEN is set (see .env.example warning)
       OPENCODE_MODEL: "${OPENCODE_MODEL:-}" # optional; empty = use the OpenCode server's default model
       OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
       OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)

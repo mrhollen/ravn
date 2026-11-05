@@ -699,6 +699,108 @@ func TestMetricsEndpointInRouter(t *testing.T) {
 	}
 }
 
+// TestRootMetricsAuthPosture proves the security posture of root /metrics and
+// /api/v1/metrics across RAVN_TOKEN × RAVN_PUBLIC_METRICS combinations
+// (01M3MMY3D5SPY219CKXR14P9NC / 01M3MN0W6Z4X9E81Z6D911PAY6):
+//   - token set, no opt-in → BOTH routes require the bearer token; unauthed → 401
+//     with the exact standard unauthorized body (task statistics and request
+//     counts are never leaked to unauthenticated callers),
+//   - RAVN_PUBLIC_METRICS=true → root /metrics stays publicly scrapable
+//     (Prometheus clients without Authorization headers) while /api/v1/metrics
+//     remains gated,
+//   - empty token → both routes open (zero-config local single-tenant default).
+func TestRootMetricsAuthPosture(t *testing.T) {
+	const secret = "metrics-gate-token"
+	const wantErr = `{"error":"unauthorized","message":"missing or invalid auth token"}`
+
+	tests := []struct {
+		name           string
+		token          string
+		publicEnv      string // RAVN_PUBLIC_METRICS value; "" = explicitly cleared
+		authHeader     string // Authorization header on both requests; "" = absent
+		wantRoot       int    // expected status for GET /metrics
+		wantAPIMetrics int    // expected status for GET /api/v1/metrics
+	}{
+		{
+			name:           "token set unauthed both 401",
+			token:          secret,
+			authHeader:     "",
+			wantRoot:       http.StatusUnauthorized,
+			wantAPIMetrics: http.StatusUnauthorized,
+		},
+		{
+			name:           "token set wrong bearer both 401",
+			token:          secret,
+			authHeader:     "Bearer wrong-token",
+			wantRoot:       http.StatusUnauthorized,
+			wantAPIMetrics: http.StatusUnauthorized,
+		},
+		{
+			name:           "token set valid bearer both 200",
+			token:          secret,
+			authHeader:     "Bearer " + secret,
+			wantRoot:       http.StatusOK,
+			wantAPIMetrics: http.StatusOK,
+		},
+		{
+			name:           "public metrics opt-in opens root only",
+			token:          secret,
+			publicEnv:      "true",
+			authHeader:     "",
+			wantRoot:       http.StatusOK,
+			wantAPIMetrics: http.StatusUnauthorized,
+		},
+		{
+			name:           "explicit false is the gated default",
+			token:          secret,
+			publicEnv:      "false",
+			authHeader:     "",
+			wantRoot:       http.StatusUnauthorized,
+			wantAPIMetrics: http.StatusUnauthorized,
+		},
+		{
+			name:           "empty token both open (local default)",
+			token:          "",
+			authHeader:     "",
+			wantRoot:       http.StatusOK,
+			wantAPIMetrics: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Explicitly clear/set so host environment can never leak into the case.
+			t.Setenv("RAVN_PUBLIC_METRICS", tt.publicEnv)
+			srv := httptest.NewServer(newRouter(newTestDB(t), filepath.Join(t.TempDir(), "no-dist"), tt.token, t.TempDir()))
+			t.Cleanup(srv.Close)
+
+			for _, tc := range []struct {
+				path string
+				want int
+			}{
+				{"/metrics", tt.wantRoot},
+				{"/api/v1/metrics", tt.wantAPIMetrics},
+			} {
+				code, body := reqWithAuth(t, "GET", srv.URL+tc.path, tt.authHeader, "")
+				if code != tc.want {
+					t.Errorf("GET %s status = %d, want %d (body %s)", tc.path, code, tc.want, body)
+					continue
+				}
+				switch tc.want {
+				case http.StatusOK:
+					if !strings.Contains(body, "http_requests_total") {
+						t.Errorf("GET %s 200 body missing http_requests_total series: %s", tc.path, body)
+					}
+				case http.StatusUnauthorized:
+					if strings.TrimSpace(body) != wantErr {
+						t.Errorf("GET %s 401 body = %q, want %q", tc.path, body, wantErr)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestMetricsTaskCountsAndActiveClaims(t *testing.T) {
 	db := newTestDB(t)
 	srv := httptest.NewServer(newRouter(db, filepath.Join(t.TempDir(), "no-dist"), "", t.TempDir()))

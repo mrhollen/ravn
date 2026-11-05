@@ -20,8 +20,11 @@ this file in the same commit.
   standard `GET` routes strictly require `Authorization: Bearer <token>` and reject
   query string tokens with `401` to prevent token leakage in server access logs
   and HTTP referer headers. Absent or mismatched token → `401` (below); unset
-  token → nothing required. `/healthz`, root-level `/metrics`, and the static UI
-  are never gated.
+  token → nothing required. `/healthz` and the static UI are never gated.
+  Root `GET /metrics` is auth-gated with the same `401` contract as `/api/v1/*`
+  whenever a token is set — **unless** `RAVN_PUBLIC_METRICS=true` explicitly
+  opts it back in for public scraping (Prometheus clients that cannot send an
+  `Authorization` header); see "Observability" below.
 
 ## Actor convention
 
@@ -301,8 +304,8 @@ extras (the web frontend uses them directly).
 | Method & path | Purpose | MCP tool |
 |---|---|---|
 | `GET /healthz`                        | liveness + DB ping (unauthenticated, outside `/api/v1`) | — (container healthcheck) |
-| `GET  /metrics`                       | in-memory metrics, Prometheus text or JSON (outside `/api/v1`, never gated) | — (ops) |
-| `GET  /api/v1/metrics`                | same metrics under the API prefix (auth-gated when a token is set)          | — (ops) |
+| `GET  /metrics`                       | in-memory metrics, Prometheus text or JSON (outside `/api/v1`; bearer-gated like the API when a token is set unless `RAVN_PUBLIC_METRICS=true`) | — (ops) |
+| `GET  /api/v1/metrics`                | same metrics under the API prefix (auth-gated when a token is set; always gated, unaffected by `RAVN_PUBLIC_METRICS`)          | — (ops) |
 | `GET  /projects`                      | projects + per-status open task counts                  | `list_projects` |
 | `POST /projects`                      | create project → 201                                     | `create_project` |
 | `GET  /projects/{id}`                 | project detail (UI)                                      | — |
@@ -351,10 +354,21 @@ chosen by `?format=json|prometheus|text` or the `Accept` header; with neither,
 `/api/v1/metrics` defaults to JSON and root `/metrics` to Prometheus text
 exposition (`text/plain; version=0.0.4`).
 
-- Root `/metrics` lives outside the API prefix — never auth-gated (ops-only,
-  not part of the durable agent contract).
+- Root `/metrics` lives outside the API prefix (ops-only, not part of the
+  durable agent contract) but carries the **same `401` bearer gate as the API**
+  whenever `RAVN_TOKEN` is set — unauthenticated scrapes receive
+  `401 {"error":"unauthorized","message":"missing or invalid auth token"}`, so
+  task statistics and internal request counts are not leaked on public
+  deployments. Authenticated scrape:
+  `curl -H "Authorization: Bearer $RAVN_TOKEN" http://<host>:<port>/metrics`.
+- Set `RAVN_PUBLIC_METRICS=true` (env) to keep root `/metrics` publicly
+  scrapable even with a token set — for Prometheus clients that cannot send an
+  `Authorization` header. Default (unset/false): gated whenever a token is set.
+  When `RAVN_TOKEN` is empty, neither route requires auth (zero-config local
+  default, unchanged).
 - `GET /api/v1/metrics` is under the prefix and takes the same `401` gate as
-  everything else when a token is configured.
+  everything else when a token is configured — it stays gated even with
+  `RAVN_PUBLIC_METRICS=true` (the opt-in only affects root `/metrics`).
 
 Series: `http_requests_total`, `http_requests_in_flight`,
 `http_requests_by_status{code}`, `http_requests_by_method{method}`,
