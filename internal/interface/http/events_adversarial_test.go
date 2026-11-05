@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mrhollen/ravn/internal/domain"
+	"github.com/mrhollen/ravn/internal/infrastructure/pubsub"
 )
 
 // TestAdversarial_SSE_MassiveAbruptDisconnects tests 50 concurrent SSE clients
@@ -186,62 +188,194 @@ func TestAdversarial_SSE_RawTCPHardResetLingerZero(t *testing.T) {
 	}
 }
 
-// TestAdversarial_SSE_SlowClientChannelBufferDrop connects a client that completely
-// stops reading. Server publishes >64 events, filling the broker channel buffer.
-// Verifies that Broker.Publish drops the slow subscriber, closes the channel,
-// and the streamEvents handler terminates promptly without hanging.
+// TestAdversarial_SSE_SlowClientChannelBufferDrop covers the graduated
+// slow-client semantics (commit 0bfd7b9) at the SSE level. A burst that fills a
+// subscriber's buffer does NOT evict it; eviction happens only on SUSTAINED
+// saturation (consecutive full publishes reaching the tolerance, or the
+// wall-clock grace window elapsing — see the deterministic broker unit tests in
+// internal/infrastructure/pubsub). The legacy version of this test fired one
+// 200-event burst at a stalled real-TCP client against the production-default
+// broker (tolerance 16 / grace 1s) and asserted eviction within 2s — but kernel
+// socket buffers let streamEvents keep draining the channel, resetting the fail
+// streak, so the outcome was scheduling-dependent (the -race flake this task
+// tracks). Neither outcome is correct to assert: it was stale semantics.
+//
+// This version makes every outcome a pure function of event counts, mirroring
+// the broker unit tests' technique:
+//   - a zero-buffer net.Pipe stands in for the client socket (same scaffold as
+//     TestAdversarial_SSE_StalledClientPipeWriteDeadline): once the stalled
+//     client stops reading, AT MOST ONE frame is ever written — the handler
+//     then blocks inside that single write and can drain no further;
+//   - a broker built with deterministic knobs (WithSlowClientTolerance +
+//     WithSlowClientGrace(0) disabling the wall-clock dimension entirely) is
+//     swapped into the stack through the same post-construction Deps seam as
+//     the SSEWriteDeadline swap, before any client connects;
+//   - publish counts are exact, so under -race both paths hold for every
+//     interleaving: sustained saturation evicts exactly once (and logs the
+//     AC-3 warning), while a one-shot burst within tolerance retains the client
+//     with only bounded, replay-recoverable frame loss.
 func TestAdversarial_SSE_SlowClientChannelBufferDrop(t *testing.T) {
-	stk, broker, srv := newRealtimeStack(t)
-	proj := createProject(t, stk, "Slow Buffer Drop Project")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/projects/"+proj.ID+"/events", nil)
-	res, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("connect SSE: %v", err)
-	}
-	defer res.Body.Close()
-
-	// Verify subscriber is registered
-	deadline := time.Now().Add(1 * time.Second)
-	for time.Now().Before(deadline) {
-		if broker.SubscriberCountForProject(domain.ID(proj.ID)) == 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if count := broker.SubscriberCountForProject(domain.ID(proj.ID)); count != 1 {
-		t.Fatalf("subscriber count = %d, want 1", count)
+	cases := []struct {
+		name          string
+		bufferSize    int // subscriber channel capacity (knob)
+		tolerance     int // consecutive full publishes before eviction (count dimension)
+		burst         int // events published at the stalled client
+		writeDeadline time.Duration // injected per-write deadline (Deps.SSEWriteDeadline)
+		wantEvicted   bool
+	}{
+		// Count dimension tripped: with tolerance 1 the first sustained full
+		// publish evicts, exactly as under the pre-0bfd7b9 immediate-drop era —
+		// but now driven deterministically instead of by wall-clock luck.
+		{name: "sustained_saturation_evicts_stalled_sse_client", bufferSize: 4, tolerance: 1, burst: 6, writeDeadline: 250 * time.Millisecond, wantEvicted: true},
+		// Burst within a production-style tolerance: worst-case fail streak is
+		// burst-buffer-1 = 4 << tolerance 16, so the client must be RETAINED —
+		// AC-2's "bursts must not kill clients" pinned end-to-end. The
+		// sustained-saturation eviction path itself is owned by the broker unit
+		// tests (TestBroker_GraduatedBurstHandling et al.).
+		{name: "one_shot_burst_within_tolerance_retains_client", bufferSize: 4, tolerance: 16, burst: 9, writeDeadline: time.Second, wantEvicted: false},
 	}
 
-	// Client intentionally DOES NOT read from res.Body!
-	// Rapidly emit 200 events directly to broker to overflow default buffer (64)
-	pID := domain.ID(proj.ID)
-	for i := 0; i < 200; i++ {
-		broker.Publish(domain.Event{
-			ID:        domain.ID(fmt.Sprintf("BURST-%d", i)),
-			ProjectID: &pID,
-			Kind:      domain.EventUpdated,
-			At:        time.Now().UTC(),
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var logBuf strings.Builder
+			logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+			stk, _, _ := newRealtimeStack(t)
+			proj := createProject(t, stk, "Graduated Slow Client Project")
+
+			// Deterministic-knob broker (wall-clock dimension disabled). Same seam
+			// as the SSEWriteDeadline swap below; done before any client connects,
+			// so no request can observe the default broker.
+			broker := pubsub.NewBroker(
+				pubsub.WithBufferSize(tc.bufferSize),
+				pubsub.WithSlowClientTolerance(tc.tolerance),
+				pubsub.WithSlowClientGrace(0),
+				pubsub.WithLogger(logger),
+			)
+			stk.App.Broker = broker
+			stk.App.SSEWriteDeadline = tc.writeDeadline
+
+			serverEnd, clientEnd := net.Pipe()
+			defer serverEnd.Close()
+			defer clientEnd.Close()
+
+			lis := &oneShotPipeListener{ch: make(chan net.Conn, 1)}
+			lis.ch <- serverEnd
+			pipeSrv := &http.Server{Handler: stk.Handler}
+			go pipeSrv.Serve(lis)
+			t.Cleanup(func() { _ = pipeSrv.Close() })
+
+			pID := domain.ID(proj.ID)
+
+			// Stalled client: drive reads through ": connected", then NEVER read again.
+			if _, err := clientEnd.Write([]byte(fmt.Sprintf(
+				"GET /api/v1/projects/%s/events HTTP/1.1\r\nHost: pipe\r\nAccept: text/event-stream\r\n\r\n", proj.ID))); err != nil {
+				t.Fatalf("write request to pipe: %v", err)
+			}
+			reader := bufio.NewReader(clientEnd)
+			connected := false
+			for i := 0; i < 20 && !connected; i++ {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					t.Fatalf("read pipe response: %v", err)
+				}
+				if strings.Contains(line, ": connected") {
+					connected = true
+				}
+			}
+			if !connected {
+				t.Fatal("did not receive ': connected' over pipe")
+			}
+
+			waitForSub := func(within time.Duration, want int, what string) {
+				t.Helper()
+				deadline := time.Now().Add(within)
+				for time.Now().Before(deadline) {
+					if broker.SubscriberCountForProject(pID) == want {
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				t.Fatalf("timed out waiting for %s (count = %d)", what, broker.SubscriberCountForProject(pID))
+			}
+			waitForSub(2*time.Second, 1, "subscriber registration")
+
+			// Flood the stalled client with an exact burst. The zero-buffer pipe
+			// guarantees at most one frame ever leaves the handler (it then blocks
+			// inside that single write), so the broker's per-subscriber accounting
+			// is decided by publish counts alone — no wall clock, no socket sizing.
+			for i := 0; i < tc.burst; i++ {
+				broker.Publish(domain.Event{
+					ID:        domain.ID(fmt.Sprintf("SSE-GRAD-%d", i)),
+					ProjectID: &pID,
+					Kind:      domain.EventUpdated,
+					At:        time.Now().UTC(),
+				})
+			}
+
+			if tc.wantEvicted {
+				// Eviction happens synchronously inside Publish — no polling needed.
+				if got := broker.DroppedCount(); got != 1 {
+					t.Fatalf("DroppedCount = %d, want 1 (stalled client evicted exactly once)", got)
+				}
+				// One frame dropped per sustained full publish until eviction:
+				// exactly tolerance frames lost, all others replayable via Last-Event-ID.
+				if got := broker.DroppedEventCount(); got != uint64(tc.tolerance) {
+					t.Errorf("DroppedEventCount = %d, want %d", got, tc.tolerance)
+				}
+				logOut := logBuf.String()
+				if !strings.Contains(logOut, "evicting subscriber") {
+					t.Errorf("expected slow-client eviction warning, got: %q", logOut)
+				}
+				if !strings.Contains(logOut, "subscriber_project="+proj.ID) {
+					t.Errorf("eviction warning should name the affected project, got: %q", logOut)
+				}
+
+				// streamEvents is blocked inside its single pipe write; the injected
+				// per-write deadline pulls it out, then defer cancel() releases the
+				// subscription (no zombie goroutine). Healthy run: ~writeDeadline.
+				cleanDeadline := time.Now().Add(2 * time.Second)
+				for time.Now().Before(cleanDeadline) {
+					if broker.SubscriberCountForProject(pID) == 0 {
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				t.Fatalf("streamEvents did not terminate after eviction: subscriber still registered (count = %d)", broker.SubscriberCountForProject(pID))
+			}
+
+			// Retention path: the burst stayed within tolerance — nothing evicted,
+			// the subscription survives, and no warning was logged for a merely
+			// saturated client.
+			if got := broker.DroppedCount(); got != 0 {
+				t.Fatalf("DroppedCount = %d, want 0 (burst within tolerance must not evict)", got)
+			}
+			if got := broker.SubscriberCountForProject(pID); got != 1 {
+				t.Errorf("subscriber count = %d, want 1 after a burst within tolerance", got)
+			}
+			// Loss is bounded deterministically: the stalled pipe guarantees at most
+			// one drained frame, so drops are in [burst-buffer-1, burst-buffer].
+			minDrops := uint64(tc.burst - tc.bufferSize - 1)
+			maxDrops := uint64(tc.burst - tc.bufferSize)
+			if got := broker.DroppedEventCount(); got < minDrops || got > maxDrops {
+				t.Errorf("DroppedEventCount = %d, want in [%d, %d] (bounded, replay-recoverable loss)", got, minDrops, maxDrops)
+			}
+			if logOut := logBuf.String(); logOut != "" {
+				t.Errorf("no eviction warning expected while the client is merely saturated, got: %q", logOut)
+			}
+
+			// Cleanup: close the stalled pipe; the handler's blocked write errors and
+			// it exits via the write-error path, releasing the subscription.
+			_ = clientEnd.Close()
+			cleanDeadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(cleanDeadline) {
+				if broker.SubscriberCountForProject(pID) == 0 {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Fatalf("stalled client was not released after pipe close: subscriber still registered (count = %d)", broker.SubscriberCountForProject(pID))
 		})
-	}
-
-	// The broker should have dropped the subscriber and closed its channel.
-	// streamEvents should have read !ok and exited, running defer cancel().
-	drainDeadline := time.Now().Add(2 * time.Second)
-	cleaned := false
-	for time.Now().Before(drainDeadline) {
-		if broker.SubscriberCountForProject(domain.ID(proj.ID)) == 0 {
-			cleaned = true
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	if !cleaned {
-		t.Errorf("slow client was not dropped after buffer exhaustion: count = %d", broker.SubscriberCountForProject(domain.ID(proj.ID)))
 	}
 }
 
