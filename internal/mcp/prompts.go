@@ -456,7 +456,7 @@ func buildNextTaskText(detail *apiclient.TaskDetail, actorName string) string {
 	sb.WriteString("## Rävn Agent Workflow Playbook\n")
 	sb.WriteString(fmt.Sprintf("Execute this task following the standard Rävn workflow as agent **%q**:\n\n", actorName))
 
-	sb.WriteString(fmt.Sprintf("1. **Claim the Task** (acquire exclusive lease):\n   `claim_task(id=%q, actor={\"type\": \"agent\", \"name\": %q})`\n\n", detail.ID, actorName))
+	sb.WriteString(fmt.Sprintf("1. **Claim the Task** (acquire exclusive lease):\n   `claim_task(id=%q, actor={\"type\": \"agent\", \"name\": %q})`\n   Shipped behavior: if this task is in status `done` or archived, `claim_task` fails with 400 invalid_input — no lease is acquired and nothing is mutated. Reopen it first with `update_task(status=\"todo\")` (done→todo is the only legal exit) or unarchive it, then claim.\n\n", detail.ID, actorName))
 
 	sb.WriteString(fmt.Sprintf("2. **Inspect & Update Notes** (record initial plan & findings):\n   `update_notes(id=%q, actor={\"type\": \"agent\", \"name\": %q}, notes=\"## Plan\\n1. ...\")`\n\n", detail.ID, actorName))
 
