@@ -21,6 +21,17 @@ services:
     build:
       context: .
       target: server-runtime
+    # Restart policy (task 01M3MN04W2YMTBZR20DRQKNHQQ): survive daemon reboots and
+    # crash/healthcheck failures; `docker stop` still wins over the policy.
+    restart: unless-stopped
+    # Per-service resource caps (env-overridable via RAVN_CPUS / RAVN_MEMORY_LIMIT
+    # in .env — see docs/ARCHITECTURE.md §8 "Production tuning"). Applied per
+    # service, not to the pair as a whole.
+    deploy:
+      resources:
+        limits:
+          cpus: "${RAVN_CPUS:-2}"
+          memory: ${RAVN_MEMORY_LIMIT:-1g}
     ports:
       - "${RAVN_BIND_IP:-127.0.0.1}:${RAVN_SERVER_PORT:-3311}:8080"
     environment:
@@ -33,8 +44,10 @@ services:
       OPENCODE_MODEL: "${OPENCODE_MODEL:-}" # optional; empty = use the OpenCode server's default model
       OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
       OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)
-      OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-}" # OpenCode server base URL; empty = built-in default
-      OPENCODE_DIRECTORY: "${OPENCODE_DIRECTORY:-}"   # session working directory; empty = built-in default
+      OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-http://host.docker.internal:4444}" # OpenCode runs on the HOST; inside Docker "localhost" is the container, so default to the host-gateway name (mapped below). Non-Docker dev keeps the built-in http://localhost:4444.
+      OPENCODE_DIRECTORY: "${OPENCODE_DIRECTORY:-}"   # session working directory — when set in Docker it MUST be an absolute path that exists on the HOST running OpenCode (e.g. your ravn checkout); unset falls back to the container CWD, which is meaningless for dispatching host-side sessions
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Docker 20.10+: resolves to the host machine so the default OPENCODE_SERVER_URL above reaches a host-side OpenCode server from inside the container
     volumes:
       - "${RAVN_DATA_DIR:-ravn-data}:/data"
       - "${RAVN_ARTIFACTS_DIR:-ravn-artifacts}:/artifacts"
@@ -51,6 +64,15 @@ services:
     build:
       context: .
       target: server-runtime
+    # Restart policy (task 01M3MN04W2YMTBZR20DRQKNHQQ): same as ravn-server —
+    # survive daemon reboots and crashes; stateless, so restarts are cheap.
+    restart: unless-stopped
+    # Same env-overridable per-service caps as ravn-server (RAVN_CPUS / RAVN_MEMORY_LIMIT).
+    deploy:
+      resources:
+        limits:
+          cpus: "${RAVN_CPUS:-2}"
+          memory: ${RAVN_MEMORY_LIMIT:-1g}
     ports:
       - "${RAVN_BIND_IP:-127.0.0.1}:${RAVN_MCP_PORT:-9311}:9080"
     environment:

@@ -349,78 +349,121 @@ No separate web container, no nginx.
 
 ## 8. Docker blueprint
 
-**One `Dockerfile`, four stages (3 build + 2 runtime targets selected via `build.target`):**
+**One `Dockerfile`, four stages (3 build + 2 runtime targets selected via `build.target`). Base images are digest-pinned — the lines below match the tracked Dockerfiles exactly:**
 
 ```dockerfile
 # syntax=docker/dockerfile:1
-FROM node:22-alpine AS web-build
+# Base images pinned to immutable digests (verified resolvable against
+# registry-1.docker.io on 2026-11-08). To bump ONE image, re-resolve the tag's
+# manifest digest and edit exactly one FROM line.
+FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS web-build
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 RUN npm run build                    # vite → /web/dist
 
-FROM golang:1.26-alpine AS go-build  # CGO not installed → pure-Go builds only (as intended)
+# Go 1.25.14 >= go.mod's `go 1.25.5`; alpine has no C compiler → pure-Go builds only (as intended)
+FROM golang:1.25.14-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS go-build
 WORKDIR /src
-COPY go.mod go.sum ./
+COPY go.mod go.sum ./               # module layer cached across source edits
 RUN go mod download
-COPY . .
+COPY cmd/ ./cmd/                    # Go-ONLY context: web/ is deliberately NOT copied,
+COPY internal/ ./internal/          # so UI edits never invalidate this stage (internal/ also
+                                    # carries //go:embed migrations/*.sql)
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+ENV CGO_ENABLED=0
+RUN go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
       -o /out/ravn-server ./cmd/ravn-server && \
-    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
       -o /out/ravn-mcp     ./cmd/ravn-mcp
 
-FROM alpine:3.21 AS server-runtime   # alpine (not scratch): busybox wget for the healthcheck
-RUN adduser -D -u 10001 app
+FROM alpine:3.21.10@sha256:769c0a0cb2a64409697b54551072ee46ee1e36d4b369ddafd671b02a5d16e0e5 AS server-runtime
+# alpine (not scratch): busybox wget for the healthcheck; app user UID 10001 owns /data + /artifacts
+RUN apk add --no-cache ca-certificates && addgroup -g 10001 app \
+  && adduser -D -u 10001 -G app app && mkdir -p /data /artifacts \
+  && chown app:app /data /artifacts
 COPY --from=go-build  /out/ravn-server /usr/local/bin/
-COPY --from=web-build /web/dist /app/public
+COPY --from=go-build  /out/ravn-mcp    /usr/local/bin/   # ONE image ships BOTH binaries
+COPY --from=web-build /web/dist        /app/public
 USER app
-ENV RAVN_ADDR=:8080 RAVN_DATA=/data/ravn.db
-VOLUME ["/data"]
+ENV RAVN_ADDR=:8080 RAVN_DATA=/data/ravn.db RAVN_STATIC_DIR=/app/public RAVN_ARTIFACTS_DIR=/artifacts
+VOLUME ["/data", "/artifacts"]
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s \
   CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
 ENTRYPOINT ["ravn-server"]
 
-FROM alpine:3.21 AS mcp-runtime
-RUN adduser -D -u 10001 app
+FROM alpine:3.21.10@sha256:769c0a0cb2a64409697b54551072ee46ee1e36d4b369ddafd671b02a5d16e0e5 AS mcp-runtime
+RUN apk add --no-cache ca-certificates && addgroup -g 10001 app \
+  && adduser -D -u 10001 -G app app
 COPY --from=go-build /out/ravn-mcp /usr/local/bin/
 USER app
-ENV MCP_ADDR=:9080
+ENV MCP_ADDR=:9080 RAVN_API_URL=http://ravn-server:8080
 EXPOSE 9080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=5s \
   CMD wget -qO- http://127.0.0.1:9080/healthz || exit 1
 ENTRYPOINT ["ravn-mcp"]
 ```
 
-**`docker-compose.yml`:**
+Standalone `Dockerfile.server` / `Dockerfile.mcp` mirror these stages for classic (non-BuildKit) compose — same pins, same Go-only `go-build` context. Note: the shipped compose builds **both** services from `target: server-runtime` (the image carries both binaries); `ravn-mcp` just overrides the entrypoint.
+
+**`docker-compose.yml` (shipped form — legacy `docker-compose-v3.3.yml` mirrors this with the documented deltas in its header):**
+
+Port convention: host `${RAVN_SERVER_PORT:-3311}` → container 8080, host `${RAVN_MCP_PORT:-9311}` → container 9080; containers ALWAYS listen on 8080/9080 internally so the MCP→server URL is stable.
 
 ```yaml
 services:
   ravn-server:
     build: { context: ., target: server-runtime }
+    restart: unless-stopped                     # auto-restart on daemon reboot / crash; explicit stop wins
+    deploy:                                     # per-service caps (env-overridable, see below)
+      resources:
+        limits:
+          cpus: "${RAVN_CPUS:-2}"
+          memory: ${RAVN_MEMORY_LIMIT:-1g}
     ports: ["${RAVN_BIND_IP:-127.0.0.1}:${RAVN_SERVER_PORT:-3311}:8080"]
     environment:
       RAVN_ADDR: ":8080"
       RAVN_DATA: "/data/ravn.db"
       RAVN_STATIC_DIR: "/app/public"   # UI baked in at image build (web-build stage)
+      RAVN_ARTIFACTS_DIR: "/artifacts"
       RAVN_TOKEN: "${RAVN_TOKEN:-}"  # optional; empty = auth off (single-tenant local default)
-    volumes: [ "ravn-data:/data" ]     # named volume holds ravn.db + -wal/-shm
+      OPENCODE_MODEL: "${OPENCODE_MODEL:-}"   # optional providerID/modelID; empty = OpenCode server's default model
+      OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-http://host.docker.internal:4444}"  # in Docker, OpenCode runs on the HOST — localhost is the container
+      OPENCODE_DIRECTORY: "${OPENCODE_DIRECTORY:-}"   # in Docker it MUST be an absolute path that exists on the HOST running OpenCode
+    extra_hosts: ["host.docker.internal:host-gateway"]   # maps to the host machine (Docker 20.10+) so the default URL above resolves
+    volumes:
+      - "ravn-data:/data"            # named volume holds ravn.db + -wal/-shm (+ /data/backups)
+      - "ravn-artifacts:/artifacts"
 
   ravn-mcp:
-    build: { context: ., target: mcp-runtime }
+    entrypoint: ["ravn-mcp"]         # same image as ravn-server (server-runtime ships both binaries)
+    build: { context: ., target: server-runtime }
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "${RAVN_CPUS:-2}"
+          memory: ${RAVN_MEMORY_LIMIT:-1g}
     ports: ["${RAVN_BIND_IP:-127.0.0.1}:${RAVN_MCP_PORT:-9311}:9080"]
     environment:
       MCP_ADDR: ":9080"
       RAVN_API_URL: "http://ravn-server:8080"   # compose service DNS — no IPs, no host assumptions
-      RAVN_TOKEN: "${RAVN_TOKEN:-}"   # optional; empty = auth off (supersedes the :? required-interpolation sketch, see ADR 2026-09-27)
+      RAVN_TOKEN: "${RAVN_TOKEN:-}"   # forwarded as Bearer to the API when set (supersedes the :? required-interpolation sketch, see ADR 2026-09-27)
+      RAVN_AGENT_NAME: "${RAVN_AGENT_NAME:-agent}"
     depends_on:
-      ravn-server: { condition: service_healthy }
+      ravn-server: { condition: service_healthy }   # legacy v3.3 file degrades to best-effort ordering (see its header)
 
 volumes:
   ravn-data:
+  ravn-artifacts:
 ```
+
+**Production tuning (restart & resources):**
+- **Restart policy:** both services run `restart: unless-stopped` — the container is restarted on daemon reboot and after unexpected exits (crashes, failed healthcheck cycles), while an explicit `docker stop`/`down -a` still wins. The MCP service is stateless, so restarts are cheap; the server's SQLite WAL database lives in the named volume, so a restart loses nothing but in-flight requests.
+- **Resource limits:** each service is capped via `deploy.resources.limits` — default **2 CPUs / 1 GiB per service**, overridable through `RAVN_CPUS` (e.g. `0.5`) and `RAVN_MEMORY_LIMIT` (e.g. `512m`, `4g`) in `.env` / environment. Modern `docker compose` (v2) enforces these outside swarm too; the legacy v3.3 file carries the same blocks with a note that ancient v1 non-swarm compose ignores them.
+- **When to raise them:** large artifact uploads (multipart buffers live in-process), long `VACUUM 'main' INTO` backup runs on big databases, and concurrent agent dispatches are the memory hogs — if a container dies with an OOM exit code (137) after such work, bump `RAVN_MEMORY_LIMIT`. CPU caps only throttle bursty Go scheduling; 2 vCPUs is ample for single-tenant scale.
 
 - **Healthcheck endpoint (implement exactly this):** `GET /healthz` on the main server → `200 {"status":"ok","db":"ok"}` after a successful `SELECT 1` ping; `503 {"status":"degraded","db":"error: …"}` if the DB is unreachable. On the MCP server, `/healthz` proxies the upstream check: 200 only when main server's `/healthz` is healthy (so `depends_on: service_healthy` chains correctly).
 - The node build is a *Docker stage*, not a compose service — no build-only containers run. `.dockerignore`:
@@ -435,7 +478,7 @@ web/dist
 docs
 ```
 
-(Keep `web/package-lock.json` in the context — it is needed for `npm ci`; it does not match any ignore rule.)
+(Keep `web/package-lock.json` **and all of `web/src`** in the context — the web-build stage needs both; neither matches an ignore rule. That only matters to web-build: the go-build stage copies nothing from `web/` at all, so UI edits never invalidate the Go layers.)
 
 - Backups: zero-downtime hot backup via `VACUUM 'main' INTO` — `scripts/backup.sh` (`make backup`), the one-shot `ravn-server -backup <path>` / `-integrity-check <path>` flags, and authenticated `POST /api/v1/admin/backup`. Default base dir is `<data dir>/backups` (i.e. `/data/backups` on the `ravn-data` volume in Docker); existing targets are never overwritten; every scripted backup is verified with `PRAGMA integrity_check`. Do **not** naively copy a live WAL database file — see §10 risk 4, the ADR of 2026-11-08, and README "Backups".
 
@@ -446,6 +489,7 @@ docs
 **Build:**
 - UI: `cd web && npm ci && npm run build` → `web/dist` (used by Docker stage; also committed nothing — gitignored).
 - Go: `CGO_ENABLED=0 go build ./cmd/...` → two static binaries. `make build` does both locally into `bin/`.
+- Docker: multi-stage `Dockerfile` (compose target) plus standalone `Dockerfile.server` / `Dockerfile.mcp`. Base images are digest-pinned (§8), and the go-build stage copies only the Go context (`go.mod`, `go.sum`, `cmd/`, `internal/`) — a frontend-only `docker compose up --build` therefore rebuilds just the web + runtime layers, never the Go compile.
 
 **Tests per onion layer (all under `go test ./...`, no external services):**
 
@@ -508,4 +552,5 @@ Decisions locked during implementation so later slices do not re-litigate them. 
 - **2026-11-05 — Root `/metrics` bearer-gated; `RAVN_PUBLIC_METRICS` opt-in.** Supersedes the "root `/metrics` is never auth-gated" statements (the §5 route row and the 2026-09-27 metrics bullet). The router-wide `AuthMiddleware` only gates paths under `/api`, so root `GET /metrics` leaked task counts, active claims, request stats and uptime on any public/LAN deployment with `RAVN_TOKEN` set. Fix: exported `BearerGate(expectedToken)` in `internal/interface/http/auth.go` — the route-independent counterpart of `AuthMiddleware` (path-agnostic, same constant-time bearer check, identical `401 {"error":"unauthorized",…}` JSON body) — applied by `newRouterWithPoolAndCORS` (`cmd/ravn-server/main.go`) to root `/metrics` whenever a token is non-empty. New env var `RAVN_PUBLIC_METRICS` (parsed with `envBool`: `strconv.ParseBool` semantics; empty/unset/garbage → false, fail closed) opts root `/metrics` back in for public Prometheus scraping — it affects ONLY the root route; `/api/v1/metrics` stays gated under the standard middleware. Empty token (single-tenant local default) leaves both routes open, preserving existing local scrapers. Documented in `.env.example` (with an explicit warning against internet-facing instances) and `docs/API.md`; forwarded by docker-compose. Covered by `TestRootMetricsAuthPosture` (token × opt-in posture matrix) and `TestBearerGate`.
 - **2026-11-05 — Claim status gate shipped: `claim_task` on a `done` or archived task is REJECTED (option b; decision item 01M3QWNSBCG03BA9R333D8MM79 pending owner ratification).** History, for accuracy: when that decision item was opened (2026-09-30, against commit 686164b), the claim CAS had NO status gate — claiming a `done` task succeeded and flipped it to `doing`, bypassing the transition map; the behavior was pinned empirically by `TestChallenger_R5_ClaimDirectlyOnDoneTask` (an observation-only test, removed in the 7f976e2 adversarial-test dedupe). Before the owner ratified either option, commit 64df52d shipped **option (b) — the gate**. **The currently-shipped behavior:** the repository-level claim CAS (`taskRepo.Claim`) includes `archived = 0 AND status != 'done'` in its single `UPDATE … WHERE`, and the application layer pre-checks both inside the same transaction; a 0-row match on a non-conflicting `done`/archived row is answered with `400 invalid_input` ("cannot claim completed task <id>" / "cannot claim archived task <id>") and **nothing is mutated** — status stays `done`, no lease, no event. Heartbeats on `done`/archived tasks are likewise rejected (`400`), and releasing a `done` task preserves `done`. The only legal exit from `done` is `update_task` with `status: "todo"` (the transition map's sole `done→*` edge); after reopening, the task is claimable again. Shipped and pinned by `TestTasksClaim_CompletedOrArchived_ReturnsErrInvalidAndNoMutation` (application), `TestClaimAndHeartbeat_DoneAndArchivedTasks_RejectedOnSQLite` (SQLite) and the HTTP-layer tests added in 64df52d. This bullet extends — does not rewrite — the 2026-09-25/26 claim CAS wording: the "lease free OR expired OR same-holder" winning-condition list applies only to non-`done`, non-archived tasks. **Decision status:** this records the shipped behavior factually; the formal keep-vs-gate decision (options documented in the task's `kind:"decision"` comment, dated 2026-11-05) is **pending owner (Hollen) ratification** — ratifying option (b), the recommendation, changes no code.
 - **2026-11-08 — Zero-downtime hot backup: `VACUUM 'main' INTO`, not stop-and-copy.** Supersedes §8's "Backups = consistent copy of the volume" bullet and risk 4's Tier-2 `.backup` phrasing. Rationale: in WAL mode committed data sits in `ravn.db-wal` until a checkpoint, so naively copying the raw `.db` (or all three files from a running process) can yield a corrupt or partial snapshot — and stopping a container that live agents are operating on is exactly the downtime a task tracker should not take. `VACUUM 'main' INTO '<literal>'` runs as ONE autocommit statement outside any transaction: it reads a consistent WAL snapshot (readers never block writers) and emits a complete, self-contained **rollback-journal** database — no `-wal`/`-shm` sidecars regardless of the source's journal mode, so restore is a single-file copy. Implementation in `internal/infrastructure/sqlite/backup.go`: `ResolveBackupDest(baseDir, dest)` requires an absolute dest lexically contained under the base (`filepath.Rel`) plus an `EvalSymlinks` ancestor walk so a symlink planted inside the base cannot point outside (non-absolute paths and NUL bytes rejected up front); `BackupTo(ctx, writerDB, baseDir, dest)` MkdirAlls parents, refuses existing targets with a friendly 409-class error (`ErrBackupExists`), runs the VACUUM on `pool.Writer` (pinned to one connection — VACUUM requires no other active statements on it) and returns `(path, bytes)`; `IntegrityCheck(ctx, file)` re-opens a fresh read-only handle and requires `PRAGMA integrity_check` = `ok`. Entry points: one-shot CLI flags `-backup <path>` / `-integrity-check <path>` (mutually exclusive → exit 2; dispatched BEFORE any HTTP server starts; exactly one result line; exit 0/1) and authenticated `POST /api/v1/admin/backup` with body `{"dest":…}` → `200 {path,bytes}` / `400 invalid_input` / `409 conflict` / `500 internal`, under the standard `/api` bearer gate. The allowed base dir resolves env-first: `RAVN_BACKUP_DIR`, else `<data dir>/backups` derived from `DBPool.Path` (field added 2026-11-08 — a live probe caught the file branch of `OpenPool` previously leaving it empty, which silently degraded the default to CWD-relative `"backups"`; regression-pinned by `TestResolveBackupBase_DerivesFromDataDir`). `scripts/backup.sh` (`make backup`) prefers the live endpoint when `RAVN_API_URL` is set (fully hot — the serving process writes the file), falls back to the CLI binary, timestamps each dest `ravn-backup-YYYYmmdd-HHMMSS.db`, refuses to overwrite, and verifies with `PRAGMA integrity_check` before printing `BACKUP OK`. Pinned by `internal/infrastructure/sqlite/backup_test.go` (consistency vs seed snapshot incl. schema DDL + row counts; hot backup mid-concurrent-writes with count in [pre,post]; existing-target preservation), `backup_adversarial_test.go` (traversal / symlink-escape / NUL / rejection matrix; never-writes-outside-base walk) and `cmd/ravn-server/backup_admin_test.go` (endpoint 200/401/400/409 matrix, open-without-token posture, CLI exit codes).
+- **2026-11-08 — Docker hardening shipped: restart policies, resource limits, OpenCode host wiring, go-build isolation, digest-pinned bases.** Supersedes §8's floating base tags and the "exact image tags … bump to current equivalents at build time" note in §10. (a) **Restart & resources:** both compose services set `restart: unless-stopped` (auto-restart on daemon reboot / unexpected exit; explicit stop wins) plus per-service `deploy.resources.limits` — `${RAVN_CPUS:-2}` CPUs, `${RAVN_MEMORY_LIMIT:-1g}` memory — overridable via `.env`; tuning guidance in §8 "Production tuning"; the legacy v3.3 file carries both with a note that ancient v1 non-swarm compose ignores `deploy` blocks. (b) **OpenCode dispatch from Docker:** compose defaults `OPENCODE_SERVER_URL` to `http://host.docker.internal:4444` and adds `extra_hosts: host-gateway`, because inside the container "localhost" is the container, not the host running OpenCode; `OPENCODE_DIRECTORY` must then be an absolute path on the HOST (compose + `.env.example` document this). The built-in Go default for non-Docker dev is UNCHANGED (`http://localhost:4444`). (c) **Portable directory fallback:** `resolveOpenCodeDirectory`'s last-resort fallback is now the process working directory (`os.Getwd`) — never a hardcoded personal checkout path (the pre-fix literal made every non-author deployment dispatch into a nonexistent dir); pinned by `TestResolveOpenCodeDirectory_DefaultNeverPersonal`. (d) **go-build isolation:** every Dockerfile's go-build stage copies only `go.mod`, `go.sum`, `cmd/` and `internal/` (NOT `COPY . .`) with `go mod download` in between, so `web/` edits never invalidate the Go layers; a frontend-only rebuild is fast by construction. (e) **Pinned bases (all three Dockerfiles):** `node:22-alpine@sha256:0e17…af8202`, `golang:1.25.14-alpine@sha256:1ae0…bf84b59` (Go 1.25.14 ≥ go.mod's `go 1.25.5`; satisfies the ADR-2026-09-25 "modernc.org/sqlite forces ≥1.25" note), `alpine:3.21.10@sha256:769c…a5d16e0e5`. Digests verified resolvable against registry-1.docker.io on 2026-11-08 (the tasking's pre-provided node digest was malformed — 62 hex chars, rejected by the registry with DIGEST_INVALID — and NOT used). Bump = re-resolve the tag's manifest digest and edit exactly one FROM line per file (comment blocks sit above each FROM group for this reason).
 

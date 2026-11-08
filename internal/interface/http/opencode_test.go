@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -344,8 +345,15 @@ func TestOpenCodeStart_ResolutionDefaults(t *testing.T) {
 	if url := resolveOpenCodeServerURL(""); url != "http://localhost:4444" {
 		t.Errorf("default server URL = %q, want http://localhost:4444", url)
 	}
-	if dir := resolveOpenCodeDirectory(""); dir != "/workspace" {
-		t.Errorf("default directory = %q, want /workspace", dir)
+	// The directory default must be PORTABLE — the process working directory,
+	// never a hardcoded personal checkout path (e.g. /home/<user>/...). Equality
+	// with os.Getwd() is the contract: any baked-in literal would fail it.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd = %v", err)
+	}
+	if dir := resolveOpenCodeDirectory(""); dir != cwd {
+		t.Errorf("default directory = %q, want the process working dir %q (no hardcoded personal path)", dir, cwd)
 	}
 	if model := resolveOpenCodeModel(""); model != "" {
 		t.Errorf("default model = %q, want empty", model)
@@ -374,6 +382,33 @@ func TestOpenCodeStart_ResolutionDefaults(t *testing.T) {
 	}
 	if model := resolveOpenCodeModel("openrouter/deepseek/deepseek-chat-v3-0324"); model != "openrouter/deepseek/deepseek-chat-v3-0324" {
 		t.Errorf("project model = %q, want the project value", model)
+	}
+}
+
+// TestResolveOpenCodeDirectory_DefaultNeverPersonal pins the portable-default
+// contract (task 01M3MN0J0QDEH79RQ1DBQNWP1F): with no project setting and no
+// OPENCODE_DIRECTORY, the fallback must be the process working directory — NEVER a
+// hardcoded personal checkout path. The pre-fix default was one developer's home
+// checkout, which made every non-author deployment dispatch sessions into a
+// directory that does not exist on their host. The test chdirs into a temp dir so
+// the assertion is exact and independent of where the suite runs: any baked-in
+// literal would differ from os.Getwd() there.
+func TestResolveOpenCodeDirectory_DefaultNeverPersonal(t *testing.T) {
+	t.Setenv("OPENCODE_DIRECTORY", "")
+	tmp := t.TempDir()
+	t.Chdir(tmp)           // restored automatically at test end
+	cwd, err := os.Getwd() // authoritative CWD after chdir (resolves any symlinks in tmp)
+	if err != nil {
+		t.Fatalf("os.Getwd = %v", err)
+	}
+	got := resolveOpenCodeDirectory("")
+	if got != cwd {
+		t.Errorf("default directory = %q, want the process working dir %q (no hardcoded personal path)", got, cwd)
+	}
+	for _, personal := range []string{"/home/hollen/Code/crowban", "/workspace"} {
+		if got == personal {
+			t.Errorf("default directory %q is a hardcoded personal path; want the process working dir %q", got, cwd)
+		}
 	}
 }
 

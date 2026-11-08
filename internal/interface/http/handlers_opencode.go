@@ -30,7 +30,13 @@ func resolveOpenCodeServerURL(projectServerURL string) string {
 }
 
 // resolveOpenCodeDirectory resolves the working directory for OpenCode from the project
-// setting, the OPENCODE_DIRECTORY environment variable, or defaults to "/workspace".
+// setting, the OPENCODE_DIRECTORY environment variable, or falls back to the
+// process's own current working directory (os.Getwd). The fallback is deliberately
+// PORTABLE and non-personal: a hardcoded checkout path (e.g. some developer's home
+// directory) made every non-author deployment dispatch sessions into a directory
+// that does not exist on their host. Inside Docker the container CWD is only a
+// placeholder — compose should set OPENCODE_DIRECTORY to the host repo path
+// (see docker-compose.yml), since OpenCode runs on the host, not in the container.
 func resolveOpenCodeDirectory(projectDirectory string) string {
 	if s := strings.TrimSpace(projectDirectory); s != "" {
 		return s
@@ -38,7 +44,10 @@ func resolveOpenCodeDirectory(projectDirectory string) string {
 	if s := strings.TrimSpace(os.Getenv("OPENCODE_DIRECTORY")); s != "" {
 		return s
 	}
-	return "/workspace"
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "/" // Getwd failing is effectively impossible (the kernel always has a CWD)
 }
 
 // resolveOpenCodeModel resolves the OpenCode model reference from the project

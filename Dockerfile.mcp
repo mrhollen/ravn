@@ -5,17 +5,26 @@
 # multi-stage Dockerfile (go-build + mcp-runtime); keep the two in sync when
 # build stages change.
 
-FROM golang:1.25-alpine AS go-build
+# Base images pinned to immutable digests (same pins as Dockerfile — keep in
+# sync; verified resolvable against registry-1.docker.io on 2026-11-08). To bump
+# one image, re-resolve the tag's manifest digest and edit exactly one FROM line.
+
+FROM golang:1.25.14-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS go-build
 WORKDIR /src
+# Module files first so the `go mod download` layer stays cached across source edits.
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
+# Go-only context (NOT `COPY . .`): web/ is excluded so UI edits never invalidate
+# this stage. Copy exactly the top-level dirs containing .go sources: cmd/ and
+# internal/ (internal/infrastructure/sqlite also carries //go:embed migrations/*.sql).
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
 ARG VERSION=dev
 ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
         -o /out/ravn-mcp ./cmd/ravn-mcp
 
-FROM alpine:3.21
+FROM alpine:3.21.10@sha256:769c0a0cb2a64409697b54551072ee46ee1e36d4b369ddafd671b02a5d16e0e5
 RUN apk add --no-cache ca-certificates \
  && addgroup -g 10001 app \
  && adduser -D -u 10001 -G app app

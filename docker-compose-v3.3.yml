@@ -14,6 +14,10 @@
 #      directly without building from source.
 #   3. start_period is omitted from the compose healthcheck blocks (not in v3.3 schema).
 #      The image itself carries an equivalent HEALTHCHECK with --start-period baked in.
+#   4. `deploy.resources.limits` (CPU/memory caps) are honored by MODERN `docker
+#      compose` (v2, which runs this file fine) and docker swarm; ancient standalone
+#      docker-compose v1.x in non-swarm mode ignores that block. The restart
+#      policies below apply regardless (they predate v3 semantics entirely).
 #
 # Everything else — service names, environment blocks, the ravn-data
 # named volume and its /data mount — is equivalent to docker-compose.yml.
@@ -30,6 +34,17 @@ version: "3.3"
 services:
   ravn-server:
     image: ${RAVN_IMAGE:-ravn:latest}
+    # Restart policy (task 01M3MN04W2YMTBZR20DRQKNHQQ): survive daemon reboots and
+    # crash/healthcheck failures; `docker stop` still wins over the policy.
+    restart: unless-stopped
+    # Per-service resource caps (env-overridable via RAVN_CPUS / RAVN_MEMORY_LIMIT —
+    # see docs/ARCHITECTURE.md §8 "Production tuning"). NOTE: applied under swarm or
+    # MODERN `docker compose` (v2); ancient v1 non-swarm compose ignores this block.
+    deploy:
+      resources:
+        limits:
+          cpus: "${RAVN_CPUS:-2}"
+          memory: ${RAVN_MEMORY_LIMIT:-1g}
     ports:
       - "${RAVN_BIND_IP:-127.0.0.1}:${RAVN_SERVER_PORT:-3311}:8080"
     environment:
@@ -41,8 +56,10 @@ services:
       OPENCODE_MODEL: "${OPENCODE_MODEL:-}" # optional; empty = use the OpenCode server's default model
       OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
       OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)
-      OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-}" # OpenCode server base URL; empty = built-in default
-      OPENCODE_DIRECTORY: "${OPENCODE_DIRECTORY:-}"   # session working directory; empty = built-in default
+      OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-http://host.docker.internal:4444}" # OpenCode runs on the HOST; inside Docker "localhost" is the container, so default to the host-gateway name (mapped below). Non-Docker dev keeps the built-in http://localhost:4444.
+      OPENCODE_DIRECTORY: "${OPENCODE_DIRECTORY:-}"   # session working directory — when set in Docker it MUST be an absolute path that exists on the HOST running OpenCode; unset falls back to the container CWD, which is meaningless for host-side sessions
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Docker 20.10+: resolves to the host machine (on pre-20.10 hosts set OPENCODE_SERVER_URL explicitly to the host IP)
     volumes:
       - "${RAVN_DATA_DIR:-ravn-data}:/data"
       - "${RAVN_ARTIFACTS_DIR:-ravn-artifacts}:/artifacts"
@@ -55,6 +72,15 @@ services:
   ravn-mcp:
     image: ${RAVN_IMAGE:-ravn:latest}
     entrypoint: ["ravn-mcp"]
+    # Restart policy (task 01M3MN04W2YMTBZR20DRQKNHQQ): same as ravn-server; the MCP
+    # service is stateless, so restarts are cheap and self-healing.
+    restart: unless-stopped
+    # Same env-overridable per-service caps as ravn-server (RAVN_CPUS / RAVN_MEMORY_LIMIT).
+    deploy:
+      resources:
+        limits:
+          cpus: "${RAVN_CPUS:-2}"
+          memory: ${RAVN_MEMORY_LIMIT:-1g}
     ports:
       - "${RAVN_BIND_IP:-127.0.0.1}:${RAVN_MCP_PORT:-9311}:9080"
     environment:
