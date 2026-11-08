@@ -134,7 +134,16 @@ func Open(ctx context.Context, path string) (*sql.DB, func() error, error) {
 	db.SetMaxOpenConns(1)
 
 	closeDB := func() error { return db.Close() }
-	if err := db.PingContext(ctx); err != nil {
+	// The first use of the handle opens the connection and applies dsnFor's
+	// pragmas — including the rollback→WAL journal-mode switch. When several
+	// processes open a fresh file at once, that switch takes an exclusive lock
+	// the busy timeout does not wait out, so concurrent openers can fail here
+	// with SQLITE_BUSY; retry with backoff (a failed connection is discarded,
+	// so each attempt re-applies the pragmas on a fresh one). Migrate below
+	// carries its own equivalent retry.
+	if err := retryTransient(ctx, fmt.Sprintf("ping sqlite %q", path), func() error {
+		return db.PingContext(ctx)
+	}); err != nil {
 		closeDB()
 		return nil, nil, fmt.Errorf("ping sqlite %q: %w", path, err)
 	}
