@@ -15,6 +15,12 @@ type Repos struct {
 	Artifacts ArtifactRepository
 	Relations RelationRepository
 	Events    EventStore
+
+	// Identities resolves durable identities by name and reads stored membership
+	// roles (multi-user epic, T2). Read-only here — see IdentityRepository. A
+	// nil value is tolerated: existing use cases never touch it, so tests/fakes
+	// that don't wire identity keep working unchanged.
+	Identities IdentityRepository
 }
 
 // UnitOfWork is the transactional seam between use cases and persistence. Run

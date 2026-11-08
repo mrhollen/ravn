@@ -456,3 +456,32 @@ type EventBroker interface {
 	EventSubscriber
 	Close() error
 }
+
+// IdentityRepository is the read-side port for the multi-user identity model
+// (epic T2). It resolves durable identities by their unique name and reports a
+// subject's stored membership role for a project, backed by the identity /
+// project_member tables added in migration 0011. It is deliberately read-only in
+// this ticket: resolving who an actor is and what role they hold are the two facts
+// visibility/authorization policies consume; WRITING memberships or credentials
+// belongs to a later epic ticket.
+type IdentityRepository interface {
+	// GetByName resolves name to its identity row. Outcomes (see the port doc):
+	//
+	//   (identity, nil)                     — an ENABLED identity;
+	//   (_, domain.ErrIdentityUnknown)      — no identity row for the name;
+	//   (identity, domain.ErrIdentityDisabled) — a row exists but is disabled.
+	//
+	// The returned Identity is populated in all three cases so callers can act on
+	// its id/kind/auth_method even when the outcome is not "enabled." These two
+	// outcomes are distinct sentinel values (not ErrNotFound) because they drive
+	// policy behavior rather than indicating a failed write.
+	GetByName(ctx context.Context, name string) (domain.Identity, error)
+
+	// MemberRole returns the STORED membership role for (projectID, identityID):
+	// RoleNone when there is no explicit row (the common case — most identities are
+	// not members of a given project). "Not a member" is a normal outcome, NOT an
+	// error; only unexpected I/O failures return a non-nil error. The returned role
+	// never exceeds RoleAdmin (ownership is derived separately from created_by via
+	// domain.EffectiveRole, never stored in a membership row).
+	MemberRole(ctx context.Context, projectID, identityID domain.ID) (domain.Role, error)
+}
