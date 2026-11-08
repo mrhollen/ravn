@@ -8,7 +8,7 @@ IMAGE   ?= ravn:latest
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: help fmt vet build test ui e2e up build-up down logs smoke
+.PHONY: help fmt vet build test ui e2e up build-up down logs smoke backup
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-8s %s\n", $$1, $$2}'
@@ -52,3 +52,6 @@ logs: ## stream logs from both containers
 
 smoke: ## curl both /healthz + GET /api/v1/projects on the overridable host ports
 	@sh scripts/smoke.sh
+
+backup: ## zero-downtime VACUUM-INTO hot backup of RAVN_DATA (default ravn.db) + integrity_check; never overwrites
+	@sh scripts/backup.sh

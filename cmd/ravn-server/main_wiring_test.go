@@ -44,6 +44,7 @@ func clearServerEnv(t *testing.T) {
 	for _, key := range []string{
 		"RAVN_ADDR", "RAVN_DATA", "RAVN_TOKEN", "RAVN_STATIC_DIR",
 		"RAVN_ARTIFACTS_DIR", "LOG_LEVEL", "RAVN_LOG_LEVEL", "RAVN_CORS_ORIGINS",
+		"RAVN_BACKUP_DIR",
 	} {
 		t.Setenv(key, "")
 	}

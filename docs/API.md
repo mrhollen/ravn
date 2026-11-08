@@ -329,6 +329,7 @@ extras (the web frontend uses them directly).
 | `DELETE /tasks/{id}/acceptance-criteria/{seq}`    | remove one AC → 204 (actor required)      | `remove_ac` |
 | `POST /tasks/{id}/artifacts`          | attach evidence → 201                                    | `attach_artifact` |
 | `POST /tasks/{id}/opencode/start`     | dispatch an autonomous OpenCode session → 200 session id + url (UI/ops) | — |
+| `POST /admin/backup`                  | zero-downtime hot backup (`VACUUM 'main' INTO`) into a base-dir-restricted path; never overwrites (ops) | — (ops) |
 | `POST   /tasks/{id}/relations`        | add a relation edge (upsert)                             | `relate_tasks` (add) |
 | `DELETE /tasks/{id}/relations/{other_id}/{kind}` | remove a relation edge                | `relate_tasks` (remove) |
 
@@ -887,6 +888,47 @@ removal appends an event that records *who* removed it, so no-body/empty-actor
 
 `204 No Content` on success (no body). Missing edge → `404 not_found`. Invalid
 kind / self-relation / unknown task → `400`/`404` per the usual mapping.
+
+### POST /admin/backup (ops) — zero-downtime hot backup
+
+Writes a consistent point-in-time copy of the whole database via SQLite's
+`VACUUM 'main' INTO '<file>'` while the server keeps serving. The result is ONE
+self-contained rollback-journal file (no `-wal`/`-shm` sidecars) — restore by
+copying it and reopening with any SQLite tool. Never use this to overwrite an
+existing file, and never naively copy the live `ravn.db` in WAL mode instead.
+
+Body:
+
+```json
+{ "dest": "/data/backups/ravn-20261108.db" }
+```
+
+- `dest` is required and **must be absolute**. It must resolve inside the
+  allowed base dir: env `RAVN_BACKUP_DIR`, default `<data dir>/backups`
+  (`/data/backups` on the volume in Docker). Escape attempts — paths outside
+  the base, `..` traversal, relative paths, NUL bytes, and symlinks that lead
+  outside the base — all → `400 invalid_input`. Parent directories are created.
+
+| Outcome | Status & body |
+|---|---|
+| success | `200 { "path": "<dest>", "bytes": <size> }` |
+| dest missing, relative, or outside/escaping the base | `400 { "error": "invalid_input", "message": … }` |
+| file/dir already exists at `dest` | `409 { "error": "conflict", "message": "backup target already exists: <dest>" }` (file preserved untouched) |
+| VACUUM INTO itself fails | `500 { "error": "internal", … }` — detail in the server log |
+| token set, absent/mismatched | standard `401 unauthorized` gate (like every `/api/v1` route) |
+
+```bash
+curl -sS -X POST -H "Authorization: Bearer $RAVN_TOKEN" \
+     -H 'Content-Type: application/json' \
+     -d '{"dest":"/data/backups/ravn-20261108.db"}' \
+     http://<host>:<port>/api/v1/admin/backup
+```
+
+Ops wrappers: `scripts/backup.sh` (`make backup`) drives this endpoint when
+`RAVN_API_URL` is set (falling back to the one-shot CLI flag otherwise) and
+verifies the result with `PRAGMA integrity_check`; bare CLI is
+`ravn-server -data <db> -backup <dest>` / `-integrity-check <file>` — see
+README "Backups".
 
 ## Version-bump policy (summary)
 

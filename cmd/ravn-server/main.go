@@ -61,9 +61,9 @@ func run(args []string, errW io.Writer) int {
 	fs.SetOutput(errW)
 
 	var (
-		addr   = fs.String("addr", envOr("RAVN_ADDR", ":8080"), "listen address, e.g. :8080")
-		data   = fs.String("data", envOr("RAVN_DATA", "/data/ravn.db"), "path of the SQLite database file")
-		token  = fs.String("token", os.Getenv("RAVN_TOKEN"),
+		addr  = fs.String("addr", envOr("RAVN_ADDR", ":8080"), "listen address, e.g. :8080")
+		data  = fs.String("data", envOr("RAVN_DATA", "/data/ravn.db"), "path of the SQLite database file")
+		token = fs.String("token", os.Getenv("RAVN_TOKEN"),
 			"bearer token gating /api/v1 routes and root /metrics (opt the latter back out with RAVN_PUBLIC_METRICS=true); empty disables auth (dev default)")
 		static = fs.String("static", envOr("RAVN_STATIC_DIR", "./web/dist"),
 			"directory holding the built web UI (Vite dist); placeholder root is served when it has no index.html")
@@ -73,10 +73,22 @@ func run(args []string, errW io.Writer) int {
 			"log level: debug, info, warn, error")
 		corsOrigins = fs.String("cors-origins", envOr("RAVN_CORS_ORIGINS", "*"),
 			"comma-separated list of allowed CORS origins or '*' for any origin")
+		backup = fs.String("backup", "",
+			"one-shot mode: write a zero-downtime hot backup (VACUUM INTO) of the database to <path> — must be an absolute path inside RAVN_BACKUP_DIR (default <data dir>/backups) — print a one-line result and exit WITHOUT starting the HTTP server; mutually exclusive with -integrity-check")
+		integrityCheck = fs.String("integrity-check", "",
+			"one-shot mode: run PRAGMA integrity_check on <db file> with a fresh read-only connection, print ok/FAIL and exit 0/1 without starting the HTTP server; mutually exclusive with -backup")
 	)
 
 	if err := fs.Parse(args); err != nil { // bad flag value / unknown flag: usage already printed to errW
 		return 2
+	}
+
+	// One-shot maintenance modes: -backup and -integrity-check operate on the
+	// database file directly and exit — no HTTP server, no artifacts dir. They
+	// are checked before any server wiring so a misconfigured deployment still
+	// answers to the operator with exactly one line of result.
+	if *backup != "" || *integrityCheck != "" {
+		return runBackupOrIntegrityCheck(*data, *backup, *integrityCheck, errW)
 	}
 
 	lvl := parseLogLevel(*logLevel)
@@ -265,6 +277,64 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 		writeJSON(w, code, res)
 	})
 
+	// POST /api/v1/admin/backup — zero-downtime hot backup (VACUUM INTO).
+	// Security: the route sits under the /api prefix, so the standard
+	// AuthMiddleware bearer-gates it whenever RAVN_TOKEN is set (401 on
+	// missing/mismatched token) — same posture as every other API route. The
+	// destination is additionally restricted by sqlite.ResolveBackupDest to an
+	// absolute path strictly inside the backup base directory
+	// (RAVN_BACKUP_DIR, default <data dir>/backups) — traversal and symlink
+	// escapes are rejected with 400, existing targets with 409 (never
+	// overwritten). Body: {"dest":"<absolute path>"}. Answer:
+	// 200 {"path":...,"bytes":...}; 400 invalid_input; 409 conflict; 500 on DB failure.
+	var poolPath string
+	if pool != nil {
+		poolPath = pool.Path
+	}
+	backupBase := resolveBackupBase(poolPath)
+	mux.HandleFunc("POST /api/v1/admin/backup", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Dest string `json:"dest"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":   httpapi.ErrCodeInvalidInput,
+				"message": fmt.Sprintf("expected JSON body {\"dest\":\"<absolute path inside the backup base directory %s>\"} — e.g. {\"dest\":\"%s\"}", backupBase, filepath.Join(backupBase, "ravn-2026.db")),
+			})
+			return
+		}
+		if writerDB == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error":   httpapi.ErrCodeInternal,
+				"message": "no database connected to this server",
+			})
+			return
+		}
+		out, n, err := sqlite.BackupTo(r.Context(), writerDB, backupBase, req.Dest)
+		// Each branch writes EXACTLY ONE response (no fall-through — the first
+		// WriteHeader of a request is the only legal one).
+		switch {
+		case err == nil:
+			writeJSON(w, http.StatusOK, map[string]any{"path": out, "bytes": n})
+		case errors.Is(err, sqlite.ErrBackupPathInvalid):
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":   httpapi.ErrCodeInvalidInput,
+				"message": err.Error(),
+			})
+		case errors.Is(err, sqlite.ErrBackupExists):
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":   httpapi.ErrCodeConflict,
+				"message": err.Error(),
+			})
+		default:
+			slog.Error("admin hot backup failed", "err", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error":   httpapi.ErrCodeInternal,
+				"message": "hot backup failed (VACUUM INTO error — see server log)",
+			})
+		}
+	})
+
 	if hasIndexHTML(staticDir) {
 		// Slice 5a (ARCHITECTURE §7): the Go binary serves the Vite build with
 		// stdlib only — no web container. "GET /" is the least specific pattern
@@ -341,6 +411,67 @@ func spaFallback(static fs.FS) http.Handler {
 		spa.URL = &u
 		fileServer.ServeHTTP(w, spa)
 	})
+}
+
+// resolveBackupBase returns the directory hot backups may be written into:
+// env RAVN_BACKUP_DIR wins; otherwise a "backups" subdirectory of the data
+// directory (RAVN_DATA=/data/ravn.db → /data/backups, i.e. on the ravn-data
+// volume in Docker). When no data path is known (raw *sql.DB pools built in
+// tests) it degrades to CWD-relative "backups" — still absolute-anchored and
+// validated by sqlite.ResolveBackupDest before any write.
+func resolveBackupBase(dataPath string) string {
+	if v := strings.TrimSpace(os.Getenv("RAVN_BACKUP_DIR")); v != "" {
+		return filepath.Clean(v)
+	}
+	if dataPath != "" && dataPath != ":memory:" {
+		return filepath.Join(filepath.Dir(dataPath), "backups")
+	}
+	return "backups"
+}
+
+// runBackupOrIntegrityCheck implements the one-shot maintenance modes and
+// returns the process exit code. Exactly one of backupDest / checkPath must be
+// non-empty (enforced before the call). Each mode prints EXACTLY ONE line of
+// result to w and never starts the HTTP server:
+//
+//	-backup <dest>            open the DB, VACUUM INTO a hot snapshot at dest
+//	                          (validated against the backup base dir), verify it
+//	                          with PRAGMA integrity_check → 0 on ok.
+//	-integrity-check <file>   fresh read-only PRAGMA integrity_check → 0 on "ok".
+func runBackupOrIntegrityCheck(dataPath, backupDest, checkPath string, w io.Writer) int {
+	if backupDest != "" && checkPath != "" {
+		fmt.Fprintln(w, "ravn-server: -backup and -integrity-check are mutually exclusive")
+		return 2
+	}
+	ctx := context.Background()
+
+	if checkPath != "" {
+		if err := sqlite.IntegrityCheck(ctx, checkPath); err != nil {
+			fmt.Fprintf(w, "integrity_check FAIL: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(w, "integrity_check ok: %s\n", checkPath)
+		return 0
+	}
+
+	db, closeDB, err := sqlite.Open(ctx, dataPath)
+	if err != nil {
+		fmt.Fprintf(w, "backup failed: open database %q: %v\n", dataPath, err)
+		return 1
+	}
+	defer func() { _ = closeDB() }()
+
+	out, n, err := sqlite.BackupTo(ctx, db, resolveBackupBase(dataPath), backupDest)
+	if err != nil {
+		fmt.Fprintf(w, "backup failed: %v\n", err)
+		return 1
+	}
+	if iErr := sqlite.IntegrityCheck(ctx, out); iErr != nil {
+		fmt.Fprintf(w, "backup written but integrity_check FAIL: %s (%d bytes) — %v\n", out, n, iErr)
+		return 1
+	}
+	fmt.Fprintf(w, "backup ok: %s (%d bytes) integrity_check=ok\n", out, n)
+	return 0
 }
 
 // defaultArtifactsDir returns "/artifacts" if present as a directory (e.g. In Docker),

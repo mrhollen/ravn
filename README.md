@@ -62,7 +62,7 @@ Older `docker-compose` (v1.x, Compose schema v3.3) can't parse the modern file �
 
 **Port overrides.** Host-side published ports are env-overridable (`RAVN_SERVER_PORT`, default `3311`; `RAVN_MCP_PORT`, default `9311`). The containers always listen on 8080/9080 *internally* — only the host mapping changes, so the MCP→server upstream URL stays stable. If another process already owns the port you want, set e.g. `RAVN_SERVER_PORT=18080` in `.env` (do **not** kill what's there) and run `make up`; point UI/clients at http://localhost:18080.
 
-**Persistence.** The SQLite database lives in the named Docker volume `ravn-data` (mounted at `/data`) and survives rebuilds and `make down`. Backups = a consistent copy of that volume (stop the container first, or use SQLite's `.backup`). To mount local host directories instead (e.g. `./data` and `./artifacts`), set `RAVN_DATA_DIR=./data` and `RAVN_ARTIFACTS_DIR=./artifacts` in `.env`.
+**Persistence.** The SQLite database lives in the named Docker volume `ravn-data` (mounted at `/data`) and survives rebuilds and `make down`. To mount local host directories instead (e.g. `./data` and `./artifacts`), set `RAVN_DATA_DIR=./data` and `RAVN_ARTIFACTS_DIR=./artifacts` in `.env`. For backups see [Backups](#backups) below — do **not** copy the raw database file while the server is running.
 
 ### Direct binaries (development)
 
@@ -76,9 +76,30 @@ make ui                    # → web/dist (the built Vite UI)
 RAVN_API_URL=http://localhost:3311 ./bin/ravn-mcp -addr=:9311 &
 ```
 
-`-addr`, `-data`, `-token`, `-static` are the server flags; the MCP binary takes `-addr` plus env `RAVN_API_URL` (where the server lives), `RAVN_AGENT_NAME` (fallback actor name for calls that omit `actor`), and optional `RAVN_TOKEN` (forwarded upstream as a Bearer token). Verify with `curl http://localhost:3311/healthz` and `curl http://localhost:9311/healthz`.
+`-addr`, `-data`, `-token`, `-static` are the server flags, plus two one-shot ops modes that exit before any HTTP server starts: `-backup <path>` (hot backup of `-data` via `VACUUM INTO`) and `-integrity-check <path>` (`PRAGMA integrity_check` on any SQLite file). The MCP binary takes `-addr` plus env `RAVN_API_URL` (where the server lives), `RAVN_AGENT_NAME` (fallback actor name for calls that omit `actor`), and optional `RAVN_TOKEN` (forwarded upstream as a Bearer token). Verify with `curl http://localhost:3311/healthz` and `curl http://localhost:9311/healthz`.
 
 **Optional auth.** Set `RAVN_TOKEN` in your environment or `.env` to enable shared-token auth: the server then requires it on every `/api/v1/*` route — `Authorization: Bearer <token>` or, for SSE/EventSource clients that cannot set headers, `?token=<token>` — answering `401` when absent or mismatched. `/healthz` and the web UI stay open either way. The MCP container forwards the same token on every upstream call, so agent tools keep working with no extra client config.
+
+### Backups
+
+ravn runs SQLite in **WAL mode**: while the server is live, data physically lives split across `ravn.db`, `ravn.db-wal` and `ravn.db-shm`, and the `-wal` file only folds into the main database on a clean checkpoint/shutdown. **Copying the raw `.db` (or naively copying all three files) from a running server can yield a corrupt or partial copy** — it is only safe after a graceful stop. Use one of these instead:
+
+| Mechanism | When to use | Command |
+|---|---|---|
+| `scripts/backup.sh` (HTTP mode) | live server, zero downtime | `RAVN_API_URL=http://127.0.0.1:3311 [RAVN_TOKEN=…] sh scripts/backup.sh` (or `make backup`) |
+| `scripts/backup.sh` (CLI mode) | local/dev DB file on this machine | `RAVN_DATA=./ravn.db sh scripts/backup.sh` — finds `./bin/ravn-server` automatically |
+| one-shot CLI flag | scripting, containers | `ravn-server -data /data/ravn.db -backup /data/backups/snap.db` |
+| admin endpoint | automation | `POST /api/v1/admin/backup` with `{"dest":"<absolute path>"}` (auth applies when `RAVN_TOKEN` is set) |
+
+All four paths use SQLite's `VACUUM 'main' INTO '<file>'`: a consistent point-in-time snapshot written while the database keeps serving, producing a **single self-contained rollback-journal file with no `-wal`/`-shm` sidecars** — restore it by copying one file. Guarantees: destinations are restricted to a base directory (env `RAVN_BACKUP_DIR`, default `<data dir>/backups` — i.e. `/data/backups` on the volume in Docker), existing targets are **never overwritten** (`409` / exit 1), and `scripts/backup.sh` verifies every backup with `PRAGMA integrity_check` before printing `BACKUP OK`.
+
+```bash
+# live, zero-downtime backup (Docker or direct binary — adjust port)
+make backup RAVN_API_URL=http://127.0.0.1:3311
+
+# verify any SQLite file by hand
+./bin/ravn-server -integrity-check ./ravn-backup-….db   # → "integrity_check ok: <file>", exit 0
+```
 
 ## MCP client config
 

@@ -32,6 +32,11 @@ const DefaultReaderMaxIdleConns = 2
 type DBPool struct {
 	Writer *sql.DB
 	Reader *sql.DB
+	// Path is the database file the pool was opened against (":memory:" for
+	// in-process pools). Exposed so the composition root can derive config
+	// defaults relative to the data directory — e.g. the hot-backup base dir
+	// (default <data dir>/backups, on the ravn-data volume in Docker).
+	Path string
 }
 
 // Close closes both writer and reader database handles.
@@ -77,7 +82,7 @@ func OpenPool(ctx context.Context, path string) (*DBPool, func() error, error) {
 	}
 
 	if path == ":memory:" {
-		pool := &DBPool{Writer: writer, Reader: writer}
+		pool := &DBPool{Writer: writer, Reader: writer, Path: path}
 		return pool, closeWriter, nil
 	}
 
@@ -93,6 +98,7 @@ func OpenPool(ctx context.Context, path string) (*DBPool, func() error, error) {
 	pool := &DBPool{
 		Writer: writer,
 		Reader: reader,
+		Path:   path,
 	}
 	closeAll := func() error {
 		return pool.Close()
