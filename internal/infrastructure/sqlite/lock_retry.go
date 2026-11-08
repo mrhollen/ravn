@@ -23,11 +23,15 @@ func isTransientLockError(err error) bool {
 	return drvErr.Code()&0xff == 5 // primary code SQLITE_BUSY
 }
 
-const (
+// lockRetryMaxAttempts and lockRetryBaseBackoff are vars (not consts) so tests
+// can shrink the retry window without waiting out the full ~4 s production
+// worst case; their default values are the production behavior.
+var (
 	lockRetryMaxAttempts = 16
 	lockRetryBaseBackoff = 25 * time.Millisecond
-	lockRetryMaxBackoff  = 250 * time.Millisecond
 )
+
+const lockRetryMaxBackoff = 250 * time.Millisecond
 
 // retryTransient runs fn, re-running it with capped exponential backoff on
 // transient lock errors. Any other error, and context cancellation, are

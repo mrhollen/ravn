@@ -139,6 +139,51 @@ func TestBackupTo_NeverWritesOutsideBase(t *testing.T) {
 	}
 }
 
+// TestResolveBackupDest_BaseParentIsAFile pins the base-resolution failure
+// that is NOT a path-policy rejection: when the (existing) base directory sits
+// beneath a regular file, EvalSymlinks fails with ENOTDIR — reported as a plain
+// resolution error, distinct from ErrBackupPathInvalid.
+func TestResolveBackupDest_BaseParentIsAFile(t *testing.T) {
+	tmp := t.TempDir()
+	holder := filepath.Join(tmp, "holder")
+	if err := os.WriteFile(holder, []byte("a file"), 0o644); err != nil {
+		t.Fatalf("write holder file: %v", err)
+	}
+	base := filepath.Join(holder, "backups")
+	dest := filepath.Join(base, "x.db")
+
+	if out, err := ResolveBackupDest(base, dest); err == nil {
+		t.Fatalf("ResolveBackupDest with a file-named base ancestor = (%q), want an error", out)
+	} else if errors.Is(err, ErrBackupPathInvalid) {
+		t.Errorf("error %q wraps ErrBackupPathInvalid, want the plain ENOTDIR resolution error", err)
+	}
+}
+
+// TestBackupTo_NulByteDestination_SurfacesStatError exercises the stat branch
+// of BackupTo where the destination is lexically inside a not-yet-existing
+// base but carries a NUL byte: ResolveBackupDest passes (nothing on disk to
+// walk), and os.Stat then fails with EINVAL — reported, never treated as
+// "target exists".
+func TestBackupTo_NulByteDestination_SurfacesStatError(t *testing.T) {
+	ctx := context.Background()
+	src := openTestDB(t)
+	seedBackupFixture(t, src)
+
+	base := filepath.Join(t.TempDir(), "absent-base") // deliberately not on disk
+	dest := filepath.Join(base, "n\x00x.db")
+
+	out, size, err := BackupTo(ctx, src, base, dest)
+	if err == nil {
+		t.Fatalf("BackupTo with NUL-byte destination = (%q, %d), want an error", out, size)
+	}
+	if errors.Is(err, ErrBackupExists) {
+		t.Errorf("NUL-byte destination misclassified as existing target: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stat backup target") {
+		t.Errorf("error = %q, want it to name the failed stat", err)
+	}
+}
+
 func listFiles(t *testing.T, dir string) []string {
 	t.Helper()
 	var out []string
