@@ -21,6 +21,11 @@ type Repos struct {
 	// nil value is tolerated: existing use cases never touch it, so tests/fakes
 	// that don't wire identity keep working unchanged.
 	Identities IdentityRepository
+
+	// Auth owns the credential/session/api-token write side of the identity model
+	// (multi-user epic T3). Nil-tolerated like Identities: compositions and test
+	// fakes that never exercise /auth/* keep working unchanged.
+	Auth AuthStore
 }
 
 // UnitOfWork is the transactional seam between use cases and persistence. Run
