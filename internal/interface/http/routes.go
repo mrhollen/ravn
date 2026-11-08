@@ -48,6 +48,16 @@ func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/events", app.handleProjectEvents)
 	mux.HandleFunc("GET "+apiPrefix+"/events", app.handleEvents)
 
+	// Authentication (multi-user epic T3). /auth/login is public in multiuser mode; the rest
+	// are gated by AuthGate and, for provisioning, require a shared-operator principal.
+	mux.HandleFunc("POST "+apiPrefix+"/auth/login", app.handleAuthLogin)
+	mux.HandleFunc("GET "+apiPrefix+"/auth/session", app.handleAuthSession)
+	mux.HandleFunc("DELETE "+apiPrefix+"/auth/session", app.handleAuthSessionRevoke)
+	mux.HandleFunc("POST "+apiPrefix+"/auth/accounts", app.handleAuthAccountCreate)
+	mux.HandleFunc("POST "+apiPrefix+"/auth/tokens", app.handleAuthTokenMint)
+	mux.HandleFunc("GET "+apiPrefix+"/auth/tokens", app.handleAuthTokenList)
+	mux.HandleFunc("DELETE "+apiPrefix+"/auth/tokens/{id}", app.handleAuthTokenRevoke)
+
 	mux.HandleFunc("GET "+apiPrefix+"/tasks", app.handleListTasks)
 	mux.HandleFunc("POST "+apiPrefix+"/tasks", app.handleCreateTask)
 	mux.HandleFunc("GET "+apiPrefix+"/tasks/{id}", app.handleGetTask)

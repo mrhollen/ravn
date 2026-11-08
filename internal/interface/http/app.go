@@ -28,6 +28,7 @@ type Deps struct {
 	Artifacts        *application.Artifacts  // routed in slice 3b
 	Acceptance       *application.Acceptance // routed in slice 3b
 	Relations        *application.Relations  // routed in slice 3b
+	Auth             *application.Auth       // OPTIONAL: multi-user auth (T3); nil → /auth/* routes return 404, other behavior unchanged
 	Broker           application.EventBroker // realtime pub-sub for SSE events
 	Events           application.EventStore  // OPTIONAL: activity-log read path behind SSE Last-Event-ID replay; nil = live-only streams (no replay)
 	HTTPClient       *http.Client            // optional HTTP client for external integrations (e.g. OpenCode)

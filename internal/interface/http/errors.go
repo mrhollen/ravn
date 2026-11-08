@@ -17,9 +17,13 @@ import (
 // the wire values are matched by clients (web/src/api.ts, docs/API.md), so a
 // change is a breaking API change.
 const (
-	ErrCodeNotFound        = "not_found"
-	ErrCodeInvalidInput    = "invalid_input"
-	ErrCodeUnauthorized    = "unauthorized"
+	ErrCodeNotFound     = "not_found"
+	ErrCodeInvalidInput = "invalid_input"
+	ErrCodeUnauthorized = "unauthorized"
+	// ErrCodeForbidden marks a request that authenticated (or was anonymous) but whose
+	// principal lacks the privilege the operation requires — in T3, calling an
+	// operator-only /auth/* provisioning endpoint without a shared-operator principal.
+	ErrCodeForbidden       = "forbidden"
 	ErrCodeInternal        = "internal"
 	ErrCodeVersionConflict = "version_conflict"
 	ErrCodeClaimConflict   = "claim_conflict"

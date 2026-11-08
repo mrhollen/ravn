@@ -37,6 +37,7 @@ import (
 	"github.com/mrhollen/ravn/internal/infrastructure/clock"
 	"github.com/mrhollen/ravn/internal/infrastructure/idgen"
 	"github.com/mrhollen/ravn/internal/infrastructure/pubsub"
+	"github.com/mrhollen/ravn/internal/infrastructure/pwhash"
 	"github.com/mrhollen/ravn/internal/infrastructure/sqlite"
 	httpapi "github.com/mrhollen/ravn/internal/interface/http"
 )
@@ -99,6 +100,27 @@ func run(args []string, errW io.Writer) int {
 	logger.Info("ravn-server starting",
 		"version", version, "addr", *addr, "data", *data, "token_set", *token != "",
 		"public_metrics", envBool("RAVN_PUBLIC_METRICS"), "static_dir", *static, "artifacts_dir", *artifacts, "log_level", lvl.String(), "cors_origins", *corsOrigins)
+
+	// Multi-user auth config (T3): validate RAVN_AUTH + its dependencies up front so a
+	// misconfigured deployment fails fast with one clear line instead of booting into an
+	// inconsistent gate. RAVN_AUTH=token requires a non-empty token; the session TTL and
+	// identity-open knobs must parse. The resolved values are re-derived in
+	// newRouterWithPoolAndCORS (env is the single source of truth, so nothing crosses over).
+	if am, err := httpapi.ResolveAuthMode(os.Getenv("RAVN_AUTH"), *token != ""); err != nil {
+		logger.Error("invalid RAVN_AUTH", "err", err)
+		return 1
+	} else if am == httpapi.AuthModeToken && *token == "" {
+		logger.Error("RAVN_AUTH=token requires a non-empty token (flag -token or env RAVN_TOKEN)")
+		return 1
+	}
+	if _, err := httpapi.ParseSessionTTL(os.Getenv("RAVN_SESSION_TTL")); err != nil {
+		logger.Error("invalid RAVN_SESSION_TTL", "err", err)
+		return 1
+	}
+	if _, err := httpapi.ParseIdentityOpen(os.Getenv("RAVN_IDENTITY_OPEN")); err != nil {
+		logger.Error("invalid RAVN_IDENTITY_OPEN", "err", err)
+		return 1
+	}
 
 	if err := os.MkdirAll(*artifacts, 0o755); err != nil {
 		logger.Error("failed to create artifacts dir", "dir", *artifacts, "err", err)
@@ -230,6 +252,21 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 	now := clock.New()
 	mint := idgen.New()
 
+	// Multi-user auth (T3): resolve the gate mode + session TTL from env. run() already
+	// validated these and exits on error, so the errors here are non-fatal — on any surprise
+	// we fall back to safe defaults (token mode / 24h sessions) rather than fail to boot.
+	// The auth use case is only built when a writer DB exists; otherwise Deps.Auth stays nil
+	// and the /auth/* routes answer 404 ("not enabled").
+	authMode := httpapi.AuthModeToken
+	if m, e := httpapi.ResolveAuthMode(os.Getenv("RAVN_AUTH"), token != ""); e == nil {
+		authMode = m
+	}
+	sessionTTL, _ := httpapi.ParseSessionTTL(os.Getenv("RAVN_SESSION_TTL")) // 0/invalid → NewAuth default 24h
+	var auth *application.Auth
+	if uow != nil {
+		auth = application.NewAuth(uow, now, mint, pwhash.New(pwhash.DefaultParams()), sessionTTL)
+	}
+
 	metrics := httpapi.NewMetrics()
 	var events application.EventStore // SSE Last-Event-ID replay (nil = live-only)
 	if readerDB != nil {
@@ -251,6 +288,7 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 		Artifacts:    application.NewArtifacts(uow, now, mint),
 		Acceptance:   application.NewAcceptance(uow, now, mint),
 		Relations:    application.NewRelations(uow, now, mint),
+		Auth:         auth,
 		Broker:       broker,
 		Events:       events,
 		ArtifactsDir: artifactsDir,
@@ -356,7 +394,7 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 	corsOpts := httpapi.DefaultCORSOptions()
 	corsOpts.AllowedOrigins = httpapi.ParseCORSOrigins(corsOrigins)
 
-	apiHandler := httpapi.AuthMiddleware(token)(mux)
+	apiHandler := httpapi.AuthGate(authMode, token, auth)(mux)
 	meteredHandler := metrics.Middleware(apiHandler)
 	corsHandler := httpapi.CORSMiddleware(corsOpts)(meteredHandler)
 	return httpapi.SecurityHeadersMiddleware()(corsHandler)
