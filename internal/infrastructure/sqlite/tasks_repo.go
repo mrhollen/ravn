@@ -28,7 +28,7 @@ var _ application.TaskRepository = (*taskRepo)(nil)
 // order). Nullable columns are scanned into pointer targets.
 const taskColumns = `id, project_id, status, title, description, priority, due_at, notes,
 	assignee_type, assignee_name, claimed_by_type, claimed_by_name, claimed_at,
-	claim_expires_at, claim_ttl_sec, version, archived, created_at, updated_at, completed_at`
+	claim_expires_at, claim_ttl_sec, version, archived, created_at, updated_at, completed_at, created_by`
 
 // lastActivityExpr derives domain.Task.LastActivity on read: the MAX of the
 // task row's own updated_at and the latest child-row timestamp for this task
@@ -61,14 +61,14 @@ const taskSelect = taskColumns + ", " + lastActivityExpr + ` AS last_activity`
 func (r *taskRepo) Create(ctx context.Context, t domain.Task) error {
 	la := claimLeaseArgs(t.Claim) // the five lease columns, rendered all-or-nothing
 	res, err := r.q.ExecContext(ctx,
-		`INSERT INTO task (`+taskColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) `+
+		`INSERT INTO task (`+taskColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) `+
 			`ON CONFLICT(id) DO NOTHING`,
 		string(t.ID), string(t.ProjectID), string(t.Status), t.Title, t.Description, int(t.Priority),
 		tsOrNil(t.DueAt), t.Notes,
 		actorTypeOrNil(t.Assignee), actorNameOrNil(t.Assignee),
 		la[0], la[1], la[2], la[3], la[4],
 		t.Version, boolToInt(t.Archived),
-		formatTS(t.CreatedAt), formatTS(t.UpdatedAt), tsOrNil(t.CompletedAt))
+		formatTS(t.CreatedAt), formatTS(t.UpdatedAt), tsOrNil(t.CompletedAt), idOrNil(t.CreatedBy))
 	if err != nil {
 		if isConstraintViolation(err) {
 			return fmt.Errorf("%w: task %s violates a schema constraint", domain.ErrInvalid, t.ID)
@@ -699,6 +699,21 @@ func taskListWhere(f application.TaskFilter) (string, []any) {
 		args = append(args, formatTS(*f.ClaimExpiryNow))
 	}
 
+	// --- multi-user epic T4 (additive: every branch below fires ONLY on a set field —
+	// the zero-value filter appends nothing, keeping default-mode queries unchanged) ---
+	if f.Creator != nil { // ?mine=created: exact created_by match; a zero ID matches nothing (legacy rows are NULL)
+		conds = append(conds, "created_by = ?")
+		args = append(args, string(*f.Creator))
+	}
+	if f.Visibility != nil { // membership-scoped visibility through the owning project (owner OR member)
+		conds = append(conds, taskProjectVisibleExpr)
+		args = append(args, string(f.Visibility.IdentityID), string(f.Visibility.IdentityID))
+	}
+	if f.ActivityActor != "" { // ?mine=activity: at least one comment/artifact/event by this exact actor name
+		conds = append(conds, taskActivityExpr)
+		args = append(args, f.ActivityActor, f.ActivityActor, f.ActivityActor)
+	}
+
 	return strings.Join(conds, " AND "), args
 }
 
@@ -729,12 +744,13 @@ func scanTask(s scanner) (domain.Task, error) {
 		createdAt      string
 		updatedAt      string
 		completedAt    *string
+		createdBy      *string // NULL for every legacy row → unattributed (epic T4), never an error
 		lastActivity   *string // derived (taskSelect), never NULL in practice — see lastActivityExpr
 	)
 	err := s.Scan(
 		&t.ID, &projectID, &status, &t.Title, &t.Description, &priority, &dueAt, &notes,
 		&assigneeType, &assigneeName, &claimedByType, &claimedByName, &claimedAt,
-		&claimExpiresAt, &claimTTL, &version, &archived, &createdAt, &updatedAt, &completedAt,
+		&claimExpiresAt, &claimTTL, &version, &archived, &createdAt, &updatedAt, &completedAt, &createdBy,
 		&lastActivity)
 	if err != nil {
 		return domain.Task{}, err
@@ -797,6 +813,10 @@ func scanTask(s scanner) (domain.Task, error) {
 			return domain.Task{}, fmt.Errorf("task %s completed_at %q: %w", t.ID, *completedAt, err)
 		}
 		t.CompletedAt = &ts
+	}
+	if createdBy != nil && *createdBy != "" { // NULL = legacy unattributed; a stray '' likewise stays unattributed
+		cb := domain.ID(*createdBy)
+		t.CreatedBy = &cb
 	}
 	// LastActivity is derived on read by taskSelect (see lastActivityExpr): the
 	// SQL never yields NULL, but the pointer + fallback keeps a corrupt row from

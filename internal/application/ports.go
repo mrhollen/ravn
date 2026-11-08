@@ -68,11 +68,36 @@ type ProjectRepository interface {
 	Update(ctx context.Context, p domain.Project) error
 }
 
+// VisibilityScope narrows list results to the rows ONE identity can see under
+// membership-scoped visibility (multi-user epic T4). A project is visible to
+// it when it OWNS the project (project.created_by = IdentityID) OR HOLDS any
+// stored membership in it (a project_member row, role viewer/editor/admin —
+// the policy's "effective role != none" rule folded into one predicate). The
+// task-level analogue inherits through the owning project.
+//
+// Tri-state semantics live on the CALLER holding the pointer: a nil filter
+// field = UNCONSTRAINED (global/default mode — adapters add NO predicate, so
+// default-mode queries stay byte-identical to today); a non-nil scope with a
+// zero ID = DENY ALL (membership scoping is ON but the acting subject is
+// unknown/unresolved, which has no relationships and therefore sees nothing).
+type VisibilityScope struct {
+	IdentityID domain.ID
+}
+
 // ProjectFilter narrows ProjectRepository.List.
 // Archived selects which archive state is listed: false (zero value) =
 // open projects only, the REST default; true = archived projects only.
+//
+// Visibility (multi-user epic T4) scopes the listing to one identity's visible
+// projects when set (see VisibilityScope for the nil / zero-ID tri-state);
+// Creator restricts to projects that identity CREATED. Both are additive: every
+// field left at its zero value leaves the query exactly as it was before, so
+// default-mode callers observe no change.
 type ProjectFilter struct {
 	Archived bool
+
+	Visibility *VisibilityScope // nil = unscoped (default); see VisibilityScope
+	Creator    *domain.ID       // nil = any creator; non-nil matches created_by (a zero ID matches nothing)
 }
 
 // TaskFilter narrows TaskRepository.List. Zero values mean "unconstrained"
@@ -144,6 +169,24 @@ type TaskFilter struct {
 	CreatedBefore   *time.Time
 	CompletedAfter  *time.Time
 	CompletedBefore *time.Time
+
+	// --- multi-user epic T4 (all additive: zero value = no predicate, default-mode queries unchanged) ---
+
+	// Visibility scopes the listing to tasks whose OWNING PROJECT the identity
+	// can see (owner or member — see VisibilityScope). nil = unscoped (the
+	// default; NO clause is added), non-nil with a zero ID = deny all.
+	Visibility *VisibilityScope
+
+	// Creator matches task.created_by exactly (the ?mine=created filter). A
+	// non-nil pointer to a ZERO ID matches NOTHING — a mine=created request
+	// whose acting identity cannot be resolved yields an empty list, never
+	// everything.
+	Creator *domain.ID
+
+	// ActivityActor restricts to tasks the named actor ACTED ON: it has at
+	// least one comment, artifact, or logged event under that exact
+	// actor_name (the ?mine=activity filter). "" = unconstrained.
+	ActivityActor string
 
 	Limit  int // 0 = use the default (20); values above the max (100) are clamped by use cases
 	Offset int // row offset for pagination
@@ -484,4 +527,11 @@ type IdentityRepository interface {
 	// never exceeds RoleAdmin (ownership is derived separately from created_by via
 	// domain.EffectiveRole, never stored in a membership row).
 	MemberRole(ctx context.Context, projectID, identityID domain.ID) (domain.Role, error)
+
+	// GetByIds resolves many identity ids in ONE query (batched name/owner display
+	// for created_by fields, multi-user epic T4). Returns ONLY the rows that exist;
+	// unknown or disabled ids are silently omitted (display lookup, not a policy
+	// input — policies resolve through GetByName/MemberRole). Empty input returns an
+	// empty map and nil error. Only unexpected I/O failures return a non-nil error.
+	GetByIds(ctx context.Context, ids []domain.ID) (map[domain.ID]domain.Identity, error)
 }

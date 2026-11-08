@@ -22,8 +22,16 @@ type Project struct {
 	OpenCodeAgent     string // optional agent name (e.g. "build"); empty = default agent
 	OpenCodeVariant   string // optional model variant (e.g. "thinking", "high"); empty = default variant
 	Archived          bool
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+
+	// CreatedBy is the DURABLE identity of the project's creator (multi-user
+	// epic). nil for legacy rows (created before identity attribution existed)
+	// and for every row created without an authenticated identity — under
+	// membership scoping a nil owner means NO subject can be its Owner until an
+	// owner is explicitly assigned. Never validated for format at the entity
+	// level: storage enforces the FK to identity(id).
+	CreatedBy *ID
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // MaxProjectNameLen caps a project name's length in RUNES after trimming.

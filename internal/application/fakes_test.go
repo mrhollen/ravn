@@ -62,15 +62,20 @@ func (f *fakeProjects) Get(_ context.Context, id domain.ID) (domain.Project, err
 // List returns all projects matching filter ordered by created_at ASC (id ASC tie-break),
 // mirroring the port contract.
 func (f *fakeProjects) List(_ context.Context, filter ...ProjectFilter) ([]domain.Project, error) {
-	archived := false
+	var flt ProjectFilter
 	if len(filter) > 0 {
-		archived = filter[0].Archived
+		flt = filter[0]
 	}
 	out := make([]domain.Project, 0, len(f.byID))
 	for _, p := range f.byID {
-		if p.Archived != archived {
+		if p.Archived != flt.Archived {
 			continue
 		}
+		if flt.Creator != nil && (p.CreatedBy == nil || *p.CreatedBy != *flt.Creator) { // ?mine=created: unattributed never matches
+			continue
+		}
+		// Note: flt.Visibility is sqlite-adapter-only (ownership + membership rows);
+		// use-case tests leave it nil (unscoped).
 		out = append(out, p)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -501,8 +506,13 @@ func taskMatches(t domain.Task, f TaskFilter) bool {
 			return false
 		}
 	}
+	if f.Creator != nil && (t.CreatedBy == nil || *t.CreatedBy != *f.Creator) { // ?mine=created: exact match; unattributed never matches
+		return false
+	}
 	// Note: f.UnblockedOnly and f.ParentID are NOT checked here — they depend on
 	// relation edges, which only fakeTasks.List can see through its rel reference.
+	// f.Visibility is sqlite-adapter-only (it needs ownership + membership rows the
+	// in-memory fake does not model); use-case tests leave it nil (unscoped).
 	return true
 }
 

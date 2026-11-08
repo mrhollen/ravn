@@ -86,6 +86,47 @@ func (r *IdentityResolver) ResolveInProject(ctx context.Context, name string, pr
 	return subject, role, err
 }
 
+// GetByIds resolves identity ids to their rows in ONE unit of work for DISPLAY
+// purposes (rendering the created_by/owner fields of list responses, multi-user
+// epic T4). It is not a policy input — visibility/authorization resolve through
+// Resolve / ResolveInProject — and it silently omits unknown or disabled ids
+// (a legacy backfilled row that was later removed must degrade to unattributed,
+// not error the response). Empty/duplicate inputs are handled: duplicates are
+// collapsed before the query. Only unexpected I/O failures return a non-nil error.
+func (r *IdentityResolver) GetByIds(ctx context.Context, ids []domain.ID) (map[domain.ID]domain.Identity, error) {
+	seen := make(map[domain.ID]struct{}, len(ids))
+	uniq := make([]domain.ID, 0, len(ids))
+	for _, id := range ids { // skip the zero id: it is the NULL created_by sentinel, not an identity
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniq = append(uniq, id)
+	}
+	out := make(map[domain.ID]domain.Identity, len(uniq))
+	if len(uniq) == 0 {
+		return out, nil
+	}
+	var repos Repos
+	err := r.uow.Run(ctx, &repos, func() error {
+		m, e := repos.Identities.GetByIds(ctx, uniq)
+		if e != nil {
+			return e
+		}
+		for k, v := range m {
+			out[k] = v
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // resolveIdentityOutcome maps an IdentityRepository.GetByName result to a resolved
 // Subject plus any PROPAGATED error. The two expected "outcome" sentinels are folded
 // into the Subject (not returned as errors); anything else is returned verbatim so the

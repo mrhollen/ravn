@@ -42,14 +42,20 @@ func NewProjects(uow UnitOfWork, clock Clock, idgen IDGenerator) *Projects {
 }
 
 // Create stores a new project and appends its `created` event in the same
-// unit of work. The acting actor is validated and normalized BEFORE anything
-// else (domain.Actor.Validate via normalizeActor): an invalid principal never
-// reaches the event log. name must be non-empty and at most
-// domain.MaxProjectNameLen runes, and description at most
-// domain.MaxProjectDescriptionLen bytes (else domain.ErrInvalid); the whole
-// entity is gated by domain.Project.Validate before any write. Duplicate names
-// surface as a wrapped domain.ErrInvalid from the repository.
+// unit of work — UNATTRIBUTED (CreatedBy stays nil, the legacy shape): shared-
+// token and unauthenticated deployments keep exactly today's rows. See CreateAs
+// for durable owner attribution.
 func (s *Projects) Create(ctx context.Context, actor domain.Actor, name, description string) (domain.Project, error) {
+	return s.CreateAs(ctx, actor, name, description, nil)
+}
+
+// CreateAs is Create with DURABLE OWNERSHIP ATTRIBUTION (multi-user epic T4):
+// a non-nil owner stamps project.created_by = the acting identity's id, which
+// makes that identity the project's Owner under membership scoping and surfaces
+// as created_by/owner in responses. A nil owner behaves exactly like Create —
+// every existing caller is unchanged. All other semantics (actor validation,
+// name/description bounds, Validate gate, duplicate-name error) are identical.
+func (s *Projects) CreateAs(ctx context.Context, actor domain.Actor, name, description string, owner *domain.ID) (domain.Project, error) {
 	actor, err := normalizeActor(actor)
 	if err != nil {
 		return domain.Project{}, err
@@ -61,6 +67,7 @@ func (s *Projects) Create(ctx context.Context, actor domain.Actor, name, descrip
 		ID:          s.idgen.NewID(),
 		Name:        name,
 		Description: description,
+		CreatedBy:   owner,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}

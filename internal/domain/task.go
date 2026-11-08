@@ -33,6 +33,14 @@ type Task struct {
 	// impossible because every field is unexported.
 	Claim Claim
 
+	// CreatedBy is the DURABLE identity that created this task (multi-user
+	// epic). nil for legacy rows and rows created without an authenticated
+	// identity — rendered unattributed, never an error. It does NOT grant any
+	// role on its own: project roles come from ownership of the PROJECT
+	// (project.created_by) and stored membership rows; CreatedBy only powers
+	// attribution (responses) and the ?mine=created list filter.
+	CreatedBy *ID
+
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	CompletedAt  *time.Time // set when status becomes done

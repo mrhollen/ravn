@@ -96,6 +96,12 @@ type TaskInput struct {
 	// self-parent is structurally impossible (freshly minted ID).
 	ParentID domain.ID
 
+	// CreatedBy is the DURABLE identity that created this task (multi-user epic
+	// T4): attribution only — rendered unattributed when nil (legacy rows), and
+	// matched by the ?mine=created list filter. It grants no role; project roles
+	// come from the project's owner + stored membership. nil = no attribution.
+	CreatedBy *domain.ID
+
 	// BlockedBy optionally files the new task as blocked by each named task in
 	// the SAME transaction: per unique id, one stored edge kind='blocked-by',
 	// task_id=new task, other_task_id=blocker — byte-identical to what
@@ -218,6 +224,7 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 		Priority:    in.Priority,
 		DueAt:       copyTime(in.DueAt),
 		Assignee:    assignee,
+		CreatedBy:   in.CreatedBy, // nil = unattributed (legacy shape); adapters store NULL
 		Version:     1, // fresh task rows start at version 1 (ADR)
 		Archived:    false,
 		CreatedAt:   now,

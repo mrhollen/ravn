@@ -21,8 +21,9 @@ func newProjectRepo(q querier) *projectRepo { return &projectRepo{q: q} }
 var _ application.ProjectRepository = (*projectRepo)(nil)
 
 // projectColumns is the single source of truth for SELECT column order — it
-// must stay aligned with scanProject's Scan targets.
-const projectColumns = "id, name, description, opencode_server_url, opencode_directory, opencode_model, opencode_agent, opencode_variant, archived, created_at, updated_at"
+// must stay aligned with scanProject's Scan targets. created_by (migration 0011)
+// is trailing so legacy rows scan as NULL → domain.CreatedBy stays nil.
+const projectColumns = "id, name, description, opencode_server_url, opencode_directory, opencode_model, opencode_agent, opencode_variant, archived, created_at, updated_at, created_by"
 
 // Create stores a new project row exactly as given (IDs and timestamps are
 // minted/stamped by the use case). A duplicate name trips the UNIQUE
@@ -33,8 +34,8 @@ func (r *projectRepo) Create(ctx context.Context, p domain.Project) error {
 		archivedInt = 1
 	}
 	_, err := r.q.ExecContext(ctx,
-		`INSERT INTO project (`+projectColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		string(p.ID), p.Name, p.Description, p.OpenCodeServerURL, p.OpenCodeDirectory, p.OpenCodeModel, p.OpenCodeAgent, p.OpenCodeVariant, archivedInt, formatTS(p.CreatedAt), formatTS(p.UpdatedAt))
+		`INSERT INTO project (`+projectColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		string(p.ID), p.Name, p.Description, p.OpenCodeServerURL, p.OpenCodeDirectory, p.OpenCodeModel, p.OpenCodeAgent, p.OpenCodeVariant, archivedInt, formatTS(p.CreatedAt), formatTS(p.UpdatedAt), idOrNil(p.CreatedBy))
 	if err != nil {
 		if isConstraintViolation(err) {
 			return fmt.Errorf("%w: project name %q already exists", domain.ErrInvalid, p.Name)
@@ -61,8 +62,20 @@ func (r *projectRepo) List(ctx context.Context, f ...application.ProjectFilter) 
 	if len(f) > 0 && f[0].Archived {
 		archivedInt = 1
 	}
+	where := "archived = ?"
+	args := []any{archivedInt}
+	if len(f) > 0 { // optional narrowing — the zero-value filter adds NOTHING, so default-mode queries are unchanged
+		if f[0].Creator != nil { // ?mine=created: exact created_by match (a zero ID matches nothing — legacy rows are NULL)
+			where += " AND created_by = ?"
+			args = append(args, string(*f[0].Creator))
+		}
+		if f[0].Visibility != nil { // membership-scoped visibility: owner OR stored member (epic T4)
+			where += " AND (" + projectVisibleExpr + ")"
+			args = append(args, string(f[0].Visibility.IdentityID), string(f[0].Visibility.IdentityID))
+		}
+	}
 	rows, err := r.q.QueryContext(ctx,
-		`SELECT `+projectColumns+` FROM project WHERE archived = ? ORDER BY created_at ASC, id ASC`, archivedInt)
+		`SELECT `+projectColumns+` FROM project WHERE `+where+` ORDER BY created_at ASC, id ASC`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
@@ -122,8 +135,9 @@ func scanProject(s scanner) (domain.Project, error) {
 		archived          int
 		createdAt         string
 		updatedAt         string
+		createdBy         sql.NullString // NULL for every legacy row → unattributed, never an error
 	)
-	if err := s.Scan(&p.ID, &p.Name, &description, &opencodeServerURL, &opencodeDirectory, &opencodeModel, &opencodeAgent, &opencodeVariant, &archived, &createdAt, &updatedAt); err != nil {
+	if err := s.Scan(&p.ID, &p.Name, &description, &opencodeServerURL, &opencodeDirectory, &opencodeModel, &opencodeAgent, &opencodeVariant, &archived, &createdAt, &updatedAt, &createdBy); err != nil {
 		return domain.Project{}, err
 	}
 	created, err := parseTS(createdAt)
@@ -133,6 +147,10 @@ func scanProject(s scanner) (domain.Project, error) {
 	updated, err := parseTS(updatedAt)
 	if err != nil {
 		return domain.Project{}, fmt.Errorf("project %s updated_at %q: %w", p.ID, updatedAt, err)
+	}
+	if createdBy.Valid && createdBy.String != "" { // malformed non-NULL is impossible (FK), but a stray '' stays unattributed
+		cb := domain.ID(createdBy.String)
+		p.CreatedBy = &cb
 	}
 	p.Description = description
 	p.OpenCodeServerURL = opencodeServerURL

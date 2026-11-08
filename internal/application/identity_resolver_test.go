@@ -35,7 +35,26 @@ type fakeIdents struct {
 	member map[memberKey]domain.Role
 	failGet    error
 	failMember error
+	failByIds error // injects a failure into GetByIds (display lookups)
 	getCalls   int // to assert MemberRole is short-circuited for non-enabled subjects
+}
+
+// GetByIds mirrors the sqlite adapter's display semantics: outcome-INSENSITIVE —
+// unknown ids are omitted from the map, disabled ids are INCLUDED (attribution, not
+// auth), and it derives from byName so existing fixtures need no changes.
+func (f *fakeIdents) GetByIds(_ context.Context, ids []domain.ID) (map[domain.ID]domain.Identity, error) {
+	if f.failByIds != nil {
+		return nil, f.failByIds
+	}
+	out := make(map[domain.ID]domain.Identity, len(ids))
+	for _, id := range ids {
+		for _, i := range f.byName {
+			if i.ID == id {
+				out[id] = i
+			}
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeIdents) GetByName(_ context.Context, name string) (domain.Identity, error) {

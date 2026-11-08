@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mrhollen/ravn/internal/application"
 	"github.com/mrhollen/ravn/internal/domain"
@@ -49,6 +50,38 @@ func (r *identityRepo) GetByName(ctx context.Context, name string) (domain.Ident
 		return id, domain.ErrIdentityDisabled
 	}
 	return id, nil
+}
+
+// GetByIds resolves identity ids to their rows in ONE unit of work for display
+// purposes (created_by/owner rendering, multi-user epic T4) via a single batched
+// IN query. It is deliberately OUTCOME-INSENSITIVE: unknown ids are simply absent
+// from the map and DISABLED ids are included — this is attribution metadata, not
+// authentication, so a later-disabled creator still renders on their rows (and an
+// empty input list short-circuits without touching the DB). Only I/O errors are
+// wrapped and returned.
+func (r *identityRepo) GetByIds(ctx context.Context, ids []domain.ID) (map[domain.ID]domain.Identity, error) {
+	out := make(map[domain.ID]domain.Identity, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") // one placeholder per id; ids are ULIDs (no quoting concerns)
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = string(id)
+	}
+	rows, err := r.q.QueryContext(ctx, `SELECT `+identityColumns+` FROM identity WHERE id IN (`+ph+")", args...)
+	if err != nil {
+		return nil, fmt.Errorf("get identities by ids: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() { // no row => unknown id, omitted by construction
+		id, err := scanIdentity(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[id.ID] = id
+	}
+	return out, rows.Err()
 }
 
 // MemberRole returns the stored membership role for (projectID, identityID). A missing
