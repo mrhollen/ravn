@@ -86,6 +86,7 @@ func (u *SQLiteUnitOfWork) Run(ctx context.Context, r *application.Repos, fn fun
 	r.Comments = newCommentRepo(tx)
 	r.Artifacts = newArtifactRepo(tx)
 	r.Relations = newRelationRepo(tx)
+	r.Identities = newIdentityRepo(tx)
 
 	var committedEvents []domain.Event
 	eventStore := newEventStore(tx)
