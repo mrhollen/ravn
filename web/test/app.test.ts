@@ -18,6 +18,8 @@ import {
   DEFAULT_DONE_LIMIT,
   readStoredCardDensity,
   isCardDensity,
+  LS_MY_PROJECTS,
+  readStoredMyProjects,
   parseBoardQueryParams,
   buildBoardQueryString,
   SEARCH_DEBOUNCE_MS,
@@ -2542,6 +2544,24 @@ test("CardDensity: app state initialization, toggle and persistence", () => {
   app.setCardDensity("compact");
   assert.equal(app.cardDensity, "compact");
   assert.equal(safeStorage.getItem(LS_CARD_DENSITY), "compact");
+});
+
+test("MyProjects: readStoredMyProjects defaults to false and reads the persisted flag", () => {
+  safeStorage.clear();
+  assert.equal(readStoredMyProjects(), false, "no stored value → off");
+  safeStorage.setItem(LS_MY_PROJECTS, "1");
+  assert.equal(readStoredMyProjects(), true, "'1' → on");
+  safeStorage.setItem(LS_MY_PROJECTS, "0");
+  assert.equal(readStoredMyProjects(), false, "'0' → off");
+  safeStorage.setItem(LS_MY_PROJECTS, "junk");
+  assert.equal(readStoredMyProjects(), false, "anything but '1' → off");
+});
+
+test("MyProjects: ravnApp initializes myProjectsOnly from the persisted flag", () => {
+  safeStorage.clear();
+  assert.equal((ravnApp() as any).myProjectsOnly, false, "no stored value → off at init");
+  safeStorage.setItem(LS_MY_PROJECTS, "1");
+  assert.equal((ravnApp() as any).myProjectsOnly, true, "'1' → on at init");
 });
 
 test("DonePagination: columns() caps Done tasks to doneLimit and orders by recency", () => {

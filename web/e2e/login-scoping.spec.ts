@@ -191,5 +191,81 @@ test.describe('T7 session identity (multiuser + membership)', () => {
     // …and "Secret Room" appears nowhere in his UI (dropdown trigger + any card).
     await expect(page.locator('body', { hasText: 'Secret Room' })).toHaveCount(0);
   });
+});
 
+test.describe('T7 "My projects" filter (multiuser + global scoping)', () => {
+  // GLOBAL scoping (not membership): every project is visible to everyone, so the
+  // ?mine=created filter — NOT per-project visibility — is what isolates a user's own
+  // created projects. This proves AC3's "My projects" half end-to-end AND that the
+  // unfiltered ("global") list still shows everything (the filter, not visibility, narrows).
+  test.use({ isolatedServerEnv: { RAVN_AUTH: 'multiuser', RAVN_TOKEN: SHARED_TOKEN, RAVN_SCOPING: 'global' } });
+
+  let base = '';
+  let uncaught: string[] = [];
+
+  test.beforeEach(async ({ page }) => {
+    uncaught = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        // A credential-less first-visit boot fetches /api/v1/projects → 401; expected.
+        if (msg.text().includes('status of 401')) return;
+        uncaught.push(`[console.error] ${msg.text()}`);
+      }
+    });
+    page.on('pageerror', (err) => {
+      uncaught.push(`[uncaught pageerror] ${err.message}`);
+    });
+  });
+
+  test.afterEach(async () => {
+    expect(uncaught).toEqual([]);
+  });
+
+  // Names from the projects list for a token, optionally mine-scoped (AC3 ground truth).
+  async function projectNames(token: string, mine = false): Promise<string[]> {
+    const url = `${base}/api/v1/projects${mine ? '?mine=created' : ''}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    const out = (await res.json()) as { projects: Array<{ name: string }> };
+    return out.projects.map((p) => p.name);
+  }
+
+  test('the "My projects" filter shows only the signed-in user\'s created projects; global shows all', async ({ page, isolatedServer }) => {
+    base = isolatedServer.url; // fresh empty DB per test — plain distinct names suffice
+    await createAccount(base, 'alice');
+    await createAccount(base, 'bob');
+    const tokAlice = await loginApi(base, 'alice');
+    const tokBob = await loginApi(base, 'bob');
+    await createProject(base, tokAlice, 'Alice Global Proj'); // created_by stamped with alice
+    await createProject(base, tokBob, 'Bob Global Proj'); // created_by stamped with bob
+
+    // Server ground truth (global mode): unscoped list shows BOTH; mine=created narrows to own.
+    expect(await projectNames(tokAlice), 'global: unscoped sees all projects').toEqual(
+      expect.arrayContaining(['Alice Global Proj', 'Bob Global Proj']),
+    );
+    expect(await projectNames(tokAlice, true), 'global: ?mine=created shows only own created').toEqual(['Alice Global Proj']);
+
+    await loginViaUI(page, base, 'alice');
+
+    const menu = page.getByTestId('project-menu');
+    const trigger = page.getByTestId('project-select');
+    const toggle = page.getByTestId('my-projects-toggle');
+
+    // Open the dropdown: global mode lists every project to alice. The signed-in control renders.
+    await trigger.click();
+    await expect(menu).toBeVisible();
+    await expect(toggle).toBeVisible();
+    await expect(menu.getByText('Alice Global Proj')).toBeVisible();
+    await expect(menu.getByText('Bob Global Proj')).toBeVisible();
+
+    // Toggle ON: only alice's created project remains (bob's filtered out server-side).
+    await toggle.click();
+    await expect(menu.getByText('Alice Global Proj')).toBeVisible();
+    await expect(menu.getByText('Bob Global Proj')).not.toBeVisible();
+
+    // Toggle OFF: both return — global mode shows all when unfiltered.
+    await toggle.click();
+    await expect(menu.getByText('Alice Global Proj')).toBeVisible();
+    await expect(menu.getByText('Bob Global Proj')).toBeVisible();
+  });
 });

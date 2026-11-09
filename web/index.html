@@ -201,8 +201,22 @@
                  @keydown.home.prevent="moveProjectFocus('home')"
                  @keydown.end.prevent="moveProjectFocus('end')"
                  @keydown.escape="closeProjectMenu(true)"
-                 class="absolute left-0 right-0 top-full z-40 mt-1.5 max-h-[24rem] min-w-[15rem] overflow-auto rounded-md border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
-              <template x-for="p in projects" :key="p.id">
+                  class="absolute left-0 right-0 top-full z-40 mt-1.5 max-h-[24rem] min-w-[15rem] overflow-auto rounded-md border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
+               <!-- "My projects" filter (AC3): restricts the OPEN list to projects the
+                    signed-in identity created (?mine=created). Rendered only while a session
+                    identity exists — the server rejects mine=created with no acting actor, so
+                    logged-out views always show every project. A <label>+<input> (NOT a
+                    <button>) keeps it OUT of moveProjectFocus's roving button list, so
+                    Arrow/Home/End still traverse only the project rows + "+ New project…". -->
+               <template x-if="identity">
+                 <div class="w-full border-b border-zinc-100 pb-1 dark:border-zinc-800">
+                   <label class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-zinc-100 focus-within:rounded focus-within:ring-1 focus-within:ring-indigo-500 dark:hover:bg-zinc-800">
+                     <input type="checkbox" data-testid="my-projects-toggle" x-model="myProjectsOnly" @change="onMyProjectsToggle()" class="h-3.5 w-3.5 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500 dark:border-zinc-600">
+                     <span class="min-w-0 flex-1 truncate" x-text="'My projects'"></span>
+                   </label>
+                 </div>
+               </template>
+               <template x-for="p in projects" :key="p.id">
                 <button type="button" role="menuitem" data-testid="project-option" :data-project-id="p.id"
                         @click="pickProject(p.id)"
                         class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-zinc-100 focus-ring dark:hover:bg-zinc-800"

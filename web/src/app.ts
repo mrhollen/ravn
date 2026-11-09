@@ -76,6 +76,9 @@ export const LS_CARD_DENSITY = "ravn.card_density";
 export const LS_THEME = "ravn_theme";
 /** Persisted per-actor board scope (epic T7); "all" means no mine filter. */
 export const LS_TASK_SCOPE = "ravn.task_scope";
+/** Persisted "My projects" filter (epic T7): true → the open project list is fetched
+ *  with ?mine=created so only projects the signed-in identity created are shown. */
+export const LS_MY_PROJECTS = "ravn.my_projects";
 
 /** Board data-source scope: the unscoped default plus the three task `mine` values. */
 export type TaskScope = "all" | MineScope;
@@ -88,6 +91,15 @@ export function readStoredTaskScope(): TaskScope {
     return (TASK_SCOPES as readonly string[]).includes(v) ? (v as TaskScope) : "all";
   } catch {
     return "all";
+  }
+}
+
+/** Read + validate the persisted "My projects" flag; falls back to false on any bad value. */
+export function readStoredMyProjects(): boolean {
+  try {
+    return safeStorage.getItem(LS_MY_PROJECTS) === "1";
+  } catch {
+    return false;
   }
 }
 
@@ -785,6 +797,10 @@ export function ravnApp() {
     loginError: "",
     /** Per-actor board scope (persisted): "all" or one of the task `mine` values. */
     taskScope: readStoredTaskScope() as TaskScope,
+    /** "My projects" filter (persisted): true → the open project list is fetched with
+     *  ?mine=created. Only honored while a session identity exists — the server rejects
+     *  mine=created with no acting actor — so logged-out views always show every project. */
+    myProjectsOnly: readStoredMyProjects(),
     /** True once a signed-in session is denied access to the currently selected project
      *  (membership scoping 403). Drives a one-shot "no access" banner and stops the SSE
      *  reconnect loop; cleared on a successful board load / project change. */
@@ -916,6 +932,18 @@ export function ravnApp() {
       void this.loadBoard();
     },
 
+    /** "My projects" filter change (epic T7): persist the flag, then reload the project
+     *  lists. The open list re-fetches with ?mine=created (gated on a session identity in
+     *  loadProjectsCore); the archived list is deliberately never mine-scoped. */
+    onMyProjectsToggle(): void {
+      try {
+        safeStorage.setItem(LS_MY_PROJECTS, this.myProjectsOnly ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      void this.loadProjects(false);
+    },
+
     /** Single close path for the auth modal (× / Cancel / backdrop / save / clear / Esc). */
     closeAuthModal(): void {
       this.showAuthModal = false;
@@ -1026,8 +1054,16 @@ export function ravnApp() {
         // own call. They run in parallel — total latency stays ~1 RTT. A failed
         // ARCHIVED fetch degrades gracefully: the restore section simply keeps
         // showing the last known list instead of erroring the boot path.
+        // "My projects" (epic T7): when the filter is on AND a session identity exists,
+        // restrict the OPEN list to this identity's created projects (?mine=created). The
+        // archived fetch stays unscoped (the endpoint never combines archived + mine), and
+        // logged-out views omit the param so they keep seeing every project.
+        const openList = api.listProjects(
+          false,
+          this.myProjectsOnly && this.identity ? "created" : undefined,
+        );
         const [res, archivedRes] = await Promise.all([
-          api.listProjects(),
+          openList,
           api.listProjects(true).catch((e) => {
             if (!ApiError.isUnauthorized(e)) console.warn("archived projects fetch failed:", e);
             return null; // keep the previous archivedProjects on failure
