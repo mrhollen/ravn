@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -36,7 +38,51 @@ type fakeIdents struct {
 	failGet    error
 	failMember error
 	failByIds error // injects a failure into GetByIds (display lookups)
+	failWrite  error // injects a failure into the T9 write methods (upsert/remove/list)
 	getCalls   int // to assert MemberRole is short-circuited for non-enabled subjects
+}
+
+// The T9 write side mirrors the sqlite adapter's semantics: UpsertMember rejects
+// non-storable roles, RemoveMember reports missing rows as wrapped ErrNotFound, and
+// ListMembers returns stable identity_id order (disabled identities' rows included).
+func (f *fakeIdents) UpsertMember(_ context.Context, projectID, identityID domain.ID, role domain.Role) error {
+	if f.failWrite != nil {
+		return f.failWrite
+	}
+	if !role.Storable() {
+		return fmt.Errorf("%w: storable membership roles are viewer/editor/admin, got %q", domain.ErrInvalid, role.String())
+	}
+	if f.member == nil { // fixtures that only exercise reads never set the map; writing needs one
+		f.member = make(map[memberKey]domain.Role)
+	}
+	f.member[memberKey{projectID, identityID}] = role
+	return nil
+}
+
+func (f *fakeIdents) RemoveMember(_ context.Context, projectID, identityID domain.ID) error {
+	if f.failWrite != nil {
+		return f.failWrite
+	}
+	k := memberKey{projectID, identityID}
+	if _, ok := f.member[k]; !ok {
+		return fmt.Errorf("%w: identity %s is not a member of project %s", domain.ErrNotFound, identityID, projectID)
+	}
+	delete(f.member, k)
+	return nil
+}
+
+func (f *fakeIdents) ListMembers(_ context.Context, projectID domain.ID) ([]domain.ProjectMember, error) {
+	if f.failWrite != nil {
+		return nil, f.failWrite
+	}
+	out := make([]domain.ProjectMember, 0)
+	for k, role := range f.member {
+		if k.project == projectID {
+			out = append(out, domain.ProjectMember{ProjectID: projectID, IdentityID: k.identity, Role: role})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].IdentityID < out[j].IdentityID })
+	return out, nil
 }
 
 // GetByIds mirrors the sqlite adapter's display semantics: outcome-INSENSITIVE —

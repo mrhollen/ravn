@@ -504,13 +504,13 @@ type EventBroker interface {
 	Close() error
 }
 
-// IdentityRepository is the read-side port for the multi-user identity model
-// (epic T2). It resolves durable identities by their unique name and reports a
-// subject's stored membership role for a project, backed by the identity /
-// project_member tables added in migration 0011. It is deliberately read-only in
-// this ticket: resolving who an actor is and what role they hold are the two facts
-// visibility/authorization policies consume; WRITING memberships or credentials
-// belongs to a later epic ticket.
+// IdentityRepository is the port for the multi-user identity model (epic T2).
+// It resolves durable identities by their unique name and reports a subject's
+// stored membership role for a project, backed by the identity / project_member
+// tables added in migration 0011. The read side (T2/T4) serves the
+// visibility/authorization policies; the write side (UpsertMember / RemoveMember
+// / ListMembers, multi-user T9) is used ONLY by the Memberships use case —
+// credentials are still written through the Auth store, not here.
 type IdentityRepository interface {
 	// GetByName resolves name to its identity row. Outcomes (see the port doc):
 	//
@@ -531,6 +531,31 @@ type IdentityRepository interface {
 	// never exceeds RoleAdmin (ownership is derived separately from created_by via
 	// domain.EffectiveRole, never stored in a membership row).
 	MemberRole(ctx context.Context, projectID, identityID domain.ID) (domain.Role, error)
+
+	// UpsertMember creates or updates the stored membership row for
+	// (projectID, identityID) with role. Only Storable roles may be written
+	// (RoleNone would mean "delete", RoleOwner is derived — both are rejected
+	// with a wrapped ErrInvalid); any other error wraps the underlying failure.
+	// The call is idempotent: setting a row to the role it already has is a no-op
+	// that still returns nil, so re-granting is safe under concurrency. No FK
+	// integrity is checked here for identityID — the use case resolves the name
+	// through GetByName first, and legacy rows predating that call are tolerated.
+	UpsertMember(ctx context.Context, projectID, identityID domain.ID, role domain.Role) error
+
+	// RemoveMember deletes the stored membership row for (projectID,
+	// identityID). "No such row" is an OUTCOME distinct from I/O failure: it
+	// returns a wrapped ErrNotFound ("not a member"), mirroring MemberRole's
+	// RoleNone-as-normal-outcome stance in the write direction. Disabling an
+	// identity does NOT auto-remove its rows (a disabled principal's membership
+	// is preserved for re-enable), so callers must remove explicitly.
+	RemoveMember(ctx context.Context, projectID, identityID domain.ID) error
+
+	// ListMembers returns every stored membership row of projectID in stable
+	// order (identity_id ascending). Rows for disabled identities are included —
+	// the caller decides policy; this is a raw view of the table. An empty
+	// project returns an empty (non-nil) slice and nil error. Only unexpected I/O
+	// failures return a non-nil error.
+	ListMembers(ctx context.Context, projectID domain.ID) ([]domain.ProjectMember, error)
 
 	// GetByIds resolves many identity ids in ONE query (batched name/owner display
 	// for created_by fields, multi-user epic T4). Returns ONLY the rows that exist;
