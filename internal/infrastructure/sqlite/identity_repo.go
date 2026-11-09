@@ -11,12 +11,12 @@ import (
 	"github.com/mrhollen/ravn/internal/domain"
 )
 
-// identityRepo implements application.IdentityRepository over SQLite: the read side
-// of the multi-user identity model (epic T2). It is deliberately READ-ONLY — it
-// resolves an identity by name and reports a stored membership role; writing rows
-// (credentials, sessions, memberships) belongs to later epic tickets. It uses raw
-// database/sql with an explicit column list and hand-rolled scanning (ARCHITECTURE §4),
-// the same shape as every other repo here.
+// identityRepo implements application.IdentityRepository over SQLite: the multi-user
+// identity model. The read side (epic T2) resolves an identity by name and reports a
+// stored membership role; the write side (T9, UpsertMember/RemoveMember/ListMembers)
+// maintains the project_member rows for the Memberships use case. Credentials still
+// live in the Auth store. It uses raw database/sql with an explicit column list and
+// hand-rolled scanning (ARCHITECTURE §4), the same shape as every other repo here.
 type identityRepo struct {
 	q querier
 }
@@ -100,6 +100,75 @@ func (r *identityRepo) MemberRole(ctx context.Context, projectID, identityID dom
 		return domain.RoleNone, fmt.Errorf("get membership %s/%s: %w", projectID, identityID, err)
 	}
 	return domain.ParseRole(roleStr.String)
+}
+
+// UpsertMember writes the stored membership row per the port contract: only Storable
+// roles may persist (RoleNone/RoleOwner rejected with wrapped ErrInvalid — matching
+// the CHECK constraint, so an in-memory guard catches it before the driver ever sees
+// it), and ON CONFLICT(project_id, identity_id) makes re-granting idempotent. The
+// project_member row carries no timestamps of its own (T9 keeps the table unchanged).
+func (r *identityRepo) UpsertMember(ctx context.Context, projectID, identityID domain.ID, role domain.Role) error {
+	if !role.Storable() {
+		return fmt.Errorf("%w: storable membership roles are viewer/editor/admin, got %q", domain.ErrInvalid, role.String())
+	}
+	_, err := r.q.ExecContext(ctx,
+		`INSERT INTO project_member (project_id, identity_id, role) VALUES (?, ?, ?)
+		 ON CONFLICT(project_id, identity_id) DO UPDATE SET role = excluded.role`,
+		string(projectID), string(identityID), role.String())
+	if err != nil {
+		return fmt.Errorf("upsert membership %s/%s: %w", projectID, identityID, err)
+	}
+	return nil
+}
+
+// RemoveMember deletes the stored membership row per the port contract. A DELETE that
+// affects zero rows is the "not a member" OUTCOME and maps to wrapped ErrNotFound —
+// RowsAffected is authoritative here (no read-then-delete race window).
+func (r *identityRepo) RemoveMember(ctx context.Context, projectID, identityID domain.ID) error {
+	res, err := r.q.ExecContext(ctx,
+		`DELETE FROM project_member WHERE project_id = ? AND identity_id = ?`,
+		string(projectID), string(identityID))
+	if err != nil {
+		return fmt.Errorf("remove membership %s/%s: %w", projectID, identityID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("remove membership %s/%s: %w", projectID, identityID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: identity %s is not a member of project %s", domain.ErrNotFound, identityID, projectID)
+	}
+	return nil
+}
+
+// ListMembers returns the project's stored membership rows in stable identity_id order.
+// Disabled identities' rows are included (raw table view — policy filtering is the use
+// case's job). The stored text round-trips through domain.ParseRole so a corrupted role
+// value surfaces as an error, same as MemberRole.
+func (r *identityRepo) ListMembers(ctx context.Context, projectID domain.ID) ([]domain.ProjectMember, error) {
+	rows, err := r.q.QueryContext(ctx,
+		`SELECT identity_id, role FROM project_member WHERE project_id = ? ORDER BY identity_id ASC`,
+		string(projectID))
+	if err != nil {
+		return nil, fmt.Errorf("list memberships %s: %w", projectID, err)
+	}
+	defer rows.Close()
+	out := make([]domain.ProjectMember, 0)
+	for rows.Next() {
+		var (
+			identityID domain.ID
+			roleStr    string
+		)
+		if err := rows.Scan(&identityID, &roleStr); err != nil {
+			return nil, fmt.Errorf("list memberships %s: %w", projectID, err)
+		}
+		role, err := domain.ParseRole(roleStr)
+		if err != nil {
+			return nil, err // wrapped ErrInvalid naming the corrupted value
+		}
+		out = append(out, domain.ProjectMember{ProjectID: projectID, IdentityID: identityID, Role: role})
+	}
+	return out, rows.Err()
 }
 
 // scanIdentity mirrors the identityColumns order. disabled_at and last_active_at are
