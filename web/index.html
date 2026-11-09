@@ -1909,6 +1909,78 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               </label>
             </div>
 
+            <!-- Members section (multi-user T9): roster + add / role change / remove.
+                 Renders only when GET /members succeeded for this deployment
+                 (membership scoping enabled AND visible to the caller); the write
+                 controls appear only for owner/admins, read-only members get the
+                 roster with plain role badges. Deliberately NOT a nested <form> —
+                 it lives inside the outer settings form (nested forms are invalid
+                 HTML); Enter in the username input triggers addMember() directly. -->
+            <div x-show="membersState === 'ready'" x-cloak data-testid="members-section"
+                 class="border-t border-zinc-200 dark:border-zinc-800 pt-3 flex flex-col gap-2">
+              <div>
+                <h3 class="text-xs font-semibold text-zinc-900 dark:text-zinc-100">Members</h3>
+                <p class="text-[11px] text-zinc-600 dark:text-zinc-400">Who can see and work on this project</p>
+              </div>
+
+              <!-- Owner line: ownership derives from created_by, not a stored row. -->
+              <template x-if="membersRoster?.owner">
+                <div data-testid="members-owner-row"
+                     class="flex items-center justify-between rounded-md border border-indigo-100 bg-indigo-50/60 px-2.5 py-1.5 dark:border-indigo-900/40 dark:bg-indigo-950/30">
+                  <span class="text-xs font-medium text-zinc-800 dark:text-zinc-200" x-text="'Owner · ' + membersRoster.owner.name"></span>
+                  <span class="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300">Owner</span>
+                </div>
+              </template>
+
+              <!-- Stored membership rows (the owner may appear here too, badged). -->
+              <template x-for="m in (membersRoster?.members ?? [])" :key="m.username">
+                <div data-testid="member-row" :data-member-name="m.username"
+                     class="flex items-center gap-2 rounded-md border border-zinc-100 bg-white px-2.5 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
+                  <span class="min-w-0 flex-1 truncate text-xs font-medium text-zinc-800 dark:text-zinc-200" x-text="m.username"></span>
+                  <template x-if="isOwnerMember(m.username)">
+                    <span class="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300">Owner</span>
+                  </template>
+                  <select x-show="canManageMembers()" x-model="m.role" :disabled="membersBusy"
+                          :aria-label="'Role for ' + m.username" :data-testid="'member-role-select-' + m.username"
+                          @change="changeMemberRole(m.username)" class="field text-xs w-24 py-1">
+                    <template x-for="r in MEMBER_ROLES" :key="r">
+                      <option :value="r" x-text="r"></option>
+                    </template>
+                  </select>
+                  <!-- Read-only badge for members without manage permission. -->
+                  <span x-show="!canManageMembers()"
+                        class="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium capitalize text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                        x-text="m.role"></span>
+                  <button type="button" x-show="canManageMembers()" :disabled="membersBusy"
+                          @click="removeMember(m.username)" :data-testid="'member-remove-' + m.username"
+                          :aria-label="'Remove ' + m.username + ' from this project'"
+                          class="rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed focus-ring dark:border-red-900/60 dark:bg-zinc-900 dark:text-red-400 dark:hover:bg-red-950/40">
+                    Remove
+                  </button>
+                </div>
+              </template>
+
+              <!-- Add / re-grant row — managers only. The server upserts: a fresh
+                   row toasts "added", an existing row a role change. -->
+              <div x-show="canManageMembers()" data-testid="members-add-form"
+                   class="flex items-center gap-1.5 pt-1">
+                <input type="text" x-model="memberAddName" placeholder="Username to add…" autocomplete="off"
+                       aria-label="Username to add as a member" data-testid="member-add-name"
+                       @keydown.enter.prevent="addMember()" class="field text-xs flex-1 py-1.5" />
+                <select x-model="memberAddRole" :disabled="membersBusy" aria-label="Role for the new member"
+                        data-testid="member-add-role" class="field text-xs w-24 py-1.5">
+                  <template x-for="r in MEMBER_ROLES" :key="r">
+                    <option :value="r" x-text="r"></option>
+                  </template>
+                </select>
+                <button type="button" @click="addMember()" :disabled="membersBusy || !memberAddName.trim()"
+                        data-testid="member-add-btn"
+                        class="rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">
+                  <span x-text="membersBusy ? 'Saving…' : 'Add'"></span>
+                </button>
+              </div>
+            </div>
+
             <!-- Archive Project section -->
             <div class="border-t border-zinc-200 dark:border-zinc-800 pt-3 flex flex-col gap-2">
               <div x-show="!showArchiveConfirm" class="flex items-center justify-between">

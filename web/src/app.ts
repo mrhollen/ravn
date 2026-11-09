@@ -13,6 +13,7 @@ import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus }
 import { beginMove, canMove, endMove, friendlyTransitionError, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
 import { renderMarkdown } from "./md";
+import { MEMBER_ROLES, canManageRoster, memberMutationErrorCopy, normalizeRoster } from "./members";
 import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
 import { dispatchRealtimeEvent, KNOWN_REALTIME_KINDS } from "./realtime";
 import type {
@@ -25,6 +26,8 @@ import type {
   CommentKind,
   CommentRow,
   ListTasksParams,
+  MemberRole,
+  MembersRosterDTO,
   MineScope,
   OpenCodeAgentOption,
   OpenCodeModelOption,
@@ -1457,6 +1460,121 @@ export function ravnApp() {
     /** Focus session for the project settings modal (trap + restore). */
     projectSettingsFocus: null as DialogFocus | null,
 
+    // ---------------------------------------------------------- members panel (T9)
+    /** Roster read state for the settings modal's Members section. "loading" until
+     *  GET /members settles; "ready" renders roster + controls; "unavailable" =
+     *  feature off (403 reason membership_scoping_disabled), not visible, or not
+     *  enabled → the section must simply NOT render at all. */
+    membersState: "" as "" | "loading" | "ready" | "unavailable",
+    /** Normalized GET /projects/{id}/members body (owner + stored rows). Null until ready. */
+    membersRoster: null as MembersRosterDTO | null,
+    /** True while a member add / role change / remove is in flight. */
+    membersBusy: false,
+    memberAddName: "",
+    memberAddRole: "viewer" as MemberRole,
+
+    /** Client-side manage decision for the roster (owner or stored admin; see
+     *  canManageRoster). Read-only members get the roster with NO write controls. */
+    canManageMembers(): boolean {
+      return canManageRoster(this.membersRoster, this.identity?.name ?? null);
+    },
+
+    /** True when a stored row is ALSO the project owner (ownership derives from
+     *  created_by — the row stays editable; ownership is only badged). */
+    isOwnerMember(username: string): boolean {
+      const o = this.membersRoster?.owner;
+      return !!o && !!username && o.name.trim() === username;
+    },
+
+    /** Fetches the roster for the selected project. Never throws — every outcome
+     *  (200 malformed, 403 feature-off/forbidden, 404 not-enabled) lands in
+     *  membersState so the section renders or hides accordingly. */
+    async loadMembers(): Promise<void> {
+      if (!this.selectedProjectId) return;
+      // Membership management only exists on authenticated deployments (a session,
+      // or at least a shared/operator token). In zero-config local mode every GET is
+      // a guaranteed 403 — skip the request entirely: Chromium logs any failed resource
+      // as console.error, and the E2E suite treats that as a test failure.
+      if (!this.identity && !api.getAuthToken()) {
+        this.membersState = "unavailable";
+        return;
+      }
+      const pid = this.selectedProjectId;
+      this.membersState = "loading";
+      try {
+        const raw = await api.listMembers(pid);
+        const roster = normalizeRoster(raw);
+        // Late resolution after the modal closed / project changed: drop it.
+        if (!this.showProjectSettings || this.selectedProjectId !== pid) return;
+        this.membersRoster = roster;
+        this.membersState = roster ? "ready" : "unavailable";
+      } catch {
+        if (this.showProjectSettings && this.selectedProjectId === pid) {
+          this.membersRoster = null;
+          this.membersState = "unavailable";
+        }
+      }
+    },
+
+    /** Add or re-grant (server upsert: 201 created / 200 role-change), then
+     *  refetch — the server emits no membership SSE events, so the local roster
+     *  is the only source of truth. */
+    async addMember(): Promise<void> {
+      if (this.membersBusy || !this.selectedProjectId) return;
+      const username = this.memberAddName.trim();
+      if (!username) return;
+      const role = this.memberAddRole;
+      this.membersBusy = true;
+      try {
+        const resp = await api.addMember(this.selectedProjectId, username, role);
+        this.toast(
+          resp.created ? `${username} added as ${role}` : `${username}'s role is now ${role}`
+        );
+        this.memberAddName = "";
+        await this.loadMembers();
+      } catch (e) {
+        this.toast(memberMutationErrorCopy(e, username), "error");
+        void this.loadMembers(); // server state may have moved — resync the roster
+      } finally {
+        this.membersBusy = false;
+      }
+    },
+
+    /** Role change on an EXISTING row (x-model has already put the new role on
+     *  the row). On failure the refetch below restores the server's value, which
+     *  rolls the <select> back automatically. */
+    async changeMemberRole(username: string): Promise<void> {
+      if (this.membersBusy || !this.selectedProjectId || !this.membersRoster) return;
+      const row = this.membersRoster.members.find((m) => m.username === username);
+      if (!row) return;
+      this.membersBusy = true;
+      try {
+        await api.setMemberRole(this.selectedProjectId, username, row.role);
+        this.toast(`${username} is now ${row.role}`);
+        await this.loadMembers();
+      } catch (e) {
+        this.toast(memberMutationErrorCopy(e, username), "error");
+        void this.loadMembers();
+      } finally {
+        this.membersBusy = false;
+      }
+    },
+
+    async removeMember(username: string): Promise<void> {
+      if (this.membersBusy || !this.selectedProjectId) return;
+      this.membersBusy = true;
+      try {
+        await api.removeMember(this.selectedProjectId, username);
+        this.toast(`${username} removed`);
+        await this.loadMembers();
+      } catch (e) {
+        this.toast(memberMutationErrorCopy(e, username), "error");
+        void this.loadMembers();
+      } finally {
+        this.membersBusy = false;
+      }
+    },
+
     async openProjectSettings(): Promise<void> {
       if (!this.selectedProjectId) return;
       this.showArchiveConfirm = false;
@@ -1488,6 +1606,13 @@ export function ravnApp() {
       this.showProjectSettings = true;
       // Name field first — least destructive control in this dialog.
       this.projectSettingsFocus = this.openDialog("cb-project-settings", "input");
+
+      // Members panel (T9): fresh per open — the roster + manage decision both
+      // key off selectedProjectId and the session identity.
+      this.memberAddName = "";
+      this.memberAddRole = "viewer";
+      this.membersRoster = null;
+      void this.loadMembers();
 
       try {
         const full = await api.getProject(this.selectedProjectId);
@@ -6078,6 +6203,7 @@ export function ravnApp() {
     // ------------------------------------------------------------- template glue
     STATUSES,
     STATUS_LABEL,
+    MEMBER_ROLES,
     SORT_OPTIONS,
     canMove,
     /** TEST hook only (task 01M3MMYBHECPH5Z5FRHJDS5G4J): lets a browser test

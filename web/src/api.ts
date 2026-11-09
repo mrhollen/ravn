@@ -20,6 +20,9 @@ import type {
   ListTasksParams,
   ListTasksResponse,
   LoginResponse,
+  MemberRowResponse,
+  MemberRole,
+  MembersRosterDTO,
   NotesReq,
   SessionResponse,
   OpenCodeOptionsResponse,
@@ -342,6 +345,41 @@ export const api = {
   /** Whole-project board snapshot in one round-trip. */
   getBoard(projectId: string): Promise<Board> {
     return request<Board>(`/projects/${projectId}/board`);
+  },
+
+  // --- membership management (multi-user T9) ----------------------------------
+  /** GET /projects/{id}/members — stored membership rows + the owner. A
+   *  deployment WITHOUT RAVN_SCOPING=membership answers 403 with the
+   *  machine-readable reason "membership_scoping_disabled" (detect via
+   *  isMembershipDisabledError in members.ts, never message prose). The read
+   *  gate is any visible member (viewer+); a non-member gets a plain 403. */
+  listMembers(projectId: string): Promise<MembersRosterDTO> {
+    return request<MembersRosterDTO>(`/projects/${projectId}/members`);
+  },
+
+  /** POST /projects/{id}/members — idempotent UPSERT, not create-only: 201 with
+   *  created:true for a fresh row, 200 with created:false when the user already
+   *  had one (the call then doubles as a role change). Unknown usernames 404
+   *  resource:"identity" — membership never auto-provisions accounts. */
+  addMember(projectId: string, username: string, role: MemberRole): Promise<MemberRowResponse> {
+    return post<MemberRowResponse>(`/projects/${projectId}/members`, { username: username.trim(), role });
+  },
+
+  /** PATCH /projects/{id}/members/{username} — role change on an EXISTING row
+   *  only; a target with no stored row 404s resource:"member" (use addMember). */
+  setMemberRole(projectId: string, username: string, role: MemberRole): Promise<MemberRowResponse> {
+    return request<MemberRowResponse>(
+      `/projects/${projectId}/members/${username}`,
+      { method: "PATCH", body: JSON.stringify({ role }) }
+    );
+  },
+
+  /** DELETE /projects/{id}/members/{username} — remove a stored row (204).
+   *  Removing the owner's ROW never changes ownership (it derives from
+   *  created_by); the last-admin guard still applies to admin rows on
+   *  ownerless projects. */
+  removeMember(projectId: string, username: string): Promise<void> {
+    return request<void>(`/projects/${projectId}/members/${username}`, { method: "DELETE" });
   },
 
   // --- tasks ------------------------------------------------------------------
