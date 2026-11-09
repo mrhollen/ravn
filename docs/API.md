@@ -10,27 +10,51 @@ this file in the same commit.
 - **Transport:** JSON over HTTP only (`Content-Type: application/json`) except
   the SSE event streams, which are `text/event-stream`. Timestamps are RFC3339
   UTC (`2026-09-26T15:48:00Z`). IDs are ULID strings.
-- **Auth:** off by default — Rävn is a single-tenant, LAN-local service. When
-  the server starts with `RAVN_TOKEN` set (env or `-token` flag), every route
-  under `/api/v1/*` requires the token sent as `Authorization: Bearer <token>`.
-  Query string token authentication (`?token=<token>`) is accepted **only** on
+- **Auth:** optional and tiered, selected by the server's `RAVN_AUTH` setting
+  (`off` | `token` | `multiuser`; defaults: token when `RAVN_TOKEN` is set, else
+  off). The authoritative variable reference lives in
+  [ARCHITECTURE.md § Multi-user & authentication](ARCHITECTURE.md#multi-user--authentication);
+  the wire contract per tier follows.
+
+  - **off** — nothing required; declared free-form actors flow through as
+    self-declared identity (the historical zero-config LAN default).
+  - **token** — one shared bearer (`RAVN_TOKEN`, env or `-token` flag) on every
+    `/api/v1/*` route, sent as `Authorization: Bearer <token>`. Every admitted
+    request acts as the privileged *operator* (optionally acting-as a declared
+    name). Absent or mismatched token → `401`.
+  - **multiuser** — each request's bearer is resolved in strict order: shared
+    operator token → password-login **session token** → per-agent **api_token**
+    (see [Multi-user authentication endpoints](#multi-user-authentication-endpoints)).
+    Missing or unresolvable bearer → `401`
+    (`"present a valid session token or api_token secret as the Bearer token"`).
+    The only public route is `POST /auth/login`; every other `/auth/*` and all
+    data routes require one of the three.
+
+  Query string token authentication (`?token=<secret>`) is accepted **only** on
   `GET` requests for SSE streams (`/api/v1/events`, `/api/v1/projects/{id}/events`,
   or when `Accept: text/event-stream` is requested) due to browser EventSource
-  limitations. All mutating endpoints (`POST`, `PUT`, `PATCH`, `DELETE`) and
-  standard `GET` routes strictly require `Authorization: Bearer <token>` and reject
+  limitations — in multiuser mode the query secret may be ANY of the three
+  bearer kinds. All mutating endpoints (`POST`, `PUT`, `PATCH`, `DELETE`) and
+  standard `GET` routes strictly require `Authorization: Bearer <secret>` and reject
   query string tokens with `401` to prevent token leakage in server access logs
-  and HTTP referer headers. Absent or mismatched token → `401` (below); unset
-  token → nothing required. `/healthz` and the static UI are never gated.
-  Root `GET /metrics` is auth-gated with the same `401` contract as `/api/v1/*`
-  whenever a token is set — **unless** `RAVN_PUBLIC_METRICS=true` explicitly
-  opts it back in for public scraping (Prometheus clients that cannot send an
-  `Authorization` header); see "Observability" below.
+  and HTTP referer headers. `/healthz` and the static UI are never gated in any
+  tier. Root `GET /metrics` is auth-gated with the same `401` contract as
+  `/api/v1/*` whenever a token exists (any tier) — **unless**
+  `RAVN_PUBLIC_METRICS=true` explicitly opts it back in for public scraping
+  (Prometheus clients that cannot send an `Authorization` header); with no
+  `RAVN_TOKEN` at all it is open. See "Observability" below.
 
 ## Actor convention
 
-Every mutation body carries an `actor` object — the self-declared identity of
-whoever is acting (single-tenant MVP; there is no session state, so the server
-trusts it):
+Every mutation body carries an `actor` object — the declared identity of whoever
+is acting. **In `off` and `token` tiers** this is self-declared (the server
+trusts it, as in the single-tenant MVP). **In `multiuser`**, a request that
+authenticated via a session or api_token credential acts authoritatively as its
+OWN stored identity: the body's `actor` must still be present and well-formed,
+but its NAME is overridden by the authenticated identity wherever it differs —
+a declared actor naming someone else cannot attribute work or pass gates to
+that name (anti-spoofing). The operator bearer keeps declared-actor behavior
+(an operator may act-as a name):
 
 ```json
 "actor": { "name": "ada", "type": "human" }
@@ -80,13 +104,67 @@ relation pairs, and any other use-case validation failure. No `resource`/`id`.
 
 ### 401 unauthorized
 
-Only when the server has `RAVN_TOKEN` configured (see Auth above); returned
-by any `/api/v1/*` route on an absent or mismatched token, or when query string
-token authentication is attempted on non-SSE or mutating endpoints:
+Only when auth is enabled (see Auth above). Two message variants by tier —
+both carry `error: "unauthorized"`; match on the status, treat `message` as a
+hint:
 
-```json
-{ "error": "unauthorized", "message": "missing or invalid auth token" }
-```
+- **token / root `/metrics`** — absent or mismatched shared token, or query
+  string token authentication attempted on a non-SSE or mutating endpoint:
+
+  ```json
+  { "error": "unauthorized", "message": "missing or invalid auth token" }
+  ```
+
+- **multiuser** — missing bearer, or a bearer that resolves to none of the
+  three kinds (shared operator / session / api_token), on any gated route:
+
+  ```json
+  { "error": "unauthorized", "message": "present a valid session token or api_token secret as the Bearer token" }
+  ```
+
+  Credential-specific `401`s inside the auth endpoints themselves use their own
+  unenumerable wording (e.g. login always answers `"invalid username or
+  password"` for unknown AND wrong-password alike, so usernames cannot be
+   enumerated) — see the endpoint sections below.
+
+### 403 forbidden
+
+Only meaningful when auth is enabled; four variants by cause:
+
+- **Role denial** (multiuser + `RAVN_SCOPING=membership`) — authenticated but
+  under-privileged for the operation on that project. `resource` names the type
+  and `required` the minimum role, both machine-readable so clients can render
+  upgrade hints without parsing the message:
+
+  ```json
+  { "error": "forbidden", "resource": "project", "required": "editor",
+    "message": "this write operation requires at least the \"editor\" role in this project (you hold less or no relationship to it)" }
+  ```
+
+  Minimum roles: read → `viewer`, write → `editor`, destructive → `admin`.
+- **Provisioning denied** — a credential principal (session/api_token) hit an
+  operator-only route (`/auth/accounts`, `/auth/tokens`):
+
+  ```json
+  { "error": "forbidden", "message": "operator access required" }
+  ```
+
+- **Feature off** — any verb on the membership endpoints in a non-memember-scoped
+  deployment (including `GET`; there is nothing to list). Deliberately 403, not
+  404: the caller authenticated fine, the capability simply does not exist here:
+
+  ```json
+  { "error": "forbidden", "resource": "members", "reason": "membership_scoping_disabled",
+    "message": "membership management requires RAVN_SCOPING=membership — …" }
+  ```
+
+- **Identity closed** — a credential principal tries to `POST /projects` while
+  `RAVN_IDENTITY_OPEN=strict`:
+
+  ```json
+  { "error": "forbidden", "resource": "project",
+    "message": "creating projects requires the shared operator token or a resolved enabled identity (identity-open deployments)" }
+  ```
 
 ### 404 not_found
 
@@ -332,6 +410,17 @@ extras (the web frontend uses them directly).
 | `POST /admin/backup`                  | zero-downtime hot backup (`VACUUM 'main' INTO`) into a base-dir-restricted path; never overwrites (ops) | — (ops) |
 | `POST   /tasks/{id}/relations`        | add a relation edge (upsert)                             | `relate_tasks` (add) |
 | `DELETE /tasks/{id}/relations/{other_id}/{kind}` | remove a relation edge                | `relate_tasks` (remove) |
+| `POST /auth/login`                    | exchange username+password for a session token (public in multiuser) → 200 {token, expires_at, identity} | — (auth, multiuser) |
+| `GET  /auth/session`                  | inspect the presenting session bearer → 200 {identity, expires_at}; 401 when it isn't a live session | — (auth) |
+| `DELETE /auth/session`                | revoke the presenting session → 204 (idempotent)         | — (auth) |
+| `POST /auth/accounts`                 | create or reset a human account (operator-only) → 201/200 | — (auth, provisioning) |
+| `POST /auth/tokens`                   | mint an api_token for a named identity (operator-only) → 201, secret shown once | — (auth, provisioning) |
+| `GET  /auth/tokens?name=…`            | list token metadata for one identity (operator-only)     | — (auth, provisioning) |
+| `DELETE /auth/tokens/{id}`            | disable a token by durable id (operator-only) → 204 (idempotent) | — (auth, provisioning) |
+| `GET    /projects/{id}/members`       | stored members + derived owner; `RAVN_SCOPING=membership` only (any visible member may read) | — (membership) |
+| `POST   /projects/{id}/members`       | add or re-grant a member {username, role} → 201/200; admin-or-owner gated | — (membership) |
+| `PATCH  /projects/{id}/members/{username}` | set an existing member's role → 200                 | — (membership) |
+| `DELETE /projects/{id}/members/{username}` | remove the stored membership row → 204; hierarchy + last-admin guards apply | — (membership) |
 
 ---
 
@@ -378,13 +467,182 @@ Series: `http_requests_total`, `http_requests_in_flight`,
 `active_claims` (omitted from JSON when the DB callback is unwired). The JSON
 body is a flat snapshot object with one key per series.
 
+### Multi-user authentication (`/auth/*`)
+
+Available whenever the server boots with a database (auth is always wired then);
+the provisioning routes additionally require a **shared-operator** bearer — a
+credential principal (session/api_token) gets `403 {"error":"forbidden","message":
+"operator access required"}` on all four of them, so per-user tokens can never
+provision accounts or mint other tokens. When the auth use case is unwired
+(no-database deployments) every `/auth/*` route answers `404 {"resource":"…",
+"message":"authentication is not enabled"}`.
+
+The `identityDTO` shared by these responses:
+
+```json
+{ "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4", "name": "ada", "kind": "human",
+  "auth_method": "password", "created_at": "2026-10-01T09:00:00Z" }
+```
+
+`kind` is `"human"` | `"agent"`; `auth_method` is `"password"` (login-able) or
+`"api_token"` (neutral, token-only).
+
+### POST /auth/login → session token
+
+The only **public** route in multiuser mode. Exchanges a username + password for
+a fresh opaque session token (only its hash is stored — the secret is shown
+exactly once, on this response):
+
+Request: `{ "username": "ada", "password": "s3cret!" }`
+
+```json
+{ "token": "Kx7vQ…(32-byte base64url, no prefix)", "expires_at": "2026-10-02T09:15:04Z",
+  "identity": { /* identityDTO */ } }
+```
+
+All three bearer kinds (operator / session / api_token) are the same shape —
+32 random bytes, base64url without padding — and carry no type prefix; the server
+resolves a presented secret by lookup order, never by inspection of the value.
+
+`200`. `400 invalid_input` on empty username. **Unknown AND wrong-password
+credentials are indistinguishable**: both →
+`401 {"error":"unauthorized","message":"invalid username or password"}` so
+usernames cannot be enumerated (disabled identities likewise). The session TTL
+is set by `RAVN_SESSION_TTL` (default 24h); the returned token is usable as the
+Bearer secret on every gated route, including SSE via `?token=`, and as the
+principal for all scoping/attribution decisions.
+
+### GET /auth/session → inspect presenting session
+
+`200 {"identity": {…}, "expires_at": "…"}` when the bearer **is** a live session
+token; otherwise `401`. An operator or api_token bearer has no session — that is
+the expected `401 {"message":"no active session for this token"}`, not an error.
+
+### DELETE /auth/session → revoke presenting session
+
+`204`, idempotent: a valid, unknown, or already-revoked token all succeed
+(a replayed logout never errors).
+
+### POST /auth/accounts → create or reset an account (operator-only)
+
+Request: `{ "name": "ada", "kind": "human|agent"?, "password": "s3cret!" }`
+(`kind` optional, default `"human"`; `password` min 8 chars; empty name / bad
+kind / short password → `400`).
+
+```json
+{ "identity": { /* identityDTO */ }, "created": true }
+```
+
+`201` on create (`created: true`), `200` when the account already exists and its
+password is **reset** (`created: false`) — the idempotent form of provisioning a
+known name. There is no rename/disable/delete route in this release; reset the
+password to rotate, and manage per-project access through membership instead.
+
+### POST /auth/tokens → mint an api_token (operator-only)
+
+Request: `{ "name": "builder-agent", "kind": "human|agent"?, "label": "ci-deploy" }`
+— mints a long-lived API token for the named identity, **creating it as a
+neutral (no-password) row in the same transaction if absent** (`kind` then
+defaults to `"human"`, so pass `"agent"` explicitly for agent tokens). Empty
+name or bad kind → `400`. The secret is shown exactly once:
+
+```json
+{ "token": "Kx7vQ…(same 32-byte base64url shape as session secrets)",
+  "meta": { "id": "01J3ZK8WQ9X7M2P4R6S8T0U2V5", "identity_id": "01J3ZK8WQ9X7M2P4R6S8T0U2V4",
+            "label": "ci-deploy", "created_at": "…", "last_used_at": null, "disabled": false } }
+```
+
+`201`. Present the `token` value as the Bearer secret; it authenticates as that
+identity on every request (subject to the same scoping gates as any session).
+
+### GET /auth/tokens?name=… → list token metadata (operator-only)
+
+`200` with an array of `meta` rows for the named identity (disabled included),
+empty array when it has none; unknown identity → `404`. Secrets never appear —
+only `id`, `identity_id`, `label`, timestamps, `disabled`.
+
+### DELETE /auth/tokens/{id} → disable a token (operator-only)
+
+`204`, idempotent (already-disabled is a no-op). Unknown or empty id → `404`/`400`.
+Disabling is the only deletion: the durable row stays for audit.
+
+### Project membership endpoints (`/projects/{id}/members`)
+
+Gated to deployments booted with `RAVN_SCOPING=membership`; every other
+deployment refuses **all four verbs, including GET**, with
+`403 {"resource":"members","reason":"membership_scoping_disabled",…}` (machine-
+readable `reason` so clients can detect "feature off"). Gate order per verb:
+bad path id → `400`; scoping off → that `403`; feature unwired → `404 not
+enabled`; unknown project → `404 not_found`; visibility/role denial → `403`
+(`required` field). `GET` sits at the **read line** (any visible member may read
+the roster); `POST`/`PATCH`/`DELETE` require **admin-or-owner** — or the shared
+operator, which passes every gate and is exempt from both use-case guards.
+
+The request bodies accept an OPTIONAL `actor` field for wire compatibility with
+shared client code: it is validated (malformed → `400`) and then **ignored** —
+these verbs always act as the authenticated principal, and member rows store no
+attribution. Roles are case-insensitive; `"owner"` is refused by name (`400`:
+ownership derives from `created_by` and is not assignable).
+
+#### GET /projects/{id}/members
+
+```json
+{ "owner": { "type": "human", "name": "ada" },
+  "members": [ { "username": "builder-agent", "role": "editor" } ] }
+```
+
+`owner` is **derived** from the project's `created_by`, not a stored row — it is
+`null` for legacy unattributed projects. `members` are the stored rows sorted by
+username; an owner who also holds a stored row appears in both places (their role
+column shows the STORED role).
+
+#### POST /projects/{id}/members → add or re-grant
+
+Request: `{ "username": "ada", "role": "viewer|editor|admin" }` (both required;
+the name must be an **existing enabled** identity — no auto-provisioning: unknown
+→ `404 {"resource":"identity",…}` pointing at `POST /auth/accounts`).
+
+```json
+{ "username": "ada", "role": "editor", "created": true }
+```
+
+`201 created:true` for a fresh row; `200 created:false` on re-grant (idempotent,
+same or different role). Guards: granting/demoting **at or below your own role**
+→ `403 {"resource":"members"}` hierarchy refusal (`ErrCannotAssign`); disabling an
+identity → `403` on Grant/PATCH (DELETE of its row still works).
+
+#### PATCH /projects/{id}/members/{username} → set role
+
+Request: `{ "role": "viewer|editor|admin" }`. Existing member only — a target
+with no stored row → `404 {"resource":"member","message":"…not a member of this
+project…"}` (use POST to add). `200` echoing the normalized username + canonical
+role string. Same guards as POST, including `409 {"resource":"members"}` when the
+move would leave an ownerless project with **no admins left** (`ErrLastAdmin`).
+
+#### DELETE /projects/{id}/members/{username} → remove row
+
+`204`, no body. Removes the stored membership (a disabled identity's row is
+explicitly removable); non-member or unknown name → distinct `404`s. The last-
+admin guard applies here too. Removing the **owner** never fails — ownership is
+derived and survives; they simply lose their member-row privileges.
+
 ### GET /projects → `list_projects`
 
 Lists projects, newest-first, with per-status **open** task counts (all three
 statuses always present, zero when empty). Not paged in the MVP.
 
-Query param:
+Query params:
 - `archived`: `true` lists archived projects; default `false` = open only.
+- `mine=created` (multi-user epic T4): restrict to projects the acting identity
+  **created**. A credential principal filters by its own stored identity id; a
+  free-form actor in token/off modes that has no identity row resolves to an
+  honest empty list (legacy rows are unattributed). Any other `mine` value →
+  `400`.
+
+Visibility: in the default configuration every caller sees every project. Under
+`RAVN_SCOPING=membership`, a credential principal sees only projects it created
+or has been added to as a member; requests with no resolvable identity are
+fail-closed (structurally empty list). The shared operator always sees all.
 
 ```json
 {
@@ -414,6 +672,14 @@ Query param:
 
 Request: `{ "actor": {"name":"ada"}, "name": "Website Redesign", "description": "MVP landing page work" }`
 (`description` optional). `201` with the fresh project row. Empty name → `400`.
+
+Multi-user (T4): a credential principal (session/api_token) stamps durable
+`created_by` ownership of what it creates in **every** scoping mode — attribution
+is a property of who authenticated, not of the visibility policy. Under
+`RAVN_SCOPING=membership`, whether such a principal may create projects at all is
+governed by `RAVN_IDENTITY_OPEN`: open (default) allows; `strict` → `403`
+(identity closed). Operator and off-mode creates stay unattributed, exactly as
+before.
 
 ### GET /projects/{id} (UI) · PUT /projects/{id} (UI)
 
@@ -508,8 +774,12 @@ empty. The canonical event kinds are: `created`, `updated`, `status-changed`,
 `events` tail, live). The stream is not constrained to this set: whatever kind
 a mutation emits is delivered verbatim in the payload.
 
-SSE clients cannot set headers, so when auth is enabled the token rides on the
-query string: `…/events?project_id=…&token=<RAVN_TOKEN>`.
+SSE clients cannot set headers, so when auth is enabled the secret rides on the
+query string: `…/events?project_id=…&token=<secret>` — in multiuser mode that
+may be ANY of the three bearer kinds (operator / session / api_token), resolved
+in the same order as the `Authorization` header. Note the feed covers task- and
+AC-shaped mutations only: membership grants/removals and auth provisioning emit
+no events.
 
 ### GET /tasks → `list_tasks`
 
@@ -532,8 +802,16 @@ Query params (all optional; unknown params ignored; any malformed value → `400
 | `due_after`      | RFC3339; due_at at or after (inclusive) |
 | `created_after` / `created_before` | RFC3339 window over creation time |
 | `completed_since` / `completed_after` (aliases of each other) and `completed_before` | RFC3339 completion window |
+| `mine`           | `assigned` \| `created` \| `activity` — restrict to tasks assigned to / created by / touched by the acting identity (T4). `assigned` alongside an explicit `assignee*` filter → `400` (ambiguous) |
 | `limit`          | default 20, max 100 (clamped); ≤ 0 → `400` |
 | `offset`         | default 0; negative → `400` |
+
+`mine` resolves against the **acting** identity: a credential principal always
+its own stored name/id (a free-form actor cannot fake someone else's work); a
+token/off-mode request its declared actor. In every mode a name with no history
+yields an honest empty list — never an error. Visibility is otherwise governed
+by the same membership-scoping rules as `GET /projects` (tasks have no
+independent roles; everything derives from the project relationship).
 
 ```json
 {
