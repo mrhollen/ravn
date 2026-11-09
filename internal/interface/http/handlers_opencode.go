@@ -290,6 +290,13 @@ func (a *App) handleOpenCodeStart(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "project", detail.Task.ProjectID)
 		return
 	}
+	// T4: dispatching an autonomous session is an OpWrite — the acting principal
+	// needs editor-or-better in the project (zero lookups in default mode). The
+	// claim itself still runs under the fixed "opencode" actor; the gate only
+	// decides whether THIS user may trigger the dispatch.
+	if _, _, ok := a.checkProject(w, r, declaredName(r), proj, domain.OpWrite); !ok {
+		return
+	}
 
 	serverURL := resolveOpenCodeServerURL(proj.OpenCodeServerURL)
 	if err := application.ValidateOpenCodeServerURL(serverURL); err != nil {
@@ -570,6 +577,9 @@ func (a *App) handleOpenCodeOptions(w http.ResponseWriter, r *http.Request) {
 	proj, err := a.Projects.Get(ctx, id)
 	if err != nil {
 		writeAppError(w, err, "project", id)
+		return
+	}
+	if _, _, ok := a.checkProject(w, r, declaredName(r), proj, domain.OpRead); !ok { // T4: gate before any upstream contact (no-op in default mode)
 		return
 	}
 

@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/mrhollen/ravn/internal/application"
@@ -15,13 +18,38 @@ const duplicateAdvisoryLimit = 5
 
 // handleListTasks → GET /api/v1/tasks?filters. Returns summary rows in
 // canonical order plus `total` (before paging) and the effective limit/offset.
+//
+// Multi-user epic T4: ?mine=assigned|created|activity restricts the list to the
+// ACTING identity's assignments / creations / event activity (additive — omitting
+// it leaves the query byte-identical); under membership scoping the list is
+// additionally visibility-scoped server-side. Owner rows are batch-resolved after
+// the build (one lookup, no N+1) and omitted everywhere attribution is absent.
 func (a *App) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	f, err := parseTaskFilter(r.URL.Query())
+	ctx := r.Context()
+	q := r.URL.Query()
+	f, err := parseTaskFilter(q)
 	if err != nil {
 		writeAppError(w, err, "task", "")
 		return
 	}
-	rows, total, err := a.Tasks.List(r.Context(), f)
+	dn := declaredName(r) // header/query-declared actor (no body on list GETs)
+	_, empty, merr := a.applyMine(ctx, q, dn, &f) // fills Creator/AssigneeName/ActivityActor; "" = untouched filter
+	if merr != nil {
+		writeAppError(w, merr, "task", "")
+		return
+	}
+	if empty { // structurally empty (anonymous under membership scoping): skip the query entirely
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tasks":  []taskSummaryDTO{},
+			"total":  0,
+			"limit":  f.Limit,
+			"offset": f.Offset,
+		})
+		return
+	}
+	f.Visibility = a.listScope(ctx, dn) // nil in default mode → unchanged query
+
+	rows, total, err := a.Tasks.List(ctx, f)
 	if err != nil {
 		writeAppError(w, err, "task", "")
 		return
@@ -30,12 +58,65 @@ func (a *App) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	for _, t := range rows {
 		out = append(out, toSummary(t))
 	}
+	if err := a.fillTaskOwners(ctx, out); err != nil {
+		writeAppError(w, err, "task", "")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"tasks":  out,
 		"total":  total,
 		"limit":  f.Limit,
 		"offset": f.Offset,
 	})
+}
+
+// applyMine parses and validates ?mine= for the TASK list endpoint (projects
+// support only "created"; tasks support all three) and fills the matching filter
+// field IN PLACE. The returned token is "" when the parameter is absent (filter
+// untouched); `empty` is true when the request can ONLY return zero rows (an
+// anonymous principal under membership scoping asking for its assignments or
+// activity — nothing is ever stored under an empty name), letting the caller skip
+// the query entirely. Precedence: an explicit conflicting ?assignee_name/?assignee
+// alongside ?mine=assigned is a 400 (ambiguous), never a silent override.
+func (a *App) applyMine(ctx context.Context, q url.Values, declaredName string, f *application.TaskFilter) (string, bool, error) {
+	mine, err := parseMine(q)
+	if err != nil {
+		return "", false, err
+	}
+	switch mine {
+	case "":
+		return "", false, nil
+	case "assigned":
+		if q.Get("assignee_name") != "" || q.Get("assignee") != "" {
+			return "", false, fmt.Errorf("%w: ?mine=assigned conflicts with an explicit assignee filter", domain.ErrInvalid)
+		}
+		name, nerr := a.actorFilterName(ctx, declaredName)
+		if nerr != nil {
+			return "", false, nerr
+		}
+		if name == "" { // anonymous under membership scoping: structurally empty
+			return mine, true, nil
+		}
+		f.AssigneeName = name
+	case "created":
+		creator, cerr := a.creatorFilterID(ctx, declaredName)
+		if cerr != nil {
+			return "", false, cerr
+		}
+		f.Creator = creator // zero-id (unresolvable actor) matches nothing in SQL — honest empty list
+	case "activity":
+		name, nerr := a.actorFilterName(ctx, declaredName)
+		if nerr != nil {
+			return "", false, nerr
+		}
+		if name == "" { // anonymous under membership scoping: structurally empty
+			return mine, true, nil
+		}
+		f.ActivityActor = name
+	default:
+		return "", false, fmt.Errorf("%w: ?mine for tasks supports \"assigned\", \"created\" or \"activity\"", domain.ErrInvalid)
+	}
+	return mine, false, nil
 }
 
 // handleCreateTask → POST /api/v1/tasks. 201 with the fresh task (summary row)
@@ -103,6 +184,20 @@ func (a *App) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		in.Assignee = &as
 	}
 
+	// T4: OpWrite gate on the OWNING project (zero queries in default mode — the
+	// use case keeps its pre-T4 404 for unknown projects), spoof-proofed acting
+	// actor, and created_by attribution for credential principals (any scoping
+	// mode; operators/off-mode stays unattributed exactly as before).
+	if _, ok := a.gateProject(w, r, actor.Name, projectID, domain.OpWrite); !ok {
+		return
+	}
+	actor = a.authoritativeActor(ctx, actor)
+	reqPr := a.requester(ctx, actor.Name)
+	if !reqPr.operator && reqPr.subject.Enabled() && reqPr.subject.ID != "" {
+		id := reqPr.subject.ID
+		in.CreatedBy = &id
+	}
+
 	task, err := a.Tasks.Create(ctx, actor, in)
 	if err != nil {
 		writeAppError(w, err, "task", "")
@@ -122,7 +217,22 @@ func (a *App) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			dups = append(dups, toSummary(c))
 		}
 	}
-	writeJSON(w, http.StatusCreated, createTaskResponse{Task: toSummary(task), PossibleDuplicates: dups})
+	resp := createTaskResponse{Task: toSummary(task), PossibleDuplicates: dups}
+	// T4 owner display (no-ops unless attribution is present): the fresh task row
+	// and its advisory duplicates, each in one batched lookup.
+	single := []taskSummaryDTO{resp.Task}
+	if oerr := a.fillTaskOwners(ctx, single); oerr != nil {
+		writeAppError(w, oerr, "task", task.ID)
+		return
+	}
+	resp.Task = single[0]
+	if len(resp.PossibleDuplicates) > 0 {
+		if oerr := a.fillTaskOwners(ctx, resp.PossibleDuplicates); oerr != nil {
+			writeAppError(w, oerr, "task", task.ID)
+			return
+		}
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // handleGetTask → GET /api/v1/tasks/{id}. One-call resume payload. Optional
@@ -145,12 +255,31 @@ func (a *App) handleGetTask(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	d, err := a.Tasks.GetDetail(r.Context(), id, commentLimit, eventLimit)
+	ctx := r.Context()
+	// T4: visibility gate on a light summary fetch BEFORE the heavy resume payload
+	// (zero extra queries in default mode; membership mode rejects invisible tasks
+	// without pulling comments/artifacts/events).
+	t, terr := a.Tasks.Get(ctx, id)
+	if terr != nil {
+		writeAppError(w, terr, "task", id)
+		return
+	}
+	if !a.checkTask(w, r, declaredName(r), t, domain.OpRead) {
+		return
+	}
+	d, err := a.Tasks.GetDetail(ctx, id, commentLimit, eventLimit)
 	if err != nil {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	writeJSON(w, http.StatusOK, toDetail(d))
+	out := toDetail(d) // embeds taskSummaryDTO — CreatedBy/Owner are promoted fields
+	single := []taskSummaryDTO{out.taskSummaryDTO} // T4 owner display (no-op unless attributed)
+	if oerr := a.fillTaskOwners(ctx, single); oerr != nil {
+		writeAppError(w, oerr, "task", id)
+		return
+	}
+	out.taskSummaryDTO = single[0]
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleUpdateTask → PATCH /api/v1/tasks/{id}. Version-guarded partial update:
@@ -193,6 +322,9 @@ func (a *App) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	cur, err := a.Tasks.Get(ctx, id)
 	if err != nil {
 		writeAppError(w, err, "task", id)
+		return
+	}
+	if !a.checkTask(w, r, actor.Name, cur, domain.OpWrite) { // T4: gate on the pre-read already fetched (zero queries in default mode)
 		return
 	}
 	if cur.Version != req.Version { // stale read → the fresh row IS the recovery instruction
@@ -242,10 +374,16 @@ func (a *App) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		in.Archived = req.Archived
 	}
 
-	fresh, err := a.Tasks.Update(ctx, actor, id, in)
+	fresh, err := a.Tasks.Update(ctx, a.authoritativeActor(ctx, actor), id, in) // T4 spoof-proofing
 	if err != nil {
 		writeAppError(w, err, "task", id) // *ConflictError → 409 with current_version + current task
 		return
 	}
-	writeJSON(w, http.StatusOK, toSummary(fresh))
+	out := toSummary(fresh)
+	single := []taskSummaryDTO{out} // T4 owner display (no-op unless attributed)
+	if oerr := a.fillTaskOwners(ctx, single); oerr != nil {
+		writeAppError(w, oerr, "task", id)
+		return
+	}
+	writeJSON(w, http.StatusOK, single[0])
 }

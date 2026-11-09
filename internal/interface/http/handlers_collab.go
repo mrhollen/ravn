@@ -49,6 +49,10 @@ func (a *App) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
+		return
+	}
 	ttl := 0
 	if req.TTLSec != nil {
 		ttl = *req.TTLSec
@@ -98,6 +102,10 @@ func (a *App) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
+		return
+	}
 	force := req.Force || parseBoolFlag(r.URL.Query(), "force")
 	fresh, err := a.Tasks.Release(ctx, actor, id, req.Note, force)
 	if err != nil {
@@ -130,6 +138,10 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
+		return
+	}
 	fresh, err := a.Tasks.Heartbeat(ctx, actor, id)
 	if err != nil {
 		writeAppError(w, err, "task", id) // ClaimConflictError → 409 holder+expiry; ErrNotClaimed → 409 not_claimed
@@ -158,6 +170,10 @@ func (a *App) handleHandoffTask(w http.ResponseWriter, r *http.Request) {
 	actor, err := req.Actor.toDomain()
 	if err != nil {
 		writeAppError(w, err, "task", id) // bad actor type / empty name → 400
+		return
+	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
 	in := application.HandOffInput{
@@ -204,6 +220,10 @@ func (a *App) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
+		return
+	}
 	c, err := a.Comments.Add(ctx, actor, id, domain.CommentKind(req.Kind), req.Body)
 	if err != nil {
 		writeAppError(w, err, "task", id) // bad kind / empty body → 400; unknown task → 404
@@ -225,6 +245,9 @@ func (a *App) handleListComments(w http.ResponseWriter, r *http.Request) {
 	limit, offset, err := parsePageParams(r.URL.Query())
 	if err != nil {
 		writeAppError(w, err, "task", id)
+		return
+	}
+	if _, ok := a.gateTask(w, r, declaredName(r), id, domain.OpRead); !ok { // T4 scoping gate
 		return
 	}
 	rows, total, err := a.Comments.List(ctx, id, limit, offset)
@@ -270,6 +293,10 @@ func (a *App) handleUpdateNotes(w http.ResponseWriter, r *http.Request) {
 	actor, err := req.Actor.toDomain()
 	if err != nil {
 		writeAppError(w, err, "task", id)
+		return
+	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
 	fresh, err := a.Tasks.UpdateNotes(ctx, actor, id, req.Notes, req.Version) // 0 = legacy replace-on-write (no base-version guard)
@@ -324,6 +351,10 @@ func (a *App) handleToggleAC(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
+		return
+	}
 	var c domain.AcceptanceCriterion
 	if req.Text != nil { // reword takes precedence over the toggle fields
 		c, err = a.Acceptance.EditACText(ctx, actor, id, seq, *req.Text)
@@ -354,6 +385,10 @@ func (a *App) handleAddAC(w http.ResponseWriter, r *http.Request) {
 	actor, err := req.Actor.toDomain()
 	if err != nil {
 		writeAppError(w, err, "task", id)
+		return
+	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
 	c, err := a.Acceptance.AddAC(ctx, actor, id, req.Text)
@@ -398,6 +433,10 @@ func (a *App) handleRemoveAC(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpDestructive); !ok { // T4 scoping gate — AC removal is destructive
+		return
+	}
 
 	if err := a.Acceptance.RemoveAC(ctx, actor, id, seq); err != nil {
 		writeAppError(w, err, "task", id) // unknown task or seq → 404
@@ -422,6 +461,10 @@ func (a *App) handleReorderAC(w http.ResponseWriter, r *http.Request) {
 	actor, err := req.Actor.toDomain()
 	if err != nil {
 		writeAppError(w, err, "task", id)
+		return
+	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
 	if len(req.Seqs) == 0 {
@@ -594,6 +637,11 @@ func (a *App) handleAttachArtifact(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// T4 scoping gate — placed BEFORE the multipart dispatch so both artifact-
+	// creation paths (JSON attach and file upload) are gated identically.
+	if _, ok := a.gateTask(w, r, declaredName(r), id, domain.OpWrite); !ok {
+		return
+	}
 
 	ct := r.Header.Get("Content-Type")
 	mediaType, _, _ := mime.ParseMediaType(ct)
@@ -611,6 +659,7 @@ func (a *App) handleAttachArtifact(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
 	art, err := a.Artifacts.Attach(ctx, actor, id, domain.ArtifactKind(req.Kind), req.Ref, req.Summary)
 	if err != nil {
 		writeAppError(w, err, "task", id) // bad kind / empty ref → 400; unknown task → 404
@@ -681,6 +730,7 @@ func (a *App) handleUploadArtifact(w http.ResponseWriter, r *http.Request, taskI
 		writeAppError(w, err, "task", taskID)
 		return
 	}
+	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention; gating already applied in handleAttachArtifact)
 
 	// Kind and extension
 	ext := cleanExt(filepath.Ext(header.Filename))
@@ -802,6 +852,14 @@ func (a *App) handleRemoveArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// T4: artifact REMOVAL is a destructive op — membership mode demands
+	// admin-or-better in the owning project (zero queries in default mode). The
+	// acting actor is spoof-proofed so the audit event records who ACTUALLY did it.
+	if _, ok := a.gateTask(w, r, actor.Name, taskID, domain.OpDestructive); !ok {
+		return
+	}
+	actor = a.authoritativeActor(ctx, actor)
+
 	removed, err := a.Artifacts.Remove(ctx, actor, taskID, artifactID)
 	if err != nil {
 		writeAppError(w, err, "task", taskID)
@@ -826,6 +884,36 @@ func (a *App) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 			"message": "artifact not found",
 		})
 		return
+	}
+
+	// T4: serving an artifact file is an OpRead on its OWNING TASK. Membership
+	// mode resolves that task through the artifact row (one lookup each) and gates
+	// it; DEFAULT/global mode skips this block entirely — pure file serving with
+	// zero DB queries, exactly as pre-T4. An orphaned file with no DB row is 404
+	// under membership (no ownership to grant); under default mode the row was
+	// never consulted and behavior is unchanged.
+	if a.scopingActive() {
+		ctx := r.Context()
+		artID := domain.ID(id)
+		art, gerr := a.Artifacts.Get(ctx, artID)
+		if gerr != nil {
+			writeJSONError(w, http.StatusNotFound, map[string]any{
+				"error":   ErrCodeNotFound,
+				"message": "artifact not found",
+			})
+			return
+		}
+		t, terr := a.Tasks.Get(ctx, art.TaskID)
+		if terr != nil {
+			writeJSONError(w, http.StatusNotFound, map[string]any{
+				"error":   ErrCodeNotFound,
+				"message": "artifact not found",
+			})
+			return
+		}
+		if !a.checkTask(w, r, declaredName(r), t, domain.OpRead) {
+			return
+		}
 	}
 
 	filePath, err := findArtifactFile(a.ArtifactsDir, id)
@@ -926,6 +1014,14 @@ func (a *App) handleAddRelation(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := domain.RelationKind(req.Kind)
 
+	// T4: adding an edge is an OpWrite in the path task's project (relations are
+	// same-project only, so one gate covers both ends — the cross-project pair
+	// rule stays enforced by the use case). Spoof-proofed acting actor.
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok {
+		return
+	}
+	actor = a.authoritativeActor(ctx, actor)
+
 	rel, created, err := a.Relations.Relate(ctx, actor, id, otherID, kind, application.RelateAdd)
 	if err != nil {
 		writeAppError(w, err, "task", id) // self/kind/cross-project → 400; unknown → 404; second parent → 409
@@ -981,6 +1077,12 @@ func (a *App) handleRemoveRelation(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
+
+	// T4: removing an edge is an OpWrite (same gate as adding — one project).
+	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok {
+		return
+	}
+	actor = a.authoritativeActor(ctx, actor)
 
 	if _, _, err := a.Relations.Relate(ctx, actor, id, otherID, kind, application.RelateRemove); err != nil {
 		writeAppError(w, err, "task", id) // missing edge → 404; self/kind/unknown task → 400

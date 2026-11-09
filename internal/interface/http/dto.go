@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -43,6 +44,15 @@ type taskSummaryDTO struct {
 	CreatedAt      string    `json:"created_at"`
 	UpdatedAt      string    `json:"updated_at"`
 
+	// CreatedBy/Owner (multi-user epic T4): durable creation attribution. Omitted
+	// on every legacy row (created_by NULL) and on rows created by shared-token /
+	// unauthenticated principals, so default-mode responses are byte-identical to
+	// pre-T4. Owner is the resolved identity actor for CreatedBy, filled in ONE
+	// batched lookup after the list is built (App.fillTaskOwners); a row whose
+	// creator identity was later deleted keeps created_by and omits owner.
+	CreatedBy string    `json:"created_by,omitempty"`
+	Owner     *actorDTO `json:"owner,omitempty"`
+
 	// Per-card progress badges, populated by the board snapshot only; omitted
 	// (zero) on list/create/update rows so other consumers keep the compact
 	// shape. AcTotal = acceptance-criteria count, AcDone = how many are done,
@@ -80,6 +90,9 @@ func toSummary(t domain.Task) taskSummaryDTO {
 		v := rfc3339(c.Expiry())
 		s.ClaimedBy = toActor(holder)
 		s.ClaimExpiresAt = &v
+	}
+	if t.CreatedBy != nil { // legacy/unattributed rows omit the field entirely (regression safety)
+		s.CreatedBy = string(*t.CreatedBy)
 	}
 	return s
 }
@@ -282,10 +295,15 @@ type projectDTO struct {
 	Archived          bool   `json:"archived"`
 	CreatedAt         string `json:"created_at"`
 	UpdatedAt         string `json:"updated_at"`
+
+	// CreatedBy/Owner (multi-user epic T4) — same rules as task rows: omitted on
+	// legacy/unattributed projects, Owner batch-filled by App.fillProjectOwners.
+	CreatedBy string    `json:"created_by,omitempty"`
+	Owner     *actorDTO `json:"owner,omitempty"`
 }
 
 func toProject(p domain.Project) projectDTO {
-	return projectDTO{
+	dto := projectDTO{
 		ID:                p.ID.String(),
 		Name:              p.Name,
 		Description:       p.Description,
@@ -298,6 +316,65 @@ func toProject(p domain.Project) projectDTO {
 		CreatedAt:         rfc3339(p.CreatedAt),
 		UpdatedAt:         rfc3339(p.UpdatedAt),
 	}
+	if p.CreatedBy != nil { // legacy rows (NULL) omit the field entirely
+		dto.CreatedBy = string(*p.CreatedBy)
+	}
+	return dto
+}
+
+// --- owner enrichment (multi-user epic T4) ---------------------------------------
+
+// fillOwners resolves a SET of created_by identity ids into owner actor rows in ONE
+// batched lookup (IdentityResolver.GetByIds — no N+1), and fills the Owner pointer
+// on every row that carries a known creator. Rows whose id is unknown or whose
+// identity was deleted keep their CreatedBy string and simply omit Owner (display
+// metadata degrades, it never errors the request). A nil resolver (shared-token /
+// off deployments) makes this a no-op — legacy responses stay byte-identical.
+func (a *App) fillOwners(ctx context.Context, get func(int) string, set func(int, *actorDTO), rows int) error {
+	if a.Identity == nil || rows == 0 {
+		return nil
+	}
+	ids := make([]domain.ID, 0, rows)
+	seen := make(map[domain.ID]struct{}, rows)
+	for i := 0; i < rows; i++ {
+		idStr := get(i)
+		if idStr == "" {
+			continue
+		}
+		id := domain.ID(idStr)
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	resolved, err := a.Identity.GetByIds(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("resolve created-by owners: %w", err)
+	}
+	for i := 0; i < rows; i++ { // one map hit per row; missing entries omit Owner
+		idStr := get(i)
+		if idStr == "" {
+			continue
+		}
+		if id, ok := resolved[domain.ID(idStr)]; ok {
+			set(i, &actorDTO{Type: string(id.Kind), Name: id.Name})
+		}
+	}
+	return nil
+}
+
+// fillTaskOwners batch-fills Owner on task summary rows (list/board/create/detail).
+func (a *App) fillTaskOwners(ctx context.Context, out []taskSummaryDTO) error {
+	return a.fillOwners(ctx, func(i int) string { return out[i].CreatedBy }, func(i int, o *actorDTO) { out[i].Owner = o }, len(out))
+}
+
+// fillProjectOwners batch-fills Owner on project rows (list/get/create/update).
+func (a *App) fillProjectOwners(ctx context.Context, out []projectDTO) error {
+	return a.fillOwners(ctx, func(i int) string { return out[i].CreatedBy }, func(i int, o *actorDTO) { out[i].Owner = o }, len(out))
 }
 
 // statusCountDTO carries per-status open task counts (GET /projects rows and
