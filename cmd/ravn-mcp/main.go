@@ -39,8 +39,9 @@ func main() {
 		apiURL    = flag.String("api-url", envOr("RAVN_API_URL", "http://ravn-server:8080"), "upstream rawn-server API URL")
 		token     = flag.String("token", os.Getenv("RAVN_TOKEN"), "bearer token forwarded to raw-server; gates incoming MCP requests when set")
 		agentName = flag.String("agent-name", envOr("RAVN_AGENT_NAME", "agent"), "default actor name stamped on tool calls when omitted")
-		transport = flag.String("transport", envOr("RAVN_MCP_TRANSPORT", "http"), "protocol transport to serve: http (Streamable HTTP + SSE) or stdio (JSON-RPC over stdin/stdout)")
-		stdioFlag = flag.Bool("stdio", false, "serve the stdio transport (shorthand for -transport=stdio)")
+		transport    = flag.String("transport", envOr("RAVN_MCP_TRANSPORT", "http"), "protocol transport to serve: http (Streamable HTTP + SSE) or stdio (JSON-RPC over stdin/stdout)")
+		stdioFlag    = flag.Bool("stdio", false, "serve the stdio transport (shorthand for -transport=stdio)")
+		identityOpen = flag.String("identity-open", envOr("RAVN_IDENTITY_OPEN", "auto"), "identity policy: auto/true/1/yes/on (open — omitted or malformed actors fall back to RAVN_AGENT_NAME, the pre-T6 default) or strict/closed/false/0/no/off (closed — omitted actors require a per-agent Bearer credential; malformed actors error)")
 	)
 	flag.Parse()
 
@@ -56,6 +57,16 @@ func main() {
 		mode = "stdio" // the -stdio flag wins over -transport / RAVN_MCP_TRANSPORT
 	}
 
+	// Identity policy (T6). One canonical parser shared with ravn-server so a
+	// deployment's notion of "strict" can never drift between the two
+	// processes. A typo is a config error: fail fast exactly like an unknown
+	// transport.
+	idOpen, validIDs, err := resolveIdentityOpen(*identityOpen)
+	if err != nil {
+		logger.Error("invalid identity-open value", "value", *identityOpen, "valid_values", validIDs)
+		os.Exit(2)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -63,8 +74,8 @@ func main() {
 	case "stdio":
 		// No port is bound: local MCP clients (Claude Desktop, Cursor, IDE
 		// extensions) launch us as a subprocess and speak MCP over stdin/stdout.
-		mcs := newMCPServer(*apiURL, *token, *agentName)
-		logger.Info("ravn-mcp running stdio transport", "upstream", *apiURL, "default_actor", *agentName)
+		mcs := newMCPServer(*apiURL, *token, *agentName, idOpen)
+		logger.Info("ravn-mcp running stdio transport", "upstream", *apiURL, "default_actor", *agentName, "identity_open", idOpen)
 		if err := runStdio(ctx, os.Stdin, os.Stdout, mcs); err != nil &&
 			!errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
 			logger.Error("stdio server error", "err", err)
@@ -79,7 +90,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	handler, streamable, sse := buildHandlerStack(logger, *apiURL, *token, *agentName)
+	handler, streamable, sse := buildHandlerStack(logger, *apiURL, *token, *agentName, idOpen)
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -111,7 +122,7 @@ func main() {
 // transports share identical registration: the HTTP path wraps the result in
 // StreamableHTTPServer/SSEServer handlers (buildHandlerStack) and the stdio
 // path wraps it in a StdioServer (runStdio). No tool is ever registered twice.
-func newMCPServer(apiURL, token, agentName string) *mcpsrv.MCPServer {
+func newMCPServer(apiURL, token, agentName string, identityOpen bool) *mcpsrv.MCPServer {
 	// The container default actor. RAVN_AGENT_NAME names THIS agent so its
 	// claims/attribution survive even on calls where the model forgot to pass
 	// an explicit actor (claims key on the name).
@@ -120,7 +131,10 @@ func newMCPServer(apiURL, token, agentName string) *mcpsrv.MCPServer {
 	client := apiclient.New(apiURL, token)
 
 	mcs := mcpsrv.NewMCPServer("ravn", version, mcp.ServerOptions()...)
-	mcp.RegisterTools(mcs, client, defaultActor)
+	// RegisterToolsWithIdentity with identityOpen=true is byte-for-byte the
+	// pre-T6 auto registration (same register* calls, same fallbacks);
+	// identityOpen=false tightens actor resolution per RAVN_IDENTITY_OPEN=strict.
+	mcp.RegisterToolsWithIdentity(mcs, client, defaultActor, identityOpen)
 	mcp.RegisterPrompts(mcs, client, defaultActor)
 	mcp.RegisterResources(mcs, client)
 
@@ -145,8 +159,8 @@ func runStdio(ctx context.Context, stdin io.Reader, stdout io.Writer, s *mcpsrv.
 // middleware. It returns the composed http.Handler and the two streaming
 // transports so callers can close their sessions on shutdown (see
 // shutdownServer).
-func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (http.Handler, *mcpsrv.StreamableHTTPServer, *mcpsrv.SSEServer) {
-	mcs := newMCPServer(apiURL, token, agentName)
+func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string, identityOpen bool) (http.Handler, *mcpsrv.StreamableHTTPServer, *mcpsrv.SSEServer) {
+	mcs := newMCPServer(apiURL, token, agentName, identityOpen)
 
 	// CORS: ONE origin policy feeds both layers. The SDK transports get it via
 	// WithStreamableHTTPCORS/WithSSECORS (Access-Control-* headers on real
@@ -167,6 +181,10 @@ func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (ht
 		// cross-origin; without this the SDK's transports emit no CORS headers
 		// and browsers block every call to /mcp.
 		mcpsrv.WithStreamableHTTPCORS(mcpCORSOptions(corsOrigins)...),
+		// T6: stamp each incoming request's per-agent Bearer credential into
+		// context so the API client forwards IT (not just the static RAVN_TOKEN)
+		// and strict-mode actor resolution can see whether one was presented.
+		mcp.StreamableCredentialOption(token),
 	)
 
 	// Legacy SSE transport for clients that only speak the pre-streamable MCP
@@ -180,6 +198,10 @@ func buildHandlerStack(logger *slog.Logger, apiURL, token, agentName string) (ht
 		mcpsrv.WithSSEDisableLocalhostProtection(true), // same LAN-local rationale as the streamable server above
 		mcpsrv.WithAppendQueryToMessageEndpoint(),
 		mcpsrv.WithSSECORS(mcpCORSOptions(corsOrigins)...), // same policy as the streamable transport
+		// T6: same per-agent credential stamping for the legacy SSE session's
+		// POST /message requests (credentialContextFunc also honors the ?token=
+		// query fallback the withAuth gate accepts).
+		mcp.SSECredentialOption(token),
 	)
 
 	mux := http.NewServeMux()
@@ -223,6 +245,22 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// resolveIdentityOpen maps the raw -identity-open / RAVN_IDENTITY_OPEN value
+// (already env-fallback'd by the flag default) to the strict-vs-auto policy.
+// It reuses apiclient.ParseIdentityOpen — the single canonical parser shared
+// with ravn-server, so the two processes' notion of "strict" cannot drift —
+// and returns the valid values for startup diagnostics on a typo. A config
+// error here must fail fast (exit 2 in main), exactly like an unknown
+// transport: strict-vs-auto must never be ambiguous at runtime. Extracted
+// from main() as a testable seam (C2 pattern).
+func resolveIdentityOpen(value string) (open bool, validValues []string, err error) {
+	open, err = apiclient.ParseIdentityOpen(value)
+	if err != nil {
+		validValues = []string{"auto", "strict", "true", "false"}
+	}
+	return open, validValues, err
 }
 
 // withLogging is a minimal slog request logger. Healthy /healthz polls are
@@ -550,9 +588,22 @@ func writeMCPError(w http.ResponseWriter, status int, code, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": code, "message": message})
 }
 
-// withAuth gates endpoints (/mcp, /sse, /message) with Bearer token authentication
-// when expectedToken is non-empty. When expectedToken is empty, all requests pass
-// through untouched (local dev mode). /healthz is never gated.
+// withAuth gates endpoints (/mcp, /sse, /message) when expectedToken is
+// non-empty. When expectedToken is empty, all requests pass through untouched
+// (local dev mode). /healthz is never gated.
+//
+// T6 (per-agent identities): the gate accepts any WELL-FORMED
+// "Bearer <non-empty>" Authorization header — not only the exact RAVN_TOKEN.
+// ravn-mcp is a pure protocol adapter with no authority of its own: it cannot
+// validate per-agent API tokens issued by the upstream ravn-server
+// (RAVN_AUTH=multiuser), and must forward them so the upstream can. The
+// upstream remains the identity authority — an unknown/invalid token yields a
+// 401 there, which every tool result surfaces verbatim via fail(). What the
+// gate still rejects at its door: no credential at all, non-Bearer schemes
+// (Basic, custom), and empty/malformed Bearer values. The ?token= query
+// fallback (legacy SSE clients) remains an EXACT constant-time match on
+// RAVN_TOKEN — it exists for a single shared deployment token, not for
+// per-agent credentials.
 func withAuth(expectedToken string, next http.Handler) http.Handler {
 	if expectedToken == "" {
 		return next
@@ -560,7 +611,7 @@ func withAuth(expectedToken string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isMCPRoute(r.URL.Path) {
 			auth := r.Header.Get("Authorization")
-			if !validBearerToken(auth, expectedToken) {
+			if !isWellFormedBearer(auth) {
 				qToken := r.URL.Query().Get("token")
 				if qToken == "" || subtle.ConstantTimeCompare([]byte(qToken), []byte(expectedToken)) != 1 {
 					w.Header().Set("Content-Type", "application/json")
@@ -576,6 +627,23 @@ func withAuth(expectedToken string, next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// isWellFormedBearer reports whether header is a syntactically valid
+// "Bearer <token>" — scheme case-insensitive, non-empty token after trimming.
+// It deliberately does NOT check the token's VALUE: the upstream ravn-server
+// decides whether a presented credential is authorized (see withAuth).
+func isWellFormedBearer(header string) bool {
+	parts := strings.SplitN(strings.TrimSpace(header), " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+		return false
+	}
+	return strings.TrimSpace(parts[1]) != ""
+}
+
+// validBearerToken reports whether header is a well-formed Bearer whose token
+// EXACTLY equals expected (constant-time). Used where the gate must identify
+// the deployment's shared RAVN_TOKEN specifically; T6 credential forwarding
+// (any well-formed bearer) is isWellFormedBearer.
 
 func isMCPRoute(p string) bool {
 	cleaned := path.Clean(p)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -29,7 +30,7 @@ func TestShutdownClosesStreamingSessions(t *testing.T) {
 	// Real handler stack exactly as main builds it: shared MCPServer + tools/
 	// prompts/resources, streamable HTTP, legacy SSE, mux, middleware. The
 	// upstream API URL is a dummy — the SSE endpoint never dials upstream.
-	handler, streamable, sse := buildHandlerStack(logger, "http://127.0.0.1:9", "", "test-agent")
+	handler, streamable, sse := buildHandlerStack(logger, "http://127.0.0.1:9", "", "test-agent", true)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0") // ephemeral port; never 8080
 	if err != nil {
@@ -107,4 +108,61 @@ func TestShutdownClosesStreamingSessions(t *testing.T) {
 	}
 
 	t.Logf("shutdown completed in %v; SSE stream ended with EOF after %v", shutdownElapsed, res.elapsed)
+}
+
+// TestShutdownForcesCloseOnGracefulTimeout pins the OTHER side of
+// shutdownServer: when srv.Shutdown cannot complete within its timeout — an
+// in-flight request still blocked at deadline time — it must log
+// "graceful shutdown failed" and force-close the listener rather than hang.
+// The streamable/sse instances come from a real handler stack but are never
+// started, which also proves CloseSessions is a safe no-op for them; only the
+// http.Server timeout path is under test.
+func TestShutdownForcesCloseOnGracefulTimeout(t *testing.T) {
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	_, streamable, sse := buildHandlerStack(logger, "http://127.0.0.1:9", "", "test-agent", true)
+
+	release := make(chan struct{}) // lets the blocked handler goroutine exit at test end
+	started := make(chan struct{}, 1)
+	blockSrv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-release
+	})}
+	ln, err := net.Listen("tcp", "127.0.0.1:0") // ephemeral port; never 8080
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = blockSrv.Serve(ln) }()
+
+	// Open an in-flight request that will NOT return before the shutdown
+	// deadline (it is not an SSE/streaming session, so CloseSessions cannot
+	// end it — exactly the condition the force-close fallback exists for).
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	defer func() {
+		cancelReq()
+		close(release)
+	}()
+	client := &http.Client{}
+	go func() {
+		req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, "http://"+ln.Addr().String(), nil)
+		resp, rerr := client.Do(req)
+		if resp != nil {
+			resp.Body.Close()
+		}
+		_ = rerr // error expected after force-close; not the point of this test
+	}()
+	<-started // handler is definitely in-flight before we shut down
+
+	const shutdownTimeout = 50 * time.Millisecond
+	shutdownStart := time.Now()
+	shutdownServer(logger, blockSrv, streamable, sse, shutdownTimeout)
+	elapsed := time.Since(shutdownStart)
+
+	if !strings.Contains(logBuf.String(), "graceful shutdown failed") {
+		t.Fatalf("force-close fallback was not triggered; logs: %q", logBuf.String())
+	}
+	if elapsed < shutdownTimeout/2 || elapsed >= 2*time.Second {
+		t.Fatalf("shutdown took %v, want ~%v (deadline-wait then force-close)", elapsed, shutdownTimeout)
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mrhollen/ravn/internal/domain"
+	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
 )
 
 // AuthMode selects the request-auth strategy applied by AuthGate (multi-user epic T3).
@@ -87,15 +88,12 @@ func ParseScopingMode(env string) (domain.ScopingConfig, error) {
 // strict/false. T3 validates it at startup; T4's visibility policies consume the value to
 // decide whether any authenticated principal may create projects. Kept separate from
 // ResolveAuthMode so each knob has one clear purpose.
+//
+// The canonical parser lives in apiclient so ravn-server and the ravn-mcp adapter (T6)
+// share ONE definition of "strict"; this delegation keeps T3's behavior, valid-value set
+// and error text byte-for-byte identical.
 func ParseIdentityOpen(env string) (bool, error) {
-	switch v := strings.ToLower(strings.TrimSpace(env)); v {
-	case "", "auto", "true", "1", "yes", "on":
-		return true, nil
-	case "strict", "closed", "false", "0", "no", "off":
-		return false, nil
-	default:
-		return false, fmt.Errorf("value %q is not one of auto, strict, true, false", env)
-	}
+	return apiclient.ParseIdentityOpen(env)
 }
 
 // ScopingFromEnv resolves the multi-user epic T4 knobs into the two Deps fields

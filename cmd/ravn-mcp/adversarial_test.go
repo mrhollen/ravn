@@ -84,11 +84,15 @@ func TestAdversarial_AuthPermutations(t *testing.T) {
 			header string
 			want   int
 		}{
-			{"tab separated bearer rejected", "/mcp", "Bearer\t" + secret, http.StatusUnauthorized},
+			{"tab separated bearer rejected (malformed)", "/mcp", "Bearer\t" + secret, http.StatusUnauthorized},
 			{"wrong query key name rejected", "/mcp?auth=" + secret, "", http.StatusUnauthorized},
 			{"valid header beats invalid query", "/mcp?token=wrong", "Bearer " + secret, http.StatusOK},
-			{"invalid header falls back to valid query", "/mcp?token=" + secret, "Bearer wrong", http.StatusOK},
-			{"invalid header and invalid query rejected", "/mcp?token=wrong", "Bearer wrong", http.StatusUnauthorized},
+			// T6: a well-formed bearer whose value is not RAVN_TOKEN passes the
+			// gate — it may be a per-agent API token; the upstream ravn-server
+			// is the identity authority and rejects anything invalid there.
+			{"well-formed unknown header passes (upstream authoritative)", "/mcp?token=wrong", "Bearer wrong", http.StatusOK},
+			{"malformed header falls back to valid query", "/mcp?token=" + secret, "Basic dXNlcjpwYXNz", http.StatusOK},
+			{"malformed header and invalid query rejected", "/mcp?token=wrong", "Basic dXNlcjpwYXNz", http.StatusUnauthorized},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -401,7 +405,11 @@ func TestAdversarial_Concurrency(t *testing.T) {
 							req.URL.RawQuery = "token=" + secret
 						}
 					} else {
-						req.Header.Set("Authorization", "Bearer bad-token")
+						// T6: a well-formed bearer of any value passes the gate
+						// (upstream is the identity authority), so the invalid
+						// path exercises a MALFORMED credential instead — still
+						// rejected at the gate.
+						req.Header.Set("Authorization", "Bearer")
 					}
 				}
 
@@ -460,16 +468,19 @@ func TestAdversarial_HighEntropyTokens(t *testing.T) {
 			t.Fatalf("failed for high entropy token len %d with query parameter", len(token))
 		}
 
-		// 3. Mutated token (1 bit flip)
+		// 3. Mutated token (1 bit flip) via the QUERY fallback: T6 made the
+		// header path accept-and-forward (the upstream validates per-agent
+		// tokens), so the gate's value-level comparison — and its constant-time
+		// guarantee — now lives on the ?token= fallback. A mutated query token
+		// must still be rejected here with 401.
 		mutated := []byte(token)
 		mutated[0] ^= 0x01
 		innerCalled = false
-		reqBad := httptest.NewRequest(http.MethodPost, "/mcp", nil)
-		reqBad.Header.Set("Authorization", "Bearer "+string(mutated))
+		reqBad := httptest.NewRequest(http.MethodPost, "/mcp?token="+url.QueryEscape(string(mutated)), nil)
 		recBad := httptest.NewRecorder()
 		handler.ServeHTTP(recBad, reqBad)
 		if recBad.Code != http.StatusUnauthorized || innerCalled {
-			t.Fatalf("mutated token should be rejected with 401")
+			t.Fatalf("mutated query token should be rejected with 401")
 		}
 	}
 }
@@ -597,16 +608,18 @@ func TestAdversarial_DuplicateHeadersAndParams(t *testing.T) {
 	})
 	handler := withAuth(secret, inner)
 
-	// 1. Multiple Authorization headers: first is wrong, second is valid
-	// http.Request.Header.Get returns the FIRST header, so this must fail 401.
+	// 1. Multiple Authorization headers: first is MALFORMED, second is valid.
+	// http.Request.Header.Get returns the FIRST header, so the malformed one
+	// wins and this must fail 401 (T6: a well-formed value never fails at the
+	// gate — only missing/malformed credentials do).
 	innerCalled = false
 	req1 := httptest.NewRequest(http.MethodPost, "/mcp", nil)
-	req1.Header.Add("Authorization", "Bearer wrong")
+	req1.Header.Add("Authorization", "Bearer")
 	req1.Header.Add("Authorization", "Bearer "+secret)
 	rec1 := httptest.NewRecorder()
 	handler.ServeHTTP(rec1, req1)
 	if rec1.Code != http.StatusUnauthorized || innerCalled {
-		t.Fatalf("expected 401 when first header is wrong, got %d", rec1.Code)
+		t.Fatalf("expected 401 when first header is malformed, got %d", rec1.Code)
 	}
 
 	// 2. Multiple Authorization headers: first is valid, second is wrong

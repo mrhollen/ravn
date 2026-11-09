@@ -73,32 +73,95 @@ func ServerOptions() []mcpsrv.ServerOption {
 }
 
 // RegisterTools wires every ravn MCP tool onto s (the full 22-tool surface,
-// docs/API.md route table). defaultActor is the container-default identity
-// (from RAVN_AGENT_NAME) used whenever a mutating call arrives without a
-// usable `actor` object.
+// docs/API.md route table) in AUTO identity mode — the rollout default and the
+// pre-T6 behavior: whenever a mutating call arrives without a usable `actor`
+// object (or with a malformed one), the container-default identity
+// (RAVN_AGENT_NAME) is used. Tool schemas, protocol and request shapes are
+// exactly what ravn-mcp has always exposed; only strict mode changes outcomes.
 func RegisterTools(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+	registerAll(s, c, actorPolicy{def: defaultActor})
+}
+
+// RegisterToolsWithIdentity is the identity-aware twin of RegisterTools for
+// deployments that run ravn-mcp with RAVN_IDENTITY_OPEN=strict (docs/MCP.md
+// §Identity). identityOpen=true registers exactly what RegisterTools does;
+// identityOpen=false tightens actor resolution on every mutating tool: a
+// well-formed explicit `actor` is still honored; a MALFORMED one returns a
+// clear isError (instead of silently falling back); an OMITTED one is accepted
+// only when the request carried a non-shared per-agent credential (see
+// Credential) — the ravn-server then authenticates that named identity and its
+// authority rules apply on top. Everything else errors before any upstream
+// round-trip. Read tools are untouched: no actor rides the wire on them.
+func RegisterToolsWithIdentity(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor, identityOpen bool) {
+	registerAll(s, c, actorPolicy{def: defaultActor, strict: !identityOpen})
+}
+
+func registerAll(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	registerListProjects(s, c)
-	registerCreateProject(s, c, defaultActor)
+	registerCreateProject(s, c, pol)
 	registerGetProject(s, c)
-	registerUpdateProject(s, c, defaultActor)
+	registerUpdateProject(s, c, pol)
 	registerListTasks(s, c)
 	registerGetTask(s, c)
-	registerGetTaskBrief(s, c, defaultActor)
+	registerGetTaskBrief(s, c)
 	registerProjectReport(s, c)
-	registerCreateTask(s, c, defaultActor)
-	registerUpdateTask(s, c, defaultActor)
-	registerClaimTask(s, c, defaultActor)
-	registerReleaseTask(s, c, defaultActor)
-	registerHeartbeatTask(s, c, defaultActor)
-	registerHandoffTask(s, c, defaultActor)
-	registerAddComment(s, c, defaultActor)
-	registerUpdateNotes(s, c, defaultActor)
-	registerCompleteAC(s, c, defaultActor)
-	registerAddAC(s, c, defaultActor)
-	registerRemoveAC(s, c, defaultActor)
-	registerEditAC(s, c, defaultActor)
-	registerAttachArtifact(s, c, defaultActor)
-	registerRelateTasks(s, c, defaultActor)
+	registerCreateTask(s, c, pol)
+	registerUpdateTask(s, c, pol)
+	registerClaimTask(s, c, pol)
+	registerReleaseTask(s, c, pol)
+	registerHeartbeatTask(s, c, pol)
+	registerHandoffTask(s, c, pol)
+	registerAddComment(s, c, pol)
+	registerUpdateNotes(s, c, pol)
+	registerCompleteAC(s, c, pol)
+	registerAddAC(s, c, pol)
+	registerRemoveAC(s, c, pol)
+	registerEditAC(s, c, pol)
+	registerAttachArtifact(s, c, pol)
+	registerRelateTasks(s, c, pol)
+}
+
+// actorPolicy governs how each mutating tool resolves the acting identity from
+// a decoded call (T6). auto (strict=false): missing or malformed `actor`
+// falls back to the container default — byte-for-byte the legacy resolveActor
+// behavior. strict: see RegisterToolsWithIdentity; its errors are local isError
+// results returned BEFORE any upstream round-trip, written for small models to
+// self-correct on one retry.
+type actorPolicy struct {
+	def    apiclient.Actor // container default (RAVN_AGENT_NAME)
+	strict bool            // RAVN_IDENTITY_OPEN=strict at the adapter
+}
+
+// resolve applies the policy to the decoded arguments of tool. The returned
+// *CallToolResult is non-nil ONLY in strict mode and means "stop with this
+// error"; auto mode always returns nil there.
+func (p actorPolicy) resolve(tool string, ctx context.Context, args map[string]any) (apiclient.Actor, *mcpgo.CallToolResult) {
+	if !p.strict {
+		return resolveActor(args, p.def), nil // legacy fallback — behavior unchanged
+	}
+	var name, typ string
+	if obj, ok := args["actor"].(map[string]any); ok {
+		name, _ = obj["name"].(string)
+		typ, _ = obj["type"].(string)
+	}
+	if strings.TrimSpace(name) != "" {
+		return apiclient.Actor{Name: name, Type: typ}, nil // honored; server authority rules apply on top
+	}
+	if _, present := args["actor"]; present {
+		// PRESENT but unusable is malformed — even when a per-agent credential
+		// rides the request: sending an explicit actor that says nothing is a
+		// wiring mistake strict mode must surface, not paper over.
+		return apiclient.Actor{}, mcpgo.NewToolResultError(fmt.Sprintf(
+			`{"error":"invalid_input","message":"%s: strict identity mode (RAVN_IDENTITY_OPEN=strict): \"actor\" is malformed — pass an object {name, type} with a non-empty name, or omit it to authenticate as this connection's per-agent identity"}`, tool))
+	}
+	if cred, ok := CredentialFromContext(ctx); ok && !cred.Shared {
+		// A per-agent API token authenticates THIS request to a named identity:
+		// the ravn-server resolves it and applies its authority rules; the
+		// container default only fills the name slot for attribution.
+		return p.def, nil
+	}
+	return apiclient.Actor{}, mcpgo.NewToolResultError(fmt.Sprintf(
+		`{"error":"invalid_input","message":"%s: strict identity mode (RAVN_IDENTITY_OPEN=strict): no actor supplied and this request carries no per-agent API token — pass actor {name, type}, or authenticate the MCP connection with a per-agent Bearer token (docs/MCP.md §Identity)"}`, tool))
 }
 
 // --- shared helpers -------------------------------------------------------------------
@@ -309,7 +372,7 @@ func registerListProjects(s *mcpsrv.MCPServer, c Client) {
 	})
 }
 
-func registerCreateProject(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerCreateProject(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("create_project",
 		mcpgo.WithDescription(
 			"Create a new project. Returns the fresh project row as compact JSON (id, name, description, timestamps). Name is required; an empty name or other bad input surfaces as an invalid-input error verbatim."+actorHint),
@@ -324,8 +387,12 @@ func registerCreateProject(s *mcpsrv.MCPServer, c Client, defaultActor apiclient
 		if name == "" {
 			return invalidInput("create_project", "name"), nil
 		}
+		actor, actorErr := pol.resolve("create_project", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		row, err := c.CreateProject(ctx, apiclient.CreateProjectRequest{
-			Actor:       resolveActor(req.GetArguments(), defaultActor),
+			Actor:       actor,
 			Name:        name,
 			Description: strings.TrimSpace(req.GetString("description", "")),
 		})
@@ -365,7 +432,7 @@ func registerGetProject(s *mcpsrv.MCPServer, c Client) {
 // least one must be set (the use case 400s an empty update). name must be
 // non-empty after trimming (mirrored locally to save a round-trip); description
 // may be an empty string to clear it. Returns the updated project row.
-func registerUpdateProject(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerUpdateProject(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("update_project",
 		mcpgo.WithDescription(
 			"Partially update an existing project: set any of name (rename) or description (full markdown replace; an empty string clears it). Omitted fields are unchanged. At least one field is required — a call with neither fails as invalid_input, exactly like the API's 400 for an empty update. Returns the updated project row as compact JSON."+actorHint),
@@ -383,7 +450,11 @@ func registerUpdateProject(s *mcpsrv.MCPServer, c Client, defaultActor apiclient
 			return res, nil
 		}
 		args := req.GetArguments()
-		body := apiclient.UpdateProjectRequest{Actor: resolveActor(args, defaultActor)}
+		actor, actorErr := pol.resolve("update_project", ctx, args)
+		if actorErr != nil {
+			return actorErr, nil
+		}
+		body := apiclient.UpdateProjectRequest{Actor: actor}
 		if v, ok := args["name"]; ok {
 			s, _ := v.(string)
 			s = strings.TrimSpace(s)
@@ -586,7 +657,12 @@ func recentHandoffs(comments []apiclient.Comment, n int) []HandoffComment {
 // comments are within reach, then strip the payload down to the resume blob + that
 // thread. Read-only like get_task; the optional actor is accepted for interface
 // parity with the other tools, but GET /tasks/{id} does not attribute it.
-func registerGetTaskBrief(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+// registerGetTaskBrief deliberately takes NO actor policy: a brief is a pure
+// read — no actor rides the wire on GETs and nothing is attributed — so strict
+// mode imposes no extra requirement here. (The schema still advertises the
+// shared `actor` property for uniformity with other tools; it is ignored, as
+// before T6.)
+func registerGetTaskBrief(s *mcpsrv.MCPServer, c Client) {
 	tool := mcpgo.NewTool("get_task_brief",
 		mcpgo.WithDescription(
 			"A COMPACT, token-optimized handoff/resume brief for one task — the lightweight alternative to get_task when you only need to pick up where a previous agent stopped. Returns exactly: title; description (trimmed); the durable notes blob VERBATIM (this is the resume context); and the LAST 2 comments whose kind is \"handoff\" (fewer if fewer exist). Everything else — events, artifacts, acceptance criteria, blockers, relations, and the full comment list — is omitted to stay small. Unknown id → isError not-found naming the id; re-check ids with list_projects/list_tasks."+actorHint),
@@ -638,7 +714,7 @@ func registerProjectReport(s *mcpsrv.MCPServer, c Client) {
 	})
 }
 
-func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerCreateTask(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("create_task",
 		mcpgo.WithDescription(
 			"Create a task in a project, optionally with priority (0–5), RFC3339 due date, durable assignee, an optional parent_id that files it as a subtask in the SAME transaction, an optional blocked_by array that creates the task ALREADY blocked by each named task (same transaction), and initial acceptance criteria (an array of strings that become seq 1..n in one transaction with the task). Returns {\"task\": fresh summary row at version 1, \"possible_duplicates\": [...]}. possible_duplicates is ADVISORY only — never an error; if it lists a near-duplicate, do NOT create another task; work on or relate to the existing one instead. Unknown project_id, parent_id or blocked_by ids → invalid-input error verbatim (nothing is created)."+actorHint),
@@ -671,8 +747,12 @@ func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 			return res, nil
 		}
 		args := req.GetArguments()
+		actor, actorErr := pol.resolve("create_task", ctx, args)
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		body := apiclient.CreateTaskRequest{
-			Actor:       resolveActor(args, defaultActor),
+			Actor:       actor,
 			Title:       title,
 			Description: strings.TrimSpace(req.GetString("description", "")),
 			ProjectID:   projectID,
@@ -722,7 +802,7 @@ func registerCreateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 	})
 }
 
-func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerUpdateTask(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("update_task",
 		mcpgo.WithDescription(
 			"Version-guarded partial update of one task: any of title, description, status (todo|doing|done, validated against allowed transitions), priority (0–5), due_at (RFC3339), clear_due (boolean), assignee, clear_assignee (boolean), archived — omitted fields are unchanged. version is REQUIRED and must be the stored version you last read (fresh tasks are version 1; every mutating result echoes the new version). A STALE version returns isError with the 409 body VERBATIM — it carries current_version plus a fresh \"current\" row, so retry your update with that version WITHOUT re-reading. Returns the fresh summary row (version bumped)."+actorHint),
@@ -761,8 +841,12 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"update_task: \"version\" is required — read the current version with get_task first"}`), nil
 		}
 		args := req.GetArguments()
+		actor, actorErr := pol.resolve("update_task", ctx, args)
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		body := apiclient.UpdateTaskRequest{
-			Actor:   resolveActor(args, defaultActor),
+			Actor:   actor,
 			Version: version,
 		}
 		if v := strings.TrimSpace(req.GetString("title", "")); v != "" {
@@ -804,7 +888,7 @@ func registerUpdateTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 	})
 }
 
-func registerClaimTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerClaimTask(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("claim_task",
 		mcpgo.WithDescription(
 			"Atomically take a TTL lease on a task and move it to doing. Shipped behavior: a task in status `done` or archived CANNOT be claimed — the result is isError with the 400 body verbatim (\"cannot claim completed task …\") and nothing is mutated; reopen it via update_task(status=\"todo\") or unarchive it first, then claim. Retry-safe: if YOU already hold the active lease, re-claiming just refreshes it. If ANOTHER actor holds the active lease the result is isError with the conflict body verbatim — it names the holder and claim_expires_at. Do not wait/sleep/poll for expiry: only acquiring the lease is claim-gated; comments, notes, status and AC mutations are open to non-holders — proceed with those only if you have explicit permission (from the holder or a human) to work that task, otherwise stop and report. ttl_sec is optional (default 900, max 3600, clamped server-side; negative → error)."+actorHint),
@@ -819,7 +903,10 @@ func registerClaimTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Act
 		if res != nil {
 			return res, nil
 		}
-		actor := resolveActor(req.GetArguments(), defaultActor)
+		actor, actorErr := pol.resolve("claim_task", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		row, err := c.ClaimTask(ctx, id, actor, req.GetInt("ttl_sec", 0))
 		if err != nil {
 			return fail(c, err), nil
@@ -828,7 +915,7 @@ func registerClaimTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Act
 	})
 }
 
-func registerReleaseTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerReleaseTask(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("release_task",
 		mcpgo.WithDescription(
 			"Give up YOUR claim lease on a task; its status returns to todo and the fresh summary row is returned. Optional note explains why (it rides on the released event — it is NOT posted as a comment). Holder-only: if another actor holds the active lease you get isError with the 409 claim-conflict body verbatim naming the real holder and expiry; releasing a task with no lease at all is an idempotent no-op (retry-safe)."+actorHint),
@@ -843,7 +930,11 @@ func registerReleaseTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 		if res != nil {
 			return res, nil
 		}
-		row, err := c.ReleaseTask(ctx, id, resolveActor(req.GetArguments(), defaultActor), strings.TrimSpace(req.GetString("note", "")))
+		actor, actorErr := pol.resolve("release_task", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
+		row, err := c.ReleaseTask(ctx, id, actor, strings.TrimSpace(req.GetString("note", "")))
 		if err != nil {
 			return fail(c, err), nil
 		}
@@ -851,7 +942,7 @@ func registerReleaseTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 	})
 }
 
-func registerHeartbeatTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerHeartbeatTask(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("heartbeat_task",
 		mcpgo.WithDescription(
 			"Keep-alive for YOUR active claim lease during long silent work — call it regularly while working so the lease does not expire mid-task. Deliberately bumps NO version and touches NO updated_at (a heartbeat never invalidates a working agent's read base). The returned fresh summary row doubles as a health/state check: it shows status, claimed_by, and the new claim_expires_at. If you are not the holder, or your lease expired → isError with the 409 claim-conflict body verbatim naming the real holder and expiry; if the task has NO lease at all → isError with a 409 \"not_claimed\" body — call claim_task first."+actorHint),
@@ -864,7 +955,11 @@ func registerHeartbeatTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient
 		if res != nil {
 			return res, nil
 		}
-		row, err := c.HeartbeatTask(ctx, id, resolveActor(req.GetArguments(), defaultActor))
+		actor, actorErr := pol.resolve("heartbeat_task", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
+		row, err := c.HeartbeatTask(ctx, id, actor)
 		if err != nil {
 			return fail(c, err), nil
 		}
@@ -872,7 +967,7 @@ func registerHeartbeatTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient
 	})
 }
 
-func registerHandoffTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerHandoffTask(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("handoff_task",
 		mcpgo.WithDescription(
 			"Atomically hand off a task you hold to its next actor in ONE call, replacing the fragile update_notes + add_comment + assign + release sequence. You must hold the ACTIVE claim lease: an active lease held by someone else → isError with the 409 claim-conflict body verbatim naming the real holder and expiry; no active lease at all → isError with a 409 \"not_claimed\" body (claim_task first). On success it, in one transaction: optionally replaces notes, sets/clears the durable assignee, appends exactly ONE comment (kind defaults to \"handoff\"; only \"handoff\"|\"question\" — anything else → 400), clears the lease and moves status back to todo, bumping the version once. Returns compact JSON {\"task\":<fresh row>,\"comment\":<created comment>}. "+actorHint),
@@ -895,8 +990,12 @@ func registerHandoffTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 			return res, nil
 		}
 		args := req.GetArguments()
+		actor, actorErr := pol.resolve("handoff_task", ctx, args)
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		body := apiclient.HandoffRequest{
-			Actor:         resolveActor(args, defaultActor),
+			Actor:         actor,
 			Kind:          strings.TrimSpace(req.GetString("kind", "")),
 			Body:          req.GetString("body", ""),
 			Notes:         req.GetString("notes", ""),
@@ -913,7 +1012,7 @@ func registerHandoffTask(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 	})
 }
 
-func registerAddComment(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerAddComment(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("add_comment",
 		mcpgo.WithDescription(
 			"Append a typed markdown comment to the task thread (a child-row mutation: NO task version bump). kind: progress | question | decision | handoff | note — use \"question\" to signal that you need HUMAN INPUT, and \"handoff\" when stepping away from the task. body is required markdown (non-empty after trimming). Returns the created comment row (201). Appends are NOT idempotent: after a timeout error, check the comment tail via get_task before re-posting or you may duplicate."+actorHint),
@@ -934,8 +1033,12 @@ func registerAddComment(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		if body == "" {
 			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"add_comment: \"body\" must not be empty (markdown)"}`), nil
 		}
+		actor, actorErr := pol.resolve("add_comment", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		comment, err := c.AddComment(ctx, id, apiclient.CommentRequest{
-			Actor: resolveActor(req.GetArguments(), defaultActor),
+			Actor: actor,
 			Kind:  strings.TrimSpace(req.GetString("kind", "")),
 			Body:  body,
 		})
@@ -946,7 +1049,7 @@ func registerAddComment(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 	})
 }
 
-func registerUpdateNotes(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerUpdateNotes(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("update_notes",
 		mcpgo.WithDescription(
 			"Replace the task's DURABLE resume-context blob in WHOLE — the \"write down what you found / what's next\" call, so a fresh session can pick up where you stopped. This is REPLACE-ON-WRITE: send the complete new notes, not an append. There is deliberately NO version field (single-writer scratchpad): identical content is a no-op; a genuinely concurrent write can surface as 409 version_conflict — handle it like any 409 (re-read with get_task, then rewrite). Returns the fresh summary row; read notes back via get_task."+actorHint),
@@ -968,7 +1071,11 @@ func registerUpdateNotes(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 		if !ok {
 			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"update_notes: \"notes\" is required (markdown)"}`), nil
 		}
-		row, err := c.UpdateNotes(ctx, id, resolveActor(args, defaultActor), nstr)
+		actor, actorErr := pol.resolve("update_notes", ctx, args)
+		if actorErr != nil {
+			return actorErr, nil
+		}
+		row, err := c.UpdateNotes(ctx, id, actor, nstr)
 		if err != nil {
 			return fail(c, err), nil
 		}
@@ -976,7 +1083,7 @@ func registerUpdateNotes(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 	})
 }
 
-func registerCompleteAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerCompleteAC(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("complete_ac",
 		mcpgo.WithDescription(
 			"Check or uncheck ONE acceptance criterion by its 1-based seq (from get_task's acceptance_criteria). done=true records completed_by/completed_at; done=false clears both (uncheck is free). Optional note. Optional text rewords the criterion (taking precedence). A child-row mutation: NO task version bump. Returns the updated AC row. Unknown task OR unknown seq → isError not-found verbatim."+actorHint),
@@ -1005,8 +1112,12 @@ func registerCompleteAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 		if t := strings.TrimSpace(req.GetString("text", "")); t != "" {
 			textPtr = &t
 		}
+		actor, actorErr := pol.resolve("complete_ac", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		row, err := c.CompleteAC(ctx, id, seq, apiclient.ACToggleRequest{
-			Actor: resolveActor(req.GetArguments(), defaultActor),
+			Actor: actor,
 			Done:  req.GetBool("done", false),
 			Note:  strings.TrimSpace(req.GetString("note", "")),
 			Text:  textPtr,
@@ -1018,7 +1129,7 @@ func registerCompleteAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Ac
 	})
 }
 
-func registerAddAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerAddAC(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("add_ac",
 		mcpgo.WithDescription(
 			"Append a new acceptance criterion to an existing task at max(seq)+1 (callers never choose the seq). text is required markdown wording (non-empty after trimming). A child-row mutation: NO task version bump. Returns the created AC row. Unknown task → isError not-found verbatim."+actorHint),
@@ -1037,8 +1148,12 @@ func registerAddAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) 
 		if text == "" {
 			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"add_ac: \"text\" must not be empty"}`), nil
 		}
+		actor, actorErr := pol.resolve("add_ac", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		row, err := c.AddAC(ctx, id, apiclient.ACAddRequest{
-			Actor: resolveActor(req.GetArguments(), defaultActor),
+			Actor: actor,
 			Text:  text,
 		})
 		if err != nil {
@@ -1048,7 +1163,7 @@ func registerAddAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) 
 	})
 }
 
-func registerRemoveAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerRemoveAC(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("remove_ac",
 		mcpgo.WithDescription(
 			"Remove an acceptance criterion by its 1-based seq. The remaining criteria keep their seqs (no renumbering). A child-row mutation: NO task version bump. Returns {\"removed\":true,\"task_id\":id,\"seq\":seq}. Unknown task OR unknown seq → isError not-found verbatim."+actorHint),
@@ -1067,7 +1182,10 @@ func registerRemoveAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Acto
 		if seq < 1 {
 			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"remove_ac: \"seq\" is required and must be >= 1 (see acceptance_criteria in get_task)"}`), nil
 		}
-		actor := resolveActor(req.GetArguments(), defaultActor)
+		actor, actorErr := pol.resolve("remove_ac", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		if err := c.RemoveAC(ctx, id, seq, actor); err != nil {
 			return fail(c, err), nil
 		}
@@ -1079,7 +1197,7 @@ func registerRemoveAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Acto
 	})
 }
 
-func registerEditAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerEditAC(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("edit_ac",
 		mcpgo.WithDescription(
 			"Reword or edit the text of an existing acceptance criterion by its 1-based seq. text is required markdown wording (non-empty after trimming). A child-row mutation: NO task version bump. Returns the updated AC row. Unknown task OR unknown seq → isError not-found verbatim."+actorHint),
@@ -1104,8 +1222,12 @@ func registerEditAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor)
 		if text == "" {
 			return mcpgo.NewToolResultError(`{"error":"invalid_input","message":"edit_ac: \"text\" must not be empty"}`), nil
 		}
+		actor, actorErr := pol.resolve("edit_ac", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		row, err := c.EditACText(ctx, id, seq, apiclient.ACEditTextRequest{
-			Actor: resolveActor(req.GetArguments(), defaultActor),
+			Actor: actor,
 			Text:  text,
 		})
 		if err != nil {
@@ -1115,7 +1237,7 @@ func registerEditAC(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor)
 	})
 }
 
-func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("attach_artifact",
 		mcpgo.WithDescription(
 			"Attach a typed piece of evidence to a task: kind log | screenshot | command-output | trace | url | other. Provide either data_base64 (to upload binary data like images, video, audio, PDF, logs) or ref (a web URL or accessible server file path). When using data_base64, optional filename specifies the file extension for MIME detection. If data_base64 is provided (or ref is an accessible local file on the server), the file bytes are uploaded to the storage volume and ref becomes /artifacts/{id}. Returns the created artifact row (201). Append-only and NOT idempotent — after an error, check artifacts via get_task before re-attaching or you may duplicate. RECOMMENDED for verification: when your work includes running tests or verification commands, attach that evidence (kind \"command-output\", \"log\" or \"screenshot\") so a human can verify it — encouraged, never required."+actorHint),
@@ -1143,7 +1265,10 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 		filename := strings.TrimSpace(req.GetString("filename", ""))
 		kind := strings.TrimSpace(req.GetString("kind", ""))
 		summary := strings.TrimSpace(req.GetString("summary", ""))
-		actor := resolveActor(req.GetArguments(), defaultActor)
+		actor, actorErr := pol.resolve("attach_artifact", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
 
 		// Support data URI passed via ref if data_base64 was omitted
 		if dataBase64 == "" && strings.HasPrefix(ref, "data:") {
@@ -1238,7 +1363,7 @@ func registerAttachArtifact(s *mcpsrv.MCPServer, c Client, defaultActor apiclien
 	})
 }
 
-func registerRelateTasks(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.Actor) {
+func registerRelateTasks(s *mcpsrv.MCPServer, c Client, pol actorPolicy) {
 	tool := mcpgo.NewTool("relate_tasks",
 		mcpgo.WithDescription(
 			"Add or REMOVE a relation edge between two tasks in the SAME project. kind: child | parent | blocked-by | duplicate-of | related; action \"add\" (default) or \"remove\". For add: returns the stored relation row — note that \"parent\" is normalized server-side to the inverse \"child\" edge, so the returned kind is always the STORED kind; re-adding an existing identical edge is an idempotent no-op (200); a second DIFFERENT parent → isError with the 409 parent-conflict body verbatim (a task has at most one parent). For remove: returns {\"removed\":true,...} (the server answers 204 No Content); a missing edge → isError not-found verbatim. Both ends must exist and may not be the same task."+actorHint),
@@ -1269,7 +1394,10 @@ func registerRelateTasks(s *mcpsrv.MCPServer, c Client, defaultActor apiclient.A
 		if action == "" {
 			action = "add"
 		}
-		actor := resolveActor(req.GetArguments(), defaultActor)
+		actor, actorErr := pol.resolve("relate_tasks", ctx, req.GetArguments())
+		if actorErr != nil {
+			return actorErr, nil
+		}
 		switch action {
 		case "add":
 			rel, err := c.RelateTasks(ctx, id, apiclient.RelationRequest{Actor: actor, OtherID: otherID, Kind: kind})

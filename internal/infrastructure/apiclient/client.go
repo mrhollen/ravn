@@ -369,8 +369,8 @@ func (c *Client) UploadArtifact(ctx context.Context, id string, filename string,
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Accept", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if tok := c.authTokenFor(ctx); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
 	resp, err := c.http.Do(req)
@@ -432,6 +432,17 @@ func (c *Client) Health(ctx context.Context) (*Health, error) {
 	return &out, nil
 }
 
+// authTokenFor resolves the bearer token for ONE request: a per-request
+// context override (WithAuthToken) wins over the static construction-time
+// token, so one shared client can forward many credentials. Both absent → ""
+// and the caller sets no Authorization header at all (unchanged default).
+func (c *Client) authTokenFor(ctx context.Context) string {
+	if tok, ok := AuthTokenFromContext(ctx); ok {
+		return tok
+	}
+	return c.token
+}
+
 // do performs one REST call against the versioned API: it prepends /api/v1 to
 // path and delegates to doPath.
 func (c *Client) do(ctx context.Context, op, method, path string, query url.Values, body any, out any) error {
@@ -474,8 +485,8 @@ func (c *Client) doPathWithHeaders(ctx context.Context, op, method, path string,
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if tok := c.authTokenFor(ctx); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)

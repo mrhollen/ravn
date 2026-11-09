@@ -235,6 +235,12 @@ func TestWithAuth_DisabledWhenTokenEmpty(t *testing.T) {
 	}
 }
 
+// TestWithAuth_RejectsMissingOrInvalidToken pins the gate's T6 contract: when
+// RAVN_TOKEN is set, MISSING and MALFORMED credentials are rejected here (401).
+// A well-formed Bearer whose VALUE differs from RAVN_TOKEN is no longer a
+// gate-level rejection — the adapter forwards it to the upstream ravn-server,
+// which is the identity authority (T6 per-agent tokens; see
+// TestWithAuth_AcceptsWellFormedPerAgentTokens).
 func TestWithAuth_RejectsMissingOrInvalidToken(t *testing.T) {
 	const secret = "mcp-secret-token-123"
 	innerCalled := false
@@ -252,7 +258,6 @@ func TestWithAuth_RejectsMissingOrInvalidToken(t *testing.T) {
 		{"missing auth header /mcp", "/mcp", ""},
 		{"missing auth header /sse", "/sse", ""},
 		{"missing auth header /message", "/message", ""},
-		{"wrong token", "/mcp", "Bearer wrong-token"},
 		{"empty bearer", "/mcp", "Bearer "},
 		{"whitespace bearer", "/mcp", "Bearer    "},
 		{"basic auth scheme", "/mcp", "Basic dXNlcjpwYXNz"},
@@ -322,6 +327,43 @@ func TestWithAuth_AcceptsValidBearerToken(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestWithAuth_AcceptsWellFormedPerAgentTokens pins T6: with RAVN_TOKEN set,
+// ANY well-formed "Bearer <non-empty>" header passes the gate — including one
+// whose value differs from RAVN_TOKEN (a per-agent API token) — and is
+// forwarded verbatim. The upstream ravn-server (RAVN_AUTH=multiuser) is the
+// identity authority: it validates the presented credential and 401s anything
+// invalid, which every tool result surfaces verbatim. The gate itself only
+// rejects missing or malformed credentials.
+func TestWithAuth_AcceptsWellFormedPerAgentTokens(t *testing.T) {
+	const secret = "mcp-secret-token-123"
+	innerHit := 0
+	seenHeader := ""
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		innerHit++
+		seenHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := withAuth(secret, inner)
+
+	for _, p := range []string{"/mcp", "/sse", "/message"} {
+		t.Run(p, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, p, nil)
+			req.Header.Set("Authorization", "Bearer some-agent-per-token")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s: well-formed per-agent bearer must pass the gate, got %d (body %s)", p, rec.Code, rec.Body.String())
+			}
+			if seenHeader != "Bearer some-agent-per-token" {
+				t.Errorf("Authorization header not forwarded verbatim: %q", seenHeader)
+			}
+		})
+	}
+	if innerHit != 3 {
+		t.Fatalf("inner handler called %d times, want 3", innerHit)
 	}
 }
 
@@ -655,6 +697,57 @@ func TestUpstreamAndAgentDefaults(t *testing.T) {
 	}
 }
 
+// TestResolveIdentityOpen pins the startup identity-policy seam: every alias
+// the canonical parser accepts maps to the right strict-vs-auto policy (the
+// flag default already env-fallbacks RAVN_IDENTITY_OPEN before this runs),
+// and a typo is an error carrying the valid values for the fail-fast log.
+func TestResolveIdentityOpen(t *testing.T) {
+	cases := []struct {
+		name      string
+		value     string
+		wantOpen  bool
+		wantErr   bool
+		wantValid []string
+	}{
+		{"default auto is open", "auto", true, false, nil},
+		{"empty defers to open (pre-T6 behavior)", "", true, false, nil},
+		{"true family", "true", true, false, nil},
+		{"1 alias", "1", true, false, nil},
+		{"yes alias", "yes", true, false, nil},
+		{"on alias", "on", true, false, nil},
+		{"case-insensitive AUTO", "AUTO", true, false, nil},
+		{"surrounding whitespace trimmed", "  strict  ", false, false, nil},
+		{"strict is closed", "strict", false, false, nil},
+		{"closed alias", "closed", false, false, nil},
+		{"false family", "false", false, false, nil},
+		{"0 alias", "0", false, false, nil},
+		{"no alias", "no", false, false, nil},
+		{"off alias", "off", false, false, nil},
+		{"typo is an error with valid values", "STRICTLY", false, true, []string{"auto", "strict", "true", "false"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			open, valid, err := resolveIdentityOpen(tc.value)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("resolveIdentityOpen(%q) error = %v, want error %v", tc.value, err, tc.wantErr)
+			}
+			if open != tc.wantOpen {
+				t.Errorf("resolveIdentityOpen(%q) open = %v, want %v", tc.value, open, tc.wantOpen)
+			}
+			if tc.wantErr {
+				if len(valid) != len(tc.wantValid) || valid[0] != tc.wantValid[0] {
+					t.Errorf("valid values = %v, want %v", valid, tc.wantValid)
+				}
+				if !strings.Contains(err.Error(), "not one of") {
+					t.Errorf("error should name the valid set, got %q", err.Error())
+				}
+			} else if valid != nil {
+				t.Errorf("valid values on success = %v, want nil", valid)
+			}
+		})
+	}
+}
+
 // TestWithModernMCPCompat_OversizedUndeclaredBodyRejected exercises the io.LimitReader read
 // path (not the declared-ContentLength fast path): an oversized body whose Content-Length is
 // hidden (-1) must be bounded by the cap, rejected with 413, never reach the inner handler,
@@ -898,7 +991,7 @@ func nonEmptyLines(s string) []string {
 // the registered tool names, proving the shared MCPServer object is fully
 // wired in stdio mode just as it is behind HTTP.
 func TestRunStdio_HandshakeServesJSONRPC(t *testing.T) {
-	mcs := newMCPServer("http://ravn-server:8080", "", "test-agent")
+	mcs := newMCPServer("http://ravn-server:8080", "", "test-agent", true)
 
 	stdin := strings.NewReader(strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"stdio-test","version":"1.0"}}}`,
@@ -992,7 +1085,7 @@ func TestRunStdio_StdoutCarriesOnlyJSONRPC(t *testing.T) {
 	os.Stderr = stderrPipeW
 	defer func() { os.Stderr = oldStderr }()
 
-	mcs := newMCPServer("http://ravn-server:8080", "", "test-agent")
+	mcs := newMCPServer("http://ravn-server:8080", "", "test-agent", true)
 	stdin := strings.NewReader(strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"stdio-test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
@@ -1115,7 +1208,7 @@ func corsDoPreflight(t *testing.T, tsURL, targetPath, origin string) *http.Respo
 // errors" on the default local configuration.
 func TestCORSPreflight_McpAndSSEEndpoints(t *testing.T) {
 	t.Setenv(corsOriginsEnv, "") // blank → default "*" policy
-	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", "", "test-agent")
+	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", "", "test-agent", true)
 	ts := httptest.NewServer(handler) // ephemeral port; never a fixed one
 	defer ts.Close()
 
@@ -1143,7 +1236,7 @@ func TestCORSPreflight_McpAndSSEEndpoints(t *testing.T) {
 // Access-Control-Allow-Credentials.
 func TestCORS_CrossOriginSimpleRequestCarriesAllowOrigin(t *testing.T) {
 	t.Setenv(corsOriginsEnv, "") // blank → default "*" policy
-	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", "", "test-agent")
+	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", "", "test-agent", true)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -1202,7 +1295,7 @@ func TestCORS_CrossOriginSimpleRequestCarriesAllowOrigin(t *testing.T) {
 func TestCORSPreflight_AnsweredBeforeAuthWhenTokenSet(t *testing.T) {
 	const secret = "cors-auth-secret"
 	t.Setenv(corsOriginsEnv, "") // blank → default "*" policy
-	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", secret, "test-agent")
+	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", secret, "test-agent", true)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -1233,7 +1326,7 @@ func TestCORSPreflight_AnsweredBeforeAuthWhenTokenSet(t *testing.T) {
 // work.
 func TestCORS_OriginsEnvOverrideHonored(t *testing.T) {
 	t.Setenv(corsOriginsEnv, "https://inspector.example.com , https://lan-ravn.example")
-	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", "", "test-agent")
+	handler, _, _ := buildHandlerStack(nil, "http://ravn-server:8080", "", "test-agent", true)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 

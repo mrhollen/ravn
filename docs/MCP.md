@@ -30,7 +30,14 @@ selected at startup (flag `-stdio` / `-transport=stdio`, or env
 **Auth:** when `RAVN_TOKEN` is set, it gates `/mcp`, `/sse`, and `/message`:
 send `Authorization: Bearer <token>` (or `?token=<token>` on any of the three).
 Unset = no auth (the single-tenant LAN default), and the token is forwarded as
-a Bearer token on every upstream request.
+a Bearer token on every upstream request. The gate accepts **any well-formed**
+`Bearer <non-empty>` header — including per-agent API tokens that differ from
+`RAVN_TOKEN`; it rejects only missing or malformed credentials, and the
+upstream ravn-server remains the identity authority (an unknown token 401s
+there and surfaces verbatim in every tool result). See
+[Identity](#identity-per-agent-tokens-and-strict-mode). The `?token=` query
+fallback stays an exact match on `RAVN_TOKEN` — it exists for the single shared
+deployment token, not per-agent credentials.
 
 **CORS:** enabled on `/mcp` and `/sse`. Allowed origins come from
 `RAVN_MCP_CORS_ORIGINS` — comma-separated, entries trimmed; absent or blank
@@ -137,6 +144,56 @@ Every mutating tool accepts an optional `actor` object:
   `RAVN_AGENT_NAME` rather than erroring: small models recover more cheaply
   from a working call. A call that works with the fallback still attributes to
   that shared name — pass your own name whenever you can.
+- Under **strict identity mode** (`RAVN_IDENTITY_OPEN=strict`) this fallback is
+  tightened — omitted and malformed actors become clear errors unless a
+  per-agent credential authenticates the request. See
+  [Identity](#identity-per-agent-tokens-and-strict-mode) below.
+
+## Identity — per-agent tokens & strict mode
+
+The adapter is single-process but can serve **many distinct identities at
+once**: each MCP client dials with its own credential, and every request the
+adapter makes upstream carries THAT request's token.
+
+### Per-agent API tokens (multiuser deployments)
+
+When the upstream ravn-server runs `RAVN_AUTH=multiuser`, operators mint a
+per-agent API token per identity (`POST /api/v1/auth/tokens` with
+`kind: "agent"` — the identity is created as neutral if absent, so no account
+is needed). Point each agent's MCP client at ravn-mcp with that token as its
+`Authorization: Bearer …` header:
+
+- The adapter **forwards it verbatim on every upstream call** (it takes
+  precedence over the shared `RAVN_TOKEN`, which keeps flowing for requests
+  that carry no credential).
+- The ravn-server authenticates it to its **named identity**: claims,
+  attribution and role-gated authorization all apply to that identity, and
+  spoof-prevention overrides any declared actor name that contradicts it.
+- Each agent sees exactly what its own identity is allowed to see under the
+  server's scoping config (`RAVN_SCOPING=global` → everything; `membership`
+  → only projects where the identity is a member or owns things — foreign
+  reads come back as the `403 forbidden` body verbatim).
+
+One adapter process can therefore serve an army of agents, each scoped to its
+own identity, with no per-agent ravn-mcp instance.
+
+### `RAVN_IDENTITY_OPEN`: auto vs strict
+
+Configured on ravn-mcp (`-identity-open` / `RAVN_IDENTITY_OPEN`, shared parser
+with ravn-server so the two processes cannot drift): `auto`/`true` (the
+default) or `strict`/`closed`/`false`. A typo exits at startup with status 2.
+
+| Mutating call arrives… | auto (default, pre-T6 behavior) | strict |
+|---|---|---|
+| with a well-formed explicit `actor` | honored and forwarded | honored and forwarded (server authority applies on top) |
+| with `actor` omitted + a **per-agent** credential present | falls back to `RAVN_AGENT_NAME` | **accepted** — authenticated as the credential's identity; `RAVN_AGENT_NAME` fills the name slot only |
+| with `actor` omitted + no credential, or only the shared `RAVN_TOKEN` | falls back to `RAVN_AGENT_NAME` | **isError**: "no actor supplied and this request carries no per-agent API token" — before any upstream round-trip |
+| with a **malformed** `actor` (empty name / wrong shape) | falls back to `RAVN_AGENT_NAME` | **isError**: "actor is malformed" — even when a per-agent credential rides the request; sending an empty placeholder on purpose is a wiring mistake strict mode surfaces |
+
+Read tools (`list_*`, `get_*`, `project_report`, …) are never gated: no actor
+rides the wire on them in either mode. **stdio transport** carries no HTTP
+credentials, so under strict an omitted actor always errors — pass explicit
+`actor` objects there (or run auto).
 
 ## Tools (22)
 
