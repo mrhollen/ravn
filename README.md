@@ -8,7 +8,7 @@ MCP-first, multi-project KanBan for humans and AI agents.
 
 ## What it is
 
-Rävn is an MCP-first KanBan tool where AI coding agents are the primary users. It serves as external memory (state survives session death), a coordination bus for multi-agent work (claims, handoffs, no duplicate work), and an evidence store (proof of done). The human web board is secondary. The system is single-tenant with a dependency-minimal Go backend in onion architecture, Docker-first deployment (main server + stateless MCP server containers), and pure-Go SQLite (no CGO).
+Rävn is an MCP-first KanBan tool where AI coding agents are the primary users. It serves as external memory (state survives session death), a coordination bus for multi-agent work (claims, handoffs, no duplicate work), and an evidence store (proof of done). The human web board is secondary. The backend is dependency-minimal Go in onion architecture with Docker-first deployment (main server + stateless MCP server containers) and pure-Go SQLite (no CGO). Authentication is optional and tiered: off (zero-config local), a single shared `RAVN_TOKEN`, or full multi-user mode with per-identity credentials, per-project membership scoping, and role gating — all opt-in via environment variables (see [Multi-user & authentication](#multi-user--authentication)).
 
 ## MVP features
 
@@ -24,7 +24,8 @@ Rävn is an MCP-first KanBan tool where AI coding agents are the primary users. 
 - **Relations**: Parent/child, blocked-by, duplicate-of, related edges; computed "blocked" flag; duplicate warnings on create.
 - **Optimistic versioning**: Version-guarded writes with full activity log on every mutation.
 - **Realtime events**: Per-project SSE streams; every mutation emits a typed event (the UI updates live, with a 15s poll fallback).
-- **Optional token auth**: `RAVN_TOKEN` gates all `/api/v1/*` routes when set (`Authorization: Bearer …` or `?token=…` for SSE clients); off by default.
+- **Auth (optional, tiered)**: off by default; shared `RAVN_TOKEN` bearer gates all `/api/v1/*` when set (`Authorization: Bearer …` or `?token=…` for SSE clients); or full multi-user mode with per-identity credentials and membership scoping (below).
+- **Multi-user identity**: human + agent identities, password login sessions with TTL, per-agent API tokens, and operator provisioning endpoints; per-project membership (viewer/editor/admin) gates visibility and writes when enabled.
 - **Observability**: `/healthz` liveness + in-memory metrics (Prometheus text or JSON) at `/metrics`.
 - **Agent-first reads**: Filtered list_tasks (project/status/assignee/unblocked/search/date-range) with canonical sort and pagination; get_task returns one-call resume payload.
 - **Minimal web UI**: Board columns by status plus task detail (notes, ACs, comments, artifacts), project settings, relations editor, and drag-and-drop status moves.
@@ -78,7 +79,7 @@ RAVN_API_URL=http://localhost:3311 ./bin/ravn-mcp -addr=:9311 &
 
 `-addr`, `-data`, `-token`, `-static` are the server flags, plus two one-shot ops modes that exit before any HTTP server starts: `-backup <path>` (hot backup of `-data` via `VACUUM INTO`) and `-integrity-check <path>` (`PRAGMA integrity_check` on any SQLite file). The MCP binary takes `-addr` plus env `RAVN_API_URL` (where the server lives), `RAVN_AGENT_NAME` (fallback actor name for calls that omit `actor`), and optional `RAVN_TOKEN` (forwarded upstream as a Bearer token). Verify with `curl http://localhost:3311/healthz` and `curl http://localhost:9311/healthz`.
 
-**Optional auth.** Set `RAVN_TOKEN` in your environment or `.env` to enable shared-token auth: the server then requires it on every `/api/v1/*` route — `Authorization: Bearer <token>` or, for SSE/EventSource clients that cannot set headers, `?token=<token>` — answering `401` when absent or mismatched. `/healthz` and the web UI stay open either way. The MCP container forwards the same token on every upstream call, so agent tools keep working with no extra client config.
+**Optional auth.** Set `RAVN_TOKEN` in your environment or `.env` to enable shared-token auth: the server then requires it on every `/api/v1/*` route — `Authorization: Bearer <token>` or, for SSE/EventSource clients that cannot set headers, `?token=<token>` — answering `401` when absent or mismatched. `/healthz` and the web UI stay open either way. The MCP container forwards the same token on every upstream call, so agent tools keep working with no extra client config. For per-identity credentials and membership scoping instead of one shared token, see [Multi-user & authentication](#multi-user--authentication).
 
 ### Backups
 
@@ -99,6 +100,29 @@ make backup RAVN_API_URL=http://127.0.0.1:3311
 
 # verify any SQLite file by hand
 ./bin/ravn-server -integrity-check ./ravn-backup-….db   # → "integrity_check ok: <file>", exit 0
+```
+
+## Multi-user & authentication
+
+ravn ships three auth tiers, selected by **`RAVN_AUTH`** (`off` | `token` | `multiuser`). Every tier is opt-in and reversible — changing the env vars and restarting is the whole migration; no data format changes are ever required to go back.
+
+| Tier | Behavior |
+|---|---|
+| **off** (default) | No auth. Declared free-form actors flow through exactly as in every pre-multi-user deployment. Zero-config local dev. |
+| **token** (implicit when only `RAVN_TOKEN` is set) | One shared bearer token gates `/api/v1/*` and root `/metrics`. Requests act as the privileged *operator* (optionally acting-as a declared name). The historical default for LAN use. |
+| **multiuser** | Each request's bearer resolves in strict order: shared operator token → password-login **session token** → per-agent **api_token**. Unresolvable/missing bearer → `401`. `POST /auth/login` is the only public route. |
+
+On top of auth, **`RAVN_SCOPING=membership`** switches every list/read/write from see-all to *per-project membership* (viewer/editor/admin roles + owner), with role-gated task writes and admin/owner-gated membership management (`/projects/{id}/members`). It requires `RAVN_AUTH=token` or `multiuser` (with auth off, fail-closed scoping would lock out everyone, so the server refuses to boot). The authoritative variable reference — every accepted value, default, error behavior, and cross-knob rule — lives in [docs/ARCHITECTURE.md § Multi-user & authentication](docs/ARCHITECTURE.md#multi-user--authentication).
+
+**First run (fresh install).** Enable multi-user, provision the first human account as operator, then give every agent its own api_token. **Upgrade of an existing deployment.** Everything is additive: the migration adds new tables only, `RAVN_SCOPING` stays `global` until you opt in, and `TestScoping_GlobalModeByteIdenticalToToken` pins that global mode is byte-identical to token-mode behavior. The full reversible rollout/hardening procedure (including rollback) is a runbook: [docs/RUNBOOK-multiuser.md](docs/RUNBOOK-multiuser.md).
+
+```bash
+# .env for a multi-user deployment (compose forwards all four knobs)
+RAVN_AUTH=multiuser
+RAVN_TOKEN=<operator-bootstrap-token>   # still honored in multiuser as the operator path
+RAVN_SCOPING=membership                  # off until you're ready; global is the default
+# RAVN_SESSION_TTL=24h                   # optional (Go duration; default 24h)
+# RAVN_IDENTITY_OPEN=auto                # optional: auto (any authenticated user may create projects) | strict (operator only)
 ```
 
 ## MCP client config
@@ -131,3 +155,4 @@ When `RAVN_TOKEN` is set, the MCP server itself requires that token on every req
 - [docs/API.md](docs/API.md) — the durable REST wire contract (row shapes, error bodies, pagination, idempotency)
 - [docs/MCP.md](docs/MCP.md) — agent onboarding: connection, actor convention, all 14 tools
 - [docs/ROADMAP.md](docs/ROADMAP.md) — MVP scope (Tier 1) and the Tier 2/3 boundary
+- [docs/RUNBOOK-multiuser.md](docs/RUNBOOK-multiuser.md) — reversible rollout/hardening runbook for enabling multi-user auth + membership scoping on a live deployment
