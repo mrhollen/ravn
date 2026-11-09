@@ -7,6 +7,8 @@
 // READ-ONLY here (agents manage leases via MCP).
 
 import { ApiError, api, errMsg, LS_TOKEN, setApiTimeoutMsForTests } from "./api";
+import { boardFromTaskList } from "./board-scope";
+import { clearStoredSession, loadStoredSession, normalizeIdentity, storeSession } from "./identity";
 import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { beginMove, canMove, endMove, friendlyTransitionError, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
@@ -23,11 +25,13 @@ import type {
   CommentKind,
   CommentRow,
   ListTasksParams,
+  MineScope,
   OpenCodeAgentOption,
   OpenCodeModelOption,
   OpenCodeOptionsResponse,
   ProjectWithCounts,
   RelationRow,
+  SessionIdentity,
   SseConnectionStatus,
   StartOpenCodeInput,
   StartOpenCodeResponse,
@@ -70,6 +74,22 @@ export const LS_SORT = "ravn.sort";
 export const LS_HOIST_PARENTS = "ravn.hoist_parents";
 export const LS_CARD_DENSITY = "ravn.card_density";
 export const LS_THEME = "ravn_theme";
+/** Persisted per-actor board scope (epic T7); "all" means no mine filter. */
+export const LS_TASK_SCOPE = "ravn.task_scope";
+
+/** Board data-source scope: the unscoped default plus the three task `mine` values. */
+export type TaskScope = "all" | MineScope;
+const TASK_SCOPES: readonly TaskScope[] = ["all", "assigned", "created", "activity"];
+
+/** Read + validate the persisted board scope, falling back to "all" on any bad value. */
+export function readStoredTaskScope(): TaskScope {
+  try {
+    const v = safeStorage.getItem(LS_TASK_SCOPE) ?? "all";
+    return (TASK_SCOPES as readonly string[]).includes(v) ? (v as TaskScope) : "all";
+  } catch {
+    return "all";
+  }
+}
 
 /** Human-readable event diff formatter for the Task Detail Activity list. */
 export function formatEventDetail(e?: { kind: string; before?: string; after?: string } | null): string {
@@ -749,11 +769,151 @@ export function ravnApp() {
     /** Focus session for the auth modal (trap + restore); null while closed. */
     authFocus: null as DialogFocus | null,
 
-    openAuthModal(): void {
+    // -- multi-user identity + login (epic T7) ---------------------------------
+    /** The acting session identity resolved from the live /auth/session probe (or the
+     *  pre-boot cache so the header renders it instantly). Null when there is no
+     *  logged-in session — the UI then falls back to the free-form actor name. */
+    identity: loadStoredSession()?.identity ?? null as SessionIdentity | null,
+    /** Which panel of the combined auth modal is shown. Defaults to "login" only if we
+     *  remember a prior session (so a returning signed-in user lands on Sign in); fresh
+     *  browsers / token-mode servers have no stored identity → default "token", which
+     *  keeps the pre-existing token-flow E2E assertions (single password input + Save) green. */
+    authModalTab: loadStoredSession() ? ("login" as const) : ("token" as const),
+    loginUsername: "",
+    loginPassword: "",
+    loginBusy: false,
+    loginError: "",
+    /** Per-actor board scope (persisted): "all" or one of the task `mine` values. */
+    taskScope: readStoredTaskScope() as TaskScope,
+    /** True once a signed-in session is denied access to the currently selected project
+     *  (membership scoping 403). Drives a one-shot "no access" banner and stops the SSE
+     *  reconnect loop; cleared on a successful board load / project change. */
+    projectForbidden: false,
+
+    /** The name to show as "acting as". A live session identity wins over the free-form
+     *  actor override; otherwise the (trimmed) actor name; otherwise "You". */
+    actingIdentityName(): string {
+      return this.identity?.name || this.actorName.trim() || "You";
+    },
+
+    openAuthModal(tab?: "login" | "token"): void {
+      const wasOpen = this.showAuthModal;
       this.tokenInput = this.authToken;
       this.showAuthModal = true;
-      // Token input first — least destructive control in this dialog.
-      this.authFocus = this.openDialog("cb-auth-modal", "input");
+      if (tab) this.authModalTab = tab;
+      if (!wasOpen) {
+        // Fresh open: establish the ONE focus session (focus trap + restore-target
+        // capture). Focus the active panel's first input — only the active panel is in
+        // the DOM thanks to x-if, so "input" is unambiguous.
+        this.authFocus = this.openDialog("cb-auth-modal", "input");
+      } else {
+        // Already open (e.g. the boot-401 auto-open lands on the token tab and the user
+        // then clicks Sign in): do NOT re-capture a second focus session — that would
+        // clone a null restore-target and leak the first trap. Just switch panels and,
+        // once x-if has committed the new panel to the DOM, move focus to its input.
+        setTimeout(() => {
+          const root = document.getElementById("cb-auth-modal");
+          root?.querySelector<HTMLElement>("input")?.focus();
+        }, 0);
+      }
+    },
+
+    /** Submit the Sign-in form: exchange credentials for a session token (stored as the
+     *  Bearer credential on every call), adopt the returned identity, and resume boot. */
+    async doLogin(): Promise<void> {
+      const username = this.loginUsername.trim();
+      if (!username || !this.loginPassword) {
+        this.loginError = "Enter your username and password.";
+        return;
+      }
+      this.loginBusy = true;
+      this.loginError = "";
+      try {
+        const res = await api.login(username, this.loginPassword);
+        api.setAuthToken(res.token); // becomes the Bearer on all subsequent calls + SSE ?token=
+        this.authToken = api.getAuthToken();
+        const id = normalizeIdentity(res.identity);
+        if (id) {
+          this.identity = id;
+          storeSession(id);
+        }
+        this.loginPassword = ""; // never linger a password in state/DOM
+        this.projectForbidden = false;
+        this.closeAuthModal();
+        this.loadError = "";
+        await this.loadProjects();
+        if (this.loadError) return;
+        const deepLinkedTaskId =
+          typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
+        // Mirror saveAuthToken()'s post-auth continuation: clear boot error, keep a
+        // valid manual selection else auto-select, load board + SSE.
+        this.bootError = false;
+        void this.continueBoot(deepLinkedTaskId);
+      } catch (e) {
+        if (ApiError.isUnauthorized(e)) this.loginError = "Invalid username or password.";
+        else this.loginError = errMsg(e);
+      } finally {
+        this.loginBusy = false;
+      }
+    },
+
+    /** Sign out: revoke the session server-side, drop the Bearer credential + identity
+     *  cache, and reload so the (now unscoped) lists are authoritative again. Best-effort
+     *  revoke — a network failure to DELETE still clears local state. */
+    async logout(): Promise<void> {
+      if (api.getAuthToken()) {
+        try {
+          await api.revokeSession();
+        } catch {
+          /* best-effort: the token is dropped locally regardless */
+        }
+      }
+      api.setAuthToken("");
+      this.authToken = "";
+      this.identity = null;
+      clearStoredSession();
+      this.projectForbidden = false;
+      this.loginError = "";
+      this.disconnectSse(true);
+      void this.loadProjects().then(() => {
+        if (this.selectedProjectId) {
+          void this.loadBoard();
+          this.connectSse();
+        }
+      });
+    },
+
+    /** Inspect the presenting bearer via GET /auth/session to learn WHO is acting. Fire-
+     *  and-forget at boot: a non-session bearer (shared/operator token, or an off-mode
+     *  server with no auth route) legitimately returns no identity — that's NOT an error,
+     *  so we just clear any stale cached identity in that case without touching the token. */
+    async refreshSessionIdentity(): Promise<void> {
+      if (!api.getAuthToken()) return; // nothing to inspect
+      try {
+        const res = await api.getSession();
+        const id = normalizeIdentity(res.identity);
+        this.identity = id;
+        if (id) storeSession(id);
+        else clearStoredSession();
+      } catch {
+        // No live session for this bearer — drop the cached identity so the header
+        // doesn't keep showing a name whose session is gone. Token is left alone: it
+        // may still be a valid shared/operator/off credential.
+        this.identity = null;
+        clearStoredSession();
+      }
+    },
+
+    /** Board-scope change: persist, then reload the board (scope and the archived view
+     *  are separate data sources, so drop archived mode if it was on). */
+    onScopeChange(): void {
+      try {
+        safeStorage.setItem(LS_TASK_SCOPE, this.taskScope);
+      } catch {
+        /* ignore */
+      }
+      if (this.showArchived) this.showArchived = false;
+      void this.loadBoard();
     },
 
     /** Single close path for the auth modal (× / Cancel / backdrop / save / clear / Esc). */
@@ -2780,8 +2940,24 @@ export function ravnApp() {
     async loadBoard(silent = false): Promise<void> {
       if (!this.selectedProjectId) return;
       const token = this._boardSeq.next(); // newest initiated board load wins
+      // Per-actor scoping (epic T7): when a `mine` scope is active AND we're not in the
+      // archived view, fetch a flat task list via listTasks({ mine }) and reshape it into
+      // the same Board snapshot columns() reads. "All" / archived keep the getBoard path.
+      // (Scoped rows omit the board-only card badges — ac_total/comment_count/etc.) by
+      // design; that only affects which optional chips render in the scoped view.)
+      const scoped = !this.showArchived && this.taskScope !== "all";
       try {
-        const b = await api.getBoard(this.selectedProjectId);
+        let b: Board;
+        if (scoped) {
+          const res = await api.listTasks({
+            project_id: this.selectedProjectId,
+            mine: this.taskScope as MineScope,
+            limit: 100,
+          });
+          b = boardFromTaskList(this.selectedProjectId, res.tasks);
+        } else {
+          b = await api.getBoard(this.selectedProjectId);
+        }
         // Out-of-order + project-switch protection: a stale response (a newer
         // load started after this one, or the user moved to another project in
         // flight) must never overwrite current state.
@@ -2795,11 +2971,18 @@ export function ravnApp() {
         if (!mayApply()) return; // stale (newer load started) or foreign project — never overwrite
         this.board = b;
         this.syncBlockedFromBoard(b);
+        this.projectForbidden = false; // a successful read means access is fine again
         if (!silent) this.loadError = "";
       } catch (e) {
         if (!silent) this.loadError = errMsg(e);
         if (ApiError.isUnauthorized(e)) {
           this.openAuthModal();
+        } else if (ApiError.isForbidden(e)) {
+          // Membership scoping: a signed-in session that can't see THIS project. Not a
+          // credential problem (so no auth modal) — show the one-shot "no access" state
+          // and stop the board/SSE from looping on a resource we may not read.
+          this.board = null;
+          this.projectForbidden = true;
         }
       }
     },
@@ -2889,6 +3072,13 @@ export function ravnApp() {
       }
 
       this.sseStatus = "connecting";
+      // A fresh connect attempt is for a possibly-accessible project; drop any prior
+      // membership-deny state. loadBoard's 403 sets projectForbidden, and the guard in
+      // handleSseDisconnect() stops the reconnect loop while it is active — an EventSource
+      // opened against a denied project errors immediately, so that gate is what prevents
+      // the infinite-reconnect loop (kept synchronous on purpose: existing SSE tests assert
+      // the stream is constructed the moment connectSse() returns).
+      this.projectForbidden = false;
 
       const token = this.authToken || api.getAuthToken();
       const params: string[] = [];
@@ -3005,6 +3195,14 @@ export function ravnApp() {
         this.sse = null;
         sseTelemetry.closed++; // TEST-SUPPORT: a live stream was actually closed
       }
+      // Membership deny: a project we may not access must NOT spin an exponential-
+      // backoff reconnect loop. connectSse's preflight and loadBoard set this on a 403;
+      // surface the one-shot "no access" state (sseStatus disconnected) and stop retrying.
+      if (this.projectForbidden) {
+        this.sseStatus = "disconnected";
+        return;
+      }
+
       this.sseStatus = "connecting";
       this.scheduleSseDisconnectTimer();
 
@@ -5987,6 +6185,10 @@ export function ravnApp() {
         this.setDocumentTitle();
       }
       await this.loadProjects();
+      // Fire-and-forget identity probe: learns WHO the presenting bearer is (multi-user
+      // session) so the header can show it reactively; a non-session/off-mode token
+      // simply resolves to "no identity" without disturbing boot or the token.
+      void this.refreshSessionIdentity();
       // Deep link: the initial URL may already be a full-page task route.
       const deepLinkedTaskId =
         typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;

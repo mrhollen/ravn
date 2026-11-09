@@ -529,3 +529,86 @@ test("API: opencode + collaboration endpoints — trimmed qs, ttl/note optionali
   assert.equal(JSON.parse(calls[5].init.body).note, "stalled on DB");
   assert.equal(calls[8].init.headers["X-Actor-Name"], "opencode", "removeRelation carries the actor header");
 });
+
+// --- multi-user identity (epic T3/T7): auth endpoints + listProjects mine scoping ---
+
+test("API: api.listProjects preserves the exact legacy URL for every mine/arg combination", async () => {
+  const urls: string[] = [];
+  const capture = async (url: string | URL, init?: any) => {
+    urls.push(String(url));
+    return new Response(JSON.stringify({ projects: [], total: 0 }), { status: 200 });
+  };
+  await withFetch(capture, async () => {
+    await api.listProjects(); // default — MUST stay query-less (existing boot relies on this)
+    await api.listProjects(true); // archived only
+    await api.listProjects(false, "created"); // mine only (no archived → no archived param)
+    await api.listProjects(true, "created"); // both
+  });
+  assert.deepEqual(urls, [
+    "/api/v1/projects",
+    "/api/v1/projects?archived=true",
+    "/api/v1/projects?mine=created",
+    "/api/v1/projects?archived=true&mine=created",
+  ]);
+});
+
+test("API: api.login POSTs trimmed username+password, sends the Bearer, and parses LoginResponse", async () => {
+  const calls: Array<{ url: string; init?: any }> = [];
+  await withGlobals(
+    { window: { location: { search: "" } }, localStorage: { getItem: (_k: string) => "sess-1" } },
+    async () => {
+      const resFactory = (_url: string, _init?: any) =>
+        new Response(
+          JSON.stringify({ token: "tok-new", expires_at: "2026-12-31T00:00:00Z", identity: { id: "u1", name: "ada", kind: "human", auth_method: "password", created_at: "2026-01-01T00:00:00Z" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      const res = await withFetch(captureFetch(calls, resFactory), () => api.login("  ada ", "hunter2"));
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url, "/api/v1/auth/login");
+      assert.equal(calls[0].init.method, "POST");
+      assert.deepEqual(JSON.parse(calls[0].init.body), { username: "ada", password: "hunter2" }, "username trimmed, password verbatim");
+      assert.equal(calls[0].init.headers.Authorization, "Bearer sess-1", "existing bearer rides along");
+      assert.equal(res.token, "tok-new");
+      assert.equal(res.identity.name, "ada");
+    },
+  );
+});
+
+test("API: api.login surfaces a 401 as an unauthorized ApiError (invalid credentials)", async () => {
+  await withFetch(captureFetch([], () => jsonResp(401, { error: "unauthorized", message: "invalid username or password" })), async () => {
+    const e = await expectApiError(api.login("ada", "nope"), 401, { error: "unauthorized", message: "invalid username or password" });
+    assert.equal(ApiError.isUnauthorized(e), true);
+    assert.equal(ApiError.isForbidden(e), false);
+  });
+});
+
+test("API: api.getSession hits GET /auth/session; a dead/absent session is an unauthorized ApiError", async () => {
+  await withFetch(captureFetch([], () => jsonResp(401, { error: "unauthorized", message: "invalid bearer token" })), async () => {
+    const e = await expectApiError(api.getSession(), 401, { error: "unauthorized", message: "invalid bearer token" });
+    assert.equal(ApiError.isUnauthorized(e), true);
+    assert.equal(ApiError.isForbidden(e), false, "401 is NOT a membership deny");
+  });
+});
+
+test("API: api.revokeSession DELETEs /auth/session and resolves void on success", async () => {
+  const calls: Array<{ url: string; init?: any }> = [];
+  await withFetch(
+    captureFetch(calls, (_url) => new Response(null, { status: 204 })),
+    async () => {
+      const out = await api.revokeSession();
+      assert.equal(out, undefined, "void body resolves to undefined");
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url, "/api/v1/auth/session");
+      assert.equal(calls[0].init.method, "DELETE");
+    },
+  );
+});
+
+test("API: ApiError.isForbidden distinguishes 403 (membership deny) from 401 (unauthenticated)", async () => {
+  const forbody = { error: "forbidden", message: "no access to this project" };
+  await withFetch(captureFetch([], () => jsonResp(403, forbody)), async () => {
+    const e = await expectApiError(api.getProject("p-deny"), 403, forbody);
+    assert.equal(ApiError.isForbidden(e), true, "403 is a membership deny");
+    assert.equal(ApiError.isUnauthorized(e), false, "403 is NOT unauthenticated");
+  });
+});

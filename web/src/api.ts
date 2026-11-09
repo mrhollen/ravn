@@ -19,7 +19,9 @@ import type {
   ListProjectsResponse,
   ListTasksParams,
   ListTasksResponse,
+  LoginResponse,
   NotesReq,
+  SessionResponse,
   OpenCodeOptionsResponse,
   Project,
   RelationRow,
@@ -155,6 +157,13 @@ export class ApiError extends Error {
   static isUnauthorized(e: unknown): boolean {
     return e instanceof ApiError && e.status === 401;
   }
+
+  /** True for a membership-scoping deny (the actor can't see this project/row).
+   *  Distinct from 401 (not authenticated) — a 403 on a signed-in session means
+   *  "you have no access to THIS resource", not "you need credentials". */
+  static isForbidden(e: unknown): boolean {
+    return e instanceof ApiError && e.status === 403;
+  }
 }
 
 export const LS_TOKEN = "ravn_token";
@@ -283,12 +292,39 @@ function put<T>(path: string, payload: unknown): Promise<T> {
 }
 
 export const api = {
+  // --- authentication (multi-user epic T3/T7) --------------------------------
+  /** POST /auth/login — exchange a username + password for a fresh session token.
+   *  The returned token is opaque and shown once; the caller stores it (it becomes
+   *  the Bearer credential on every subsequent request via getAuthToken()). */
+  login(username: string, password: string): Promise<LoginResponse> {
+    return post<LoginResponse>("/auth/login", { username: username.trim(), password });
+  },
+
+  /** GET /auth/session — inspect the presenting session bearer. 200 with its
+   *  identity + expiry when live; ApiError 401 (via request()) otherwise — callers
+   *  use ApiError.isUnauthorized to distinguish "no live session". */
+  getSession(): Promise<SessionResponse> {
+    return request<SessionResponse>("/auth/session");
+  },
+
+  /** DELETE /auth/session — revoke the presenting session bearer. Idempotent (204)
+   *  for a valid, unknown, or already-revoked token alike. */
+  revokeSession(): Promise<void> {
+    return request<void>("/auth/session", { method: "DELETE" });
+  },
+
   // --- projects -------------------------------------------------------------
   /** Project list. `includeArchived` flips the endpoint filter: without it the
    *  server returns only OPEN projects; with it, ONLY archived ones — they are
-   *  never combined in one response, so the UI keeps two separate lists. */
-  listProjects(includeArchived?: boolean): Promise<ListProjectsResponse> {
-    return request<ListProjectsResponse>(includeArchived ? "/projects?archived=true" : "/projects");
+   *  never combined in one response, so the UI keeps two separate lists.
+   *  `mine="created"` (per-actor scoping, epic T7) further restricts the open list
+   *  to projects the acting session created; archived+mine is never combined. */
+  listProjects(includeArchived?: boolean, mine?: "created"): Promise<ListProjectsResponse> {
+    const qs = new URLSearchParams();
+    if (includeArchived) qs.set("archived", "true");
+    if (mine) qs.set("mine", mine);
+    const s = qs.toString();
+    return request<ListProjectsResponse>(`/projects${s ? `?${s}` : ""}`);
   },
 
   createProject(req: CreateProjectReq): Promise<Project> {

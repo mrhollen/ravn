@@ -294,7 +294,21 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                the mobile expansion renders BELOW the header (slide-down panel),
                nothing ever reorders this anchor: it stays permanently reachable
                in row 1 at every width. -->
-          <div class="relative" data-testid="header-menu-anchor">
+           <!-- Signed-in surface (multi-user, epic T7): appears ONLY while a live session
+                identity is known, so it is absent from every non-login e2e context and adds
+                no focusable to the keyboard-gated header dropdown. Identity-gated x-if keeps
+                DOM + tab order identical for token-mode / logged-out users. -->
+            <button type="button" x-show="identity" x-cloak data-testid="sign-out-button"
+                    @click="logout()"
+                   class="focus-ring flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-zinc-200 bg-zinc-100 px-2.5 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-200 md:h-auto dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                   :title="'Sign out (' + actingIdentityName() + ')'">
+             <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+             </svg>
+             <span x-text="actingIdentityName()"></span>
+           </button>
+
+           <div class="relative" data-testid="header-menu-anchor">
             <!-- Below md: the compact avatar circle (initial only) — unchanged
                  footprint, no svg inside. On md+ it widens into a STANDALONE
                  rounded button matching the other top-bar controls (.field /
@@ -304,8 +318,8 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                  preserved). -->
             <button type="button" data-testid="header-menu-trigger" aria-controls="header-menu-panel"
                     aria-haspopup="true" :aria-expanded="headerMenuOpen ? 'true' : 'false'"
-                    :aria-label="'Preferences — theme, identity and token. Acting as ' + (actorName.trim() || 'You')"
-                    :title="'Preferences (acting as ' + (actorName.trim() || 'You') + ')'"
+                    :aria-label="'Preferences — theme, identity and token. Acting as ' + actingIdentityName()"
+                    :title="'Preferences (acting as ' + actingIdentityName() + ')'"
                     @click="toggleHeaderMenu()"
                     @keydown.down.prevent="openHeaderMenu('first')"
                     @keydown.up.prevent="openHeaderMenu('last')"
@@ -313,9 +327,9 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     :class="headerMenuOpen
                       ? 'border-indigo-400 bg-indigo-600 text-white ring-2 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-700'
                       : 'border-zinc-200 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'">
-             <span class="md:hidden" data-testid="header-menu-initial" x-text="actorGlyph()" aria-hidden="true"></span>
-             <span class="hidden max-w-[8rem] truncate md:inline" data-testid="header-menu-name" :title="actorName.trim() || 'You'"
-                   x-text="actorName.trim() || 'You'"></span>
+              <span class="md:hidden" data-testid="header-menu-initial" x-text="actorGlyph()" aria-hidden="true"></span>
+              <span class="hidden max-w-[8rem] truncate md:inline" data-testid="header-menu-name" :title="actingIdentityName()"
+                    x-text="actingIdentityName()"></span>
              <span class="hidden select-none text-zinc-400 md:inline dark:text-zinc-500" aria-hidden="true">&#9662;</span>
            </button>
 
@@ -332,9 +346,9 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white"
                     x-text="actorGlyph()" aria-hidden="true"></span>
               <div class="min-w-0 leading-tight">
-                <p class="truncate text-sm font-semibold" :title="actorName.trim() || 'You'"
-                   x-text="actorName.trim() || 'You'"></p>
-                <p class="text-[11px] text-zinc-600 dark:text-zinc-400">Actor for this browser</p>
+                <p class="truncate text-sm font-semibold" :title="actingIdentityName()"
+                   x-text="actingIdentityName()"></p>
+                <p class="text-[11px] text-zinc-600 dark:text-zinc-400" x-text="identity ? 'Signed-in session' : 'Actor for this browser'"></p>
               </div>
             </div>
             <div class="my-1 border-t border-zinc-200 dark:border-zinc-700"></div>
@@ -583,6 +597,19 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       :title="showArchived ? 'Hide archived tasks' : 'Show archived tasks'">
                 <span x-text="'Archived ' + (showArchived ? '(on)' : '(off)')"></span>
               </button>
+
+              <!-- Per-actor board scope (epic T7): scopes the board to this session's
+                   assigned/created/activity rows (server-side mine=). "All" restores the
+                   full live board. Placed last so it doesn't shift earlier tab targets; the
+                   mobile twin shares this testid and is mutually exclusive by x-if. -->
+              <select x-model="taskScope" @change="onScopeChange()" data-testid="board-scope-select"
+                      aria-label="Scope the board to your tasks" title="Show only your tasks (by assignment, authorship, or activity)"
+                      class="h-full rounded-r border-l border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-700 focus:outline-none dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
+                <option value="all">All tasks</option>
+                <option value="assigned">Assigned to me</option>
+                <option value="created">Created by me</option>
+                <option value="activity">My activity</option>
+              </select>
           </div>
         </div>
         </template>
@@ -678,6 +705,15 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               <svg class="ml-auto h-3.5 w-3.5 shrink-0 text-zinc-500 dark:text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
               </svg>
+            </button>
+            <!-- Mobile sign-out (multi-user, epic T7): identity-gated x-if, so it is
+                 absent from every non-login e2e context (mobile menu specs never sign in). -->
+            <button type="button" x-show="identity" x-cloak data-testid="mobile-sign-out" @click="logout()"
+                    class="mt-2 flex w-full items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 shadow-sm transition-colors hover:bg-red-100 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-900/40">
+              <svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              <span x-text="identity ? 'Sign out (' + identity.name + ')' : ''"></span>
             </button>
           </div>
 
@@ -900,6 +936,17 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                           :title="showArchived ? 'Hide archived tasks' : 'Show archived tasks'">
                     <span x-text="'Archived ' + (showArchived ? '(on)' : '(off)')"></span>
                   </button>
+
+                  <!-- Per-actor board scope (epic T7) — mobile twin of the desktop select;
+                       shares its testid and is mutually exclusive per viewport (x-if). -->
+                  <select x-model="taskScope" @change="onScopeChange()" data-testid="board-scope-select"
+                          aria-label="Scope the board to your tasks" title="Show only your tasks"
+                          class="h-full rounded-r border-l border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-700 focus:outline-none dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
+                    <option value="all">All tasks</option>
+                    <option value="assigned">Assigned to me</option>
+                    <option value="created">Created by me</option>
+                    <option value="activity">My activity</option>
+                  </select>
                 </div>
               </div>
             </div>
@@ -949,8 +996,24 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   class="text-lg leading-none text-amber-700 hover:text-amber-950 dark:text-amber-400 dark:hover:text-amber-100">&times;</button>
         </div>
 
+        <!-- Membership-scoping denial (epic T7): a signed-in session that has no access to
+             the selected project (server returns 403, filtered lists exclude it). One-shot,
+             non-retrying — distinct from the credential error above. Pick another project or sign out. -->
+        <div x-show="projectForbidden" x-cloak data-testid="project-forbidden"
+             role="alert" aria-live="assertive"
+             class="mx-auto mt-16 max-w-md rounded-xl border border-amber-300 bg-amber-50 p-6 text-center shadow-sm dark:border-amber-700 dark:bg-zinc-900">
+          <p class="text-sm font-semibold text-amber-800 dark:text-amber-300">No access to this project</p>
+          <p class="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+            Your signed-in account isn't a member of this project, so it's hidden from your lists.
+            Choose another project or sign out.
+          </p>
+          <div class="mt-4 flex justify-center gap-2">
+            <button type="button" @click="logout()" data-testid="forbidden-sign-out" class="btn-primary">Sign out</button>
+          </div>
+        </div>
+
         <!-- load error (superseded by the dedicated boot-error screen below) -->
-        <div x-show="loadError && !board && !bootError" x-cloak data-testid="board-error"
+        <div x-show="loadError && !board && !bootError && !projectForbidden" x-cloak data-testid="board-error"
              role="alert"
              aria-live="assertive"
              class="mx-auto mt-16 max-w-md rounded-xl border border-red-200 bg-white p-6 text-center shadow-sm dark:border-red-800 dark:bg-zinc-900">
@@ -1418,13 +1481,23 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                             </svg>
                             <span x-text="isOverdue(task) ? 'Overdue: ' + dueLabel(task.due_at) : dueLabel(task.due_at)"></span>
                           </span>
-                           <span x-show="task.assignee" x-cloak class="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800"
-                                 :title="'Owner: ' + (task.assignee ? task.assignee.name + ' (' + task.assignee.type + ')' : '')">
-                             <span class="font-semibold text-amber-700 dark:text-amber-400">Owner:</span>
-                             <span x-text="task.assignee ? task.assignee.name : ''"></span>
-                           </span>
+                            <span x-show="task.assignee" x-cloak class="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800"
+                                  :title="'Owner: ' + (task.assignee ? task.assignee.name + ' (' + task.assignee.type + ')' : '')">
+                              <span class="font-semibold text-amber-700 dark:text-amber-400">Owner:</span>
+                              <span x-text="task.assignee ? task.assignee.name : ''"></span>
+                            </span>
 
-                           <!-- Match-source chip (AC2, task 01M5XTAW3RZ4QJCSW9C3CS255R): shown ONLY when the
+                            <!-- Creation-attribution chip (epic T4/T7): shown ONLY when the row carries a
+                                 resolved creator actor. Distinct neutral tint from the amber "Owner:" chip so
+                                 "created by" is never confused with durable assignment. Omitted on legacy rows. -->
+                            <span x-show="task.owner" x-cloak data-testid="card-creator-chip"
+                                  class="inline-flex items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700"
+                                  :title="'Created by ' + (task.owner ? task.owner.name + ' (' + task.owner.type + ')' : '')">
+                              <span>by</span>
+                              <span x-text="task.owner ? task.owner.name : ''"></span>
+                            </span>
+
+                            <!-- Match-source chip (AC2, task 01M5XTAW3RZ4QJCSW9C3CS255R): shown ONLY when the
                                 active search matched this card via description/notes — its title and id do NOT
                                 contain the term. Same badge grammar (ring + tinted bg, 11px) as the other meta
                                 chips so it reads subtle in both comfortable and compact density (the row wraps). -->
@@ -1889,33 +1962,88 @@ DOM-placed after the collapsible strip: on md+ it renders flush
             <button type="button" @click="closeAuthModal()" class="modal-close" aria-label="Close">&times;</button>
           </header>
 
-          <form @submit.prevent="saveAuthToken()" class="mt-4 flex flex-col gap-4">
-            <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-              Bearer Token
-              <input type="password" x-model="tokenInput" placeholder="Enter RAVN_TOKEN..."
-                     class="field font-mono text-xs w-full" autofocus />
-            </label>
+          <!-- Signed-in status (multi-user): shown whenever a live session identity is known. -->
+          <div x-show="identity" x-cloak data-testid="auth-signed-in"
+               class="mt-4 flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs dark:border-emerald-800 dark:bg-emerald-950/40">
+            <span class="text-emerald-700 dark:text-emerald-300">
+              Signed in as <strong x-text="identity?.name ?? ''"></strong><span x-text="identity && identity.kind !== 'human' ? ' (' + identity.kind + ')' : ''"></span>
+            </span>
+            <button type="button" @click="logout()" data-testid="auth-sign-out" class="btn-ghost text-xs">Sign out</button>
+          </div>
 
-            <p class="text-[11px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
-              If the server was started with <code>RAVN_TOKEN</code>, enter it here. It is saved in your browser's <code>localStorage</code>.
-              You can also pass it in the URL as <code>?token=your_token</code> to authenticate automatically.
-            </p>
+          <!-- Panel tabs: token (default, preserves the legacy single-password flow) + login. -->
+          <div role="tablist" aria-label="Authentication method" class="mt-4 flex gap-1 border-b border-zinc-200 dark:border-zinc-700">
+            <button type="button" role="tab" data-testid="auth-tab-token" :aria-selected="authModalTab === 'token' ? 'true' : 'false'"
+                    @click="openAuthModal('token')"
+                    :class="['rounded-t px-3 py-2 text-xs font-medium transition', authModalTab === 'token' ? 'border-b-2 border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100' : 'text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200']">
+              API Token
+            </button>
+            <button type="button" role="tab" data-testid="auth-tab-login" :aria-selected="authModalTab === 'login' ? 'true' : 'false'"
+                    @click="openAuthModal('login')"
+                    :class="['rounded-t px-3 py-2 text-xs font-medium transition', authModalTab === 'login' ? 'border-b-2 border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100' : 'text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200']">
+              Sign in
+            </button>
+          </div>
 
-            <div class="flex items-center justify-between pt-2">
-              <button type="button" @click="clearAuthToken()" x-show="authToken"
-                      class="text-xs text-red-600 hover:underline dark:text-red-400">
-                Clear token
-              </button>
-              <div class="flex gap-2 ml-auto">
-                <button type="button" @click="closeAuthModal()" class="btn-ghost">
-                  Cancel
+          <!-- x-if (not x-show) so only the ACTIVE panel's inputs exist in the DOM — keeps
+               "#cb-auth-modal input[type=password]" unambiguous for the legacy token flow. -->
+          <template x-if="authModalTab === 'token'">
+            <form @submit.prevent="saveAuthToken()" class="mt-4 flex flex-col gap-4">
+              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                Bearer Token
+                <input type="password" x-model="tokenInput" placeholder="Enter RAVN_TOKEN..."
+                       class="field font-mono text-xs w-full" autofocus />
+              </label>
+
+              <p class="text-[11px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                If the server was started with <code>RAVN_TOKEN</code>, enter it here. It is saved in your browser's <code>localStorage</code>.
+                You can also pass it in the URL as <code>?token=your_token</code> to authenticate automatically.
+              </p>
+
+              <div class="flex items-center justify-between pt-2">
+                <button type="button" @click="clearAuthToken()" x-show="authToken"
+                        class="text-xs text-red-600 hover:underline dark:text-red-400">
+                  Clear token
                 </button>
-                <button type="submit" class="btn-primary">
-                  Save token
+                <div class="flex gap-2 ml-auto">
+                  <button type="button" @click="closeAuthModal()" class="btn-ghost">
+                    Cancel
+                  </button>
+                  <button type="submit" class="btn-primary">
+                    Save token
+                  </button>
+                </div>
+              </div>
+            </form>
+          </template>
+
+          <template x-if="authModalTab === 'login'">
+            <form @submit.prevent="doLogin()" class="mt-4 flex flex-col gap-4" novalidate>
+              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                Username
+                <input type="text" x-model="loginUsername" autocomplete="username" placeholder="Your username"
+                       data-testid="login-username" class="field w-full" />
+              </label>
+              <label class="flex flex-col gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                Password
+                <input type="password" x-model="loginPassword" autocomplete="current-password" placeholder="Your password"
+                       data-testid="login-password" class="field w-full" />
+              </label>
+
+              <p x-show="loginError" x-cloak data-testid="login-error" role="alert"
+                 class="text-xs text-red-600 dark:text-red-400">
+                <span x-text="loginError"></span>
+              </p>
+
+              <div class="flex gap-2 pt-2 ml-auto">
+                <button type="button" @click="closeAuthModal()" class="btn-ghost">Cancel</button>
+                <button type="submit" :disabled="loginBusy" data-testid="login-submit"
+                        class="btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
+                  <span x-text="loginBusy ? 'Signing in…' : 'Sign in'"></span>
                 </button>
               </div>
-            </div>
-          </form>
+            </form>
+          </template>
         </div>
       </div>
 
@@ -2245,6 +2373,14 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   <span x-show="detail.assignee" x-cloak class="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800">
                     <span class="font-semibold text-amber-700 dark:text-amber-400">Owner:</span>
                     <span x-text="detail.assignee ? actorLabel(detail.assignee) : ''"></span>
+                  </span>
+
+                  <!-- Creation-attribution badge (epic T4/T7): shown ONLY when the detail row carries a
+                       resolved creator; neutral tint keeps it distinct from the amber "Owner:" (assignee). -->
+                  <span x-show="detail.owner" x-cloak data-testid="detail-creator-chip"
+                        class="inline-flex items-center gap-1 rounded bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700">
+                    <span class="font-semibold text-zinc-500 dark:text-zinc-400">Created by:</span>
+                    <span x-text="detail.owner ? actorLabel(detail.owner) : ''"></span>
                   </span>
 
                   <!-- Due date badge & popover -->

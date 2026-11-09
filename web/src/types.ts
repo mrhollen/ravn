@@ -67,6 +67,33 @@ export interface ActorInput {
   type?: "human" | "agent";
 }
 
+// --- multi-user identity (epic T3/T7) ----------------------------------------
+
+/** A durable human/agent identity as resolved from a live session or row.
+ *  Mirrors the server `identityDTO` — every field is always present on the wire
+ *  when an identity is returned (no omitempty), so all are required here. */
+export interface SessionIdentity {
+  id: string; // ULID
+  name: string; // display name, e.g. "ada" or "runner-2"
+  kind: string; // "human" | "agent"
+  auth_method: string; // how this identity authenticates (password/token/…)
+  created_at: string; // RFC3339
+}
+
+/** POST /api/v1/auth/login → 200 body. `token` is the opaque session secret,
+ *  shown exactly once — its hash is what the server stores for verification. */
+export interface LoginResponse {
+  token: string;
+  expires_at: string; // RFC3339 session expiry
+  identity: SessionIdentity;
+}
+
+/** GET /api/v1/auth/session → 200 body (inspects the presenting bearer). */
+export interface SessionResponse {
+  identity: SessionIdentity;
+  expires_at: string; // RFC3339 session expiry
+}
+
 // --- row shapes -------------------------------------------------------------
 
 export interface StatusCounts {
@@ -87,6 +114,9 @@ export interface Project {
   archived?: boolean;
   created_at: string;
   updated_at: string;
+  // Creation attribution (epic T4): same omitempty rules as task rows.
+  created_by?: string; // creator identity ULID, omitted when unknown/legacy
+  owner?: ActorRef; // resolved creator actor {type,name}, omitted when unknown/legacy
 }
 
 /** GET /projects row: project + per-status OPEN task counts. */
@@ -109,6 +139,10 @@ export interface TaskSummary {
   assignee?: ActorRef; // durable owner, omitted when unset
   claimed_by?: ActorRef; // ephemeral lease holder, omitted when unclaimed
   claim_expires_at?: string; // omitted while unclaimed
+  // Creation attribution (epic T4): the creator's identity id + its resolved actor.
+  // BOTH are OMITTED on legacy/unattributed rows — render only when present.
+  created_by?: string; // creator identity ULID, omitted when unknown/legacy
+  owner?: ActorRef; // resolved creator actor {type,name}, omitted when unknown/legacy
   version: number;
   created_at: string;
   updated_at: string;
@@ -353,10 +387,16 @@ export interface ArtifactReq {
 
 // --- list_tasks (subset of filters the UI uses) -------------------------------
 
+export type MineScope = "assigned" | "created" | "activity";
+
 export interface ListTasksParams {
   project_id?: string;
   status?: Status;
   assignee_name?: string;
+  /** Per-actor scoping (epic T7): resolve the acting session identity to its
+   *  assigned/created/activity rows server-side. Omitted = no mine filter.
+   *  NOTE: `mine="assigned"` + an explicit assignee filter is a 400 (ambiguous). */
+  mine?: MineScope;
   unblocked?: boolean; // true = keep only tasks with no open blocker
   search?: string;
   priority?: number;

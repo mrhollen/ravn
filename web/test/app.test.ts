@@ -1302,8 +1302,9 @@ test("BootError: index.html wires the dedicated boot-error screen (role=alert + 
   assert.match(html, /data-testid="boot-error"[\s\S]{0,400}?role="alert"/, "boot-error screen carries role=alert");
   assert.match(html, /data-testid="boot-retry-btn"[^>]*@click="retryBoot\(\)"/, "Retry wired to retryBoot()");
   assert.match(html, /:disabled="bootRetrying"/, "Retry disabled while its re-fetch is in flight");
-  // The generic board error block must not compete with the boot-error screen.
-  assert.match(html, /x-show="loadError && !board && !bootError"/);
+  // The generic board error block must not compete with the boot-error screen. It also
+  // hides while a membership-deny (projectForbidden) banner owns that region instead.
+  assert.match(html, /x-show="loadError && !board && !bootError( && !projectForbidden)?"/);
 });
 
 test("Boot: failed loadProjects keeps stored selection and offers retry, not New Project", async () => {
