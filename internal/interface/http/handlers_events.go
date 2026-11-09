@@ -40,10 +40,22 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID domain.ID) {
-	// Verify that the requested project exists
-	if _, err := a.Projects.Get(r.Context(), projectID); err != nil {
+	// Verify the requested project exists AND — under membership scoping — that the
+	// requesting identity can SEE it. This gate runs BEFORE any SSE header is set, the
+	// 200 status is written, or a single frame / replayed event is emitted: a non-member
+	// gets a JSON 403 and the stream is never opened (T5 AC1/AC2 — zero event leakage).
+	// checkProject reuses the T4 visibility+authorization gate verbatim: in DEFAULT/global
+	// mode it short-circuits to allow with ZERO extra lookups, so the fetch keeps its
+	// pre-T5 404 behavior and an allowed stream is byte-identical (global mode is a
+	// guaranteed no-op — existing SSE specs stay green). Membership mode resolves the
+	// acting subject's role ONCE and writes 403 before anything below runs.
+	p, err := a.Projects.Get(r.Context(), projectID)
+	if err != nil {
 		writeAppError(w, err, "project", projectID)
 		return
+	}
+	if _, _, ok := a.checkProject(w, r, "", p, domain.OpRead); !ok {
+		return // 403 already written by checkProject; no frames/replay below are reached
 	}
 
 	if _, ok := w.(http.Flusher); !ok {
