@@ -161,7 +161,10 @@ When the upstream ravn-server runs `RAVN_AUTH=multiuser`, operators mint a
 per-agent API token per identity (`POST /api/v1/auth/tokens` with
 `kind: "agent"` — the identity is created as neutral if absent, so no account
 is needed). Point each agent's MCP client at ravn-mcp with that token as its
-`Authorization: Bearer …` header:
+`Authorization: Bearer …` header. The adapter is credential-agnostic — it
+forwards **any** well-formed bearer (a per-agent api_token, a multiuser session
+token from `POST /auth/login`, or the shared operator secret) verbatim and
+leaves identity resolution to the upstream server, which is the sole authority:
 
 - The adapter **forwards it verbatim on every upstream call** (it takes
   precedence over the shared `RAVN_TOKEN`, which keeps flowing for requests

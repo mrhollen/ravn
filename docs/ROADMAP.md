@@ -2,7 +2,7 @@
 
 ## Overview
 
-Rävn is an MCP-first KanBan tool for AI agents and humans. Agents are the primary users, leveraging the tool as external memory, a coordination bus for multi-agent work, and an evidence store. The system is single-tenant and Docker-first, with a pure-Go backend using onion architecture and a minimal Vite+TS+Tailwind frontend.
+Rävn is an MCP-first KanBan tool for AI agents and humans. Agents are the primary users, leveraging the tool as external memory, a coordination bus for multi-agent work, and an evidence store. The system is single-tenant (multi-user identities, per-project membership scoping and role gating supported) and Docker-first, with a pure-Go backend using onion architecture and a minimal Vite+TS+Tailwind frontend.
 
 ## MVP — Tier 1 ✅ COMPLETE
 
@@ -53,12 +53,13 @@ All Tier 1 items are built, tested, and verified end-to-end (live E2E smoke: bot
 - ✅ **OpenCode dispatch**: `POST /tasks/{id}/opencode/start` creates an autonomous session, claims the task, attaches the session URL as an artifact; project-level server/directory/model settings plus a board launcher button. (`8dd1801`, `5dbd18a`, `cbef29e`, `c0a97e3`)
 - ✅ **MCP prompts**: Onboarding prompts (`triage_open_tasks`, `next_task`). (`05a8bed`)
 - ✅ **MCP resources**: Read-only `ravn://task/{id}` and `ravn://project/{id}` resources for resume payloads and project summaries. (`028a0d0`)
+- ✅ **Multi-user auth & membership scoping** (epic T1–T9, `7edc5a7` → `f087b9e`): tiered `RAVN_AUTH=off|token|multiuser` — password login with opaque sessions (SHA-256 hash at rest, non-enumerable logins), per-agent api_tokens shown once, operator-only provisioning (`/auth/*`); credential principals act as their own identity with anti-spoofing attribution; per-project visibility scoping via `RAVN_SCOPING=membership` (fail-closed) with viewer/editor/admin roles + derived owner and role-gated task writes; membership management over REST and in the project settings UI. Rollout/rollback: [RUNBOOK-multiuser.md](RUNBOOK-multiuser.md).
 
 ### Shipped boundary — still deferred
 
 - **Definition-of-Done enforcement** — marking a task `done` stays allowed with unchecked ACs or no artifacts (Tier 2).
 - **Claim operations in the UI** — claims are displayed read-only; claim/release/heartbeat remain API + MCP only, deliberately.
-- **Per-agent identity & rate limits** — auth is one shared token for the whole stack; a registered agent table with per-agent tokens/audit lands in Tier 2.
+- **Rate limits** — multi-user identities, per-agent credentials and membership scoping are now shipped (see wave above); per-identity rate limiting and audit rollups still land in Tier 2.
 
 Everything else deferred is listed under Tier 2 / Tier 3 below.
 
@@ -69,13 +70,13 @@ Everything else deferred is listed under Tier 2 / Tier 3 below.
 - **Explicit policies (Kanban practice)**: Custom statuses/workflow per project, WIP limits per column, Definition-of-Done *enforcement* (block status=done until all ACs checked / ≥1 artifact attached).
 - **Labels/tags**: Filtering and full-text search (SQLite FTS5 over titles/descriptions/notes/comments) for richer discovery.
 - **Structured decision records (ADR-lite)**: Options considered, decision, rationale — searchable across tasks/projects; links from task to decision.
-- **Agent identity & advanced auth**: Registered agent table + per-agent tokens with attribution integrity and audit/rate limits on top of the shipped shared-token gating; optional outbound webhooks (e.g., question comment → Gotify/push so humans are pinged).
+- **Advanced auth on the multi-user foundation**: Per-identity rate limits + audit rollups on top of the now-shipped identity/credentials/scoping model; optional outbound webhooks (e.g., question comment → Gotify/push so humans are pinged).
 - **Artifact file uploads**: Server-side storage, size caps, UI preview beyond URL references.
 - **Stall/health surfacing**: Stale filter on list_tasks (doing beyond N hours without activity), per-agent workload summaries.
 
 ## Tier 3 — Later / nice-to-haves
 
-Scheduling/reminders/recurrence · timeline & Gantt views · flow analytics dashboards (cycle time, lead time, WIP compliance) · task templates & project cloning · import/export (GitHub Issues, Jira, CSV/JSON) · custom fields/plugin schema · artifact diffing and screenshot annotation · AI-assisted decomposition and AC drafting · agent runner integration (auto-launch an agent session per claimed task — the full self-bootstrap endgame) · fine-grained permissions / multi-user authN (OAuth/mTLS for agents) · portfolio rollups & OKR alignment · mobile UI · plugin webhooks (Matrix/Discord).
+Scheduling/reminders/recurrence · timeline & Gantt views · flow analytics dashboards (cycle time, lead time, WIP compliance) · task templates & project cloning · import/export (GitHub Issues, Jira, CSV/JSON) · custom fields/plugin schema · artifact diffing and screenshot annotation · AI-assisted decomposition and AC drafting · agent runner integration (auto-launch an agent session per claimed task — the full self-bootstrap endgame) · agent auth protocols beyond the shipped session/api_token tiers (OAuth/mTLS for agents) · portfolio rollups & OKR alignment · mobile UI · plugin webhooks (Matrix/Discord).
 
 ## Out of scope (MVP)
 

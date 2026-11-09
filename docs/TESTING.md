@@ -1,18 +1,19 @@
 # Testing Strategy & Best Practices
 
-Audited 2026-10-30; re-measured post-epic (test-quality epic
-`01M6735WRK6XC46HQCSYGAEYVC`) on 2026-10-31. This document is the source of
-truth for how ravn is tested, the measured baselines, and the conventions new
-tests must follow. Improvements are tracked as tasks on the Ravn board (see
+Audited 2026-10-30; re-measured post test-quality epic
+(`01M6735WRK6XC46HQCSYGAEYVC`) on 2026-10-31 and again after the multi-user
+epic (T1–T9) on 2026-11-09. This document is the source of truth for how ravn
+is tested, the measured baselines, and the conventions new tests must follow.
+Improvements are tracked as tasks on the Ravn board (see
 [Findings index](#findings-index-task-traceability)).
 
 ## 1. The three suites
 
 | Suite | What it covers | Runner | Size (2026-10-31, post-epic) | Wall time (local, 12-core) | Coverage |
 |---|---|---|---|---|---|
-| Go unit + integration (`internal/`, `cmd/`) | domain rules, application use-cases, SQLite repos, HTTP handlers, MCP tools | `go test` (+ `-race` in CI) | 91 files, **38,080** LOC (vs 16,948 source LOC → 2.2:1) | **3.6s** total; `-race` **12.5s**; slowest package `internal/interface/http` ~3.2s wall (measured post-epic, 2026-10-31) | **83.9%** statements total |
-| Web unit (`web/test/`) | pure logic of `web/src/*.ts` (dates, markdown, drafts, API client, board state, moves, refresh, realtime) | `node:test` via `jiti` (`npm run test:unit`; coverage: `npm run test:unit:coverage`) | 9 module files + `test-helpers.ts`, **5,641** LOC, **221** tests | **~8.1s** (suite 7.9s) | **69.35%** lines / 79.03% branches / 67.07% functions (re-measured post-epic) |
-| Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 38 spec files + shared `fixtures.ts`/`helpers.ts`, **12,848** LOC (was 15,727), 175 tests | **~43s** wall (default workers; measured post-epic); one shared `ravn-server` per worker (+ a few isolated spins) | not measured (E2E is the integration proof) |
+| Go unit + integration (`internal/`, `cmd/`) | domain rules, application use-cases, SQLite repos, HTTP handlers, MCP tools | `go test` (+ `-race` in CI) | 137 files, **50,546** LOC (re-measured post-multiuser epic, 2026-11-09; was 91 / 38,080 on 2026-10-31) | **~7.1s** total; `-race` **24.2s**; slowest package `internal/interface/http` ~3.3s wall (re-measured 2026-11-09) | **84.5%** statements total |
+| Web unit (`web/test/`) | pure logic of `web/src/*.ts` (dates, markdown, drafts, API client, board state/scope, identity, members, moves, refresh, realtime) | `node:test` via `jiti` (`npm run test:unit`; coverage: `npm run test:unit:coverage`) | 12 per-module files + `test-helpers.ts`, **6,685** LOC, **263** tests (re-measured 2026-11-09) | **~8.0s** (suite 8.03s) | **70.58%** lines / 75.97% branches / 67.81% functions (re-measured 2026-11-09) |
+| Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 41 spec files + shared `fixtures.ts`/`helpers.ts`, **14,149** LOC, **189** tests (re-measured 2026-11-09) | **~47s** wall (default workers); one shared `ravn-server` per worker (+ a few isolated spins); prereqs built once per run by the dedicated `e2e/global-setup.ts` globalSetup — mtime-staleness check, and the server binary is staged via temp copy + atomic rename so a worker can never start a mid-write binary (no ETXTBSY race) | not measured (E2E is the integration proof) |
 
 All three run in CI on every push/PR (`.github/workflows/ci.yml`,
 `.forgejo/workflows/ci.yml`): `go test -race ./... -coverprofile=c.out -cover`,
@@ -31,23 +32,24 @@ cd web && npm run build && cd ..   # E2E serves web/dist
 cd web && npx playwright test      # or: make e2e (builds as needed)
 ```
 
-## 2. Coverage baselines (re-measured post-epic, 2026-10-31)
+## 2. Coverage baselines (re-measured post-multiuser epic, 2026-11-09; previous pass 2026-10-31)
 
 ### Go — per package, statements (`go test ./... -cover`)
 
 | Package | Coverage | Notes |
 |---|---|---|
 | internal/infrastructure/clock, idgen | 100% | |
-| internal/domain | 91.0% | state machine + invariants well covered |
+| internal/domain | 91.8% | state machine + invariants + visibility/authorization policy well covered |
 | cmd/ravn-exec | 90.8% | flag/env parse + spawn covered via `parseCLIArgs` seam (C2, f430f84) |
-| cmd/ravn-server | 90.1% | wiring/flags/shutdown covered via full-boot tests on the `run()` seam (C2, f430f84) |
-| internal/infrastructure/pubsub | 88.8% | |
-| internal/application | 86.8% | batch rollups (`ListWithCounts`) now covered (C1, e5bc919) |
-| internal/infrastructure/apiclient | 83.8% | `ProjectReport` client path now covered (C1, e5bc919) |
-| internal/interface/http | 83.4% | handlers + security middleware |
-| internal/mcp | 82.4% | tools/resources/prompts |
-| cmd/ravn-mcp | 80.7% | |
-| internal/infrastructure/sqlite | 77.5% | rollup/boundary queries now covered (C1, e5bc919) |
+| cmd/ravn-server | 90.9% | wiring/flags/shutdown + multiuser boot-validation matrix on the `run()` seam (`main_multiuser_test.go`, eca9c1f) |
+| internal/infrastructure/pubsub | 92.7% | |
+| internal/application | 85.9% | batch rollups covered (C1, e5bc919); multiuser identity/tokens/memberships use cases added in the epic |
+| internal/infrastructure/apiclient | 85.2% | auth + membership client paths now covered |
+| internal/interface/http | 82.2% | handlers + security middleware + tiered auth chain & scoping (T3–T9) |
+| internal/mcp | 82.9% | tools/resources/prompts |
+| cmd/ravn-mcp | 80.8% | per-agent credential forwarding + strict identity mode (T6) |
+| internal/infrastructure/pwhash | 82.7% | new package (epic T3): Argon2id PHC-format hash emit/verify + parameter parsing |
+| internal/infrastructure/sqlite | 84.0% | migration 0011 + adversarial identity/member tests lifted it from 77.5% (T1/T9) |
 
 The previously-known **0%-covered production functions** (all confirmed in use,
 not dead code) are all at ≥80% now — measured post-epic: `ListWithCounts` 92.6%,
@@ -57,26 +59,32 @@ not dead code) are all at ≥80% now — measured post-epic: `ListWithCounts` 92
 
 ### Web unit — per file (`npm run test:unit:coverage`)
 
-Re-measured post-epic (9 per-module test files + `test-helpers.ts`, 221 tests)
-with Node's built-in plain coverage reporter on Node 26 — zero extra deps.
-Values are the reporter's exact two-decimal output, descending by line %.
+Re-measured post-multiuser epic (12 per-module test files + `test-helpers.ts`,
+263 tests) with Node's built-in plain coverage reporter on Node 26 — zero extra
+deps. Values are the reporter's exact two-decimal output, descending by line %.
 
 | File | Lines | Branches | Functions |
 |---|---|---|---|
 | src/drafts.ts | 100.00% | 100.00% | 100.00% |
+| src/board-scope.ts | 100.00% | 100.00% | 100.00% |
 | src/moves.ts | 97.44% | 94.74% | 88.89% |
+| src/members.ts | 95.83% | 95.16% | 100.00% |
 | src/refresh.ts | 94.34% | 100.00% | 89.47% |
+| src/identity.ts | 94.05% | 91.67% | 100.00% |
 | src/focus.ts | 93.85% | 90.91% | 100.00% |
-| src/api.ts | 88.21% | 96.10% | 97.92% |
-| src/util.ts | 80.06% | 86.76% | 54.84% |
-| src/realtime.ts | 79.25% | 95.45% | 100.00% |
+| src/api.ts | 85.89% | 95.71% | 89.66% |
+| src/util.ts | 84.40% | 87.36% | 66.67% |
+| src/realtime.ts | 79.38% | 95.45% | 100.00% |
 | src/md.ts | 68.63% | 87.50% | 100.00% |
-| src/app.ts | 66.54% | 73.10% | 59.28% |
-| src/types.ts | 37.98% | 100.00% | 100.00% |
-| **All files (total)** | **69.35%** | **79.03%** | **67.07%** |
+| src/app.ts | 67.57% | 68.16% | 59.61% |
+| src/types.ts | 40.12% | 100.00% | 100.00% |
+| **All files (total)** | **70.58%** | **75.97%** | **67.81%** |
 
-`api.ts` and `focus.ts` rose in B3 (44bfcfd): api lines 71.37% → 88.21%
-(funcs 47.92% → 97.92%), focus lines 52.31% → 93.85% (funcs 41.67% → 100.00%).
+The epic's new pure modules land covered by construction — `board-scope.ts`
+(project visibility per identity) at 100%, `members.ts` (T9 roster helpers) and
+`identity.ts` (login/session/tokens client + display-name rules) at ≥94% lines.
+`api.ts` dipped 88.21% → 85.89% because the multiuser client surface grew
+(auth/members endpoints); `focus.ts` stays at 93.85%.
 
 The total line coverage is the ratcheting baseline: it must stay ≥ 65% (the web
 unit floor) and the Go total must stay ≥ 80% (the Go statement floor). Both are
@@ -100,7 +108,7 @@ Notes:
 The plain reporter writes the table to **stdout** with a stable total line
 (exactly as printed, including spacing):
 
-    ℹ all files    |  69.35 |    79.03 |   67.07 |
+    ℹ all files    |  70.58 |    75.97 |   67.81 |
 
 Pipe-friendly one-liner (POSIX awk; prints `69.35` = total line %; the suite's
 own pass/fail exit code is preserved by piping only after the command). The
@@ -119,8 +127,9 @@ Caveat (measured 2026-10-31, Node v22 vs v26): the CI runners pin **Node v22**
 (`setup-node` in both `ci.yml` files), whose plain reporter prefixes report
 rows with `#` instead of `ℹ` and — more importantly — **includes the test files
 themselves** (`web/test/*.test.ts`, `test-helpers.ts`) in the table. So the CI
-total reads ~82.35% while a modern local Node (v26, which reports `src/` only)
-reads ~69.35%. Both comfortably clear the 65% floor; the gate matches the total
+total reads higher than a modern local Node (v26, which reports `src/` only):
+post-multiuser the v26 total is 70.58% (re-measure on your runner's Node if you
+need its exact number). Both comfortably clear the 65% floor; the gate matches the total
 row by content so it works on both. If you bump the runner's Node major, re-check
 which file set is reported before ratcheting (see below).
 
@@ -154,12 +163,11 @@ never re-lost. To verify the gate itself locally without touching real
 coverage, override the env floors (e.g. `GO_FLOOR=99 WEB_FLOOR=99 scripts/ci/
 coverage-gate.sh c.out web-unit-coverage.log` must FAIL; defaults must PASS).
 
-Measured totals as of 2026-10-31 (post test-quality epic): Go **83.9%**
-statements; web unit total lines **69.35%** on Node 26 / **82.35%** on the
-CI-pinned Node 22 (see the v22 caveat above) — both floors have headroom.
-Re-confirmed by the fresh post-epic verification run of 2026-10-31
-(`go tool cover -func` total line and `npm run test:unit:coverage` all-files
-row): identical totals.
+Measured totals as of 2026-11-09 (post multi-user epic): Go **84.5%**
+statements (`go tool cover -func` total line); web unit total lines **70.58%**
+on Node 26 (`npm run test:unit:coverage` all-files row) — both floors have
+headroom. Previous pass (2026-10-31, post test-quality epic): Go 83.9% / web
+69.35% lines on Node 26.
 
 ### How to measure
 
@@ -268,15 +276,14 @@ cd web && npm run test:unit:coverage
 ## 4. Performance budgets
 
 Measured on a 12-core / 64GB Linux box, 2026-10-30; "Current" actuals
-re-measured fresh in the post-epic verification run of 2026-10-31. CI targets
-2 workers for E2E.
+re-measured fresh post multi-user epic (2026-11-09). CI targets 2 workers for E2E.
 
-| Budget | Current (measured 2026-10-31) | Target |
+| Budget | Current (measured 2026-11-09) | Target |
 |---|---|---|
-| Go full suite (no race) | **3.6s**; slowest package `internal/interface/http` ~3.2s wall | ≤ 30s; `internal/interface/http` ≤ 4s — met via the §3 SSE deadline seam (A1, 41a6479) |
-| Go full suite (`-race`, CI) | **12.5s** | ≤ 60s |
-| Web unit | **~8.1s** (221 tests) | ≤ 15s |
-| E2E (local, default workers) | **~43s** (175 passed) | ≤ 60s; one shared `ravn-server` per worker (+ a few isolated spins) — realized by the §3 fixture |
+| Go full suite (no race) | **~7.1s**; slowest package `internal/interface/http` ~3.3s wall | ≤ 30s; `internal/interface/http` ≤ 4s — met via the §3 SSE deadline seam (A1, 41a6479) |
+| Go full suite (`-race`, CI) | **24.2s** | ≤ 60s |
+| Web unit | **~8.0s** (263 tests) | ≤ 15s |
+| E2E (local, default workers) | **~47s** (189 passed) | ≤ 60s; one shared `ravn-server` per worker (+ a few isolated spins) — realized by the §3 fixture; prereqs built once in the globalSetup hook (§1) |
 | E2E memory | ~6GB peak chromium; `ravn-server` count bounded by worker count, not spec count (fixture) | keep total < 8GB on a 16GB runner box |
 
 Rules for keeping the budgets:

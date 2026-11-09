@@ -5,14 +5,14 @@
 Read `docs/TESTING.md` before writing or refactoring tests. Hard rules:
 
 - Three suites: Go (`go test ./... -cover`, `-race` in CI), web unit (`cd web && npm run test:unit`, node:test via jiti — no other framework), Playwright E2E (`npm run test:e2e`). Budgets: Go ≤ 30s, web unit ≤ 15s, E2E ≤ 60s wall; do not add sleeps > 3s or raise a budget without fixing the wait.
-- E2E specs must never assume an empty database — seed with unique project names (`randomUUID()`). Each spec currently owns its own ephemeral server (fixture consolidation is tracked as a task).
+- E2E specs must never assume an empty database — seed with unique project names (`randomUUID()`). One shared `bin/ravn-server` runs per worker (worker-scoped fixture in `web/e2e/fixtures.ts`; prereqs are built once by the globalSetup hook in `web/e2e/global-setup.ts`). A test that needs an untouched DB, a global count, token-required mode or data-dir access opts into the fixture's test-scoped `isolatedServer` — see docs/TESTING.md §3.
 - Go: table-driven, reuse package-level helpers (`openTestDB`, `newStack`/`doReq`); hostile-input tests go in `*_adversarial_test.go`. No milestone-style names (`stress_rN`).
 - Web unit: keep dependency-light (node:test + jiti, manual browser-global fakes). Prefer testing extracted pure modules over app.ts DOM code.
 - Coverage baselines and how to measure them: see docs/TESTING.md §2. No test may drop total Go coverage below 80% or web-unit line coverage below 65% (CI gate pending task `[CI] Report coverage in CI and add ratcheting gates`).
 
 ## E2E test artifacts & QA evidence
 
-The browser E2E suite (`web/e2e/`, Playwright) is **self-contained**: each spec spins up its own ephemeral ravn-server on a random high port (never :8080) with a temp DB, and serves the pre-built `web/dist`. You do not need a running server or fixed port.
+The browser E2E suite (`web/e2e/`, Playwright) is **self-contained**: a globalSetup hook builds the server binary and `web/dist` once per run (mtime-staleness check), and each Playwright worker then serves specs against ONE shared ravn-server on a random high port (never :8080) with a temp DB. You do not need a running server or fixed port.
 
 ### Run it
 
