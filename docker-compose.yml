@@ -41,6 +41,10 @@ services:
       RAVN_ARTIFACTS_DIR: "/artifacts"
       RAVN_TOKEN: "${RAVN_TOKEN:-}" # optional; empty = auth off (single-tenant local default)
       RAVN_PUBLIC_METRICS: "${RAVN_PUBLIC_METRICS:-}" # optional; true keeps root /metrics publicly scrapable when RAVN_TOKEN is set (see .env.example warning)
+      RAVN_AUTH: "${RAVN_AUTH:-}" # optional; off|token|multiuser — empty resolves to token when RAVN_TOKEN is set, else off (multi-user epic; see docs/RUNBOOK-multiuser.md)
+      RAVN_SESSION_TTL: "${RAVN_SESSION_TTL:-}" # optional Go duration (e.g. 1h30m); password-login session lifetime, default 24h
+      RAVN_SCOPING: "${RAVN_SCOPING:-}" # optional; global|membership — empty = global (see-all); membership requires auth and enables per-project roles
+      RAVN_IDENTITY_OPEN: "${RAVN_IDENTITY_OPEN:-}" # optional; auto|strict — whether credential principals may create projects while membership scoping is on (default open/auto)
       OPENCODE_MODEL: "${OPENCODE_MODEL:-}" # optional; empty = use the OpenCode server's default model
       OPENCODE_ALLOW_PRIVATE_IPS: "${OPENCODE_ALLOW_PRIVATE_IPS:-true}" # allow LAN/private IP addresses (e.g. 10.x.x.x, 192.168.x.x, localhost)
       OPENCODE_ALLOWED_HOSTS: "${OPENCODE_ALLOWED_HOSTS:-}" # optional explicit host allowlist (comma-separated, CIDR, or *)

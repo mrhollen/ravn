@@ -250,7 +250,7 @@ CREATE TABLE schema_migrations (filename TEXT PRIMARY KEY, applied_at TEXT NOT N
 
 ## 5. REST API map
 
-Base `/api/v1`. Auth: off by default (single-tenant); when the server starts with `-token`/`RAVN_TOKEN` set, every `/api/v1/*` route requires `Authorization: Bearer <token>` or `?token=<token>` (SSE fallback) and answers `401 {"error":"unauthorized","message":"missing or invalid auth token"}` otherwise — `/healthz`, root `/metrics`, and the static UI stay open (implemented post-blueprint; see the 2026-09-27 ADR below). The full wire contract (row shapes, error bodies, pagination) lives in [API.md](API.md). Error envelope everywhere: `{"error":"<code>","message":"<recovery hint, agent-readable>", ...fields}`.
+Base `/api/v1`. Auth is optional and tiered — `RAVN_AUTH` = `off` | `token` | `multiuser` (empty resolves to token when `RAVN_TOKEN` is set, else off): **off** requires nothing; **token** admits a shared bearer acting as the operator; **multiuser** resolves each bearer in strict order (shared operator → password-login session → per-agent api_token) and applies per-project role scoping when `RAVN_SCOPING=membership`. The authoritative variable reference (values, defaults, boot-refusal behavior) lives in [§9 Multi-user & authentication](#9-multi-user--authentication) below; the full wire contract per tier — including all `/auth/*` routes, the membership endpoints and every 401/403 body — lives in [API.md](API.md). `/healthz` and the static UI are never gated; root `/metrics` follows the `RAVN_PUBLIC_METRICS` opt-in documented there (2026-09-27 / 2026-11-05 ADRs below). Error envelope everywhere: `{"error":"<code>","message":"<recovery hint, agent-readable>", ...fields}`.
 
 | REST endpoint | MCP tool | Notes |
 |---|---|---|
@@ -314,7 +314,7 @@ http.ListenAndServe(addr, withLogging(logger, mux))
 ```
 
 - **Tool registration pattern (`mcp/tools.go`):** each tool = `mcp.NewTool(name, mcp.WithDescription(<written for small LLMs>), <typed property builders: WithString+Required, WithNumber, WithEnum(...), WithObject/WithArray where needed>)` + handler `func(ctx, mcp.CallToolRequest) (*mcp.CallToolResult, error)`. Handlers are one-liners around the client: parse args (`request.RequireString(...)`) → call REST → on success `mcp.NewToolResultText(compactJSON)`; on REST error return `mcp.NewToolResultError(text)` where text = **the REST error body verbatim** (its `message` already contains the recovery hint). Never fabricate success.
-- **Config (env, compose-injected):** `-addr`/`MCP_ADDR` (def `:9080`), `RAVN_API_URL` (def `http://ravn-server:8080`; the compose service DNS name), `RAVN_TOKEN` (optional; forwarded as `Authorization: Bearer <token>` on every upstream call when set), `RAVN_AGENT_NAME` (def `agent`; the fallback actor NAME when a call omits `actor`). No config file, no state, no other env.
+- **Config (env, compose-injected):** `-addr`/`MCP_ADDR` (def `:9080`), `RAVN_API_URL` (def `http://ravn-server:8080`; the compose service DNS name), `RAVN_TOKEN` (optional; forwarded as `Authorization: Bearer <token>` on every upstream call when set — in multiuser deployments it may hold ANY of the three bearer kinds: the shared operator secret, a session token, or a per-agent api_token; the server resolves them in that order), `RAVN_AGENT_NAME` (def `agent`; the fallback actor NAME when a call omits `actor`). No config file, no state, no other env.
 - **Docker exposure:** host 9311 → container :9080 (`RAVN_MCP_PORT`); clients point at `http://<host>:9311/mcp` (Streamable HTTP, or SSE on GET), and legacy-SSE-only clients at `http://<host>:9311/sse`. Note the SDK's DNS-rebinding guard: loopback-sourced requests with a non-localhost `Host` header get 403 — via Docker port forwarding this does not trigger (source isn't loopback in-container); escape hatch `WithDisableLocalhostProtection(true)` if host-side clients misbehave.
 - **Idempotency / error conventions:** no client-supplied idempotency keys in MVP (accepted risk, §10). Instead: semantics are retry-safe where it matters — re-claim by same actor refreshes (200), `relate_tasks` upserts (200), version-guarded updates fail loudly with 409 rather than double-applying. Appends (comments/artifacts) are NOT idempotent; a post-timeout retry may duplicate — documented in tool descriptions ("check the comment tail before re-posting after an error").
 - **Error propagation:** there is no special-case mapping — every non-2xx upstream answer (including `401` when a token is configured) arrives as `isError` with the REST body **verbatim** (`message` carries the recovery hint, e.g. `missing or invalid auth token` → set/forward `RAVN_TOKEN` on the MCP container); connection failure → "ravn-server unreachable at <url> — is it running?".
@@ -428,7 +428,11 @@ services:
       RAVN_DATA: "/data/ravn.db"
       RAVN_STATIC_DIR: "/app/public"   # UI baked in at image build (web-build stage)
       RAVN_ARTIFACTS_DIR: "/artifacts"
-      RAVN_TOKEN: "${RAVN_TOKEN:-}"  # optional; empty = auth off (single-tenant local default)
+      RAVN_TOKEN: "${RAVN_TOKEN:-}"  # optional; shared operator secret (any tier); empty = none
+      RAVN_AUTH: "${RAVN_AUTH:-}"            # optional; off|token|multiuser — empty resolves to token when RAVN_TOKEN set, else off (§9)
+      RAVN_SESSION_TTL: "${RAVN_SESSION_TTL:-}"  # optional Go duration; multiuser session lifetime (default 24h)
+      RAVN_SCOPING: "${RAVN_SCOPING:-}"       # optional; global|membership — empty = global/see-all (§9)
+      RAVN_IDENTITY_OPEN: "${RAVN_IDENTITY_OPEN:-}"  # optional; auto|strict — default open (§9)
       OPENCODE_MODEL: "${OPENCODE_MODEL:-}"   # optional providerID/modelID; empty = OpenCode server's default model
       OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-http://host.docker.internal:4444}"  # in Docker, OpenCode runs on the HOST — localhost is the container
       OPENCODE_DIRECTORY: "${OPENCODE_DIRECTORY:-}"   # in Docker it MUST be an absolute path that exists on the HOST running OpenCode
@@ -480,11 +484,109 @@ docs
 
 (Keep `web/package-lock.json` **and all of `web/src`** in the context — the web-build stage needs both; neither matches an ignore rule. That only matters to web-build: the go-build stage copies nothing from `web/` at all, so UI edits never invalidate the Go layers.)
 
-- Backups: zero-downtime hot backup via `VACUUM 'main' INTO` — `scripts/backup.sh` (`make backup`), the one-shot `ravn-server -backup <path>` / `-integrity-check <path>` flags, and authenticated `POST /api/v1/admin/backup`. Default base dir is `<data dir>/backups` (i.e. `/data/backups` on the `ravn-data` volume in Docker); existing targets are never overwritten; every scripted backup is verified with `PRAGMA integrity_check`. Do **not** naively copy a live WAL database file — see §10 risk 4, the ADR of 2026-11-08, and README "Backups".
+- Backups: zero-downtime hot backup via `VACUUM 'main' INTO` — `scripts/backup.sh` (`make backup`), the one-shot `ravn-server -backup <path>` / `-integrity-check <path>` flags, and authenticated `POST /api/v1/admin/backup`. Default base dir is `<data dir>/backups` (i.e. `/data/backups` on the `ravn-data` volume in Docker); existing targets are never overwritten; every scripted backup is verified with `PRAGMA integrity_check`. Do **not** naively copy a live WAL database file — see §11 risk 4, the ADR of 2026-11-08, and README "Backups".
 
 ---
 
-## 9. Build & test plan
+## 9. Multi-user & authentication
+
+The multi-user epic (T1–T9, shipped 2026-11-08/09) adds tiered optional auth and
+config-driven data scoping on top of the pre-existing shared-token middleware.
+This section is the **authoritative configuration reference** — sourced from
+`internal/interface/http/config.go`, `internal/infrastructure/apiclient/authctx.go`
+and the validation seams in `cmd/ravn-server/main.go`; the wire contract lives in
+[API.md](API.md), the operational rollout/rollback in [RUNBOOK-multiuser.md](RUNBOOK-multiuser.md).
+
+### The three auth tiers (`RAVN_AUTH`)
+
+| Tier | Admits | Acts as |
+|---|---|---|
+| `off` | everything (zero-config LAN default) | self-declared actor from the request (no trust, no attribution beyond declared names) |
+| `token` | one shared bearer (`RAVN_TOKEN`, or `-token` flag) | the privileged **operator** — see-all, may do everything, in every scoping mode |
+| `multiuser` | any of three kinds, resolved in strict order: ① shared operator token (if set) → ② password-login **session token** → ③ per-agent **api_token**; a secret that matches none is rejected `401` | the presenting principal: operator for ①; the stored identity of ②/③ — credential principals always act as their OWN identity (a declared actor naming someone else is ignored for attribution AND authorization) |
+
+All three bearer kinds are the same opaque shape (32 random bytes, base64url,
+no type prefix); resolution is by lookup order, never by value inspection. Only
+`POST /auth/login` is public in multiuser mode; everything else under `/api/v1`
+requires one of the three.
+
+### Configuration variables (authoritative table)
+
+All values are compared case-insensitively after trim. **Every parse error below
+is a STARTUP REFUSAL** — validated before signal handlers, DB open or any port
+bind (fail fast; there is no "boot anyway in a weird state" path). Empty
+`RAVN_AUTH` and empty `RAVN_SCOPING`/`RAVN_IDENTITY_OPEN`/`RAVN_SESSION_TTL`
+preserve every existing deployment's behavior byte-for-byte.
+
+| Variable | Accepted values (aliases) | Default (when empty/unset) | Bad value |
+|---|---|---|---|
+| `RAVN_AUTH` | `off` (`none`, `disabled`) · `token` (`shared`, `shared_token`, `single`) · `multiuser` (`multi-user`, `multi_user`, `users`) | **implicit resolution:** `RAVN_TOKEN` set → `token`, else `off` | exit 1: `"… is not one of off, token, multiuser"` |
+| `RAVN_TOKEN` | any non-empty string (shared operator secret; also gates root `/metrics`) | empty = no shared secret; with empty `RAVN_AUTH` that means tier `off` | n/a. In multiuser mode an **absent** `RAVN_TOKEN` is legal — there is then no operator backdoor: account/token provisioning (`POST /auth/accounts`, `/auth/tokens`) becomes unreachable via REST, so provision during a transition window with the token set, then unset it (see runbook) |
+| `RAVN_SESSION_TTL` | any Go duration (`"24h"`, `"1h30m"`, …) | `24h` | exit 1: unparseable or ≤ 0 (`not a valid duration` / `must be a positive duration`) — never silently zero-length sessions |
+| `RAVN_SCOPING` | `global` (also `auto`) · `membership` | `global` (see-all, no role gating — today's behavior) | exit 1: `"… is not one of global, membership"` |
+| `RAVN_IDENTITY_OPEN` | open family: `auto`, `true`, `1`, `yes`, `on` · closed family: `strict`, `closed`, `false`, `0`, `no`, `off` | **open** — only consulted when `RAVN_SCOPING=membership`: whether a credential principal (session/api_token) may `POST /projects`. Open = allowed; strict = `403` identity-closed | exit 1: `"… is not one of auto, strict, true, false"` |
+
+Cross-checks enforced in `run()` after the per-variable parsing:
+- `RAVN_SCOPING=membership` **without any auth** → boot refusal (scoping has no
+  principals to scope). Membership + bare `token` mode boots with a **warning**:
+  every admitted request is the all-seeing operator, so scoping is a no-op there.
+- Defense in depth: `ScopingFromEnv` (used by embedded/test composition) falls
+  back to safe defaults — global scoping / identity open — on parse errors,
+  since `run()` already exited on them for real servers.
+
+### Identity & credentials model
+
+- **Identity**: a durable row with `name` (unique), `kind` (`human` | `agent`)
+  and `auth_method` (`password` = login-able · `api_token` = neutral token-only).
+  Provisioned via `POST /auth/accounts` (operator-only; create or password-**reset**)
+  or implicitly by `POST /auth/tokens` for a name that doesn't exist yet.
+- **Session tokens**: minted on `POST /auth/login`; opaque, shown exactly once,
+  only their SHA-256 hash persisted; live for `RAVN_SESSION_TTL` from issue;
+  revoked by `DELETE /auth/session` (idempotent). Login is timing-safe and
+  answers identically for unknown-name, wrong-password and disabled accounts —
+  usernames cannot be enumerated.
+- **API tokens**: long-lived per-agent secrets minted operator-only via
+  `POST /auth/tokens` (shown exactly once; metadata listable; disable-by-id is the
+  only deletion). Used as the bearer for agent processes (e.g. an MCP container
+  pointed at a multiuser server with one api_token instead of the shared secret).
+- **Attribution**: credential principals stamp durable `created_by` ownership on
+  projects they create and appear under their stored identity name in every
+  actor field — free-form names can no longer be spoofed by authenticated callers.
+
+### Scoping model (`RAVN_SCOPING=membership`)
+
+Per-project roles: **viewer** (read) < **editor** (write) < **admin**
+(destructive + member management), plus a DERIVED **owner** — the identity in
+`project.created_by`, above admin, never assignable via the API. Membership rows
+are added/edited/removed on `/projects/{id}/members` (GET at the read line;
+mutations admin-or-owner; hierarchy and last-admin guards apply). Task-level
+access always derives from the task's project — tasks have no independent roles.
+
+- **Fail-closed:** a request whose identity is unresolved (or anonymous) sees an
+  empty list and may do nothing; the shared operator is exempt in every mode —
+  its behavior must not change when scoping turns on.
+- **List filtering** honors the same policy (`GET /projects`, `GET /tasks`) and
+  gains the `?mine=created|assigned|activity` filters (unresolvable actors get an
+  honest empty list, never an error). SSE streams are visibility-gated per actor
+  too; membership and auth mutations emit no events.
+- **Regression safety:** in global/default mode every gate helper short-circuits
+  with ZERO extra queries — responses are byte-identical to pre-epic
+  deployments (`TestScoping_GlobalModeByteIdenticalToToken`,
+  `internal/interface/http/scoping_test.go`). Restrictions appear ONLY once
+  `RAVN_SCOPING=membership` is set explicitly.
+
+### Schema & reversibility
+
+Migration `0011_multiuser_identity.sql` is **purely additive** (identity, session,
+api_token and project_member tables + indexes); rolling back means reverting the
+environment variables — the schema stays and empty tables cost nothing.
+First-run bootstrap (enable multiuser WITH `RAVN_TOKEN` → provision accounts →
+mint agent tokens → optionally drop the shared token) and full rollback are
+written out in [RUNBOOK-multiuser.md](RUNBOOK-multiuser.md).
+
+---
+
+## 10. Build & test plan
 
 **Build:**
 - UI: `cd web && npm ci && npm run build` → `web/dist` (used by Docker stage; also committed nothing — gitignored).
@@ -507,7 +609,7 @@ Ordering advice for devs: domain → application(+fakes) → sqlite → api → 
 
 ---
 
-## 10. Risks & open questions
+## 11. Risks & open questions
 
 **Top risks (mitigations in parens):**
 1. **mcp-go API churn.** The SDK is explicitly "under active development" and the MCP spec itself moves (we're pinned to behavior of v1.1.1 / spec 2025-11-25). Mitigation: pin `v1.1.x` in go.sum; confine all SDK usage to `mcp/tools.go` + `cmd/ravn-mcp/main.go` so an upgrade (or swap to the official `modelcontextprotocol/go-sdk`) touches exactly two files.
@@ -553,4 +655,5 @@ Decisions locked during implementation so later slices do not re-litigate them. 
 - **2026-11-05 — Claim status gate shipped: `claim_task` on a `done` or archived task is REJECTED (option b; decision item 01M3QWNSBCG03BA9R333D8MM79 pending owner ratification).** History, for accuracy: when that decision item was opened (2026-09-30, against commit 686164b), the claim CAS had NO status gate — claiming a `done` task succeeded and flipped it to `doing`, bypassing the transition map; the behavior was pinned empirically by `TestChallenger_R5_ClaimDirectlyOnDoneTask` (an observation-only test, removed in the 7f976e2 adversarial-test dedupe). Before the owner ratified either option, commit 64df52d shipped **option (b) — the gate**. **The currently-shipped behavior:** the repository-level claim CAS (`taskRepo.Claim`) includes `archived = 0 AND status != 'done'` in its single `UPDATE … WHERE`, and the application layer pre-checks both inside the same transaction; a 0-row match on a non-conflicting `done`/archived row is answered with `400 invalid_input` ("cannot claim completed task <id>" / "cannot claim archived task <id>") and **nothing is mutated** — status stays `done`, no lease, no event. Heartbeats on `done`/archived tasks are likewise rejected (`400`), and releasing a `done` task preserves `done`. The only legal exit from `done` is `update_task` with `status: "todo"` (the transition map's sole `done→*` edge); after reopening, the task is claimable again. Shipped and pinned by `TestTasksClaim_CompletedOrArchived_ReturnsErrInvalidAndNoMutation` (application), `TestClaimAndHeartbeat_DoneAndArchivedTasks_RejectedOnSQLite` (SQLite) and the HTTP-layer tests added in 64df52d. This bullet extends — does not rewrite — the 2026-09-25/26 claim CAS wording: the "lease free OR expired OR same-holder" winning-condition list applies only to non-`done`, non-archived tasks. **Decision status:** this records the shipped behavior factually; the formal keep-vs-gate decision (options documented in the task's `kind:"decision"` comment, dated 2026-11-05) is **pending owner (Hollen) ratification** — ratifying option (b), the recommendation, changes no code.
 - **2026-11-08 — Zero-downtime hot backup: `VACUUM 'main' INTO`, not stop-and-copy.** Supersedes §8's "Backups = consistent copy of the volume" bullet and risk 4's Tier-2 `.backup` phrasing. Rationale: in WAL mode committed data sits in `ravn.db-wal` until a checkpoint, so naively copying the raw `.db` (or all three files from a running process) can yield a corrupt or partial snapshot — and stopping a container that live agents are operating on is exactly the downtime a task tracker should not take. `VACUUM 'main' INTO '<literal>'` runs as ONE autocommit statement outside any transaction: it reads a consistent WAL snapshot (readers never block writers) and emits a complete, self-contained **rollback-journal** database — no `-wal`/`-shm` sidecars regardless of the source's journal mode, so restore is a single-file copy. Implementation in `internal/infrastructure/sqlite/backup.go`: `ResolveBackupDest(baseDir, dest)` requires an absolute dest lexically contained under the base (`filepath.Rel`) plus an `EvalSymlinks` ancestor walk so a symlink planted inside the base cannot point outside (non-absolute paths and NUL bytes rejected up front); `BackupTo(ctx, writerDB, baseDir, dest)` MkdirAlls parents, refuses existing targets with a friendly 409-class error (`ErrBackupExists`), runs the VACUUM on `pool.Writer` (pinned to one connection — VACUUM requires no other active statements on it) and returns `(path, bytes)`; `IntegrityCheck(ctx, file)` re-opens a fresh read-only handle and requires `PRAGMA integrity_check` = `ok`. Entry points: one-shot CLI flags `-backup <path>` / `-integrity-check <path>` (mutually exclusive → exit 2; dispatched BEFORE any HTTP server starts; exactly one result line; exit 0/1) and authenticated `POST /api/v1/admin/backup` with body `{"dest":…}` → `200 {path,bytes}` / `400 invalid_input` / `409 conflict` / `500 internal`, under the standard `/api` bearer gate. The allowed base dir resolves env-first: `RAVN_BACKUP_DIR`, else `<data dir>/backups` derived from `DBPool.Path` (field added 2026-11-08 — a live probe caught the file branch of `OpenPool` previously leaving it empty, which silently degraded the default to CWD-relative `"backups"`; regression-pinned by `TestResolveBackupBase_DerivesFromDataDir`). `scripts/backup.sh` (`make backup`) prefers the live endpoint when `RAVN_API_URL` is set (fully hot — the serving process writes the file), falls back to the CLI binary, timestamps each dest `ravn-backup-YYYYmmdd-HHMMSS.db`, refuses to overwrite, and verifies with `PRAGMA integrity_check` before printing `BACKUP OK`. Pinned by `internal/infrastructure/sqlite/backup_test.go` (consistency vs seed snapshot incl. schema DDL + row counts; hot backup mid-concurrent-writes with count in [pre,post]; existing-target preservation), `backup_adversarial_test.go` (traversal / symlink-escape / NUL / rejection matrix; never-writes-outside-base walk) and `cmd/ravn-server/backup_admin_test.go` (endpoint 200/401/400/409 matrix, open-without-token posture, CLI exit codes).
 - **2026-11-08 — Docker hardening shipped: restart policies, resource limits, OpenCode host wiring, go-build isolation, digest-pinned bases.** Supersedes §8's floating base tags and the "exact image tags … bump to current equivalents at build time" note in §10. (a) **Restart & resources:** both compose services set `restart: unless-stopped` (auto-restart on daemon reboot / unexpected exit; explicit stop wins) plus per-service `deploy.resources.limits` — `${RAVN_CPUS:-2}` CPUs, `${RAVN_MEMORY_LIMIT:-1g}` memory — overridable via `.env`; tuning guidance in §8 "Production tuning"; the legacy v3.3 file carries both with a note that ancient v1 non-swarm compose ignores `deploy` blocks. (b) **OpenCode dispatch from Docker:** compose defaults `OPENCODE_SERVER_URL` to `http://host.docker.internal:4444` and adds `extra_hosts: host-gateway`, because inside the container "localhost" is the container, not the host running OpenCode; `OPENCODE_DIRECTORY` must then be an absolute path on the HOST (compose + `.env.example` document this). The built-in Go default for non-Docker dev is UNCHANGED (`http://localhost:4444`). (c) **Portable directory fallback:** `resolveOpenCodeDirectory`'s last-resort fallback is now the process working directory (`os.Getwd`) — never a hardcoded personal checkout path (the pre-fix literal made every non-author deployment dispatch into a nonexistent dir); pinned by `TestResolveOpenCodeDirectory_DefaultNeverPersonal`. (d) **go-build isolation:** every Dockerfile's go-build stage copies only `go.mod`, `go.sum`, `cmd/` and `internal/` (NOT `COPY . .`) with `go mod download` in between, so `web/` edits never invalidate the Go layers; a frontend-only rebuild is fast by construction. (e) **Pinned bases (all three Dockerfiles):** `node:22-alpine@sha256:0e17…af8202`, `golang:1.25.14-alpine@sha256:1ae0…bf84b59` (Go 1.25.14 ≥ go.mod's `go 1.25.5`; satisfies the ADR-2026-09-25 "modernc.org/sqlite forces ≥1.25" note), `alpine:3.21.10@sha256:769c…a5d16e0e5`. Digests verified resolvable against registry-1.docker.io on 2026-11-08 (the tasking's pre-provided node digest was malformed — 62 hex chars, rejected by the registry with DIGEST_INVALID — and NOT used). Bump = re-resolve the tag's manifest digest and edit exactly one FROM line per file (comment blocks sit above each FROM group for this reason).
+- **2026-11-08/09 — Multi-user identity, session/api_token auth and membership scoping shipped (T1–T9).** Supersedes the "auth is off or a single shared token" framing in §5/§6/§8 (all of which now describe the `token` tier of the new `RAVN_AUTH` knob; the authoritative reference moved to the new §9). Design locks, per slice: **(T1)** migration `0011_multiuser_identity.sql` is purely additive — `identity`, `session`, `api_token`, `project_member` tables + indexes; existing deployments' responses are byte-identical because nothing reads the new tables until a knob is set (`TestScoping_GlobalModeByteIdenticalToToken` pins it). **(T2)** scoping policy lives in `domain` (`VisibilityPolicy`/`AuthorizationPolicy` over a `Subject` + stored role); roles are viewer < editor < admin with a DERIVED owner (project `created_by`) above them; `ScopingConfig` nil = global/default. **(T3)** credentials: opaque 32-byte base64url secrets, SHA-256-hash-at-rest, shown exactly once (login mint / token mint); login is timing-safe and answers identically for unknown/wrong/disabled so usernames cannot be enumerated; `POST /auth/accounts` + `/auth/tokens` are operator-only (`requireOperator` — a credential principal can never provision). **(T4)** anti-spoofing: every write handler resolves the acting actor through `authoritativeActor` — a credential principal's declared actor naming someone else is overridden by its own stored identity for BOTH attribution and gating; global mode short-circuits with zero extra lookups. `?mine=created|assigned|activity` filters added to list endpoints (unresolvable actors → honest empty list). **(T5)** SSE streams are visibility-gated per actor (a non-member's stream is refused 403 before the first byte); membership/auth mutations emit no events. **(T6)** MCP: the container now authenticates with ANY bearer kind (session/api_token/operator) and stamps its credential principal on calls; `RAVN_AGENT_NAME` remains the fallback only when no actor is declared and no credential identity exists. **(T7)** web: login/logout UI, per-actor board scoping, attribution chips. **(T9)** membership management REST (`/projects/{id}/members*`) — gate ladder 400 bad-id → 403 `membership_scoping_disabled` (feature off; every verb incl. GET) → 404 unwired → 404 unknown project → 403 role; guards: hierarchy (cannot grant/demote at-or-below own role, owner never removable as owner), last-admin (ownerless projects must keep ≥1 admin); the request bodies accept a validated-but-IGNORED `actor` for wire compatibility. **Config surface:** `RAVN_AUTH` (off|token|multiuser + aliases; empty resolves token-if-token-set-else-off so existing deployments are unchanged), `RAVN_SESSION_TTL` (Go duration, default 24h, non-positive/unparseable → boot refusal), `RAVN_SCOPING` (global|membership; membership-without-auth refuses to boot; membership+token-mode warns — the shared operator renders scoping a no-op), `RAVN_IDENTITY_OPEN` (auto|strict; gates credential-principal project creation under membership only). All four are validated in `cmd/ravn-server/main.go run()` BEFORE signal handlers, DB open and port bind (pinned by `TestRunValidation*` in `cmd/ravn-server/main_multiuser_test.go`); compose forwards all four via `${VAR:-}` passthroughs (empty = unchanged behavior). Rollout/rollback: `docs/RUNBOOK-multiuser.md`.
 

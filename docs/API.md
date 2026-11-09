@@ -13,7 +13,7 @@ this file in the same commit.
 - **Auth:** optional and tiered, selected by the server's `RAVN_AUTH` setting
   (`off` | `token` | `multiuser`; defaults: token when `RAVN_TOKEN` is set, else
   off). The authoritative variable reference lives in
-  [ARCHITECTURE.md § Multi-user & authentication](ARCHITECTURE.md#multi-user--authentication);
+  [ARCHITECTURE.md §9 Multi-user & authentication](ARCHITECTURE.md#9-multi-user--authentication);
   the wire contract per tier follows.
 
   - **off** — nothing required; declared free-form actors flow through as
