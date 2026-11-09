@@ -116,16 +116,95 @@ async function waitForServer(url: string, timeoutMs = 15000): Promise<void> {
   throw new Error(`Timed out waiting for server at ${url}`);
 }
 
-/** Idempotent build-checks: no-op when web/dist + bin/ravn-server already exist. */
-function ensurePrereqs(): void {
-  if (!fs.existsSync(path.join(staticDir, 'index.html'))) {
+/** Newest mtime (ms) of any regular file under dir, walking recursively. */
+function newestFileMtimeMs(dir: string): number {
+  let newest = 0;
+  const stack = [dir];
+  while (stack.length > 0) {
+    const d = stack.pop() as string;
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        stack.push(path.join(d, entry.name));
+        continue;
+      }
+      let mtime = 0;
+      try {
+        mtime = fs.statSync(path.join(d, entry.name)).mtimeMs;
+      } catch {
+        // File vanished mid-walk (or unreadable) — skip it.
+      }
+      if (mtime > newest) newest = mtime;
+    }
+  }
+  return newest;
+}
+
+/** A build artifact is STALE when it is missing, or when any of the given source
+ *  files/directories is newer than it. Missing source entries are ignored. */
+function artifactIsStale(artifact: string, sources: string[]): boolean {
+  if (!fs.existsSync(artifact)) return true;
+  const mtime = fs.statSync(artifact).mtimeMs;
+  for (const src of sources) {
+    let isNewer = false;
+    try {
+      const st = fs.statSync(src);
+      isNewer = st.isDirectory() ? newestFileMtimeMs(src) > mtime : st.mtimeMs > mtime;
+    } catch {
+      // Source path absent (e.g. go.sum in a stripped checkout) — not stale.
+    }
+    if (isNewer) return true;
+  }
+  return false;
+}
+
+/** Idempotent, freshness-aware build-checks: no-op when web/dist + bin/ravn-server
+ *  exist AND are newer than their sources. The mtime guard matters because a STALE
+ *  pre-membership ravn-server binary silently serves no /api/v1/projects/{id}/members
+ *  routes (every T9 E2E 404s) while an "exists" check would happily reuse it. CI is
+ *  unaffected: `make build` / the pipeline's web build always produce fresh artifacts,
+ *  so the rebuilds below are no-ops there and only fire locally after code changes.
+ *
+ *  Exported because playwright.config.ts runs this ONCE from globalSetup BEFORE any
+ *  worker starts — a stale-binary race between workers must not be decided at spawn
+ *  time (two workers rebuilding bin/ravn-server concurrently → `spawn ETXTBSY`). */
+export function ensurePrereqs(): void {
+  if (artifactIsStale(path.join(staticDir, 'index.html'), [
+    path.join(webRoot, 'src'),
+    path.join(webRoot, 'index.html'),
+    path.join(webRoot, 'vite.config.ts'),
+    path.join(webRoot, 'package.json'),
+  ])) {
     execSync('npm run build', { cwd: webRoot, stdio: 'inherit' });
   }
-  if (!fs.existsSync(serverBin)) {
-    execSync('go build -trimpath -o bin/ravn-server ./cmd/ravn-server', {
+  if (artifactIsStale(serverBin, [
+    path.join(repoRoot, 'cmd', 'ravn-server'),
+    path.join(repoRoot, 'internal'),
+    path.join(repoRoot, 'go.mod'),
+    path.join(repoRoot, 'go.sum'),
+  ])) {
+    buildServerBinary();
+  }
+}
+
+/** Build bin/ravn-server ATOMICALLY: compile to a per-PID temp file in the same
+ *  directory, then rename over the target. Writing directly with `go build -o`
+ *  fails with ETXTBSY when the current binary is EXECUTING (a dev server running
+ *  from bin/ or another e2e worker's spawned server), and a torn write would
+ *  corrupt it. The rename replaces the path atomically; already-spawned processes
+ *  keep their old inode, new spawns get the fresh binary. */
+function buildServerBinary(): void {
+  const tmp = `${serverBin}.tmp.${process.pid}`;
+  try {
+    execSync(`go build -trimpath -o "${tmp}" ./cmd/ravn-server`, {
       cwd: repoRoot,
       stdio: 'inherit',
     });
+    fs.chmodSync(tmp, 0o755);
+    fs.renameSync(tmp, serverBin);
+  } finally {
+    try {
+      if (fs.existsSync(tmp)) fs.rmSync(tmp);
+    } catch {}
   }
 }
 

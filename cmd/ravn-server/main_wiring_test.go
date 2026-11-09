@@ -45,6 +45,9 @@ func clearServerEnv(t *testing.T) {
 		"RAVN_ADDR", "RAVN_DATA", "RAVN_TOKEN", "RAVN_STATIC_DIR",
 		"RAVN_ARTIFACTS_DIR", "LOG_LEVEL", "RAVN_LOG_LEVEL", "RAVN_CORS_ORIGINS",
 		"RAVN_BACKUP_DIR",
+		// Multi-user epic (T3/T4) knobs: pin them too so no case can inherit a
+		// host-environment auth mode, session TTL or scoping policy.
+		"RAVN_AUTH", "RAVN_SESSION_TTL", "RAVN_IDENTITY_OPEN", "RAVN_SCOPING",
 	} {
 		t.Setenv(key, "")
 	}

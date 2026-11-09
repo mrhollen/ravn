@@ -7,6 +7,10 @@ const chromiumPath =
 
 export default defineConfig({
   testDir: './e2e',
+  // Build-checks (fresh web/dist + bin/ravn-server) run ONCE here, before any
+  // worker exists — see e2e/global-setup.ts for why workers must not race the
+  // binary rebuild themselves.
+  globalSetup: './e2e/global-setup.ts',
   timeout: 30000,
   expect: {
     timeout: 10000,
