@@ -299,6 +299,14 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 		identity = application.NewIdentityResolver(uow)
 	}
 
+	// Multi-user membership management (T9): wired whenever a database exists, exactly
+	// like the identity resolver — it performs no I/O until used, and its endpoints
+	// refuse with 403/404 on deployments where scoping is off or wiring is absent.
+	var memberships *application.Memberships
+	if uow != nil {
+		memberships = application.NewMemberships(uow)
+	}
+
 	metrics := httpapi.NewMetrics()
 	var events application.EventStore // SSE Last-Event-ID replay (nil = live-only)
 	if readerDB != nil {
@@ -320,6 +328,7 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 		Artifacts:    application.NewArtifacts(uow, now, mint),
 		Acceptance:   application.NewAcceptance(uow, now, mint),
 		Relations:    application.NewRelations(uow, now, mint),
+		Memberships:  memberships,
 		Auth:         auth,
 		Broker:       broker,
 		Events:       events,
