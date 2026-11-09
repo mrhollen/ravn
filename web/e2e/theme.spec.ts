@@ -229,7 +229,15 @@ test.describe('theme (dark mode)', () => {
   test('explicit Dark survives a reload and renders high-contrast surfaces (AC2 + AC3)', async ({
     page,
   }) => {
-    await seedBoard(serverUrl);
+    const seededProjectId = await seedBoard(serverUrl);
+    // Pre-store the seeded id so boot selects THIS project — not whichever foreign
+    // project canonical server order happens to put first on the shared worker DB.
+    // (Repo data-isolation contract: never rely on bare-goto auto-select for your own
+    // seeded content.) Without this, a full-suite run can auto-select an empty project
+    // from another spec and `article[draggable]` below finds no cards → false failure.
+    await page.addInitScript((id) => {
+      try { localStorage.setItem('ravn.project', id); } catch { /* ignore */ }
+    }, seededProjectId);
       await page.goto(serverUrl);
       expect(await hasDarkClass(page)).toBe(false); // system default under light OS
 
