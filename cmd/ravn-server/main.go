@@ -106,10 +106,12 @@ func run(args []string, errW io.Writer) int {
 	// inconsistent gate. RAVN_AUTH=token requires a non-empty token; the session TTL and
 	// identity-open knobs must parse. The resolved values are re-derived in
 	// newRouterWithPoolAndCORS (env is the single source of truth, so nothing crosses over).
-	if am, err := httpapi.ResolveAuthMode(os.Getenv("RAVN_AUTH"), *token != ""); err != nil {
+	am, err := httpapi.ResolveAuthMode(os.Getenv("RAVN_AUTH"), *token != "")
+	if err != nil {
 		logger.Error("invalid RAVN_AUTH", "err", err)
 		return 1
-	} else if am == httpapi.AuthModeToken && *token == "" {
+	}
+	if am == httpapi.AuthModeToken && *token == "" {
 		logger.Error("RAVN_AUTH=token requires a non-empty token (flag -token or env RAVN_TOKEN)")
 		return 1
 	}
@@ -120,6 +122,23 @@ func run(args []string, errW io.Writer) int {
 	if _, err := httpapi.ParseIdentityOpen(os.Getenv("RAVN_IDENTITY_OPEN")); err != nil {
 		logger.Error("invalid RAVN_IDENTITY_OPEN", "err", err)
 		return 1
+	}
+
+	// Multi-user scoping (T4): RAVN_SCOPING=global|membership must parse, and membership
+	// scoping is meaningless without an auth mode that can resolve who is asking — with
+	// auth off every request is anonymous, and under membership the fail-closed policy
+	// would lock out EVERYONE (including operators of scripts built for auth-off).
+	scopingCfg, err := httpapi.ParseScopingMode(os.Getenv("RAVN_SCOPING"))
+	if err != nil {
+		logger.Error("invalid RAVN_SCOPING", "err", err)
+		return 1
+	}
+	if scopingCfg.MembershipScoped && am == httpapi.AuthModeOff {
+		logger.Error("RAVN_SCOPING=membership requires RAVN_AUTH=token or multiuser — with auth off every request is anonymous and the fail-closed policy locks all of them out")
+		return 1
+	}
+	if scopingCfg.MembershipScoped && am == httpapi.AuthModeToken {
+		logger.Warn("RAVN_SCOPING=membership with RAVN_AUTH=token: every shared-token request acts as the bypassing OPERATOR, so per-identity scoping is a no-op until identities authenticate via multiuser credentials")
 	}
 
 	if err := os.MkdirAll(*artifacts, 0o755); err != nil {
@@ -267,6 +286,19 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 		auth = application.NewAuth(uow, now, mint, pwhash.New(pwhash.DefaultParams()), sessionTTL)
 	}
 
+	// Multi-user scoping (T4): RAVN_SCOPING → Deps.Scoping (nil for global/default —
+	// every gate short-circuits with zero behavior change), RAVN_IDENTITY_OPEN →
+	// Deps.IdentityOpen. run() validated both + their auth-mode combination up front,
+	// so the fallbacks in ScopingFromEnv are defense in depth only. The identity
+	// resolver is wired whenever a database exists: it performs no I/O until used,
+	// and beyond gating it powers the created_by → owner display on rows that carry
+	// attribution (multiuser-mode creates); legacy unattributed rows never touch it.
+	scopingCfg, identityOpen := httpapi.ScopingFromEnv(os.Getenv("RAVN_SCOPING"), os.Getenv("RAVN_IDENTITY_OPEN"))
+	var identity *application.IdentityResolver
+	if uow != nil {
+		identity = application.NewIdentityResolver(uow)
+	}
+
 	metrics := httpapi.NewMetrics()
 	var events application.EventStore // SSE Last-Event-ID replay (nil = live-only)
 	if readerDB != nil {
@@ -291,6 +323,9 @@ func newRouterWithPoolAndCORS(pool *sqlite.DBPool, staticDir, token, artifactsDi
 		Auth:         auth,
 		Broker:       broker,
 		Events:       events,
+		Scoping:      scopingCfg,
+		Identity:     identity,
+		IdentityOpen: identityOpen,
 		ArtifactsDir: artifactsDir,
 	})
 	httpapi.RegisterRoutes(mux, app)

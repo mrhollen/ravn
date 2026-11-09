@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/mrhollen/ravn/internal/domain"
 )
 
 // AuthMode selects the request-auth strategy applied by AuthGate (multi-user epic T3).
@@ -65,6 +67,22 @@ func ParseSessionTTL(env string) (time.Duration, error) {
 	return d, nil
 }
 
+// ParseScopingMode parses RAVN_SCOPING (multi-user epic T4) into the domain policy
+// configuration. Empty (default for existing deployments), "global", or "auto" yields
+// DefaultScoping(): see-all visibility, no role gating — zero observable change from
+// today. "membership" yields MembershipScoping(): per-project visibility + role gating.
+// Anything unrecognized is an error so a startup typo fails fast like ResolveAuthMode.
+func ParseScopingMode(env string) (domain.ScopingConfig, error) {
+	switch v := strings.ToLower(strings.TrimSpace(env)); v {
+	case "", "global", "auto":
+		return domain.DefaultScoping(), nil
+	case "membership":
+		return domain.MembershipScoping(), nil
+	default:
+		return domain.ScopingConfig{}, fmt.Errorf("value %q is not one of global, membership", env)
+	}
+}
+
 // ParseIdentityOpen parses RAVN_IDENTITY_OPEN (multiuser only): auto/true (default), or
 // strict/false. T3 validates it at startup; T4's visibility policies consume the value to
 // decide whether any authenticated principal may create projects. Kept separate from
@@ -78,4 +96,26 @@ func ParseIdentityOpen(env string) (bool, error) {
 	default:
 		return false, fmt.Errorf("value %q is not one of auto, strict, true, false", env)
 	}
+}
+
+// ScopingFromEnv resolves the multi-user epic T4 knobs into the two Deps fields
+// they drive: a *domain.ScopingConfig pointer (nil for unset/global — the gate
+// helpers then short-circuit with zero behavior change; non-nil only for an
+// explicit "membership") and the identity-open flag. Parse errors fall back to
+// the SAFE defaults (global scoping / open) rather than booting restricted by
+// accident — run() already validates both env values up front and exits on a
+// typo, so this fallback is defense in depth for embedded/test composition.
+func ScopingFromEnv(scopingEnv, identityOpenEnv string) (*domain.ScopingConfig, bool) {
+	cfg, err := ParseScopingMode(scopingEnv)
+	if err != nil {
+		cfg = domain.DefaultScoping()
+	}
+	identityOpen := true
+	if v, perr := ParseIdentityOpen(identityOpenEnv); perr == nil {
+		identityOpen = v
+	}
+	if !cfg.MembershipScoped {
+		return nil, identityOpen
+	}
+	return &cfg, identityOpen
 }
