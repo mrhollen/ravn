@@ -67,6 +67,36 @@ export interface ActorInput {
   type?: "human" | "agent";
 }
 
+// --- multi-user membership management (epic T9) -------------------------------
+
+/** Storable roles for a project_member row. Owner is NOT a role — ownership
+ *  derives from the project's created_by and cannot be assigned or removed via
+ *  membership mutations. */
+export type MemberRole = "viewer" | "editor" | "admin";
+
+/** One stored membership row as listed under GET /projects/{id}/members. */
+export interface MemberEntryDTO {
+  username: string;
+  role: MemberRole;
+}
+
+/** GET /projects/{id}/members body. `owner` is the resolved creator (may be null);
+ *  the owner may ALSO appear in `members` when a stored row exists for them —
+ *  ownership is communicated by `owner`, their editable permission by the row. */
+export interface MembersRosterDTO {
+  owner: ActorRef | null;
+  members: MemberEntryDTO[];
+}
+
+/** POST/PATCH member response row. POST is an idempotent upsert: 201 with
+ *  created=true for a fresh row, 200 with created=false when the user already
+ *  had one (the call then doubles as a role change). */
+export interface MemberRowResponse {
+  username: string;
+  role: MemberRole;
+  created?: boolean;
+}
+
 // --- multi-user identity (epic T3/T7) ----------------------------------------
 
 /** A durable human/agent identity as resolved from a live session or row.
