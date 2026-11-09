@@ -11,6 +11,9 @@
 //            aria-expanded reflecting their state ("New project", card move
 //            menu, "+ Attach artifact"), the card menu declares aria-haspopup,
 //            and decorative SVGs are hidden from the accessibility tree.
+//   (Guard — 01M711D7TD18MM3REA6NB5GGDD: the header menus' Escape directives
+//    carry .stop so one keypress closes only the menu, never the layer beneath;
+//    the expanded-state asserts below pin that invariant end-to-end.)
 import { test, expect } from './fixtures';
 import { selectProjectViaDropdown } from './helpers';
 
@@ -184,18 +187,32 @@ test.describe('ARIA semantics (AC names, dynamic title, expanded states + decora
     const trigger = page.getByTestId('project-select');
     await expect(trigger).toBeEnabled();
     await trigger.click();
+    // State stabilization: the trigger's aria-expanded reflects projectMenuOpen,
+    // so pin the menu-open state BEFORE reading or clicking any item inside it
+    // (no interaction against a half-settled dropdown).
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
     const newItem = page.getByTestId('new-project-item');
     await expect(newItem).toHaveAttribute('aria-expanded', 'false');
     await newItem.click();
     await expect(newProjectBar(page).locator('#cb-new-project-name-input')).toBeVisible();
     // Re-open the menu to read the item's updated expanded state.
     await trigger.click();
-    await expect(newItem).toHaveAttribute('aria-expanded', 'true');
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');  // menu open again
+    await expect(newItem).toHaveAttribute('aria-expanded', 'true');  // bar now open
     await page.keyboard.press('Escape'); // close the menu (does not affect the bar)
+    // Assert-then-interact: verify the SETTLED post-Escape state before touching
+    // the bar. The menu panel's Escape directive is @keydown.escape.stop, so this
+    // single keypress closes ONLY the menu — if a regression drops that .stop,
+    // dismissTop() also collapses the bar and these asserts fail fast here
+    // instead of dying at the Cancel click's 30s visibility timeout (the flake
+    // from task 01M711D7TD18MM3REA6NB5GGDD).
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false'); // menu closed by Escape
+    await expect(newItem).toHaveAttribute('aria-expanded', 'true');  // bar SURVIVES Escape
     await newProjectBar(page).getByRole('button', { name: 'Cancel' }).click();
     await expect(newProjectBar(page).locator('#cb-new-project-name-input')).toBeHidden();
     await trigger.click();
-    await expect(newItem).toHaveAttribute('aria-expanded', 'false');
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');  // menu re-opened for the final read
+    await expect(newItem).toHaveAttribute('aria-expanded', 'false'); // Cancel closed the bar
 
     // --- Card ⋮ move menu: aria-haspopup + aria-expanded -------------------
     const card = page.locator('article', { hasText: TITLE_TASK_TITLE });

@@ -705,6 +705,16 @@ test("Dropdown: index.html has no standalone New project button and wires the cu
   const panelClass = html.match(/<div data-testid="project-menu"[\s\S]{0,2000}?class="([^"]*)"/)?.[1];
   assert.ok(panelClass, "menu panel div found");
   assert.match(panelClass, /z-40/, "menu panel must be z-40 (under modal z-[60] and toasts z-50)");
+  // Escape in the panel must be .stop-scoped: with focus inside the panel this
+  // handler closes the menu first, then the window-level dismissTop() would
+  // re-evaluate the chain (projectMenuOpen already false) and ALSO collapse the
+  // layer beneath — e.g. the new-project bar. That double-dismiss was the root
+  // cause of the flaky aria-semantics Cancel-click timeout (01M711D7TD18MM3REA6NB5GGDD).
+  assert.match(
+    html,
+    /@keydown\.escape\.stop="closeProjectMenu\(true\)"/,
+    "project-menu Escape directive must carry .stop so a single keypress closes only the menu",
+  );
 });
 
 test("Dropdown: pickProject switches + persists the project and closes the menu", () => {
@@ -811,6 +821,14 @@ test("HeaderMenu: index.html wires the consolidated trigger + panel at the dropd
   const panelClass = html.match(/<div id="header-menu-panel"[\s\S]{0,2000}?class="([^"]*)"/)?.[1];
   assert.ok(panelClass, "panel div found");
   assert.match(panelClass, /z-40/, "menu panel must be z-40 (under modal z-[60] and toasts z-50)");
+  // Same single-layer Escape contract as the Projects dropdown: without .stop,
+  // an Escape with focus inside this panel would also run dismissTop() and
+  // collapse whatever layer sits beneath (bar, detail, mobile strip).
+  assert.match(
+    html,
+    /@keydown\.escape\.stop="closeHeaderMenu\(true\)"/,
+    "header-menu Escape directive must carry .stop so a single keypress closes only the menu",
+  );
 });
 
 test("HeaderMenu: actorGlyph maps the actor name to its initial (or You)", () => {

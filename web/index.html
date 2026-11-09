@@ -193,14 +193,18 @@
                  the detail modal (z-[60]) and toasts (z-50). Anchored to the
                  WHOLE split unit (left-0/right-0 on the wrapper): it deliberately
                  spans select + gear so the menu matches the compound control's
-                 footprint. -->
+                 footprint. The Escape directive carries .stop: with focus inside
+                 the panel this handler runs first and closes the menu; without
+                 it the window-level dismissTop() would re-evaluate the chain
+                 with projectMenuOpen already false and also collapse the NEXT
+                 layer (e.g. the new-project bar) — one keypress, one layer. -->
             <div data-testid="project-menu" role="menu" aria-label="Projects"
                  x-show="projectMenuOpen" x-cloak
                  @keydown.down.prevent="moveProjectFocus(1)"
                  @keydown.up.prevent="moveProjectFocus(-1)"
-                 @keydown.home.prevent="moveProjectFocus('home')"
-                 @keydown.end.prevent="moveProjectFocus('end')"
-                 @keydown.escape="closeProjectMenu(true)"
+                  @keydown.home.prevent="moveProjectFocus('home')"
+                  @keydown.end.prevent="moveProjectFocus('end')"
+                  @keydown.escape.stop="closeProjectMenu(true)"
                   class="absolute left-0 right-0 top-full z-40 mt-1.5 max-h-[24rem] min-w-[15rem] overflow-auto rounded-md border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
                <!-- "My projects" filter (AC3): restricts the OPEN list to projects the
                     signed-in identity created (?mine=created). Rendered only while a session
@@ -347,13 +351,17 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              <span class="hidden select-none text-zinc-400 md:inline dark:text-zinc-500" aria-hidden="true">&#9662;</span>
            </button>
 
-          <div id="header-menu-panel" data-testid="header-menu" aria-label="Preferences"
-               x-show="headerMenuOpen" x-cloak
-               @keydown.down.prevent="moveHeaderFocus(1)"
-               @keydown.up.prevent="moveHeaderFocus(-1)"
-               @keydown.home.prevent="moveHeaderFocus('home')"
-               @keydown.end.prevent="moveHeaderFocus('end')"
-               @keydown.escape="closeHeaderMenu(true)"
+           <!-- The Escape directive carries .stop (same contract as the Projects
+                dropdown): with focus inside this panel it closes ONLY this menu —
+                without it, window-level dismissTop() would run second and also
+                collapse the layer beneath (bar, detail, mobile strip). -->
+           <div id="header-menu-panel" data-testid="header-menu" aria-label="Preferences"
+                x-show="headerMenuOpen" x-cloak
+                @keydown.down.prevent="moveHeaderFocus(1)"
+                @keydown.up.prevent="moveHeaderFocus(-1)"
+                 @keydown.home.prevent="moveHeaderFocus('home')"
+                 @keydown.end.prevent="moveHeaderFocus('end')"
+                 @keydown.escape.stop="closeHeaderMenu(true)"
                 class="absolute right-0 top-full z-40 mt-1.5 w-72 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
             <!-- identity summary: mirrors the trigger glyph -->
             <div class="flex items-center gap-2.5 px-3 pb-2 pt-1.5">
