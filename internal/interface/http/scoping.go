@@ -307,6 +307,77 @@ func (a *App) actorFilterName(ctx context.Context, declaredName string) (string,
 	return req.name, nil
 }
 
+// checkProjectManager is T9's gate for the membership-management endpoints: it is
+// checkProject with the bar raised to ADMIN-OR-OWNER, because adding/demoting/
+// removing members is member management — above the OpDestructive=editor-line that
+// ordinary task/admin ops use. Membership mode resolves subject+role once; a
+// non-visible subject is denied at the visibility line (403 required=viewer), a
+// visible-but-under-privileged one at the admin line (403 required=admin, resource
+// "members"). Default mode and operators return RoleOwner with zero lookups — but T9's
+// handlers never reach this in default mode: they refuse earlier with
+// writeMembersDisabled, so membership management simply does not exist there.
+func (a *App) checkProjectManager(w http.ResponseWriter, r *http.Request, declaredName string, p domain.Project) (domain.Subject, domain.Role, bool) {
+	ctx := r.Context()
+	req := a.requester(ctx, declaredName)
+	if !a.scopingActive() || req.operator {
+		return req.subject, domain.RoleOwner, true
+	}
+	subj, role := a.resolveProjectRole(ctx, req, p)
+	if !a.visibilityPolicy().CanSeeProject(subj, role) {
+		writeForbiddenRole(w, domain.OpRead, "project")
+		return subj, role, false
+	}
+	if !role.AtLeast(domain.RoleAdmin) {
+		writeForbiddenRole(w, domain.OpDestructive, "members")
+		return subj, role, false
+	}
+	return subj, role, true
+}
+
+// manageMembers is the fetch-then-gate composition for T9's mutation verbs
+// (POST/PATCH/DELETE): an unknown project 404s exactly like every other project-scoped
+// route, and only a visible admin-or-owner (or operator) gets through. It returns the
+// fresh project row AND the actor's effective role — that role is what the use-case
+// guards key off (owner/operator arrive as RoleOwner, so no separate operator flag
+// has to be threaded).
+func (a *App) manageMembers(w http.ResponseWriter, r *http.Request, declaredName string, pid domain.ID) (domain.Project, domain.Role, bool) {
+	p, err := a.Projects.Get(r.Context(), pid)
+	if err != nil {
+		writeAppError(w, err, "project", pid) // 404 unknown project
+		return p, 0, false
+	}
+	subj, role, ok := a.checkProjectManager(w, r, declaredName, p)
+	_ = subj
+	return p, role, ok
+}
+
+// writeMembersDisabled is T9's feature-off refusal: the membership endpoints exist to
+// manage per-project rows that only mean anything under RAVN_SCOPING=membership. In a
+// global/default deployment they refuse EVERY verb (including GET — there is nothing
+// member-shaped to list) with a machine-readable reason so clients can detect "feature
+// off" without parsing the message. Deliberately 403 (the caller authenticated fine;
+// the capability does not exist here), NOT 404 (the routes are real and stable).
+func writeMembersDisabled(w http.ResponseWriter) {
+	writeJSONError(w, http.StatusForbidden, map[string]any{
+		"error":    ErrCodeForbidden,
+		"resource": "members",
+		"reason":   "membership_scoping_disabled",
+		"message":  "membership management requires RAVN_SCOPING=membership — this deployment is not member-scoped and has no per-project membership to manage",
+	})
+}
+
+// writeMembersNotEnabled is the composition-guard twin for a membership-scoped
+// deployment that booted without the Memberships use case or identity resolver (no
+// writer DB): the feature is on but unwired, so the honest answer is 404 "not enabled"
+// — same pattern as /auth/* when Deps.Auth is nil.
+func writeMembersNotEnabled(w http.ResponseWriter) {
+	writeJSONError(w, http.StatusNotFound, map[string]any{
+		"error":    ErrCodeNotFound,
+		"resource": "members",
+		"message":  "membership management is not enabled on this deployment (no database wired for it)",
+	})
+}
+
 // parseMine validates the ?mine= query parameter. Multiple distinct values are a
 // 400 (ambiguous); empty/absent is "" (no mine filter). The caller restricts which
 // tokens are allowed for its endpoint (tasks: assigned|created|activity; projects: created).

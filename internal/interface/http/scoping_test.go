@@ -50,7 +50,8 @@ func withActor(name string, extra map[string]any) map[string]any {
 // pre-T4 token deployment is reproduced for comparison.
 type scopingStack struct {
 	stack
-	db *sql.DB
+	db  *sql.DB
+	uow application.UnitOfWork // exposed so later-epic stacks (T9 members) can bind extra use cases to the same DB
 }
 
 func newScopingStack(t testing.TB, mode AuthMode, scoping *domain.ScopingConfig, identityOpen bool, dbPath string) *scopingStack {
@@ -85,7 +86,17 @@ func newScopingStack(t testing.TB, mode AuthMode, scoping *domain.ScopingConfig,
 	})
 	mux := http.NewServeMux()
 	RegisterRoutes(mux, app)
-	return &scopingStack{stack: stack{Handler: AuthGate(mode, scopingSharedToken, auth)(mux), App: app}, db: db}
+	return &scopingStack{stack: stack{Handler: AuthGate(mode, scopingSharedToken, auth)(mux), App: app}, db: db, uow: uow}
+}
+
+// newMembersStack is a membership-scoped stack with the T9 Memberships use case wired
+// (the production composition always binds it when a DB exists; the T4 battery predates
+// it and stays untouched — its nil-Deps 404 behavior is itself covered in members_test).
+func newMembersStack(t *testing.T, mode AuthMode) *scopingStack {
+	t.Helper()
+	stk := newScopingStack(t, mode, membershipCfg(), true, "")
+	stk.App.Memberships = application.NewMemberships(stk.uow)
+	return stk
 }
 
 // membershipCfg builds the non-nil MembershipScoping pointer the stack builder
@@ -125,8 +136,9 @@ func mustIdentityID(t *testing.T, stk *scopingStack, name string) domain.ID {
 	return domain.ID(id)
 }
 
-// seedMember inserts a project_member row directly (membership WRITING is a later
-// epic ticket — raw SQL is the only way to confer roles today).
+// seedMember inserts a project_member row directly. T9's member endpoints exist, but
+// the T4 battery keeps using raw SQL: it predates them and deliberately also covers
+// stacks that never wire the Memberships use case (nil-Deps 404s).
 func seedMember(t *testing.T, stk *scopingStack, pid domain.ID, identityName, role string) {
 	t.Helper()
 	_, err := stk.db.Exec(

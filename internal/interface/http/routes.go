@@ -18,6 +18,10 @@ const apiPrefix = "/api/v1"
 //	GET   /api/v1/projects/{id}/report  single-call project health digest: status/priority counts, live+expired claims, stalled doing-tasks, bottleneck blockers both directions, recently completed, per-assignee workload; ?stalled_minutes= & ?since= tune the windows (defaults 60 / now−24h)
 //	GET   /api/v1/projects/{id}/events  realtime SSE stream for the project; replays events missed since Last-Event-ID (header or ?last_event_id) on reconnect
 //	GET   /api/v1/events                same stream scoped by ?project_id= (+ the same replay cursor)
+//	GET    /api/v1/projects/{id}/members  stored members + derived owner {owner, members[]}; RAVN_SCOPING=membership only (403 reason=membership_scoping_disabled when off); any visible member may read
+//	POST   /api/v1/projects/{id}/members  add or re-grant a member {username, role} → 201 created:true / 200 created:false; admin-or-owner gated; unknown username 404 (no auto-provision)
+//	PATCH  /api/v1/projects/{id}/members/{username}  set an existing member's role {role} → 200; 404 not a member
+//	DELETE /api/v1/projects/{id}/members/{username}  remove the stored membership row → 204; hierarchy + last-admin guards apply to all three verbs
 //	GET   /api/v1/tasks                 list task summaries: filters + offset/limit pagination + total
 //	POST  /api/v1/tasks                 create task (+ACs) → 201 with possible_duplicates advisory
 //	GET   /api/v1/tasks/{id}            one-call resume payload (task+ACs+comments+artifacts+relations+events+blocked)
@@ -47,6 +51,13 @@ func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/report", app.handleProjectReport)
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/events", app.handleProjectEvents)
 	mux.HandleFunc("GET "+apiPrefix+"/events", app.handleEvents)
+
+	// Membership management (multi-user epic T9). Gated to membership-scoped deployments:
+	// every verb refuses with reason=membership_scoping_disabled when RAVN_SCOPING is off.
+	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}/members", app.handleListMembers)
+	mux.HandleFunc("POST "+apiPrefix+"/projects/{id}/members", app.handleAddMember)
+	mux.HandleFunc("PATCH "+apiPrefix+"/projects/{id}/members/{username}", app.handleUpdateMemberRole)
+	mux.HandleFunc("DELETE "+apiPrefix+"/projects/{id}/members/{username}", app.handleRemoveMember)
 
 	// Authentication (multi-user epic T3). /auth/login is public in multiuser mode; the rest
 	// are gated by AuthGate and, for provisioning, require a shared-operator principal.
