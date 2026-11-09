@@ -97,6 +97,20 @@ func (r *artifactRepo) Delete(ctx context.Context, taskID, artifactID domain.ID)
 	return a, nil
 }
 
+// GetByID returns one artifact by its own id (multi-user epic T4 gating read).
+// Unknown ids surface as domain.ErrNotFound; no event is appended (a read).
+func (r *artifactRepo) GetByID(ctx context.Context, id domain.ID) (domain.Artifact, error) {
+	row := r.q.QueryRowContext(ctx, `SELECT `+artifactColumns+` FROM artifact WHERE id = ?`, string(id))
+	a, err := scanArtifact(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Artifact{}, fmt.Errorf("%w: artifact %s not found", domain.ErrNotFound, id)
+	}
+	if err != nil {
+		return domain.Artifact{}, err
+	}
+	return a, nil
+}
+
 // scanArtifact maps one row (in artifactColumns order) to a domain.Artifact.
 func scanArtifact(s scanner) (domain.Artifact, error) {
 	var (

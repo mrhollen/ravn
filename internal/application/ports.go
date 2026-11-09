@@ -427,6 +427,10 @@ type ArtifactRepository interface {
 	ListByTask(ctx context.Context, taskID domain.ID) ([]domain.Artifact, error)
 	// Delete removes the artifact with artifactID from taskID, returning the deleted artifact.
 	Delete(ctx context.Context, taskID, artifactID domain.ID) (domain.Artifact, error)
+	// GetByID returns one artifact by its OWN id (multi-user epic T4: the
+	// membership gate on GET /artifacts/{id} needs the owning task). A read —
+	// no event, no version touch; unknown ids surface as domain.ErrNotFound.
+	GetByID(ctx context.Context, id domain.ID) (domain.Artifact, error)
 }
 
 // RelationRepository persists the directed task edges (hierarchy, blocked-by,

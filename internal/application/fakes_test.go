@@ -790,6 +790,18 @@ func (f *fakeArtifacts) Delete(_ context.Context, taskID, artifactID domain.ID) 
 	return domain.Artifact{}, domain.ErrNotFound
 }
 
+// GetByID returns one artifact by its own id across all tasks (empty → ErrNotFound).
+func (f *fakeArtifacts) GetByID(_ context.Context, id domain.ID) (domain.Artifact, error) {
+	for _, rows := range f.byTask {
+		for _, a := range rows {
+			if a.ID == id {
+				return a, nil
+			}
+		}
+	}
+	return domain.Artifact{}, domain.ErrNotFound
+}
+
 // fakeRelations is an in-memory RelationRepository: edges touching either end
 // are returned by ListByTask; Add/Remove keep minimal upsert/delete semantics.
 type fakeRelations struct {

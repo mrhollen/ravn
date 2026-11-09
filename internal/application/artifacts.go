@@ -105,6 +105,24 @@ func (s *Artifacts) AttachWithID(ctx context.Context, id domain.ID, actor domain
 	return art, nil // adapters store values as-given; artifacts are immutable after insert
 }
 
+// Get returns one artifact by id for READ purposes (multi-user epic T4: the
+// membership gate on GET /artifacts/{id} resolves the owning task through it).
+// Unknown ids surface as domain.ErrNotFound. No event is appended — a read is
+// not an audit-worthy mutation, and the parent task's version is never touched.
+func (s *Artifacts) Get(ctx context.Context, id domain.ID) (domain.Artifact, error) {
+	var art domain.Artifact
+	var r Repos
+	err := s.uow.Run(ctx, &r, func() error {
+		a, gerr := r.Artifacts.GetByID(ctx, id)
+		if gerr != nil {
+			return gerr // ErrNotFound for unknown ids
+		}
+		art = a
+		return nil
+	})
+	return art, err
+}
+
 // Remove removes the artifact with artifactID from taskID and appends an
 // `artifact-removed` event recording what was deleted. Returns the removed artifact.
 func (s *Artifacts) Remove(ctx context.Context, actor domain.Actor, taskID, artifactID domain.ID) (domain.Artifact, error) {
