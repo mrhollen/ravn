@@ -107,6 +107,32 @@ func ParseRole(s string) (Role, error) {
 	}
 }
 
+// Storable reports whether r may be persisted in a membership row (the
+// project_member.role column): viewer, editor or admin. RoleNone means "no row"
+// and RoleOwner is derived from created_by — neither is ever written; the
+// membership use case rejects both at its write boundary.
+func (r Role) Storable() bool { return r >= RoleViewer && r <= RoleAdmin }
+
+// CanAssignRole is the hierarchy guard for membership management (multi-user
+// T9): may a manager whose effective role in the project is actor grant or set
+// the storable role target? Rules:
+//
+//   - RoleOwner grants ANY storable role. The shared operator token is folded
+//     into RoleOwner by the HTTP gate BEFORE this is called, so no separate
+//     "operator" flag exists here — ownership and operator are one privilege tier.
+//   - everyone else may only grant or set roles AT OR BELOW their own (an admin
+//     may assign viewer/editor/admin; an editor may assign viewer/editor).
+//
+// Pure comparison, no I/O — the same shape as EffectiveRole. The caller is
+// responsible for validating that target is Storable; this function says nothing
+// about role None/Owner inputs beyond the total order.
+func CanAssignRole(actor, target Role) bool {
+	if actor.AtLeast(RoleOwner) {
+		return true
+	}
+	return target <= actor
+}
+
 // EffectiveRole folds a project's stored membership role and its owner identity
 // into the subject's effective role for that project. Rules, in order:
 //

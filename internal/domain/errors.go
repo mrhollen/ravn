@@ -160,3 +160,21 @@ func (e *TaskBlockedError) Error() string {
 //
 //	fmt.Errorf("%w: task %s already has a parent (%s)", ErrParentConflict, ...)
 var ErrParentConflict = errors.New("task already has a parent")
+
+// ErrCannotAssign is raised by the membership-management hierarchy guard
+// (multi-user T9) when a manager tries to grant or set a role ABOVE their own
+// effective role for that project — e.g. an editor assigning admin, or a viewer
+// assigning editor. It is caller-supplied input rejected by policy (not an
+// internal inconsistency), so the REST adapter maps it to 403 with the error
+// text as the actionable message ("…may only assign roles at or below your own").
+var ErrCannotAssign = errors.New("cannot assign a role above the acting manager's own role")
+
+// ErrLastAdmin is raised when removing or demoting a membership row would leave
+// a project with NO effective administrator: no owner (created_by is NULL —
+// legacy projects) and no other stored admin surviving the change. Self-
+// demotion of a sole admin lands here too. It is a 409-style conflict — the
+// request is well-formed but cannot proceed in this state; the recovery is
+// "promote another member to admin first, or act with the owner/operator", which
+// wraps into the error text. Owner and operator actors are exempt at the guard,
+// not here: they never produce this sentinel.
+var ErrLastAdmin = errors.New("removing or demoting the last admin would leave the project without an administrator")
