@@ -327,8 +327,9 @@ func TestEvents_SSE_UnknownSyntheticKindFlowsThroughAsMessage(t *testing.T) {
 
 	reader := bufio.NewReader(res.Body)
 
-	// The handler subscribes AFTER the response headers go out, so wait until
-	// this stream is actually registered before publishing (no lost-wakeup).
+	// streamEvents subscribes before the headers go out, but poll for this
+	// stream's registration anyway — belt and braces against a future reorder
+	// re-introducing the lost-wakeup window.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if broker.SubscriberCountForProject(domain.ID(proj.ID)) >= 1 {

@@ -88,6 +88,15 @@ func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID dom
 		_ = rc.SetWriteDeadline(time.Time{})
 	}
 
+	// Subscribe BEFORE the response headers leave: a client may fire its first
+	// mutation the instant it receives the 200, and an event published in the
+	// header-to-subscribe window would reach zero subscribers and be lost
+	// (lost-wakeup). With subscribe-first program order, any publish triggered
+	// after the client has the headers is guaranteed to find this subscription;
+	// events landing during replay below are buffered in `events`, never dropped.
+	events, cancel := a.Broker.Subscribe(projectID)
+	defer cancel()
+
 	// SSE response headers (guarded by the same per-write deadline as below)
 	setWriteDeadline()
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -99,9 +108,6 @@ func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID dom
 		return
 	}
 	clearWriteDeadline()
-
-	events, cancel := a.Broker.Subscribe(projectID)
-	defer cancel()
 
 	writeChunk := func(msg string) error {
 		setWriteDeadline()

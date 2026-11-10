@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 580 230" width="580" height="230" role="img" aria-label="Rävn — Architectural Cantilever Ligature">
+  <title>Rävn — Architectural Cantilever Ligature</title>
+  <defs>
+    <!-- International Signal Vermilion to Solar Flame -->
+    <linearGradient id="b1_flame" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF453A"/>
+      <stop offset="65%" stop-color="#FF3B30"/>
+      <stop offset="100%" stop-color="#FF9500"/>
+    </linearGradient>
+
+    <!-- Polar White Titanium Body -->
+    <linearGradient id="b1_white" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#EDEDED"/>
+    </linearGradient>
+
+    <filter id="b1_glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#FF3B30" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <g id="wordmark-ligature" transform="translate(10, 5)">
+
+    <!-- ============================================================= -->
+    <!-- 1. CANTILEVER GIRDER BEAM (R into Ä)                          -->
+    <!-- A solid 30px Signal Vermilion beam uniting R waist to Ä       -->
+    <!-- ============================================================= -->
+    <rect x="62" y="118" width="186" height="30" rx="2" fill="url(#b1_flame)" filter="url(#b1_glow)"/>
+
+    <!-- ============================================================= -->
+    <!-- 2. STRUCTURAL FUSION JOINTS                                   -->
+    <!-- ============================================================= -->
+    <!-- Ä-to-V Bedrock Foundation Weld -->
+    <polygon points="270,200 304,200 326,144 292,144" fill="url(#b1_flame)" filter="url(#b1_glow)"/>
+
+    <!-- V-to-N Top Shoulder Crown -->
+    <rect x="424" y="42" width="22" height="36" rx="2" fill="url(#b1_flame)" filter="url(#b1_glow)"/>
+
+    <!-- ============================================================= -->
+    <!-- 3. WHITE MONOLITHIC STRUCTURAL BODIES                         -->
+    <!-- Strictly uniform 32px stroke width                            -->
+    <!-- ============================================================= -->
+    <g fill="url(#b1_white)">
+      <!-- LETTER R: Stem, Bowl, Leg -->
+      <rect x="30" y="42" width="32" height="158" rx="2"/>
+      <path d="
+        M 62,42
+        L 106,42
+        C 138,42 138,124 106,124
+        L 62,124
+        Z
+        M 62,74
+        L 102,74
+        C 112,74 112,92 102,92
+        L 62,92
+        Z
+      " fill-rule="evenodd"/>
+      <!-- Clean angled pillar supporting the cantilever girder -->
+      <polygon points="86,148 144,200 108,200 62,148"/>
+
+      <!-- LETTER Ä: Diagonals -->
+      <polygon points="
+        220,42
+        250,42
+        304,200
+        270,200
+        235,96
+        200,200
+        166,200
+      "/>
+
+      <!-- LETTER V: Diagonals -->
+      <polygon points="
+        290,42
+        324,42
+        362,154
+        400,42
+        434,42
+        379,200
+        345,200
+      "/>
+
+      <!-- LETTER N: Left Pillar, Diagonal, Right Pillar -->
+      <polygon points="
+        434,42
+        468,42
+        522,148
+        522,42
+        554,42
+        554,200
+        520,200
+        468,96
+        468,200
+        434,200
+      "/>
+    </g>
+
+    <!-- ============================================================= -->
+    <!-- 4. UMLAUT: Twin Signal Vermilion Discs                        -->
+    <!-- ============================================================= -->
+    <circle cx="218" cy="18" r="14" fill="url(#b1_flame)" filter="url(#b1_glow)"/>
+    <circle cx="252" cy="18" r="14" fill="url(#b1_flame)" filter="url(#b1_glow)"/>
+
+  </g>
+</svg>
