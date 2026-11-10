@@ -129,6 +129,39 @@ func TestEvents_SSE_DefaultWriteDeadline(t *testing.T) {
 	}
 }
 
+// TestEvents_SSE_SubscribeVisibleWhenHeadersReachClient is the ordering
+// canary for streamEvents: the broker subscription must already exist by the
+// time the 200 headers reach a real client. That happens-before (Subscribe →
+// WriteHeader/Flush in one goroutine; the header bytes are on the wire before
+// Do returns) is what lets every connect-then-mutate test below trust its
+// FIRST event. If Subscribe is ever reordered under the header flush, this
+// fails immediately with a clear diagnosis — instead of the SSE suite flaking
+// under load with a generic read timeout (the ARM-runner failure in run 242).
+func TestEvents_SSE_SubscribeVisibleWhenHeadersReachClient(t *testing.T) {
+	stk, broker, srv := newRealtimeStack(t)
+
+	proj := createProject(t, stk, "Subscribe Ordering Canary Project")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/projects/"+proj.ID+"/events", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("connect to SSE: %v", err)
+	}
+	defer res.Body.Close()
+
+	// Do returning means the 200 headers reached us over real TCP — with the
+	// subscribe-first ordering in streamEvents, the registration is guaranteed
+	// visible at this point (Subscribe happens-before the header flush).
+	if count := broker.SubscriberCountForProject(domain.ID(proj.ID)); count != 1 {
+		t.Fatalf("subscriber count = %d by the time headers reached the client, want 1 — streamEvents must Subscribe BEFORE WriteHeader/Flush or connect-then-mutate tests lose their first event under load", count)
+	}
+}
+
 func TestEvents_SSE_ConnectAndReceiveTaskCreated(t *testing.T) {
 	stk, _, srv := newRealtimeStack(t)
 

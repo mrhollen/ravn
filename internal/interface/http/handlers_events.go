@@ -94,6 +94,8 @@ func (a *App) streamEvents(w http.ResponseWriter, r *http.Request, projectID dom
 	// (lost-wakeup). With subscribe-first program order, any publish triggered
 	// after the client has the headers is guaranteed to find this subscription;
 	// events landing during replay below are buffered in `events`, never dropped.
+	// DO NOT reorder this below the WriteHeader/Flush — the ordering canary
+	// TestEvents_SSE_SubscribeVisibleWhenHeadersReachClient fails fast if you do.
 	events, cancel := a.Broker.Subscribe(projectID)
 	defer cancel()
 
