@@ -412,8 +412,8 @@ func TestBearerGate(t *testing.T) {
 		{"non-api path missing header is 401", "/metrics", secret, "", http.StatusUnauthorized, wantErr},
 		{"wrong token is 401", "/metrics", secret, "Bearer nope", http.StatusUnauthorized, wantErr},
 		{"wrong scheme is 401", "/metrics", secret, "Basic abc123", http.StatusUnauthorized, wantErr},
-		{"valid bearer accepted on non-api path", "/metrics", secret, "Bearer "+secret, http.StatusOK, "ok"},
-		{"bearer scheme is case-insensitive", "/metrics", secret, "bearer "+secret, http.StatusOK, "ok"},
+		{"valid bearer accepted on non-api path", "/metrics", secret, "Bearer " + secret, http.StatusOK, "ok"},
+		{"bearer scheme is case-insensitive", "/metrics", secret, "bearer " + secret, http.StatusOK, "ok"},
 		{"api path gated identically (path-independent)", "/api/v1/projects", secret, "", http.StatusUnauthorized, wantErr},
 	}
 

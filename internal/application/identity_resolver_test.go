@@ -33,13 +33,13 @@ func ptrID(s string) *domain.ID { id := domain.ID(s); return &id }
 type memberKey struct{ project, identity domain.ID }
 
 type fakeIdents struct {
-	byName map[string]domain.Identity
-	member map[memberKey]domain.Role
+	byName     map[string]domain.Identity
+	member     map[memberKey]domain.Role
 	failGet    error
 	failMember error
-	failByIds error // injects a failure into GetByIds (display lookups)
+	failByIds  error // injects a failure into GetByIds (display lookups)
 	failWrite  error // injects a failure into the T9 write methods (upsert/remove/list)
-	getCalls   int // to assert MemberRole is short-circuited for non-enabled subjects
+	getCalls   int   // to assert MemberRole is short-circuited for non-enabled subjects
 }
 
 // The T9 write side mirrors the sqlite adapter's semantics: UpsertMember rejects
@@ -209,13 +209,13 @@ func TestResolveInProject(t *testing.T) {
 	const proj = "proj-1"
 
 	cases := []struct {
-		name        string
-		idents      *fakeIdents
-		reqName     string
-		createdBy   *domain.ID
-		wantSubj    domain.Subject
-		wantRole    domain.Role
-		wantErrIs   error
+		name      string
+		idents    *fakeIdents
+		reqName   string
+		createdBy *domain.ID
+		wantSubj  domain.Subject
+		wantRole  domain.Role
+		wantErrIs error
 	}{
 		{
 			name:      "owner (matches created_by) supersedes membership",

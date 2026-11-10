@@ -225,7 +225,7 @@ func (s *Tasks) Create(ctx context.Context, actor domain.Actor, in TaskInput) (d
 		DueAt:       copyTime(in.DueAt),
 		Assignee:    assignee,
 		CreatedBy:   in.CreatedBy, // nil = unattributed (legacy shape); adapters store NULL
-		Version:     1, // fresh task rows start at version 1 (ADR)
+		Version:     1,            // fresh task rows start at version 1 (ADR)
 		Archived:    false,
 		CreatedAt:   now,
 		UpdatedAt:   now,

@@ -49,7 +49,7 @@ func (a *App) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	actor = a.authoritativeActor(ctx, actor)                            // T4: credential principals act as themselves (spoof prevention)
 	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
@@ -102,7 +102,7 @@ func (a *App) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	actor = a.authoritativeActor(ctx, actor)                            // T4: credential principals act as themselves (spoof prevention)
 	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
@@ -138,7 +138,7 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	actor = a.authoritativeActor(ctx, actor)                            // T4: credential principals act as themselves (spoof prevention)
 	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
@@ -172,7 +172,7 @@ func (a *App) handleHandoffTask(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id) // bad actor type / empty name → 400
 		return
 	}
-	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	actor = a.authoritativeActor(ctx, actor)                            // T4: credential principals act as themselves (spoof prevention)
 	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
@@ -220,7 +220,7 @@ func (a *App) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	actor = a.authoritativeActor(ctx, actor)                            // T4: credential principals act as themselves (spoof prevention)
 	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
@@ -295,7 +295,7 @@ func (a *App) handleUpdateNotes(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	actor = a.authoritativeActor(ctx, actor)                            // T4: credential principals act as themselves (spoof prevention)
 	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
@@ -351,7 +351,7 @@ func (a *App) handleToggleAC(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	actor = a.authoritativeActor(ctx, actor)                            // T4: credential principals act as themselves (spoof prevention)
 	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
@@ -387,7 +387,7 @@ func (a *App) handleAddAC(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	actor = a.authoritativeActor(ctx, actor)                            // T4: credential principals act as themselves (spoof prevention)
 	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}
@@ -433,7 +433,7 @@ func (a *App) handleRemoveAC(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	actor = a.authoritativeActor(ctx, actor)                                  // T4: credential principals act as themselves (spoof prevention)
 	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpDestructive); !ok { // T4 scoping gate — AC removal is destructive
 		return
 	}
@@ -463,7 +463,7 @@ func (a *App) handleReorderAC(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	actor = a.authoritativeActor(ctx, actor) // T4: credential principals act as themselves (spoof prevention)
+	actor = a.authoritativeActor(ctx, actor)                            // T4: credential principals act as themselves (spoof prevention)
 	if _, ok := a.gateTask(w, r, actor.Name, id, domain.OpWrite); !ok { // T4 scoping gate
 		return
 	}

@@ -17,9 +17,9 @@ import (
 	"github.com/mrhollen/ravn/internal/domain"
 	"github.com/mrhollen/ravn/internal/infrastructure/clock"
 	"github.com/mrhollen/ravn/internal/infrastructure/idgen"
-	httpapi "github.com/mrhollen/ravn/internal/interface/http"
 	"github.com/mrhollen/ravn/internal/infrastructure/pwhash"
 	"github.com/mrhollen/ravn/internal/infrastructure/sqlite"
+	httpapi "github.com/mrhollen/ravn/internal/interface/http"
 )
 
 // tools_scoping_test.go: T6 AC2 end-to-end — a per-agent API token dialed into
@@ -126,7 +126,9 @@ func mintAgentToken(t *testing.T, base, name string) string {
 	return out.Token
 }
 
-func uniqName(prefix string) string { return fmt.Sprintf("%s-%08x", prefix, time.Now().UnixNano()&0xFFFFFFFF) }
+func uniqName(prefix string) string {
+	return fmt.Sprintf("%s-%08x", prefix, time.Now().UnixNano()&0xFFFFFFFF)
+}
 
 // createProjectViaREST creates a project as the given bearer and returns its
 // id. identityName must match the token's own identity (the REST contract

@@ -32,7 +32,7 @@ func (a *App) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", "")
 		return
 	}
-	dn := declaredName(r) // header/query-declared actor (no body on list GETs)
+	dn := declaredName(r)                         // header/query-declared actor (no body on list GETs)
 	_, empty, merr := a.applyMine(ctx, q, dn, &f) // fills Creator/AssigneeName/ActivityActor; "" = untouched filter
 	if merr != nil {
 		writeAppError(w, merr, "task", "")
@@ -272,7 +272,7 @@ func (a *App) handleGetTask(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err, "task", id)
 		return
 	}
-	out := toDetail(d) // embeds taskSummaryDTO — CreatedBy/Owner are promoted fields
+	out := toDetail(d)                             // embeds taskSummaryDTO — CreatedBy/Owner are promoted fields
 	single := []taskSummaryDTO{out.taskSummaryDTO} // T4 owner display (no-op unless attributed)
 	if oerr := a.fillTaskOwners(ctx, single); oerr != nil {
 		writeAppError(w, oerr, "task", id)

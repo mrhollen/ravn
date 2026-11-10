@@ -217,9 +217,9 @@ func TestAdversarial_SSE_RawTCPHardResetLingerZero(t *testing.T) {
 func TestAdversarial_SSE_SlowClientChannelBufferDrop(t *testing.T) {
 	cases := []struct {
 		name          string
-		bufferSize    int // subscriber channel capacity (knob)
-		tolerance     int // consecutive full publishes before eviction (count dimension)
-		burst         int // events published at the stalled client
+		bufferSize    int           // subscriber channel capacity (knob)
+		tolerance     int           // consecutive full publishes before eviction (count dimension)
+		burst         int           // events published at the stalled client
 		writeDeadline time.Duration // injected per-write deadline (Deps.SSEWriteDeadline)
 		wantEvicted   bool
 	}{

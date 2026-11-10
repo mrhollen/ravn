@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
+	mcptransport "github.com/mark3labs/mcp-go/client/transport"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
-	mcptransport "github.com/mark3labs/mcp-go/client/transport"
 
 	"github.com/mrhollen/ravn/internal/infrastructure/apiclient"
 )
@@ -185,7 +185,7 @@ func TestStrict_OmittedActorWithPerAgentCredential(t *testing.T) {
 		t.Fatalf("expected success with per-agent credential, got error: %s", firstText(t, res))
 	}
 
-	cc := findStrictCall(t, *calls, http.MethodPost, 	"/api/v1/tasks/" + strictTaskID + "/comments")
+	cc := findStrictCall(t, *calls, http.MethodPost, "/api/v1/tasks/"+strictTaskID+"/comments")
 	if cc.auth != "Bearer agent-alice" {
 		t.Errorf("upstream Authorization = %q, want Bearer agent-alice (per-agent token forwarded)", cc.auth)
 	}
@@ -284,16 +284,16 @@ func TestStrict_WellFormedActorHonored(t *testing.T) {
 
 	c := dialBearer(t, mcpSrv.URL, ctx, "gate-token")
 	res := callTool(t, c, ctx, "add_comment", map[string]any{
-		"id":   strictTaskID,
-		"kind": "note",
-		"body": "hi",
+		"id":    strictTaskID,
+		"kind":  "note",
+		"body":  "hi",
 		"actor": map[string]any{"name": "bob", "type": "human"},
 	})
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", firstText(t, res))
 	}
 
-	cc := findStrictCall(t, *calls, http.MethodPost, 	"/api/v1/tasks/" + strictTaskID + "/comments")
+	cc := findStrictCall(t, *calls, http.MethodPost, "/api/v1/tasks/"+strictTaskID+"/comments")
 	if cc.auth != "Bearer gate-token" {
 		t.Errorf("upstream Authorization = %q, want Bearer gate-token", cc.auth)
 	}
@@ -360,7 +360,7 @@ func TestAuto_ThroughNewWiringIsUnchanged(t *testing.T) {
 				t.Fatalf("auto mode must not error here: %s", firstText(t, res))
 			}
 
-			cc := findStrictCall(t, *calls, http.MethodPost, 	"/api/v1/tasks/" + strictTaskID + "/comments")
+			cc := findStrictCall(t, *calls, http.MethodPost, "/api/v1/tasks/"+strictTaskID+"/comments")
 			var body struct {
 				Actor apiclient.Actor `json:"actor"`
 			}

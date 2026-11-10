@@ -22,28 +22,28 @@ import (
 // use-case structs are passed (never the UnitOfWork): the adapter is a thin
 // presentation layer and must not manage transactions itself.
 type Deps struct {
-	Projects         *application.Projects
-	Tasks            *application.Tasks
-	Comments         *application.Comments   // routed in slice 3b
-	Artifacts        *application.Artifacts  // routed in slice 3b
-	Acceptance       *application.Acceptance // routed in slice 3b
-	Relations        *application.Relations  // routed in slice 3b
-	Memberships      *application.Memberships // OPTIONAL: multi-user membership management (T9); nil → /projects/{id}/members* routes return 404 ("not enabled"), other behavior unchanged
-	Auth             *application.Auth       // OPTIONAL: multi-user auth (T3); nil → /auth/* routes return 404, other behavior unchanged
-	Broker           application.EventBroker // realtime pub-sub for SSE events
-	Events           application.EventStore  // OPTIONAL: activity-log read path behind SSE Last-Event-ID replay; nil = live-only streams (no replay)
+	Projects    *application.Projects
+	Tasks       *application.Tasks
+	Comments    *application.Comments    // routed in slice 3b
+	Artifacts   *application.Artifacts   // routed in slice 3b
+	Acceptance  *application.Acceptance  // routed in slice 3b
+	Relations   *application.Relations   // routed in slice 3b
+	Memberships *application.Memberships // OPTIONAL: multi-user membership management (T9); nil → /projects/{id}/members* routes return 404 ("not enabled"), other behavior unchanged
+	Auth        *application.Auth        // OPTIONAL: multi-user auth (T3); nil → /auth/* routes return 404, other behavior unchanged
+	Broker      application.EventBroker  // realtime pub-sub for SSE events
+	Events      application.EventStore   // OPTIONAL: activity-log read path behind SSE Last-Event-ID replay; nil = live-only streams (no replay)
 	// Scoping drives the multi-user epic T4 visibility + authorization gates.
 	// NIL MEANS DefaultScoping() (see-all, no gating) — never interpret the zero
 	// ScopingConfig directly (its zero value is restrictive); all gate helpers in
 	// scoping.go fold nil to the default, so existing wiring and test stacks stay
 	// byte-identical. Membership-scoped deployments also set Identity (and, for
 	// project creation, IdentityOpen).
-	Scoping       *domain.ScopingConfig         // RAVN_SCOPING parsed via ParseScopingMode; nil → global/default
-	Identity      *application.IdentityResolver // T4: name→Subject + project role resolution; required when Scoping.MembershipScoped
-	IdentityOpen  bool                          // RAVN_IDENTITY_OPEN: credential principals may create projects (membership scoping)
-	HTTPClient       *http.Client            // optional HTTP client for external integrations (e.g. OpenCode)
-	ArtifactsDir     string                  // directory holding stored artifact files
-	SSEWriteDeadline time.Duration           // per-write deadline for SSE streams (stalled-client zombie guard); zero/negative → DefaultSSEWriteDeadline
+	Scoping          *domain.ScopingConfig         // RAVN_SCOPING parsed via ParseScopingMode; nil → global/default
+	Identity         *application.IdentityResolver // T4: name→Subject + project role resolution; required when Scoping.MembershipScoped
+	IdentityOpen     bool                          // RAVN_IDENTITY_OPEN: credential principals may create projects (membership scoping)
+	HTTPClient       *http.Client                  // optional HTTP client for external integrations (e.g. OpenCode)
+	ArtifactsDir     string                        // directory holding stored artifact files
+	SSEWriteDeadline time.Duration                 // per-write deadline for SSE streams (stalled-client zombie guard); zero/negative → DefaultSSEWriteDeadline
 }
 
 // DefaultSSEWriteDeadline is the PRODUCTION default for Deps.SSEWriteDeadline.

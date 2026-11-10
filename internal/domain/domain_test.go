@@ -340,4 +340,3 @@ func TestNewConflictError_ClonesCurrent(t *testing.T) {
 		t.Errorf("NewConflictError Assignee aliases original")
 	}
 }
-

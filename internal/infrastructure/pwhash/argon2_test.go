@@ -82,11 +82,11 @@ func TestParsePHC_Structure(t *testing.T) {
 func TestCheck_MalformedInputsReturnFalse(t *testing.T) {
 	h := New(FastParams())
 	cases := []string{
-		"",                       // empty
-		"not a hash at all",      // no prefix
-		"$bcrypt$v=1$x$y",        // wrong tag
-		"$argon2id$v=18$m=1,t=1,p=1$c2FsdA==$aGVsbG8=", // unsupported version
-		"$argon2id$v=19$m=1$t=1$p=1$c2FsdA==$aGVsbG8=", // missing commas
+		"",                  // empty
+		"not a hash at all", // no prefix
+		"$bcrypt$v=1$x$y",   // wrong tag
+		"$argon2id$v=18$m=1,t=1,p=1$c2FsdA==$aGVsbG8=",     // unsupported version
+		"$argon2id$v=19$m=1$t=1$p=1$c2FsdA==$aGVsbG8=",     // missing commas
 		"$argon2id$v=19,m=1,t=1,p=1,x=9$c2FsdA==$aGVsbG8=", // unknown field
 		"$argon2id$v=19$m=1,t=1,p=1$!!!not-base64==$$",     // bad salt base64
 	}

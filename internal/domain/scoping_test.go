@@ -50,8 +50,8 @@ func TestRoleAtLeast(t *testing.T) {
 
 func TestParseRole(t *testing.T) {
 	cases := []struct {
-		in     string
-		want   Role
+		in      string
+		want    Role
 		wantErr bool
 	}{
 		{"", RoleNone, false},
@@ -60,8 +60,8 @@ func TestParseRole(t *testing.T) {
 		{"VIEWER", RoleViewer, false},
 		{"editor", RoleEditor, false},
 		{"admin", RoleAdmin, false},
-		{"owner", 0, true},            // owner is derived, never stored — must be loud
-		{"superuser", 0, true},        // unknown value
+		{"owner", 0, true},     // owner is derived, never stored — must be loud
+		{"superuser", 0, true}, // unknown value
 	}
 	for i, c := range cases {
 		got, err := ParseRole(c.in)
@@ -102,7 +102,7 @@ func TestEffectiveRole(t *testing.T) {
 		want    Role
 	}{
 		{
-			name: "enabled owner supersedes stored membership",
+			name:    "enabled owner supersedes stored membership",
 			ownerID: &ownerID, member: RoleEditor,
 			subj: Subject{Name: "o", Status: SubjectEnabled, ID: ownerID},
 			want: RoleOwner,
@@ -218,12 +218,12 @@ func TestVisibilityPolicy(t *testing.T) {
 // are always denied in both modes.
 func TestAuthorizationPolicy(t *testing.T) {
 	cases := []struct {
-		name  string
-		cfg   ScopingConfig
-		subj  Subject
-		role  Role
-		op    Operation
-		want  bool
+		name string
+		cfg  ScopingConfig
+		subj Subject
+		role Role
+		op   Operation
+		want bool
 	}{
 		// --- default / non-membership-scoped: no gating at all ---
 		{"default read allowed for unknown", DefaultScoping(), UnknownSubject("ghost"), RoleNone, OpRead, true},

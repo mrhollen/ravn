@@ -35,10 +35,10 @@ var version = "dev"
 
 func main() {
 	var (
-		addr      = flag.String("addr", envOr("MCP_ADDR", ":9080"), "listen address for the MCP HTTP server, e.g. :9080")
-		apiURL    = flag.String("api-url", envOr("RAVN_API_URL", "http://ravn-server:8080"), "upstream rawn-server API URL")
-		token     = flag.String("token", os.Getenv("RAVN_TOKEN"), "bearer token forwarded to raw-server; gates incoming MCP requests when set")
-		agentName = flag.String("agent-name", envOr("RAVN_AGENT_NAME", "agent"), "default actor name stamped on tool calls when omitted")
+		addr         = flag.String("addr", envOr("MCP_ADDR", ":9080"), "listen address for the MCP HTTP server, e.g. :9080")
+		apiURL       = flag.String("api-url", envOr("RAVN_API_URL", "http://ravn-server:8080"), "upstream rawn-server API URL")
+		token        = flag.String("token", os.Getenv("RAVN_TOKEN"), "bearer token forwarded to raw-server; gates incoming MCP requests when set")
+		agentName    = flag.String("agent-name", envOr("RAVN_AGENT_NAME", "agent"), "default actor name stamped on tool calls when omitted")
 		transport    = flag.String("transport", envOr("RAVN_MCP_TRANSPORT", "http"), "protocol transport to serve: http (Streamable HTTP + SSE) or stdio (JSON-RPC over stdin/stdout)")
 		stdioFlag    = flag.Bool("stdio", false, "serve the stdio transport (shorthand for -transport=stdio)")
 		identityOpen = flag.String("identity-open", envOr("RAVN_IDENTITY_OPEN", "auto"), "identity policy: auto/true/1/yes/on (open — omitted or malformed actors fall back to RAVN_AGENT_NAME, the pre-T6 default) or strict/closed/false/0/no/off (closed — omitted actors require a per-agent Bearer credential; malformed actors error)")

@@ -32,7 +32,7 @@ import (
 
 // requester is the per-request identity fact bundle computed once by App.requester.
 type requester struct {
-	operator bool         // shared-token principal: bypasses every scoping decision
+	operator bool           // shared-token principal: bypasses every scoping decision
 	subject  domain.Subject // resolved durable identity (credential principals); zero/unknown for operators & off mode
 	name     string         // authoritative acting name (spoof-proofed; declared-actor fallback in token/off modes)
 }
@@ -142,7 +142,9 @@ func requiredRoleName(op domain.Operation) string {
 }
 
 // writeForbiddenRole renders the 403 envelope for a scoping denial:
-//   {"error":"forbidden","resource":<type>,"required":"viewer|editor|admin","message":...}
+//
+//	{"error":"forbidden","resource":<type>,"required":"viewer|editor|admin","message":...}
+//
 // The "required" token is machine-readable (the web UI can render upgrade hints from
 // it); the message is the agent/human-actionable form. Both always present — matching
 // every other error envelope in this adapter.

@@ -121,14 +121,14 @@ func seedLegacyWorld(t *testing.T, db *sql.DB) {
 // --- identity read helpers ------------------------------------------------------
 
 type identityRow struct {
-	Name        string
-	Kind        string
-	AuthMethod  string
-	CredHash    sql.NullString
-	LastActive  sql.NullString
-	CreatedAt   sql.NullString
-	DisabledAt  sql.NullString
-	ID          string
+	Name       string
+	Kind       string
+	AuthMethod string
+	CredHash   sql.NullString
+	LastActive sql.NullString
+	CreatedAt  sql.NullString
+	DisabledAt sql.NullString
+	ID         string
 }
 
 func identitiesByName(t *testing.T, db *sql.DB) map[string]identityRow {
@@ -279,12 +279,12 @@ func tableColumns(t *testing.T, db *sql.DB, table string) ([]string, error) {
 	var cols []string
 	for rows.Next() {
 		var (
-			cid         int
-			name        string
-			typ         string
-			notnull     int
-			dflt        sql.NullString
-			pk          int
+			cid     int
+			name    string
+			typ     string
+			notnull int
+			dflt    sql.NullString
+			pk      int
 		)
 		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
 			return nil, err
@@ -337,10 +337,10 @@ func TestMigration0011_BackfillsDistinctActorNames(t *testing.T) {
 		wantKind   string // inferred from the *_type values stored next to it
 		wantActive sql.NullString
 	}{
-		{"hollen", "human", nullTS("2026-01-05T11:30:00Z")},           // comments + AC check + project event, all human
-		{"devin", "agent", nullTS("2026-01-05T11:30:00Z")},            // comment + artifact + claim event, all agent
-		{"mixed-bob", "human", nullTS("2026-01-05T11:30:00Z")},        // human AND agent → default 'human'
-		{"unicode-æøå-🚀", "agent", nullTS("2026-01-05T11:30:00Z")},    // assignee + comment + AC, all agent
+		{"hollen", "human", nullTS("2026-01-05T11:30:00Z")},        // comments + AC check + project event, all human
+		{"devin", "agent", nullTS("2026-01-05T11:30:00Z")},         // comment + artifact + claim event, all agent
+		{"mixed-bob", "human", nullTS("2026-01-05T11:30:00Z")},     // human AND agent → default 'human'
+		{"unicode-æøå-🚀", "agent", nullTS("2026-01-05T11:30:00Z")}, // assignee + comment + AC, all agent
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -517,12 +517,12 @@ func TestMigration0011_LegacySingleTenantUpgradeIntact(t *testing.T) {
 
 	// Spot-check exact field values on the trickiest legacy row (claim + assignee).
 	var (
-		title, status, notes     string
-		priority                 int
-		version                  int
-		ttl                      sql.NullInt64
-		assigneeName, claimer    string
-		dueAt                    sql.NullString
+		title, status, notes  string
+		priority              int
+		version               int
+		ttl                   sql.NullInt64
+		assigneeName, claimer string
+		dueAt                 sql.NullString
 	)
 	err := db.QueryRowContext(ctx, `SELECT title, status, priority, due_at, notes, assignee_name, claimed_by_name, claim_ttl_sec, version
 		FROM task WHERE id = 't-leg-1'`).

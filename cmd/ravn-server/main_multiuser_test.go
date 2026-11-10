@@ -33,9 +33,9 @@ func runExitsFast(t *testing.T, buf *lockedBuffer, args ...string) <-chan int {
 // value exits 1 with its dedicated log line, before DB/socket side effects.
 func TestServerRunMultiuserEnvValidation(t *testing.T) {
 	cases := []struct {
-		name       string
-		env        map[string]string
-		wantLog    string
+		name    string
+		env     map[string]string
+		wantLog string
 	}{
 		{
 			name:    "bogus RAVN_AUTH fails fast",

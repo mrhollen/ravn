@@ -56,11 +56,11 @@ func MembershipScoping() ScopingConfig { return ScopingConfig{Global: false, Mem
 type Role int
 
 const (
-	RoleNone  Role = iota // no relationship to the project (non-member / unresolved subject)
-	RoleViewer            // can read the project and its contents
-	RoleEditor            // can perform non-destructive writes
-	RoleAdmin             // can perform destructive/administrative operations
-	RoleOwner             // the project's creator — supersedes every other role
+	RoleNone   Role = iota // no relationship to the project (non-member / unresolved subject)
+	RoleViewer             // can read the project and its contents
+	RoleEditor             // can perform non-destructive writes
+	RoleAdmin              // can perform destructive/administrative operations
+	RoleOwner              // the project's creator — supersedes every other role
 )
 
 // AtLeast reports whether r grants at least the privilege min.
@@ -267,7 +267,9 @@ type AuthorizationPolicy struct {
 
 // NewAuthorizationPolicy builds a policy from cfg (same ScopingConfig value the
 // visibility policy uses, so both axes are driven by one deployment decision).
-func NewAuthorizationPolicy(cfg ScopingConfig) *AuthorizationPolicy { return &AuthorizationPolicy{cfg: cfg} }
+func NewAuthorizationPolicy(cfg ScopingConfig) *AuthorizationPolicy {
+	return &AuthorizationPolicy{cfg: cfg}
+}
 
 // Can reports whether s, holding effective role `role` in the target's project, may
 // perform op under this policy's config. A disabled subject is denied in EVERY config

@@ -103,7 +103,6 @@ func TestParseIdentityOpen(t *testing.T) {
 	}
 }
 
-
 // TestParseScopingMode covers the T4 RAVN_SCOPING parser: empty/global/auto must be a zero
 // observable change from today (DefaultScoping), "membership" enables per-project visibility
 // + role gating, and a typo fails fast like ResolveAuthMode.

@@ -474,7 +474,10 @@ func TestScoping_MembershipAuthorization(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("bob viewer GET task = %d, want 200", code)
 	}
-	denials := []struct{ method, path string; body any }{
+	denials := []struct {
+		method, path string
+		body         any
+	}{
 		{"POST", "/api/v1/tasks/" + tid + "/claim", withActor("bob", nil)},
 		{"POST", "/api/v1/tasks/" + tid + "/comments", withActor("bob", map[string]any{"kind": "note", "body": "x"})},
 		{"PUT", "/api/v1/tasks/" + tid + "/notes", withActor("bob", map[string]any{"notes": "# x"})},
@@ -708,10 +711,10 @@ func TestScoping_MineFiltersProjectsAndMalformed(t *testing.T) {
 	}
 
 	malformed := []struct{ path string }{
-		{"/api/v1/projects?mine=assigned"},     // projects only support created
+		{"/api/v1/projects?mine=assigned"}, // projects only support created
 		{"/api/v1/projects?mine=bogus"},
-		{"/api/v1/tasks?mine=bogus"},                 // tasks don't know bogus
-		{"/api/v1/tasks?mine=assigned&mine=created"}, // multiple distinct values
+		{"/api/v1/tasks?mine=bogus"},                      // tasks don't know bogus
+		{"/api/v1/tasks?mine=assigned&mine=created"},      // multiple distinct values
 		{"/api/v1/tasks?mine=assigned&assignee_name=bob"}, // explicit filter conflict
 	}
 	for _, c := range malformed {
