@@ -240,6 +240,14 @@ jobs:
         env:
           PUSH_TOKEN: ${{ secrets.PACKAGE_TOKEN || secrets.FORGEJO_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
+          # Mirror of the ci job's guard: a runner whose container has no docker
+          # CLI/socket (e.g. an act-based ARM runner) cannot build — skip loudly
+          # instead of failing every push until the socket is mounted.
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "WARNING: docker is not available in this runner environment; skipping image build + push."
+            exit 0
+          fi
+
           # Registry host + full image ref come from repository variables (set on the
           # Forgejo repo). If REGISTRY_IMAGE is unset, derive it from the registry and
           # the lowercased repository name.
@@ -261,7 +269,12 @@ jobs:
           fi
 
           echo "Installing crane for direct HTTP registry push..."
-          curl -sL https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz | tar -xz -C /usr/local/bin crane
+          case "$(uname -m)" in
+            x86_64)  CRANE_ARCH=x86_64 ;;
+            aarch64) CRANE_ARCH=aarch64 ;;
+            *) echo "Unsupported architecture for crane: $(uname -m)"; exit 1 ;;
+          esac
+          curl -sL https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_${CRANE_ARCH}.tar.gz | tar -xz -C /usr/local/bin crane
 
           echo "Building image (target server-runtime)..."
           docker build --target server-runtime -t ravn:latest .

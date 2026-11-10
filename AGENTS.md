@@ -85,12 +85,14 @@ This repository runs workflows both on GitHub (`.github/workflows/`) and a local
 * **The Problem with `docker push`**: the Docker daemon enforces HTTPS by default; pushing to a plain-HTTP registry fails with `http: server gave HTTP response to HTTPS client` unless the host Docker daemon is configured with `insecure-registries` and restarted (disruptive).
 * **The Solution (`crane`)**: Google's `crane` CLI runs daemonless in user space and natively supports plain HTTP via `--insecure`:
   ```bash
-  # Values come from vars.REGISTRY_HOST / vars.REGISTRY_IMAGE
-  docker build --target server-runtime -t ravn:latest .
-  echo "${PUSH_TOKEN}" | crane auth login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin --insecure
-  docker save ravn:latest -o /tmp/ravn.tar
-  crane push /tmp/ravn.tar "${IMAGE_NAME}" --insecure
-  ```
+   # Values come from vars.REGISTRY_HOST / vars.REGISTRY_IMAGE
+   docker build --target server-runtime -t ravn:latest .
+   echo "${PUSH_TOKEN}" | crane auth login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin --insecure
+   docker save ravn:latest -o /tmp/ravn.tar
+   crane push /tmp/ravn.tar "${IMAGE_NAME}" --insecure
+   ```
+ * **Architecture-aware crane**: the install step maps `uname -m` (x86_64/aarch64) to the matching go-containerregistry release tarball. Never hardcode `Linux_x86_64` — an ARM runner would install a non-executable ELF.
+ * **No docker → loud skip, not failure**: if the job container has no docker CLI/socket (e.g. an act-based runner without the socket mounted), `publish` prints a WARNING and exits 0 so pushes stay green until the access is configured. To actually publish from such a runner, provide the docker CLI in the job container AND mount `/var/run/docker.sock` in the runner's `config.yaml`.
 
 ### 4. Authentication & Package Scopes (`PACKAGE_TOKEN`)
 * The default ephemeral workflow token may lack package write permission (push → `401 reqPackageAccess`). Store a Personal Access Token with `package:write` scope in repo secrets as `PACKAGE_TOKEN`.
@@ -102,7 +104,7 @@ This repository runs workflows both on GitHub (`.github/workflows/`) and a local
 ### 6. Pipeline Structure & Test Performance
 * **Split Jobs**:
   - `ci` (`Test and Build`): linters, Go unit tests, web build, Playwright E2E suite, compose validation, image build.
-  - `publish` (`Build and Push Image`): depends on `ci`, runs only on pushes to `main` **and** only when `vars.REGISTRY_HOST` is set.
+  - `publish` (`Build and Push Image`): depends on `ci`, runs only on pushes to `main` **and** only when `vars.REGISTRY_HOST` is set; skips with a warning if the runner container lacks docker (see §3).
 * **CI Build & Install Parallelization**: the Vite frontend build and the Playwright Chromium download run concurrently in subshells (see `ci.yml`).
 * **Playwright E2E Concurrency**: 2 workers in CI; the suite completes well under a minute.
 * **Strict Locators**: when asserting text in the UI, use exact matching (`getByText('Claimed', { exact: true })`) or scope to the specific container/role to avoid Playwright strict-mode violations.
