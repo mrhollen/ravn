@@ -50,3 +50,4 @@ go.work.sum
 
 # one-off design mockups — do not commit
 /mockup.html
+/design-logos/
