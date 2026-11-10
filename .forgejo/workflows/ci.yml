@@ -36,13 +36,12 @@ jobs:
 
       - name: Run Go tests (with coverage profile)
         run: |
-          # Single instrumented run: the same suite as before, plus per-package
-          # statement coverage on screen and a merged profile in c.out for the
-          # Coverage gate step. Format documented in docs/TESTING.md §2.
-          go test -race ./... -coverprofile=c.out -cover
-          echo ""
-          echo "--- Go coverage total (statements, all packages) ---"
-          go tool cover -func=c.out | tail -1
+          # Shared by BOTH workflow files (.github + .forgejo): single instrumented
+          # run — per-package statement coverage on screen + merged profile in c.out
+          # for the Coverage gate step (docs/TESTING.md §2). Keeps -race except where
+          # TSan cannot start at all (some linux/arm64 kernels), falling back with a
+          # loud warning — see the script.
+          bash scripts/ci/go-test.sh
 
       - name: Build static binaries
         run: |

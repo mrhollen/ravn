@@ -16,11 +16,18 @@ Improvements are tracked as tasks on the Ravn board (see
 | Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 41 spec files + shared `fixtures.ts`/`helpers.ts`, **14,149** LOC, **189** tests (re-measured 2026-11-09) | **~47s** wall (default workers); one shared `ravn-server` per worker (+ a few isolated spins); prereqs built once per run by the dedicated `e2e/global-setup.ts` globalSetup — mtime-staleness check, and the server binary is staged via temp copy + atomic rename so a worker can never start a mid-write binary (no ETXTBSY race) | not measured (E2E is the integration proof) |
 
 All three run in CI on every push/PR (`.github/workflows/ci.yml`,
-`.forgejo/workflows/ci.yml`): `go test -race ./... -coverprofile=c.out -cover`,
-`npm run test:unit:coverage`, then the E2E suite after the web build and server
-binary are produced. The two instrumented runs print their coverage reports
-and feed a shared ratcheting gate (`scripts/ci/coverage-gate.sh`, floors in §2)
-that fails the pipeline on breach.
+`.forgejo/workflows/ci.yml`): `go test -race ./... -coverprofile=c.out -cover`
+(via the shared `scripts/ci/go-test.sh`), `npm run test:unit:coverage`, then the
+E2E suite after the web build and server binary are produced. The two
+instrumented runs print their coverage reports and feed a shared ratcheting gate
+(`scripts/ci/coverage-gate.sh`, floors in §2) that fails the pipeline on breach.
+
+Race-detector caveat: `go-test.sh` keeps `-race` unconditionally EXCEPT on
+linux/arm64, where it first probes with a trivial `-race` program and falls back
+to a plain instrumented run (with a loud warning) when TSan aborts at process
+startup — some ARM kernels/VA layouts reject the shadow-memory layout with
+`FATAL: ThreadSanitizer: unsupported VMA range`, in which case NO Go test can
+run there at all. amd64 runners never skip `-race`.
 
 ### Run them
 
