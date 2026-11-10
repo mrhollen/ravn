@@ -829,10 +829,16 @@ export function ravnApp() {
         // Already open (e.g. the boot-401 auto-open lands on the token tab and the user
         // then clicks Sign in): do NOT re-capture a second focus session — that would
         // clone a null restore-target and leak the first trap. Just switch panels and,
-        // once x-if has committed the new panel to the DOM, move focus to its input.
+        // once x-if has committed the new panel to the DOM, move focus to its input —
+        // but ONLY if focus isn't already inside the modal: a user (or test) may have
+        // focused/typed into the new input before this 0ms timer fires, and re-focusing
+        // then would steal subsequent keystrokes into the first field.
         setTimeout(() => {
           const root = document.getElementById("cb-auth-modal");
-          root?.querySelector<HTMLElement>("input")?.focus();
+          if (!root) return;
+          const active = document.activeElement;
+          if (active instanceof HTMLInputElement && root.contains(active)) return;
+          root.querySelector<HTMLElement>("input")?.focus();
         }, 0);
       }
     },

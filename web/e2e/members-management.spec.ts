@@ -69,8 +69,13 @@ async function loginViaUI(page: Page, base: string, username: string): Promise<v
   await expect(authModal).toBeVisible(); // auto-opened by the boot 401 (no stored credential)
   await page.getByTestId('auth-tab-login').click();
 
+  const password = `${username}-password-1234`;
   await page.getByTestId('login-username').fill(username);
-  await page.getByTestId('login-password').fill(`${username}-password-1234`);
+  await page.getByTestId('login-password').fill(password);
+  // Belt-and-braces: a focus race that misdirects a fill into the wrong field must fail
+  // here with a clear diff, not as a 10s "auth modal still visible" timeout after submit.
+  await expect(page.getByTestId('login-username')).toHaveValue(username);
+  await expect(page.getByTestId('login-password')).toHaveValue(password);
   await page.getByTestId('login-submit').click();
   await expect(authModal).toBeHidden(); // login succeeded and closed the modal
 }
