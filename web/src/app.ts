@@ -16,6 +16,7 @@ import { renderMarkdown } from "./md";
 import { MEMBER_ROLES, canManageRoster, memberMutationErrorCopy, normalizeRoster } from "./members";
 import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
 import { dispatchRealtimeEvent, KNOWN_REALTIME_KINDS } from "./realtime";
+import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
 import type {
   AcRow,
   ActorInput,
@@ -71,12 +72,18 @@ import {
   statusLabel,
 } from "./util";
 
+// ---------------------------------------------------------------------------
+// Phase 1 re-export shims — symbols that previously lived in app.ts moved to
+// dedicated flat modules; these keep the existing import surface (tests,
+// main.ts) intact until P2 switches consumers to direct module imports.
+export { LS_THEME } from "./theme";
+export type { ThemeMode } from "./theme";
+
 export const LS_ACTOR = "ravn.actor";
 export const LS_PROJECT = "ravn.project";
 export const LS_SORT = "ravn.sort";
 export const LS_HOIST_PARENTS = "ravn.hoist_parents";
 export const LS_CARD_DENSITY = "ravn.card_density";
-export const LS_THEME = "ravn_theme";
 /** Persisted per-actor board scope (epic T7); "all" means no mine filter. */
 export const LS_TASK_SCOPE = "ravn.task_scope";
 /** Persisted "My projects" filter (epic T7): true → the open project list is fetched
@@ -235,24 +242,6 @@ const MD_CACHE_MAX = 500;
 // Max visual card offset (px) while swiping. Commit/slop thresholds still use
 // the raw finger displacement — this clamp only limits what is drawn.
 const MAX_SWIPE_PX = 96;
-
-// --------------------------------------------------------------------------- theme
-/** UI theme choice. "system" (default) follows the OS prefers-color-scheme. */
-export type ThemeMode = "light" | "dark" | "system";
-
-function isThemeMode(v: unknown): v is ThemeMode {
-  return v === "light" || v === "dark" || v === "system";
-}
-
-/** Read the persisted theme choice; anything malformed falls back to system. */
-function readStoredTheme(): ThemeMode {
-  try {
-    const raw = safeStorage.getItem(LS_THEME) ?? safeStorage.getItem("ravn.theme");
-    return isThemeMode(raw) ? raw : "system";
-  } catch {
-    return "system";
-  }
-}
 
 // ---------------------------------------------------------------- client-side sort
 /** Sort criteria for the board columns. "" = canonical server order (no sort). */
@@ -656,19 +645,12 @@ export function ravnApp() {
 
     /** Whether the resolved theme is dark right now. */
     effectiveDark(): boolean {
-      if (this.theme === "light") return false;
-      if (this.theme === "dark") return true;
-      return !!this._themeMq?.matches;
+      return resolveDark(this.theme, !!this._themeMq?.matches);
     },
 
     setTheme(mode: ThemeMode): void {
       this.theme = mode;
-      try {
-        safeStorage.setItem(LS_THEME, mode);
-        safeStorage.setItem("ravn.theme", mode);
-      } catch {
-        /* private mode — non-fatal */
-      }
+      persistTheme(mode);
       this.applyTheme();
     },
 
