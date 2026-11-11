@@ -28,6 +28,13 @@ guardrail (§6) are the only deliverables.
 | `board-scope.ts` | 27 | scoped task-list → Board reshape (pure) |
 | `main.ts` / `alpinejs.d.ts` / `vite-env.d.ts` | ≤11 | bootstrap + ambient types |
 
+**After Phase 1 (main `ab1644d`, measured 2026-11-11):** `app.ts` shrank to
+**6,154** lines and seven pure cores now sit beside the existing flat modules:
+`theme.ts` (48), `sort.ts` (170), `routes.ts` (162), `filters.ts` (159),
+`columns.ts` (86), `keyboard.ts` (133) and `ac-math.ts` (53); `moves.ts` grew
+117 → 180 to host the drag/swipe gesture decisions. Nothing has moved into
+`modules/` yet — Phase 2 starts from this state.
+
 **Target layout:**
 
 ```
@@ -37,8 +44,9 @@ web/src/
   main.ts             # unchanged (Alpine.data("app", ravnApp))
   types.ts            # unchanged (wire contracts)
   api.ts util.ts md.ts focus.ts …   # existing pure cores — stay flat, not moved
-  theme.ts sort.ts routes.ts filters.ts      # NEW in Phase 1: pure cores (flat, like the rest)
-  modules/                    # NEW directory — Phase 2 feature modules live here
+   theme.ts sort.ts routes.ts filters.ts columns.ts   # NEW in Phase 1 (landed): pure cores (flat, like the rest)
+   keyboard.ts ac-math.ts               # NEW in Phase 1 (landed): pure cores; moves.ts extended with gesture decisions
+   modules/                    # NEW directory — Phase 2 feature modules live here
     board.ts sse.ts detail.ts task-edit.ts acs.ts comments.ts artifacts.ts …
 ```
 
@@ -110,11 +118,28 @@ later phase; root = deliberately stays in the composition root.
 | Comments (:5360–5481) | :5360–5481 | `modules/comments.ts` | P2 (draft keys already in `src/drafts.ts`) |
 | Artifacts (:5482–5728) | :5482–5728 | `modules/artifacts.ts` | P2 (`isTextArtifact` already pure in `src/util.ts`) |
 | Claims: display helpers + claim/release handlers (:5729–5825). **Exception:** the 1s `nowTick` ticker lives here but is consumed by BOTH claims display and the board stalled filter → `nowTick` stays **root** (shared clock); pure countdown/expiry logic already in `src/util.ts` | :5729–5825 | `modules/claims.ts` (P2) + **root** (`nowTick`) | P2 |
+| Global keyboard: bare-key dispatch `handleGlobalKeydown` + the Escape cascade `dismissTop` (:6129–6204; absent from the Phase 0 audit — the cascade's priority order is the part that breaks silently when a surface is inserted) | :6129–6204 | `src/keyboard.ts` (P1 decisions, LANDED) + **root** (the imperative close steps ride with their P2 surface owners: menus/detail/new-task) | P1 done / rest P2 |
 | Relations (:5826–6208; `RelationView` interface :621–630) | :5826–6208 | `modules/relations.ts` — P1-pure: `RelationRow → RelationView` shaping | P1+P2 |
-| Drag & drop (:4585–4696) + touch swipe-to-status + per-card move menu (:4697–4960) | :4585–4960 | `modules/drag.ts` (P2 gesture state; pure move core already in `src/moves.ts`: `canMove`, `beginMove/endMove`, `withTimeout`) | P2 |
+| Drag & drop (:4585–4696) + touch swipe-to-status + per-card move menu (:4697–4960) | :4585–4960 | `modules/drag.ts` (P2 gesture state; pure move core already in `src/moves.ts`: `canMove`, `beginMove/endMove`, `withTimeout` — **extended in Phase 1** with the drag/swipe *decision* helpers: drop legality copy, swipe constants, direction/target/activation/commit) | P2 |
 | Operational bar: drawer popovers + version-guarded `moveStatus` from the drawer (:4961–4993) | :4961–4993 | `modules/detail.ts` (popover state) delegating to the moves core | P2 |
 | Template glue (:6209–6248) — binds module methods into the flat namespace | :6209–6248 | **root** (this is what a composition root IS; never extracted) | stays |
 | `init()`/boot (:6249–6448): module instantiation, deep-link adoption, boot fetches, global listeners | :6249–6448 | **root** — if Phase 2 leaves the root still above the §6 cap, extract boot wiring into `modules/bootstrap.ts` as the designated escape hatch (team-lead decision with evidence) | stays / bootstrap |
+
+**Phase 1 status (completed on main `ab1644d`, 2026-11-11).** Landed, in slice
+order — every commit is behavior-parity-only with its own unit tests (post-
+Phase 1 coverage table: `docs/TESTING.md` §2):
+
+- `src/theme.ts` (b171a3d) — theme row.
+- `src/sort.ts` (faecaad) — sort row, incl. the hoist-parents comparator and LS round-trip.
+- `src/routes.ts` (ac5b621) — deep-link helpers + board query-param parse/build rows.
+- `src/filters.ts` + `src/columns.ts` (82ff441) — filter predicate family, full-text merge and the column assembly / done-cap pipeline; the `filter*` state fields and their `$watch` wiring stay at the root until the P2 board module owns them, as planned.
+- `src/moves.ts` extended + `src/ac-math.ts` (5b00a40) — drag/swipe decision helpers and AC display math (done counts, progress label, ring geometry).
+- `src/keyboard.ts` (ab1644d) — the keyboard row above.
+
+Remaining P1 slivers **not** landed this phase (they ride with their P2
+modules or a follow-up pass): clipboard helper → `util.ts`,
+`formatEventDetail` → `realtime.ts`, the `blockedIdsFromBoard` set derivation,
+and the `RelationRow → RelationView` shaping.
 
 Suggested P2 ordering (dependency-driven): `board` → `sse` → `projects` →
 `auth` → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/
@@ -306,9 +331,13 @@ result. Steps for moving concern **X**:
                                     # testid locators are the contract proof)
    ```
 7. **Coverage & baselines.** `npm run test:unit:coverage`: the new file must
-   be ≥90% lines at birth for P1 pure cores (precedent: `board-scope.ts`
-   100%, `moves.ts` 97.44%) and ≥80% for P2 modules; total web line coverage
-   may not drop. Re-measure the per-file table in `docs/TESTING.md` §2 when a
+    be ≥90% lines at birth for P1 pure cores (precedent: `board-scope.ts`
+    100%, `moves.ts` 100% post-Phase 1) and ≥80% for P2 modules; total web line coverage
+    may not drop. Caveat: on type-heavy files the Node-26 + jiti line-mapping
+    artifact can print a line % below 90 even though raw V8 hit data shows full
+    execution — `columns.ts`/`keyboard.ts` are the Phase 1 instances; judge such
+    files on V8-truth and document it (`docs/TESTING.md` §2 footnote).
+    Re-measure the per-file table in `docs/TESTING.md` §2 when a
    phase lands and update it with the date. If `app.ts` crosses below the §6
    cap, remove its allowlist entry in the same commit that made it happen.
 8. **Commit shape.** One concern = one PR: `[move] <concern> → <target>` (the
