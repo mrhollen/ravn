@@ -11,6 +11,7 @@ import { boardFromTaskList } from "./board-scope";
 import { acDoneCount as acDoneFor, acProgressLabel as acProgressLabelFor, acRingInner as acRingFor, completedLabel as acCompletedLabelFor } from "./ac-math";
 import { clearStoredSession, loadStoredSession, normalizeIdentity, storeSession } from "./identity";
 import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
+import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
 import {
   beginMove,
   canMove,
@@ -5770,28 +5771,26 @@ export function ravnApp() {
     handleGlobalKeydown(e: KeyboardEvent): void {
       if (!e) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isEditableTarget(e.target as HTMLElement | null)) return;
 
-      const target = e.target as HTMLElement | null;
-      if (target) {
-        const tag = target.tagName ? target.tagName.toLowerCase() : "";
-        if (tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable) {
-          return;
-        }
-      }
-
-      if (e.key === "n" || e.key === "N") {
-        if (!this.showNewTask && !this.showProjectSettings && !this.showShortcutHelp) {
-          e.preventDefault();
-          this.openNewTask("todo");
-        }
-      } else if (e.key === "/") {
+      // Dispatch table in src/keyboard.ts; this root keeps the DOM focus and
+      // surface-toggle steps.
+      const action = globalKeyAction(e.key, {
+        showNewTask: this.showNewTask,
+        showProjectSettings: this.showProjectSettings,
+        showShortcutHelp: this.showShortcutHelp,
+      });
+      if (action === "new-task") {
+        e.preventDefault();
+        this.openNewTask("todo");
+      } else if (action === "focus-search") {
         e.preventDefault();
         const searchInput = document.querySelector('input[x-model="filterSearch"]') as HTMLInputElement | null;
         if (searchInput) {
           searchInput.focus();
           searchInput.select();
         }
-      } else if (e.key === "?") {
+      } else if (action === "toggle-help") {
         e.preventDefault();
         this.showShortcutHelp = !this.showShortcutHelp;
       }
@@ -5799,47 +5798,113 @@ export function ravnApp() {
 
     /** Escape key: close the top-most overlay or cancel edit mode. Dirty
      *  surfaces (task edit, new task, project settings) confirm first via
-     *  confirmDiscard() — Escape never silently discards a draft. */
+     *  confirmDiscard() — Escape never silently discards a draft. The priority
+     *  ORDER of the cascade lives in src/keyboard.ts (escapeAction); this root
+     *  keeps each surface's imperative close step. */
     dismissTop(): void {
-      if (this.showShortcutHelp) this.showShortcutHelp = false;
-      else if (this.previewModal && this.previewModal.open) this.closeImagePreview();
-      else if (this.unsavedNotesAction) this.cancelUnsavedNotes(); // Escape = "keep editing"
-      else if (this.showAuthModal) this.closeAuthModal();
-      else if (this.showProjectSettings) {
-        if (this.showArchiveConfirm) this.cancelArchiveConfirm();
-        else this.requestCloseProjectSettings();
-      }
-      else if (this.editingAcSeq !== 0) this.cancelEditingAc();
-      else if (this.editingTask) {
-        // The edit form is the topmost surface inside the drawer: a dirty
-        // draft must be confirmed BEFORE Escape exits edit mode.
-        if (!this.discardEditDraftIfConfirmed()) return;
-        this.cancelEditing();
-      }
-      else if (this.showTaskOpenCodeConfig) this.showTaskOpenCodeConfig = false;
-      else if (this.statusMenuOpen) this.statusMenuOpen = false;
-      else if (this.ownerPopoverOpen) this.ownerPopoverOpen = false;
-      else if (this.priorityPopoverOpen) this.priorityPopoverOpen = false;
-      else if (this.duePopoverOpen) this.duePopoverOpen = false;
-      else if (this.batchMoveMenuOpen || this.batchPriorityMenuOpen || this.batchAssignMenuOpen) {
-        // Batch dropdowns sit in the board layer: a first Escape closes just
-        // the open menu — it never touches the selection itself.
-        this._closeBatchMenus();
-      }
-      else if (this.detailOpen) this.requestCloseDetail();
-      else if (this.showNewTask) {
-        if (this.confirmNewTaskDiscard) this.cancelNewTaskConfirm();
-        else this.requestCloseNewTask();
-      }
-      else if (this.projectMenuOpen) this.closeProjectMenu(true); // header dropdowns are topmost
-      else if (this.headerMenuOpen) this.closeHeaderMenu(true);
-      else if (this.showNewProject) this.showNewProject = false;
-      else if (this.cardMenuTaskId) this.cardMenuTaskId = null;
-      else if (this.showMobileMenu) this.showMobileMenu = false;
-      else if (this.selectedTaskIds.size > 0) {
-        // AC4: last-resort Escape clears the multi-selection — only reached
-        // when every other surface (drawer, dialogs, menus) is already closed.
-        this.clearSelection();
+      const act = escapeAction({
+        showShortcutHelp: this.showShortcutHelp,
+        imagePreviewOpen: Boolean(this.previewModal?.open),
+        unsavedNotesPending: Boolean(this.unsavedNotesAction),
+        showAuthModal: this.showAuthModal,
+        showProjectSettings: this.showProjectSettings,
+        showArchiveConfirm: this.showArchiveConfirm,
+        editingAcActive: this.editingAcSeq !== 0,
+        editingTaskActive: Boolean(this.editingTask),
+        showTaskOpenCodeConfig: this.showTaskOpenCodeConfig,
+        statusMenuOpen: this.statusMenuOpen,
+        ownerPopoverOpen: this.ownerPopoverOpen,
+        priorityPopoverOpen: this.priorityPopoverOpen,
+        duePopoverOpen: this.duePopoverOpen,
+        batchMenusOpen: Boolean(this.batchMoveMenuOpen || this.batchPriorityMenuOpen || this.batchAssignMenuOpen),
+        detailOpen: this.detailOpen,
+        showNewTask: this.showNewTask,
+        confirmNewTaskDiscard: this.confirmNewTaskDiscard,
+        projectMenuOpen: this.projectMenuOpen,
+        headerMenuOpen: this.headerMenuOpen,
+        showNewProject: this.showNewProject,
+        cardMenuOpen: Boolean(this.cardMenuTaskId),
+        showMobileMenu: this.showMobileMenu,
+        hasSelection: this.selectedTaskIds.size > 0,
+      });
+      if (!act) return;
+      switch (act) {
+        case "close-help":
+          this.showShortcutHelp = false;
+          break;
+        case "close-preview":
+          this.closeImagePreview();
+          break;
+        case "keep-editing-notes":
+          this.cancelUnsavedNotes(); // Escape = "keep editing"
+          break;
+        case "close-auth":
+          this.closeAuthModal();
+          break;
+        case "cancel-archive-confirm":
+          this.cancelArchiveConfirm();
+          break;
+        case "request-close-settings":
+          this.requestCloseProjectSettings();
+          break;
+        case "cancel-ac-edit":
+          this.cancelEditingAc();
+          break;
+        case "cancel-task-edit":
+          // The edit form is the topmost surface inside the drawer: a dirty
+          // draft must be confirmed BEFORE Escape exits edit mode.
+          if (!this.discardEditDraftIfConfirmed()) return;
+          this.cancelEditing();
+          break;
+        case "close-open-code-config":
+          this.showTaskOpenCodeConfig = false;
+          break;
+        case "close-status-menu":
+          this.statusMenuOpen = false;
+          break;
+        case "close-owner-popover":
+          this.ownerPopoverOpen = false;
+          break;
+        case "close-priority-popover":
+          this.priorityPopoverOpen = false;
+          break;
+        case "close-due-popover":
+          this.duePopoverOpen = false;
+          break;
+        case "close-batch-menus":
+          // Batch dropdowns sit in the board layer: a first Escape closes just
+          // the open menu — it never touches the selection itself.
+          this._closeBatchMenus();
+          break;
+        case "close-detail":
+          this.requestCloseDetail();
+          break;
+        case "cancel-new-task-confirm":
+          this.cancelNewTaskConfirm();
+          break;
+        case "request-close-new-task":
+          this.requestCloseNewTask();
+          break;
+        case "close-project-menu":
+          this.closeProjectMenu(true); // header dropdowns are topmost
+          break;
+        case "close-header-menu":
+          this.closeHeaderMenu(true);
+          break;
+        case "close-new-project":
+          this.showNewProject = false;
+          break;
+        case "close-card-menu":
+          this.cardMenuTaskId = null;
+          break;
+        case "close-mobile-menu":
+          this.showMobileMenu = false;
+          break;
+        case "clear-selection":
+          // AC4: last-resort Escape clears the multi-selection — only reached
+          // when every other surface (drawer, dialogs, menus) is already closed.
+          this.clearSelection();
+          break;
       }
     },
 
