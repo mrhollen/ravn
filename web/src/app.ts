@@ -25,7 +25,6 @@ import {
   persistSort,
   readStoredHoistParents,
   readStoredSort,
-  sortColumnTasks,
   type SortKey,
 } from "./sort";
 import {
@@ -36,6 +35,13 @@ import {
   taskRoutePath,
   type BoardQueryParams,
 } from "./routes";
+import {
+  attentionBadgeKind as badgeKindFor,
+  countStalledExpired,
+  hasAnyFilter,
+  isDescriptionNotesMatch as descNotesMatchFor,
+} from "./filters";
+import { visibleColumns, type ColumnView } from "./columns";
 import type {
   AcRow,
   ActorInput,
@@ -76,11 +82,8 @@ import {
   formatClaimCountdown,
   isClaimExpired,
   isOverdue,
-  isStalledExpired,
-  localCalendarToday,
   initials,
   isTextArtifact,
-  needsAttention,
   parseChecklistText,
   priorityClass,
   priorityName,
@@ -2412,11 +2415,7 @@ export function ravnApp() {
      *  card ONLY via description/notes — its title and id do NOT contain the
      *  substring (cards whose title/id already match show no chip). */
     isDescriptionNotesMatch(task: TaskSummary): boolean {
-      const q = (this.filterSearch ?? "").trim().toLowerCase();
-      if (!q) return false;
-      if (task.title.toLowerCase().includes(q)) return false;
-      if (task.id.toLowerCase().includes(q)) return false;
-      return this._fullTextMatchIds.has(task.id);
+      return descNotesMatchFor(task, this.filterSearch ?? "", this._fullTextMatchIds);
     },
 
     availableAssignees(): string[] {
@@ -2434,15 +2433,15 @@ export function ravnApp() {
     },
 
     hasActiveFilters(): boolean {
-      return (
-        this.filterPriority !== "" ||
-        this.filterAssignee !== "" ||
-        this.filterUnblocked ||
-        this.filterStalled ||
-        this.filterNeedsAttention ||
-        this.filterDue !== "" ||
-        this.filterSearch.trim() !== ""
-      );
+      return hasAnyFilter({
+        priority: this.filterPriority,
+        assignee: this.filterAssignee,
+        unblockedOnly: this.filterUnblocked,
+        stalled: this.filterStalled,
+        needsAttention: this.filterNeedsAttention,
+        due: this.filterDue,
+        search: this.filterSearch,
+      });
     },
 
     clearFilters(): void {
@@ -2468,11 +2467,7 @@ export function ravnApp() {
     stalledExpiredCount(): number {
       const b = this.board;
       if (!b) return 0;
-      let n = 0;
-      for (const t of b.tasks.doing ?? []) {
-        if (isStalledExpired(t, this.nowTick)) n++;
-      }
-      return n;
+      return countStalledExpired(b.tasks.doing ?? [], this.nowTick);
     },
 
     /** Accessible title/label for the toolbar alert pill: "N abandoned/stalled
@@ -2496,8 +2491,7 @@ export function ravnApp() {
      *  tasks, routine kinds (progress/note/decision) and no-comment threads
      *  never badge. Drives the card-question-badge / card-handoff-badge spans. */
     attentionBadgeKind(task: TaskSummary): "question" | "handoff" | null {
-      if (!needsAttention(task)) return null;
-      return task.last_comment_kind === "question" ? "question" : "handoff";
+      return badgeKindFor(task);
     },
 
     // -------------------------------------------------------- URL query sync
@@ -2694,105 +2688,34 @@ export function ravnApp() {
       return "bg-zinc-100 text-zinc-600 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700";
     },
 
-    columns(): { status: Status; label: string; tasks: TaskSummary[]; totalCount: number }[] {
+    columns(): ColumnView[] {
       const b = this.board;
       // "Show archived" swaps the DATA SOURCE only (same client filters, same
       // sort): live board rows vs the separately-fetched archived rows. The two
       // sets are disjoint server-side, so no per-row archival check is needed.
       const archived = this.archivedColumns();
-      return STATUSES.map((s) => {
-        let tasks = archived ? archived[s] : (b ? b.tasks[s] ?? [] : []);
-        if (this.filterPriority !== "") {
-          const p = Number(this.filterPriority);
-          tasks = tasks.filter((t) => t.priority === p);
-        }
-        if (this.filterAssignee === "unassigned") {
-          tasks = tasks.filter((t) => !t.assignee || !t.assignee.name);
-        } else if (this.filterAssignee !== "") {
-          const name = this.filterAssignee.toLowerCase();
-          tasks = tasks.filter((t) => t.assignee?.name.toLowerCase() === name);
-        }
-        if (this.filterUnblocked) {
-          tasks = tasks.filter((t) => !this.isBlocked(t.id));
-        }
-        // Expired/stalled (epic 01M5XSNR8VWZTP66GT7ABNSJC1): restrict the board
-        // to doing tasks with a lapsed claim lease or no update in > 60 min.
-        // nowTick-driven, so the visible set re-evaluates live each second —
-        // exactly like the alert pill's count (stalledExpiredCount()).
-        if (this.filterStalled) {
-          tasks = tasks.filter((t) => isStalledExpired(t, this.nowTick));
-        }
-        // Needs attention (epic child 01M5XTAYKJGP878ZEZB7TJW4ZB): restrict the
-        // board to OPEN tasks whose newest comment is a `question` (awaiting a
-        // human answer) or `handoff` (awaiting review). AND-composed with every
-        // other active filter, exactly like stalled/unblocked — done tasks are
-        // never kept by this predicate.
-        if (this.filterNeedsAttention) {
-          tasks = tasks.filter((t) => needsAttention(t));
-        }
-        // Calendar-day comparisons (due dates are days, not instants): "YYYY-MM-DD"
-        // sorts lexicographically, so ranges are plain string compares. This keeps
-        // the filters TZ-stable and stops past-due tasks leaking into "today".
-        if (this.filterDue === "overdue") {
-          tasks = tasks.filter((t) => isOverdue(t));
-        } else if (this.filterDue === "today" || this.filterDue === "week") {
-          const today = localCalendarToday();
-          const weekEnd = new Date();
-          weekEnd.setDate(weekEnd.getDate() + 7);
-          const endExclusive = `${weekEnd.getFullYear()}-${String(weekEnd.getMonth() + 1).padStart(2, "0")}-${String(weekEnd.getDate()).padStart(2, "0")}`;
-          tasks = tasks.filter((t) => {
-            if (!t.due_at || t.status === "done") return false;
-            const due = dueCalendarDate(t.due_at);
-            if (!due) return false;
-            if (this.filterDue === "today") return due === today;
-            return due >= today && due < endExclusive;
-          });
-        }
-        // Search: instant local title/id substring match UNION the debounced
-        // server-side full-text matches (_fullTextMatchIds — description/notes
-        // hits, which the client never sees in the board snapshot). The union
-        // is what keeps a card whose TITLE doesn't contain the term but whose
-        // description or notes do visible while typing (AC1).
-        const q = this.filterSearch.trim().toLowerCase();
-        if (q) {
-          tasks = tasks.filter(
-            (t) =>
-              t.title.toLowerCase().includes(q) ||
-              t.id.toLowerCase().includes(q) ||
-              this._fullTextMatchIds.has(t.id),
-          );
-        }
-        // Client-side sort: re-applied on every render, so SSE/poll refreshes
-        // keep the user's ordering without fighting live updates. The sort +
-        // parent-hoist pass lives in src/sort.ts (Phase 1) — it returns copies
-        // and never mutates the board arrays the optimistic-move code owns; with
-        // hoistParents ON (default) parents float to the top of their column, and
-        // under "Server order" Done still orders newest-first.
-        tasks = sortColumnTasks(tasks, s, this.sortKey, this.sortDir, this.hoistParents);
-
-        // Done-column pagination cap — BYPASSED while a search is active so a
-        // matched done task can never hide behind the "20 most recent" cut
-        // (AC integration requirement). doneLimit itself is untouched: clearing
-        // the search naturally restores the normal cap (whatever the user had
-        // expanded it to beforehand). The header count pill reads totalCount —
-        // the FULL post-filter count either way — so it stays accurate.
-        const totalCount = tasks.length;
-        // Bypassed while a search is active: see comment above. ALSO bypassed in
-        // the archived view: archived sets are small, that mode has no
-        // "show more" affordance, and capping would silently hide rows.
-        const searching = q !== "";
-        const renderedTasks =
-          s === "done" && !searching && !this.showArchived && totalCount > this.doneLimit
-            ? tasks.slice(0, this.doneLimit)
-            : tasks;
-
-        return {
-          status: s,
-          label: STATUS_LABEL[s],
-          tasks: renderedTasks,
-          totalCount,
-        };
-      });
+      return visibleColumns(
+        (s) => (archived ? archived[s] : b ? b.tasks[s] ?? [] : []),
+        {
+          priority: this.filterPriority,
+          assignee: this.filterAssignee,
+          unblockedOnly: this.filterUnblocked,
+          stalled: this.filterStalled,
+          needsAttention: this.filterNeedsAttention,
+          due: this.filterDue,
+          search: this.filterSearch,
+          nowTick: this.nowTick,
+          isBlocked: (id) => this.isBlocked(id),
+          fullTextMatchIds: this._fullTextMatchIds,
+        },
+        {
+          hoistParents: this.hoistParents,
+          sortKey: this.sortKey,
+          sortDir: this.sortDir,
+          doneLimit: this.doneLimit,
+          showArchived: this.showArchived,
+        },
+      );
     },
 
     selectProject(): void {
