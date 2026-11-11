@@ -17,6 +17,18 @@ import { MEMBER_ROLES, canManageRoster, memberMutationErrorCopy, normalizeRoster
 import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
 import { dispatchRealtimeEvent, KNOWN_REALTIME_KINDS } from "./realtime";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
+import {
+  DEFAULT_SORT_DIR,
+  SORT_OPTIONS,
+  isSortKey,
+  persistHoistParents,
+  persistSort,
+  readStoredHoistParents,
+  readStoredSort,
+  sortColumnTasks,
+  type SortDir,
+  type SortKey,
+} from "./sort";
 import type {
   AcRow,
   ActorInput,
@@ -78,11 +90,11 @@ import {
 // main.ts) intact until P2 switches consumers to direct module imports.
 export { LS_THEME } from "./theme";
 export type { ThemeMode } from "./theme";
+export { LS_HOIST_PARENTS, LS_SORT, SORT_OPTIONS, isSortKey } from "./sort";
+export type { SortDir, SortKey } from "./sort";
 
 export const LS_ACTOR = "ravn.actor";
 export const LS_PROJECT = "ravn.project";
-export const LS_SORT = "ravn.sort";
-export const LS_HOIST_PARENTS = "ravn.hoist_parents";
 export const LS_CARD_DENSITY = "ravn.card_density";
 /** Persisted per-actor board scope (epic T7); "all" means no mine filter. */
 export const LS_TASK_SCOPE = "ravn.task_scope";
@@ -242,60 +254,6 @@ const MD_CACHE_MAX = 500;
 // Max visual card offset (px) while swiping. Commit/slop thresholds still use
 // the raw finger displacement — this clamp only limits what is drawn.
 const MAX_SWIPE_PX = 96;
-
-// ---------------------------------------------------------------- client-side sort
-/** Sort criteria for the board columns. "" = canonical server order (no sort). */
-export type SortKey = "" | "updated_at" | "created_at" | "due_at" | "priority" | "title";
-export type SortDir = "asc" | "desc";
-
-export const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-  { value: "", label: "Server order (default)" },
-  { value: "updated_at", label: "Last Modified" },
-  { value: "created_at", label: "Created At" },
-  { value: "due_at", label: "Due Date" },
-  { value: "priority", label: "Priority" },
-  { value: "title", label: "Title (A→Z)" },
-];
-
-/** Sensible initial direction per criterion, applied when the user picks a new key. */
-const DEFAULT_SORT_DIR: Record<Exclude<SortKey, "">, SortDir> = {
-  updated_at: "desc", // newest first
-  created_at: "desc", // newest first
-  due_at: "asc", // nearest first
-  priority: "asc", // P0 (urgent) first
-  title: "asc", // alphabetical
-};
-
-export function isSortKey(v: unknown): v is SortKey {
-  return typeof v === "string" && SORT_OPTIONS.some((o) => o.value === v);
-}
-
-/** Read the persisted sort choice; anything malformed falls back to no sort. */
-function readStoredSort(): { key: SortKey; dir: SortDir } {
-  try {
-    const raw = safeStorage.getItem(LS_SORT);
-    if (!raw) return { key: "", dir: "desc" };
-    const parsed = JSON.parse(raw) as { key?: unknown; dir?: unknown };
-    const key: SortKey = isSortKey(parsed.key) ? parsed.key : "";
-    const dir: SortDir = parsed.dir === "asc" ? "asc" : "desc";
-    return { key, dir };
-  } catch {
-    return { key: "", dir: "desc" };
-  }
-}
-
-/** Read the persisted hoist-parents preference; missing or malformed values
- *  fall back to ON — new users get parent hoisting by default. */
-function readStoredHoistParents(): boolean {
-  try {
-    const raw = safeStorage.getItem(LS_HOIST_PARENTS);
-    if (raw === null) return true;
-    const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === "boolean" ? parsed : true;
-  } catch {
-    return true;
-  }
-}
 
 // ------------------------------------------------------------- card density
 export type CardDensity = "comfortable" | "compact";
@@ -511,44 +469,6 @@ function copyViaExecCommand(text: string): boolean {
     ta.remove();
   }
   return ok;
-}
-
-/** Comparator for one criterion + direction. Ties always break by id (ascending)
- *  so the order is deterministic regardless of direction. */
-function compareTasks(a: TaskSummary, b: TaskSummary, key: SortKey, dir: SortDir): number {
-  let cmp = 0;
-  switch (key) {
-    case "priority":
-      cmp = a.priority - b.priority;
-      break;
-    case "title":
-      cmp = a.title.localeCompare(b.title, undefined, { sensitivity: "base", numeric: true });
-      break;
-    case "due_at": {
-      // No due date sorts last (mirrors the server's nulls-last convention).
-      const da = a.due_at ? Date.parse(a.due_at) : Infinity;
-      const db = b.due_at ? Date.parse(b.due_at) : Infinity;
-      cmp = da === db ? 0 : da < db ? -1 : 1;
-      break;
-    }
-    case "created_at":
-    case "updated_at": {
-      const va = Date.parse(a[key]);
-      const vb = Date.parse(b[key]);
-      cmp = Number.isNaN(va) || Number.isNaN(vb) ? 0 : va - vb;
-      break;
-    }
-    default:
-      return a.id.localeCompare(b.id);
-  }
-  if (cmp === 0) return a.id.localeCompare(b.id);
-  return dir === "asc" ? cmp : -cmp;
-}
-
-/** A card is a "parent" when the board snapshot reports at least one child
- *  task on it (subtask_total is only present/populated for parents). */
-function isParentTask(task: TaskSummary): boolean {
-  return (task.subtask_total ?? 0) > 0;
 }
 
 /** NAMED-event listener registrations kept for backward compatibility with
@@ -1883,11 +1803,7 @@ export function ravnApp() {
 
     toggleHoistParents(): void {
       this.hoistParents = !this.hoistParents;
-      try {
-        safeStorage.setItem(LS_HOIST_PARENTS, JSON.stringify(this.hoistParents));
-      } catch {
-        /* private mode — non-fatal */
-      }
+      persistHoistParents(this.hoistParents);
     },
 
     /** Change handler: x-model has already written the raw value into sortKey;
@@ -1915,11 +1831,7 @@ export function ravnApp() {
     },
 
     saveSort(): void {
-      try {
-        safeStorage.setItem(LS_SORT, JSON.stringify({ key: this.sortKey, dir: this.sortDir }));
-      } catch {
-        /* private mode — non-fatal */
-      }
+      persistSort(this.sortKey, this.sortDir);
     },
 
     activeSortLabel(): string {
@@ -2989,35 +2901,12 @@ export function ravnApp() {
           );
         }
         // Client-side sort: re-applied on every render, so SSE/poll refreshes
-        // keep the user's ordering without fighting live updates. Copies —
-        // never mutates the board arrays the optimistic-move code owns. With
-        // hoistParents ON (default) parent cards float to the top of the column
-        // regardless of the sort: each group is ordered with the same active
-        // key/direction, and under "Server order" (sortKey "") both groups keep
-        // their original relative order (except Done, which orders newest-first).
-        const cmpDone = (a: TaskSummary, b: TaskSummary) => {
-          const timeA = (a as any).completed_at || a.updated_at || a.created_at || "";
-          const timeB = (b as any).completed_at || b.updated_at || b.created_at || "";
-          return timeB.localeCompare(timeA);
-        };
-
-        if (this.hoistParents) {
-          const parents = tasks.filter((t) => isParentTask(t));
-          const rest = tasks.filter((t) => !isParentTask(t));
-          if (this.sortKey !== "") {
-            const cmp = (a: TaskSummary, b: TaskSummary) => compareTasks(a, b, this.sortKey, this.sortDir);
-            parents.sort(cmp); // filter() copies — sorting in place is safe
-            rest.sort(cmp);
-          } else if (s === "done") {
-            parents.sort(cmpDone);
-            rest.sort(cmpDone);
-          }
-          tasks = [...parents, ...rest];
-        } else if (this.sortKey !== "") {
-          tasks = [...tasks].sort((a, b) => compareTasks(a, b, this.sortKey, this.sortDir));
-        } else if (s === "done") {
-          tasks = [...tasks].sort(cmpDone);
-        }
+        // keep the user's ordering without fighting live updates. The sort +
+        // parent-hoist pass lives in src/sort.ts (Phase 1) — it returns copies
+        // and never mutates the board arrays the optimistic-move code owns; with
+        // hoistParents ON (default) parents float to the top of their column, and
+        // under "Server order" Done still orders newest-first.
+        tasks = sortColumnTasks(tasks, s, this.sortKey, this.sortDir, this.hoistParents);
 
         // Done-column pagination cap — BYPASSED while a search is active so a
         // matched done task can never hide behind the "20 most recent" cut
