@@ -8,9 +8,25 @@
 
 import { ApiError, api, errMsg, LS_TOKEN, setApiTimeoutMsForTests } from "./api";
 import { boardFromTaskList } from "./board-scope";
+import { acDoneCount as acDoneFor, acProgressLabel as acProgressLabelFor, acRingInner as acRingFor, completedLabel as acCompletedLabelFor } from "./ac-math";
 import { clearStoredSession, loadStoredSession, normalizeIdentity, storeSession } from "./identity";
 import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
-import { beginMove, canMove, endMove, friendlyTransitionError, MOVE_TIMEOUT_MS, MoveTimedOutError, withTimeout } from "./moves";
+import {
+  beginMove,
+  canMove,
+  committedSwipeDirection,
+  dropAllowed,
+  endMove,
+  friendlyTransitionError,
+  illegalMoveMessage,
+  MOVE_TIMEOUT_MS,
+  MoveTimedOutError,
+  swipeActivated,
+  swipeDirection as swipeDirFor,
+  swipeTargetLabel as swipeLabelFor,
+  swipeTargetStatus,
+  withTimeout,
+} from "./moves";
 import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
 import { renderMarkdown } from "./md";
 import { MEMBER_ROLES, canManageRoster, memberMutationErrorCopy, normalizeRoster } from "./members";
@@ -4248,7 +4264,7 @@ export function ravnApp() {
      *  (False while nothing legal is known — grey-out styling for illegal
      *  columns reads this. The transition map itself lives in moves.ts.) */
     dragTargetLegal(status: Status): boolean {
-      return this.draggedFromStatus ? canMove(this.draggedFromStatus, status) : true;
+      return dropAllowed(this.draggedFromStatus, status);
     },
 
     onDragStart(e: DragEvent, task: TaskSummary, fromStatus: Status): void {
@@ -4327,7 +4343,7 @@ export function ravnApp() {
       // Belt-and-braces with the dragover guard: a drop on an illegal target
       // is ignored (with feedback), never sent to the server.
       if (!canMove(fromStatus, targetStatus)) {
-        this.toast(`Can't move ${statusLabel(fromStatus)} → ${statusLabel(targetStatus)} — that's not an allowed step.`, "info");
+        this.toast(illegalMoveMessage(fromStatus, targetStatus), "info");
         return;
       }
       await this.moveTaskStatus(taskId, targetStatus);
@@ -4379,16 +4395,11 @@ export function ravnApp() {
     },
 
     swipeDirection(id: string): "right" | "left" {
-      return this.swiping(id) && this.swipeState.dx < 0 ? "left" : "right";
+      return swipeDirFor(this.swiping(id), this.swipeState.dx);
     },
 
     swipeTargetLabel(id: string): string {
-      const from = this.swipeState.fromStatus;
-      if (!from) return "";
-      const idx = STATUSES.indexOf(from);
-      const target =
-        this.swipeDirection(id) === "right" ? STATUSES[idx + 1] : STATUSES[idx - 1];
-      return target ? statusLabel(target) : "";
+      return swipeLabelFor(this.swipeState.fromStatus, this.swipeDirection(id));
     },
 
     onCardTouchStart(e: TouchEvent, task: TaskSummary): void {
@@ -4414,7 +4425,7 @@ export function ravnApp() {
       const dx = t.clientX - s.startX;
       const dy = t.clientY - s.startY;
       // Activate once movement is clearly horizontal (past slop, vs vertical).
-      if (!s.active && Math.abs(dx) > 24 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+      if (!s.active && swipeActivated(dx, dy)) {
         s.active = true;
       }
       if (s.active) {
@@ -4434,15 +4445,14 @@ export function ravnApp() {
       const dx = endX - s.startX;
       this.swipeState = { id: null, startX: 0, startY: 0, dx: 0, fromStatus: null, active: false };
       if (!s.active || !s.fromStatus) return;
-      const idx = STATUSES.indexOf(s.fromStatus);
-      const target: Status | null =
-        dx > 48 ? (STATUSES[idx + 1] ?? null) : dx < -48 ? (STATUSES[idx - 1] ?? null) : null;
+      const dir = committedSwipeDirection(dx);
+      const target = dir ? swipeTargetStatus(s.fromStatus, dir) : null;
       if (!target) return;
       // Swipes move exactly one column at a time. The only adjacent pair that
       // the domain transition map rejects is done → doing (left-swipe on a Done
       // card); refuse it with feedback instead of hitting the 400 + rollback.
       if (!canMove(s.fromStatus, target)) {
-        this.toast(`Can't move ${statusLabel(s.fromStatus)} → ${statusLabel(target)} — that's not an allowed step.`, "info");
+        this.toast(illegalMoveMessage(s.fromStatus, target), "info");
         return;
       }
       void this.moveTaskStatus(task.id, target);
@@ -4972,45 +4982,20 @@ export function ravnApp() {
     },
 
     acDoneCount(): number {
-      return this.detail ? this.detail.acceptance_criteria.filter((a) => a.done).length : 0;
+      return acDoneFor(this.detail?.acceptance_criteria ?? []);
     },
 
-    /** One SVG <circle> per criterion for the AC progress ring. Each sits on a
-     *  100-unit circle (r = 15.915 in a 36x36 viewBox), so dash/offset map
-     *  straight onto stroke-dasharray/stroke-dashoffset. Done slots fill, open
-     *  ones stay hollow; the inter-slot gap shrinks as N grows so many criteria
-     *  still read as distinct segments. Returned as a string (not x-for) because
-     *  Alpine's x-for cannot anchor nodes inside inline SVG. Only numeric values
-     *  and two fixed class tokens are interpolated — no user text — so this is
-     *  safe to pass to :innerHTML on the <g>. */
+    /** AC progress ring inner SVG (geometry + slot math in src/ac-math.ts). */
     acRingInner(): string {
-      const acs = this.detail ? this.detail.acceptance_criteria : [];
-      const n = acs.length;
-      if (n === 0) return "";
-      const slot = 100 / n;
-      const gap = n > 1 ? Math.min(2, slot * 0.35) : 0;
-      const dash = Math.max(slot - gap, 0.5);
-      return acs
-        .map((ac, i) => {
-          const cls = ac.done ? "stroke-emerald-500" : "stroke-zinc-300 dark:stroke-zinc-600";
-          return (
-            `<circle cx="18" cy="18" r="15.915" fill="none" stroke-width="6" ` +
-            `class="${cls}" stroke-dasharray="${dash.toFixed(3)} ${(100 - dash).toFixed(3)}" ` +
-            `stroke-dashoffset="${(-i * slot).toFixed(3)}"></circle>`
-          );
-        })
-        .join("");
+      return acRingFor(this.detail?.acceptance_criteria ?? []);
     },
 
     acProgressLabel(): string {
-      const total = this.detail ? this.detail.acceptance_criteria.length : 0;
-      return `${this.acDoneCount()} of ${total} acceptance criteria complete`;
+      return acProgressLabelFor(this.detail?.acceptance_criteria ?? []);
     },
 
     completedLabel(ac: AcRow): string {
-      const who = ac.completed_by ? actorLabel(ac.completed_by) : "unknown";
-      const when = ac.completed_at ? relTime(ac.completed_at) : "";
-      return `${who}${when ? ` · ${when}` : ""}`;
+      return acCompletedLabelFor(ac);
     },
 
     // ----------------------------------------------------------------- comments

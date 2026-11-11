@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { beginMove, canMove, endMove, friendlyTransitionError, legalTargets, withTimeout } from "../src/moves.ts";
+import {
+  beginMove,
+ canMove, committedSwipeDirection, dropAllowed, endMove,
+  friendlyTransitionError, illegalMoveMessage, legalTargets,
+  SWIPE_COMMIT_PX, SWIPE_DOMINANCE_RATIO, SWIPE_SLOP_PX, swipeActivated,
+  swipeDirection, swipeTargetLabel, swipeTargetStatus, withTimeout,
+} from "../src/moves.ts";
 
 test("Moves: beginMove allows a task, then blocks a DUPLICATE of the same id only", () => {
   const busy = new Set<string>();
@@ -122,4 +128,59 @@ test("Moves: friendlyTransitionError maps the server's ErrInvalid message to a f
   assert.equal(friendlyTransitionError(new TypeError("fetch failed")), null);
   assert.equal(friendlyTransitionError(null), null);
   assert.equal(friendlyTransitionError("cannot transition status from \"todo\" to \"done\""), null, "non-Error values are not interpreted");
+});
+
+// ------------------------------------------------------------- drag + swipe decisions
+test("dropAllowed: null source is always legal; otherwise the transition map decides", () => {
+  assert.equal(dropAllowed(null, "doing"), true); // no drag started → nothing greyed
+  assert.equal(dropAllowed("todo", "doing"), true);
+  assert.equal(dropAllowed("todo", "done"), false); // skips a step
+  assert.equal(dropAllowed("bogus", "doing"), false); // unknown fails closed
+});
+
+test("illegalMoveMessage: exact shared wording (drag + swipe)", () => {
+  assert.equal(illegalMoveMessage("todo", "done"), `Can't move To Do → Done — that's not an allowed step.`);
+});
+
+test("swipeDirection: left only for an active gesture pulling leftward", () => {
+  assert.equal(swipeDirection(false, -100), "right"); // inactive → right (idle look)
+  assert.equal(swipeDirection(true, -1), "left");
+  assert.equal(swipeDirection(true, 0), "right");
+  assert.equal(swipeDirection(true, 50), "right");
+});
+
+test("swipeTargetStatus: exactly one adjacent column; null at either end", () => {
+  assert.equal(swipeTargetStatus("todo", "right"), "doing");
+  assert.equal(swipeTargetStatus("doing", "right"), "done");
+  assert.equal(swipeTargetStatus("doing", "left"), "todo");
+  assert.equal(swipeTargetStatus("done", "right"), null); // past the end
+  assert.equal(swipeTargetStatus("todo", "left"), null); // before the start
+  assert.equal(swipeTargetStatus(null, "right"), null); // no source known
+});
+
+test("swipeTargetLabel: statusLabel of the adjacent column, '' when none", () => {
+  assert.equal(swipeTargetLabel("todo", "right"), "Doing");
+  assert.equal(swipeTargetLabel("done", "left"), "Doing"); // done → doing is labelled; canMove still vetoes it
+  assert.equal(swipeTargetLabel("done", "right"), "");
+  assert.equal(swipeTargetLabel(null, "left"), "");
+});
+
+test("swipeActivated: past slop AND dominant over vertical (strict >)", () => {
+  assert.equal(SWIPE_SLOP_PX, 24);
+  assert.equal(SWIPE_DOMINANCE_RATIO, 1.5);
+  assert.equal(swipeActivated(25, 0), true); // just past slop
+  assert.equal(swipeActivated(24, 0), false); // at the slop — not past it
+  assert.equal(swipeActivated(-25, 0), true); // leftward counts too
+  assert.equal(swipeActivated(30, 10), true); // horizontal-dominant
+  assert.equal(swipeActivated(30, 20), false); // 30 > 30 is false — diagonal not dominant
+  assert.equal(swipeActivated(0, 100), false); // pure vertical scroll
+});
+
+test("committedSwipeDirection: clears the commit threshold on release (strict >)", () => {
+  assert.equal(SWIPE_COMMIT_PX, 48);
+  assert.equal(committedSwipeDirection(49), "right");
+  assert.equal(committedSwipeDirection(48), null); // at the threshold — no move
+  assert.equal(committedSwipeDirection(-49), "left");
+  assert.equal(committedSwipeDirection(-48), null);
+  assert.equal(committedSwipeDirection(0), null);
 });

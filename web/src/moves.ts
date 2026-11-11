@@ -11,6 +11,7 @@
 //     sites only — the general missing fetch timeout in api.ts is tracked
 //     separately (task 01M3MMYBHECPH5Z5FRHJDS5G4J) and stays out of scope here.
 
+import { STATUSES } from "./types";
 import type { Status } from "./types";
 import { statusLabel } from "./util";
 
@@ -114,4 +115,66 @@ export async function withTimeout<T>(
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ------------------------------------------------------------------ drag + swipe decisions
+// Pure drop/swipe DECISIONS shared by HTML5 drag-and-drop and the touch
+// swipe-to-status gesture (both funnel into app.ts's moveTaskStatus). The DOM
+// event handlers stay in the root; only the legality/threshold/message math is
+// extracted here so it stays unit-testable.
+
+/** May the currently-dragged card be dropped on `to`? Null source (drag not
+ *  started / unknown) → everything stays legal: the grey-out styling for
+ *  illegal columns reads this while a drag is in flight. */
+export function dropAllowed(from: string | null, to: Status): boolean {
+  return from ? canMove(from, to) : true;
+}
+
+/** The user-facing refusal for an illegal move (drag-drop and swipe share the
+ *  exact wording). */
+export function illegalMoveMessage(from: Status, to: Status): string {
+  return `Can't move ${statusLabel(from)} → ${statusLabel(to)} — that's not an allowed step.`;
+}
+
+/** Swipe gesture thresholds. Slop + dominance ratio separate a horizontal
+ *  intent from a vertical scroll / tap; commit requires clearly-past-threshold
+ *  travel on release (swipes move exactly ONE column). */
+export const SWIPE_SLOP_PX = 24;
+export const SWIPE_DOMINANCE_RATIO = 1.5;
+export const SWIPE_COMMIT_PX = 48;
+
+/** Displayed swipe direction: left when an active gesture is pulling leftward
+ *  (dx < 0), else right. */
+export function swipeDirection(active: boolean, dx: number): "right" | "left" {
+  return active && dx < 0 ? "left" : "right";
+}
+
+/** The adjacent status one step in `dir` from `from` — null at either end of
+ *  STATUSES (no column that far) or when the source is unknown. */
+export function swipeTargetStatus(from: Status | null, dir: "right" | "left"): Status | null {
+  if (!from) return null;
+  const idx = STATUSES.indexOf(from);
+  const target = dir === "right" ? STATUSES[idx + 1] : STATUSES[idx - 1];
+  return target ?? null;
+}
+
+/** Label chip for the swipe preview ("Move to Doing"): statusLabel of the
+ *  adjacent column in `dir`, "" when there is no target. */
+export function swipeTargetLabel(from: Status | null, dir: "right" | "left"): string {
+  const target = swipeTargetStatus(from, dir);
+  return target ? statusLabel(target) : "";
+}
+
+/** Activate a pending gesture once movement is clearly horizontal — past the
+ *  slop and dominant over vertical travel (vs. a scroll). */
+export function swipeActivated(dx: number, dy: number): boolean {
+  return Math.abs(dx) > SWIPE_SLOP_PX && Math.abs(dx) > SWIPE_DOMINANCE_RATIO * Math.abs(dy);
+}
+
+/** Committed direction on release: |dx| must clear the commit threshold. Null =
+ *  no move (snap the card back home). */
+export function committedSwipeDirection(dx: number): "right" | "left" | null {
+  if (dx > SWIPE_COMMIT_PX) return "right";
+  if (dx < -SWIPE_COMMIT_PX) return "left";
+  return null;
 }
