@@ -1,9 +1,11 @@
 # Testing Strategy & Best Practices
 
 Audited 2026-10-30; re-measured post test-quality epic
-(`01M6735WRK6XC46HQCSYGAEYVC`) on 2026-10-31 and again after the multi-user
-epic (T1–T9) on 2026-11-09. This document is the source of truth for how ravn
-is tested, the measured baselines, and the conventions new tests must follow.
+(`01M6735WRK6XC46HQCSYGAEYVC`) on 2026-10-31, again after the multi-user
+epic (T1–T9) on 2026-11-09, and a web-unit baseline refresh for the
+frontend-modularization Phase 0 on 2026-11-11. This document is the source of
+truth for how ravn is tested, the measured baselines, and the conventions new
+tests must follow.
 Improvements are tracked as tasks on the Ravn board (see
 [Findings index](#findings-index-task-traceability)).
 
@@ -12,7 +14,7 @@ Improvements are tracked as tasks on the Ravn board (see
 | Suite | What it covers | Runner | Size (2026-10-31, post-epic) | Wall time (local, 12-core) | Coverage |
 |---|---|---|---|---|---|
 | Go unit + integration (`internal/`, `cmd/`) | domain rules, application use-cases, SQLite repos, HTTP handlers, MCP tools | `go test` (+ `-race` in CI) | 137 files, **50,546** LOC (re-measured post-multiuser epic, 2026-11-09; was 91 / 38,080 on 2026-10-31) | **~7.1s** total; `-race` **24.2s**; slowest package `internal/interface/http` ~3.3s wall (re-measured 2026-11-09) | **84.5%** statements total |
-| Web unit (`web/test/`) | pure logic of `web/src/*.ts` (dates, markdown, drafts, API client, board state/scope, identity, members, moves, refresh, realtime) | `node:test` via `jiti` (`npm run test:unit`; coverage: `npm run test:unit:coverage`) | 12 per-module files + `test-helpers.ts`, **6,685** LOC, **263** tests (re-measured 2026-11-09) | **~8.0s** (suite 8.03s) | **70.58%** lines / 75.97% branches / 67.81% functions (re-measured 2026-11-09) |
+| Web unit (`web/test/`) | pure logic of `web/src/*.ts` (dates, markdown, drafts, API client, board state/scope, identity, members, moves, refresh, realtime) + the file-size guardrail (§3) | `node:test` via `jiti` (`npm run test:unit`; coverage: `npm run test:unit:coverage`) | 13 per-module files + `test-helpers.ts`, **6,801** LOC, **265** tests (re-measured 2026-11-11) | **~8.0s** (suite 7.96s; re-measured 2026-11-11) | **70.55%** lines / 75.97% branches / 67.81% functions (re-measured 2026-11-11, Node v26.13.0) |
 | Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 41 spec files + shared `fixtures.ts`/`helpers.ts`, **14,149** LOC, **189** tests (re-measured 2026-11-09) | **~47s** wall (default workers); one shared `ravn-server` per worker (+ a few isolated spins); prereqs built once per run by the dedicated `e2e/global-setup.ts` globalSetup — mtime-staleness check, and the server binary is staged via temp copy + atomic rename so a worker can never start a mid-write binary (no ETXTBSY race) | not measured (E2E is the integration proof) |
 
 All three run in CI on every push/PR (`.github/workflows/ci.yml`,
@@ -66,9 +68,12 @@ not dead code) are all at ≥80% now — measured post-epic: `ListWithCounts` 92
 
 ### Web unit — per file (`npm run test:unit:coverage`)
 
-Re-measured post-multiuser epic (12 per-module test files + `test-helpers.ts`,
-263 tests) with Node's built-in plain coverage reporter on Node 26 — zero extra
-deps. Values are the reporter's exact two-decimal output, descending by line %.
+Re-measured **2026-11-11** (frontend-modularization Phase 0; 13 per-module
+test files + `test-helpers.ts`, 265 tests) with Node's built-in plain coverage
+reporter on Node 26 (v26.13.0) — zero extra deps. Values are the reporter's
+exact two-decimal output, descending by line %. Only `app.ts` shifted since
+the 2026-11-09 pass (it grew past the then-audited size); every other row is
+byte-identical to that pass.
 
 | File | Lines | Branches | Functions |
 |---|---|---|---|
@@ -83,9 +88,12 @@ deps. Values are the reporter's exact two-decimal output, descending by line %.
 | src/util.ts | 84.40% | 87.36% | 66.67% |
 | src/realtime.ts | 79.38% | 95.45% | 100.00% |
 | src/md.ts | 68.63% | 87.50% | 100.00% |
-| src/app.ts | 67.57% | 68.16% | 59.61% |
+| src/app.ts | 67.54% | 68.16% | 59.61% |
 | src/types.ts | 40.12% | 100.00% | 100.00% |
-| **All files (total)** | **70.58%** | **75.97%** | **67.81%** |
+| **All files (total)** | **70.55%** | **75.97%** | **67.81%** |
+
+The new `web/test/file-size.test.ts` guardrail test adds no covered production
+code (it reads the file system only), so it is invisible to this table.
 
 The epic's new pure modules land covered by construction — `board-scope.ts`
 (project visibility per identity) at 100%, `members.ts` (T9 roster helpers) and
@@ -100,11 +108,14 @@ floors" below.
 
 Notes:
 
-- `web/src/app.ts` is a ~5,300-line module holding most UI state; its
-  low *unit* coverage is partly structural — large DOM/init sections are only
-  reachable through E2E. Extracting pure logic from app.ts (as was done for
-  moves/refresh/realtime/drafts) is the lever that keeps raising unit coverage
-  without adding brittle DOM tests.
+- `web/src/app.ts` is a **6,448-line** monolith (measured 2026-11-11) holding
+  most UI state; its low *unit* coverage is partly structural — large DOM/init
+  sections are only reachable through E2E. Extracting pure logic from app.ts
+  (as was done for moves/refresh/realtime/drafts) is the lever that keeps
+  raising unit coverage without adding brittle DOM tests; the full extraction
+  plan (target layout, per-concern ownership map, contracts, checklist, and
+  the §6 file-size guardrail design) lives in
+  [`docs/FRONTEND_ARCHITECTURE.md`](./FRONTEND_ARCHITECTURE.md).
 - `src/types.ts` is the wire-contract module: mostly `interface`/type
   declarations plus a handful of const tables (`STATUSES`, `COMMENT_KINDS`, …).
   Every runtime line it has executes (100% functions); the uncovered lines are
@@ -174,7 +185,9 @@ Measured totals as of 2026-11-09 (post multi-user epic): Go **84.5%**
 statements (`go tool cover -func` total line); web unit total lines **70.58%**
 on Node 26 (`npm run test:unit:coverage` all-files row) — both floors have
 headroom. Previous pass (2026-10-31, post test-quality epic): Go 83.9% / web
-69.35% lines on Node 26.
+69.35% lines on Node 26. Latest re-measurement (2026-11-11, modularization
+Phase 0): web unit total lines **70.55%** on Node v26.13.0 — a −0.03 drift as
+`app.ts` grew past the audited size; floors untouched, headroom intact.
 
 ### How to measure
 
@@ -224,6 +237,12 @@ cd web && npm run test:unit:coverage
   third time, extract a shared helper in `web/test/`.
 - Prefer testing the *extracted* pure functions (util, moves, refresh,
   realtime, drafts) over reaching into app.ts DOM code; E2E covers the DOM.
+- File-size guardrail: `web/test/file-size.test.ts` caps every `.ts` under
+  `web/src/` at **800 lines**, with an explicit allowlist that currently holds
+  only `app.ts` (6,448 lines) and can only shrink — a second test fails on
+  stale or phantom entries. It runs inside the normal `npm run test:unit`
+  glob, so both CI pipelines catch violations automatically. Design and
+  rules: [`docs/FRONTEND_ARCHITECTURE.md`](./FRONTEND_ARCHITECTURE.md) §6.
 
 ### E2E tests (Playwright)
 
