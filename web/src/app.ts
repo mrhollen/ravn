@@ -20,6 +20,8 @@ import { createBoardViewModule } from "./modules/board-view";
 import type { BoardViewModule } from "./modules/board-view";
 import { createSseModule, sseTelemetry } from "./modules/sse";
 import type { SseModule } from "./modules/sse";
+import { createOpenCodeModule } from "./modules/opencode";
+import type { OpenCodeModule } from "./modules/opencode";
 import { createProjectSettingsModule } from "./modules/project-settings";
 import type { ProjectSettingsModule } from "./modules/project-settings";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
@@ -1045,58 +1047,44 @@ export function ravnApp() {
     openCodeOptionsProjectId: "" as string,
     loadingOpenCodeOptions: false,
 
+    _opencode: null as OpenCodeModule | null,
+
+    /** Lazily-built opencode module (modules/opencode.ts — Phase 2 batch B):
+     *  the cached options read surface + variant derivation and the per-project
+     *  fetch gate. The cache itself is plain root state; nothing internal is
+     *  kept in this module's closure (see docs/FRONTEND_ARCHITECTURE.md §2). */
+    _opencodeModule(): OpenCodeModule {
+      if (this._opencode) return this._opencode;
+      this._opencode = createOpenCodeModule({
+        // state-in
+        selectedProjectId: () => this.selectedProjectId,
+        projects: () => this.projects,
+        showProjectSettings: () => this.showProjectSettings,
+        projectSettingsFormOpencodeUrl: () => this.projectSettingsForm.opencode_server_url,
+        openCodeOptions: () => this.openCodeOptions,
+        openCodeOptionsProjectId: () => this.openCodeOptionsProjectId,
+        // state-out
+        setOpenCodeOptions: (o) => { this.openCodeOptions = o; },
+        setOpenCodeOptionsProjectId: (pid) => { this.openCodeOptionsProjectId = pid; },
+        setLoadingOpenCodeOptions: (v) => { this.loadingOpenCodeOptions = v; },
+      });
+      return this._opencode;
+    },
+
     availableOpenCodeAgents(): OpenCodeAgentOption[] {
-      return this.openCodeOptions?.agents ?? [];
+      return this._opencodeModule().availableOpenCodeAgents();
     },
 
     availableOpenCodeModels(): OpenCodeModelOption[] {
-      return this.openCodeOptions?.models ?? [];
+      return this._opencodeModule().availableOpenCodeModels();
     },
 
     availableOpenCodeVariantsFor(modelRef?: string): string[] {
-      const models = this.availableOpenCodeModels();
-      if (!models.length) return [];
-      const target = (modelRef ?? "").trim() || (this.openCodeOptions?.resolved_model ?? "").trim();
-      if (target) {
-        const found = models.find((m) => m.ref === target || m.model_id === target);
-        if (found && Array.isArray(found.variants)) {
-          return [...new Set(found.variants)];
-        }
-      }
-      const union = new Set<string>();
-      for (const m of models) {
-        if (Array.isArray(m.variants)) {
-          for (const v of m.variants) {
-            if (v) union.add(v);
-          }
-        }
-      }
-      return [...union];
+      return this._opencodeModule().availableOpenCodeVariantsFor(modelRef);
     },
 
     async fetchOpenCodeOptions(projectId?: string, force = false): Promise<OpenCodeOptionsResponse | null> {
-      const pid = projectId || this.selectedProjectId;
-      if (!pid) return null;
-      const p = this.projects.find((x) => x.id === pid);
-      if (p && !p.opencode_server_url && (!this.showProjectSettings || !this.projectSettingsForm.opencode_server_url)) {
-        this.openCodeOptions = null;
-        return null;
-      }
-      if (!force && this.openCodeOptions && this.openCodeOptionsProjectId === pid) {
-        return this.openCodeOptions;
-      }
-      this.loadingOpenCodeOptions = true;
-      try {
-        const res = await api.getOpenCodeOptions(pid);
-        this.openCodeOptions = res;
-        this.openCodeOptionsProjectId = pid;
-        return res;
-      } catch {
-        this.openCodeOptions = null;
-        return null;
-      } finally {
-        this.loadingOpenCodeOptions = false;
-      }
+      return await this._opencodeModule().fetchOpenCodeOptions(projectId, force);
     },
 
     // ------------------------------------------------------------ project settings
@@ -1179,7 +1167,7 @@ export function ravnApp() {
         loadBoard: () => this.loadBoard(),
         connectSse: () => this.connectSse(),
         disconnectSse: (reset) => this.disconnectSse(reset),
-        fetchOpenCodeOptions: (pid, force) => this.fetchOpenCodeOptions(pid, force),
+        fetchOpenCodeOptions: (pid, force) => this._opencodeModule().fetchOpenCodeOptions(pid, force),
       });
       return this._projectSettings;
     },

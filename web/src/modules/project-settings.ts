@@ -95,8 +95,8 @@ export interface ProjectSettingsDeps {
   loadBoard: () => Promise<unknown>;
   connectSse: () => void;
   disconnectSse: (resetBackoff?: boolean) => void;
-  /** Open-code option refresh after the authoritative fetch (root-owned,
-   *  extracted later — the "opencode" slice). Result unused here. */
+  /** Open-code option refresh after the authoritative fetch — owned by
+   *  modules/opencode.ts (Phase 2 batch B slice "opencode"). Result unused here. */
   fetchOpenCodeOptions: (projectId: string, force?: boolean) => Promise<unknown>;
 }
 
