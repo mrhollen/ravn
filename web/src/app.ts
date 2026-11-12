@@ -27,6 +27,8 @@ import { createTaskEditModule } from "./modules/task-edit";
 import type { TaskEditModule } from "./modules/task-edit";
 import { createAcsModule } from "./modules/acs";
 import type { AcsModule } from "./modules/acs";
+import { createCommentsModule } from "./modules/comments";
+import type { CommentsModule } from "./modules/comments";
 import { createProjectSettingsModule } from "./modules/project-settings";
 import type { ProjectSettingsModule } from "./modules/project-settings";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
@@ -49,7 +51,7 @@ import {
 import { canApplyDetail, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS } from "./refresh";
 import { renderMarkdown } from "./md";
 import { MEMBER_ROLES } from "./members";
-import { commentDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
+import { notesDraftKey } from "./drafts";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
 import {
   SORT_OPTIONS,
@@ -3146,6 +3148,36 @@ export function ravnApp() {
       return this._acs;
     },
 
+    _comments: null as CommentsModule | null,
+
+    /** Lazily-built comments module (modules/comments.ts — Phase 2 batch C):
+     *  the comment draft restore/save pair, older-comment pagination and
+     *  posting. All five bound state fields stay plain root state; detail is
+     *  mutated in place (comments array reassignment) through the state-IN
+     *  getter, while whole-field writes go through setters. */
+    _commentsModule(): CommentsModule {
+      if (this._comments) return this._comments;
+      this._comments = createCommentsModule({
+        // state-in
+        detail: () => this.detail,
+        commentForm: () => this.commentForm,
+        commentShowPreview: () => this.commentShowPreview,
+        postingComment: () => this.postingComment,
+        loadingOlderComments: () => this.loadingOlderComments,
+        totalComments: () => this.totalComments,
+        // state-out
+        setCommentForm: (f) => { this.commentForm = f; },
+        setCommentShowPreview: (v) => { this.commentShowPreview = v; },
+        setPostingComment: (v) => { this.postingComment = v; },
+        setLoadingOlderComments: (v) => { this.loadingOlderComments = v; },
+        setTotalComments: (v) => { this.totalComments = v; },
+        // hooks
+        toast: (m, k) => this.toast(m, k),
+        actor: () => this.actor(),
+      });
+      return this._comments;
+    },
+
     startEditing(): void {
       this._taskEditModule().startEditing();
     },
@@ -3757,117 +3789,40 @@ export function ravnApp() {
     loadingOlderComments: false,
     totalComments: 0,
 
-    /** Reset-then-restore for a task OPEN (AC 2): the form goes back to
-     *  defaults FIRST so one task's unsaved comment can never leak into the
-     *  next, then a stored draft under THIS id (JSON body+kind) is re-applied.
-     *  Called from openTask(), which every drawer/full-page open funnels
-     *  through — drafts stay in storage across close/navigation/reload. */
+    /** [moved → modules/comments.ts] Delegation shims — comments: the bodies
+     *  moved verbatim (only `this.` became deps accessors). */
     restoreCommentDraftForTask(id: string): void {
-      this.commentShowPreview = false;
-      this.commentForm = { kind: "progress", body: "" };
-      const parsed = deserializeCommentDraft(safeStorage.getItem(commentDraftKey(id)));
-      if (parsed) this.commentForm = { body: parsed.body, kind: parsed.kind };
+      this._commentsModule().restoreCommentDraftForTask(id);
     },
 
-    /** Debounced textarea-input handler (@input.debounce.400ms): persists the
-     *  CURRENT comment draft (body + selected type as JSON) under the loaded
-     *  task's id (AC 2). No task loaded → no-op; blank body → key removed. */
     saveCommentDraft(): void {
-      const id = this.detail?.id;
-      if (!id) return;
-      const raw = this.commentForm.body ?? "";
-      if (raw.trim() !== "") safeStorage.setItem(commentDraftKey(id), serializeCommentDraft({ body: raw, kind: this.commentForm.kind }));
-      else safeStorage.removeItem(commentDraftKey(id));
+      this._commentsModule().saveCommentDraft();
     },
 
     hasMoreOlderComments(): boolean {
-      return !!this.detail && this.totalComments > this.detail.comments.length;
+      return this._commentsModule().hasMoreOlderComments();
     },
 
     olderCommentsRemaining(): number {
-      return Math.max(0, this.totalComments - (this.detail?.comments.length ?? 0));
+      return this._commentsModule().olderCommentsRemaining();
     },
 
     async initComments(id: string): Promise<void> {
-      try {
-        const res = await api.listComments(id, { limit: 50, offset: 0 });
-        if (this.detail && this.detail.id === id) {
-          this.totalComments = res.total;
-          this.mergeComments(res.comments);
-        }
-      } catch {
-        /* non-fatal */
-      }
+      return await this._commentsModule().initComments(id);
     },
 
     mergeComments(incoming: CommentRow[]): void {
-      if (!this.detail) return;
-      const map = new Map<string, CommentRow>();
-      for (const c of this.detail.comments) {
-        map.set(c.id, c);
-      }
-      for (const c of incoming) {
-        map.set(c.id, c);
-      }
-      const sorted = Array.from(map.values()).sort((a, b) => {
-        const ta = Date.parse(a.created_at);
-        const tb = Date.parse(b.created_at);
-        if (ta !== tb) return ta - tb;
-        return a.id.localeCompare(b.id);
-      });
-      this.detail.comments = sorted;
-      if (this.detail.comments.length > this.totalComments) {
-        this.totalComments = this.detail.comments.length;
-      }
+      this._commentsModule().mergeComments(incoming);
     },
 
     async loadOlderComments(): Promise<void> {
-      const d = this.detail;
-      if (!d || this.loadingOlderComments) return;
-      this.loadingOlderComments = true;
-      try {
-        const res = await api.listComments(d.id, {
-          offset: d.comments.length,
-          limit: 50,
-        });
-        this.totalComments = res.total;
-        if (this.detail && this.detail.id === d.id) {
-          this.mergeComments(res.comments);
-        }
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.loadingOlderComments = false;
-      }
+      return await this._commentsModule().loadOlderComments();
     },
 
-    /** Append a typed comment (no task version bump). Appends are NOT
-     *  idempotent — on network error we don't auto-retry. */
+    /** Append a typed comment (no task version bump). Behavior owned by
+     *  modules/comments.ts. */
     async postComment(): Promise<void> {
-      const t = this.detail;
-      const body = this.commentForm.body.trim();
-      if (!t || !body || this.postingComment) return;
-      this.postingComment = true;
-      try {
-        const c = await api.addComment(t.id, {
-          actor: this.actor(),
-          kind: this.commentForm.kind,
-          body,
-        });
-        const d = this.detail;
-        if (d && d.id === t.id) {
-          this.mergeComments([c]);
-          this.totalComments = Math.max(this.totalComments + 1, d.comments.length);
-        }
-        this.commentForm.body = "";
-        // Comment posted → the local draft has served its purpose; clear it so
-        // re-opening this task never resurrects text already on screen (AC 3).
-        safeStorage.removeItem(commentDraftKey(t.id));
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.postingComment = false;
-      }
+      return await this._commentsModule().postComment();
     },
 
     // ---------------------------------------------------------------- artifacts
