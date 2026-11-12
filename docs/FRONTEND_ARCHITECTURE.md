@@ -120,7 +120,7 @@ later phase; root = deliberately stays in the composition root.
 | Task detail drawer state/lifecycle (:3622–3646) + full-page `/tasks/<id>` view (:3647–3923) ("routes" ~:3650 / "detail+AC" in the audit) | :3622–3923 | `modules/detail.ts` (P2 state; `canApplyDetail` ownership guard already pure in `src/refresh.ts`; route helpers P1 in `src/routes.ts`) | P1+P2 |
 | Copy-ID toolbar action (:4028–4181) | :4028–4181 | `modules/detail.ts` (drawer toolbar behavior; clipboard core P1 → `src/util.ts`) | P1+P2 |
 | Quick metadata (priority & due popovers, :4182–4321) + assignee popover (:4322–4398) + title/description edit with dirty drafts (:4399–4584) + notes scratchpad (:4994–5097) | :4182–4584, :4994–5097 | `modules/task-edit.ts` (P2; draft serialize keys already in `src/drafts.ts`) — all "edit a field on the open task" behavior, one module | **PARTIAL (batch B)** — core edit session AND quick-metadata popovers + assignee update flows landed (the four-popover mutex writes the status/owner flags through typed setters; `toggleStatusMenu`/`toggleOwnerPopover` stay with the operational bar → detail); only the notes scratchpad still rides at root |
-| Acceptance criteria (:5098–5359) ("detail+AC" ~:5115 in the audit) | :5098–5359 | `modules/acs.ts` | P2 (`parseChecklistText` already pure in `src/util.ts`) |
+| Acceptance criteria (:5098–5359) ("detail+AC" ~:5115 in the audit) | :5098–5359 | `modules/acs.ts` | **P2 landed (batch C)** — toggle/add/paste-add/move/drop reorder, the inline edit session and delete, plus the four display helpers over `src/ac-math.ts`. All nine state fields are template-bound → stay root; detail patches are whole-object reassignments through `setDetail`. Non-DOM coverage: `web/test/acs-module.test.ts` (34 tests) |
 | Comments (:5360–5481) | :5360–5481 | `modules/comments.ts` | P2 (draft keys already in `src/drafts.ts`) |
 | Artifacts (:5482–5728) | :5482–5728 | `modules/artifacts.ts` | P2 (`isTextArtifact` already pure in `src/util.ts`) |
 | Claims: display helpers + claim/release handlers (:5729–5825). **Exception:** the 1s `nowTick` ticker lives here but is consumed by BOTH claims display and the board stalled filter → `nowTick` stays **root** (shared clock); pure countdown/expiry logic already in `src/util.ts` | :5729–5825 | `modules/claims.ts` (P2) + **root** (`nowTick`) | P2 |
@@ -331,10 +331,22 @@ stateful modules rather than one:
   (−144; cumulative −241 vs the ≈−298 full-row price — the remainder is the
   notes scratchpad region).
 
+  **`acs` row landed in `60ee932`:** the whole acceptance-criteria section
+  moved to `modules/acs.ts` (Phase 2 batch C) — toggleAc (server-row merge +
+  failed-toggle checkbox revert), addAc / handleAcPaste multi-line fan-out,
+  moveAc / dropAc reorders, the inline edit session, delete with
+  editing-session cleanup, and the four display helpers over `src/ac-math.ts`.
+  All nine state fields are template-bound → stay root; AcsDeps = 10 state-in
+  / 10 state-out / 2 hooks (detail patches via `setDetail` as whole-object
+  reassignments). 13 shims; ac-math alias + parseChecklistText imports dropped
+  from app.ts. Gates: unit **579/579** (+34), build+tsc clean, E2E 189/189
+  (47.8s), index.html identical. `app.ts` shrank 5,032 → **4,901** (−131;
+  first sub-5,000 crossing of the burn-down).
+
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
-~~auth~~ → `task-edit` (core edit session landed; quick-metadata + assignee
-popovers and the notes scratchpad remain in this row) → `acs`/`comments`/
-`artifacts`/`claims`/`relations` (drawer surfaces) → `detail` **last** —
+~~auth~~ → `task-edit` (landed; only the notes scratchpad rides with the
+detail cascade) → ~~acs~~ → `comments`/`artifacts`/`claims`/`relations`
+(drawer surfaces) → `detail` **last** —
 REORDERED from its original second position: `openTask`/`closeDetail` are
 cross-cutting cascades writing ~20 flat fields across the not-yet-modularized
 sub-concerns above, so extracted last each cascade write converges to ONE hook
