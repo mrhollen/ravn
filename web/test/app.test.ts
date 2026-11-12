@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 
 import { dateInputToIso, dueCalendarDate, parseChecklistText, safeStorage } from "../src/util.ts";
 import { ApiError, api } from "../src/api.ts";
-import { createDebounce } from "../src/refresh.ts";
 import {
   ravnApp,
   isMobileDetailViewport,
@@ -1686,193 +1685,33 @@ test("toggleAc: successful toggle merges the server's row back into detail state
   }
 });
 
-test("BlockedCache: selectProject() clears both caches, re-scoped to the new project (AC1)", () => {
+test("BoardWiring: applyDetail learns blocked state for the CURRENT project only (root → board module seam)", () => {
   const app = ravnApp() as any;
   // Network-side collaborators are irrelevant here — stub them out.
   app.connectSse = () => {};
   app.loadBoard = async () => {};
 
-  app.selectedProjectId = "A";
-  app.blockedIds = new Set(["a1", "a2"]);
-  app.knownBlocked = { a3: true };
-  app.blockedCacheProjectId = "A";
-
-  app.selectedProjectId = "B"; // what pickProject() does before calling selectProject()
-  app.selectProject();
-
-  assert.equal(app.blockedIds.size, 0, "derived set is cleared on switch");
-  assert.deepEqual(app.knownBlocked, {}, "learned map is cleared on switch");
-  assert.equal(app.blockedCacheProjectId, "B", "cache re-scoped to the selected project");
-  assert.equal(app.isBlocked("a1"), false);
-});
-
-test("BlockedCache: isBlocked fails closed when the cache belongs to another project (AC3)", () => {
-  const app = ravnApp() as any;
-  // The cache was derived while project "P" was selected…
-  app.blockedIds = new Set(["x1"]);
-  app.knownBlocked = { x2: true };
-  app.blockedCacheProjectId = "P";
-
-  // …but the selection has since moved on (an entry point that does not
-  // reset — deep link, popstate adoption, archive fallback).
-  app.selectedProjectId = "Q";
-  assert.equal(app.isBlocked("x1"), false, "stale derived ids never surface");
-  assert.equal(app.isBlocked("x2"), false, "stale learned entries never surface");
-
-  // Back in scope → the same entries serve normally (feature intact).
-  app.selectedProjectId = "P";
-  assert.equal(app.isBlocked("x1"), true);
-  assert.equal(app.isBlocked("x2"), true);
-});
-
-test("BlockedCache: a >100-task board populates blockedIds directly from blockers and re-scopes the cache (AC2/AC3)", async () => {
-  let listTasksCalled = false;
-  const origListTasks = api.listTasks;
-  try {
-    (api as any).listTasks = async () => {
-      listTasksCalled = true;
-      return { tasks: [], total: 150, limit: 100, offset: 0 };
-    };
-
-    const app = ravnApp() as any;
-    app.selectedProjectId = "B";
-    // Leftover from project A's load:
-    app.blockedIds = new Set(["a1"]);
-    app.knownBlocked = { a2: true };
-    app.blockedCacheProjectId = "A";
-
-    // Board with >100 tasks where some tasks carry open blockers:
-    const tasks150 = Array.from({ length: 150 }, (_, i) => ({
-      id: `b${i}`,
-      title: `Task ${i}`,
-      status: "todo",
-      priority: 3,
-      version: 1,
-      created_at: "",
-      updated_at: "",
-      blockers: i === 2 || i === 120 ? [{ id: "blk1", title: "Blocker", status: "todo" }] : undefined,
-    }));
-
-    const bigBoard = {
-      project_id: "B",
-      counts: { todo: 150, doing: 0, done: 0 },
-      tasks: { todo: tasks150, doing: [], done: [] },
-    };
-    await app.refreshBlockedSet(bigBoard);
-
-    assert.equal(listTasksCalled, false, "zero listTasks calls fired");
-    assert.deepEqual(app.knownBlocked, {}, "stale knownBlocked cleared on project switch");
-    assert.equal(app.blockedCacheProjectId, "B", "cache now belongs to project B");
-    assert.equal(app.isBlocked("a1"), false, "project A's ids can't surface in B");
-    assert.equal(app.isBlocked("a2"), false, "project A's knownBlocked can't surface in B");
-    assert.equal(app.isBlocked("b2"), true, "blocked task b2 is recognized even on >100 task board");
-    assert.equal(app.isBlocked("b120"), true, "blocked task b120 (>100) is recognized");
-    assert.equal(app.isBlocked("b0"), false, "unblocked task b0 returns false");
-
-    // Repeated loads of the SAME board don't thrash entries learned from detail:
-    app.knownBlocked["b99"] = true;
-    await app.refreshBlockedSet(bigBoard);
-    assert.equal(app.blockedCacheProjectId, "B");
-    assert.equal(app.isBlocked("b99"), true, "same-project detail entries survive reload");
-  } finally {
-    (api as any).listTasks = origListTasks;
-  }
-});
-
-test("BlockedCache: loadBoard derives blocked state directly from board snapshot without api.listTasks (AC1/AC2)", async () => {
-  let listTasksCount = 0;
-  const origListTasks = api.listTasks;
-  const origGetBoard = api.getBoard;
-  try {
-    (api as any).listTasks = async () => {
-      listTasksCount++;
-      return { tasks: [], total: 0, limit: 100, offset: 0 };
-    };
-    (api as any).getBoard = async () => ({
-      project_id: "B",
-      counts: { todo: 2, doing: 0, done: 0 },
-      tasks: {
-        todo: [
-          { id: "b1", title: "Task 1", blockers: [{ id: "blk1", title: "Blk", status: "todo" }] },
-          { id: "b2", title: "Task 2" },
-        ],
-        doing: [],
-        done: [],
-      },
-    });
-
-    const app = ravnApp() as any;
-    app.selectedProjectId = "B";
-    app.blockedCacheProjectId = ""; // fresh boot
-    await app.loadBoard();
-
-    assert.equal(listTasksCount, 0, "loadBoard must never call api.listTasks");
-    assert.equal(app.blockedCacheProjectId, "B");
-    assert.equal(app.isBlocked("b1"), true, "b1 is blocked via board snapshot blockers");
-    assert.equal(app.isBlocked("b2"), false, "b2 is unblocked");
-  } finally {
-    (api as any).listTasks = origListTasks;
-    (api as any).getBoard = origGetBoard;
-  }
-});
-
-test("BlockedCache: a failed board load keeps the current project's last good set (catch-branch decision)", async () => {
-  const origGetBoard = api.getBoard;
-  try {
-    (api as any).getBoard = async () => {
-      throw new Error("network down");
-    };
-
-    const app = ravnApp() as any;
-    app.selectedProjectId = "B";
-    // Last good set for B, derived by an earlier successful load:
-    app.blockedIds = new Set(["b1"]);
-    app.knownBlocked = {};
-    app.blockedCacheProjectId = "B";
-
-    await app.loadBoard();
-
-    assert.ok((app.blockedIds as Set<string>).has("b1"), "transient failure keeps the last good set");
-    assert.equal(app.blockedCacheProjectId, "B");
-    assert.equal(app.loadError, "network down");
-  } finally {
-    (api as any).getBoard = origGetBoard;
-  }
-});
-
-test("BlockedCache: a detail payload for ANOTHER project never writes into the current cache", () => {
-  const app = ravnApp() as any;
-  // The drawer is still open on A's task after a dropdown switch to B
-  // (selectProject does not close it) — its refresh lands post-switch.
-  app.detailOpen = true;
-  app.detailId = "a9";
-  app.selectedProjectId = "B";
-  app.blockedIds = new Set(["b1"]);
-  app.knownBlocked = {};
-  app.blockedCacheProjectId = "B";
-
-  const detailA: any = { id: "a9", project_id: "A", notes: "", comments: [], assignee: undefined, blocked: true };
-  app.applyDetail(detailA);
-
-  assert.equal(app.knownBlocked["a9"], undefined, "foreign task's blocked state is not learned");
-  assert.deepEqual(app.blockedIds, new Set(["b1"]), "current project's set untouched");
-  assert.equal(app.blockedCacheProjectId, "B", "scope stays with the selected project");
-});
-
-test("BlockedCache: a detail payload for the CURRENT project still learns blocked state (feature intact)", () => {
-  const app = ravnApp() as any;
   app.detailOpen = true;
   app.detailId = "b9";
   app.selectedProjectId = "B";
-  app.blockedIds = new Set();
-  app.knownBlocked = {};
-  app.blockedCacheProjectId = "B";
+  // A real board load has already scoped the cache to B by the time a detail
+  // lands — establish that pre-condition directly.
+  app.resetBlockedCache("B");
 
   const detailB: any = { id: "b9", project_id: "B", notes: "", comments: [], assignee: undefined, blocked: true };
   app.applyDetail(detailB);
+  assert.equal(app.isBlocked("b9"), true, "current-project task's blocked state is learned via the root seam");
 
-  assert.equal(app.knownBlocked["b9"], true, "current-project task's blocked state is learned");
-  assert.equal(app.isBlocked("b9"), true);
+  // The drawer outlives a dropdown switch to C (selectProject does not close
+  // it) — A's refresh landing post-switch must not contaminate C's cache.
+  app.detailId = "a9";
+  app.selectedProjectId = "C";
+  app.selectProject();
+  const detailA: any = { id: "a9", project_id: "A", notes: "", comments: [], assignee: undefined, blocked: true };
+  app.applyDetail(detailA);
+
+  assert.equal(app.isBlocked("a9"), false, "foreign payload is never learned");
+  assert.equal(app.isBlocked("b9"), false, "B's entries can't surface in C (fail-closed scope)");
 });
 
 test("OpenCode: startTaskInOpenCode captures session_id and session_url, records in openCodeSessions, and emits actionable toast", async () => {
@@ -2817,239 +2656,42 @@ test("URL Sync: index.html wires syncUrlState on filter inputs", () => {
   assert.ok(html.includes('@change="syncUrlState(true)"'), "Must wire change syncUrlState on dropdowns/checkboxes");
 });
 
-test("FullTextSearch: a typing burst coalesces into ONE debounced server query whose ids union into the board (AC1)", async () => {
-  const origListTasks = api.listTasks;
-  try {
-    let calls = 0;
-    (api as any).listTasks = async (params: any) => {
-      calls++;
-      assert.equal(params.project_id, "P", "query scoped to the selected project");
-      assert.equal(params.search, "quixotic", "debounced trailing query is the FINAL typed term");
-      assert.ok(params.limit >= 100, "requests a generous page (server clamps to its max)");
-      return { tasks: [{ id: "d1" }, { id: "t1" }], total: 2, limit: 100, offset: 0 };
-    };
-
-    const app = ravnApp() as any;
-    app.selectedProjectId = "P";
-    app.board = {
-      project_id: "P",
-      counts: {},
-      tasks: {
-        todo: [
-          { id: "t1", title: "Quixotic title hit", status: "todo" }, // local title match
-          { id: "d1", title: "Plain card, term only in notes", status: "todo" }, // server-only match
-          { id: "x9", title: "Irrelevant", status: "todo" },
-        ],
-        doing: [],
-        done: [],
-      },
-    };
-    // Fake-timer debounce bound to the REAL runFullTextSearch (timer-injectable
-    // createDebounce — same pattern as the SSE-reload tests).
-    app._searchDebounce = createDebounce(
-      () => { void app.runFullTextSearch(); },
-      SEARCH_DEBOUNCE_MS,
-      {
-        setTimer: (fn: () => void, ms: number) => {
-          assert.equal(ms, SEARCH_DEBOUNCE_MS);
-          return setTimeout(fn, ms);
-        },
-        clearTimer: (id: unknown) => clearTimeout(id as ReturnType<typeof setTimeout>),
-      },
-    );
-
-    // Two rapid keystrokes — trailing debounce must fire exactly once.
-    app.filterSearch = "quixo";
-    app.scheduleFullTextSearch();
-    app.filterSearch = "quixotic";
-    app.scheduleFullTextSearch();
-    assert.equal(app._searchDebounce.isPending(), true, "one pending run before the quiet window elapses");
-    await new Promise((r) => setTimeout(r, SEARCH_DEBOUNCE_MS + 100));
-
-    assert.equal(calls, 1, "whole burst costs exactly ONE round-trip");
-    assert.deepEqual([...app._fullTextMatchIds], ["d1", "t1"]);
-
-    // columns() union: local title match AND server-only id both survive.
-    const todo = app.columns().find((c: any) => c.status === "todo");
-    assert.ok(todo.tasks.some((t: any) => t.id === "t1"), "instant title match visible");
-    assert.ok(todo.tasks.some((t: any) => t.id === "d1"), "desc/notes-only match visible via id union");
-    assert.ok(!todo.tasks.some((t: any) => t.id === "x9"), "non-match hidden");
-
-    // Match-source chip predicate (AC2): only the server-only card gets one.
-    const d1 = todo.tasks.find((t: any) => t.id === "d1");
-    const t1 = todo.tasks.find((t: any) => t.id === "t1");
-    assert.equal(app.isDescriptionNotesMatch(d1), true, "desc/notes-only hit shows the chip");
-    assert.equal(app.isDescriptionNotesMatch(t1), false, "title match must NOT get the chip");
-  } finally {
-    (api as any).listTasks = origListTasks;
-  }
-});
-
-test("FullTextSearch: an out-of-order LATE response is discarded by the sequence token (AC3)", async () => {
-  const origListTasks = api.listTasks;
-  try {
-    let calls = 0;
-    (api as any).listTasks = async () => {
-      calls++;
-      if (calls === 1) {
-        // The OLD query's slow response — settles only after the newer one.
-        await new Promise((r) => setTimeout(r, 60));
-        return { tasks: [{ id: "old1" }], total: 1, limit: 100, offset: 0 };
-      }
-      return { tasks: [{ id: "new1" }], total: 1, limit: 100, offset: 0 };
-    };
-
-    const app = ravnApp() as any;
-    app.selectedProjectId = "P";
-    app.filterSearch = "old-term";
-    const pOld = app.runFullTextSearch(); // token N — in flight
-    app.filterSearch = "new-term";
-    const pNew = app.runFullTextSearch(); // token N+1 — initiates later, wins
-
-    await pNew; // faster response lands first
-    assert.deepEqual([...app._fullTextMatchIds], ["new1"], "newer query applied");
-
-    await pOld; // stale slow response arrives LAST
-    assert.deepEqual(
-      [...app._fullTextMatchIds],
-      ["new1"],
-      "out-of-order late response must NEVER overwrite the newer state",
-    );
-  } finally {
-    (api as any).listTasks = origListTasks;
-  }
-});
-
-test("FullTextSearch: clearing the input cancels the timer, clears the id set, and retires in-flight results (AC3)", async () => {
-  const origListTasks = api.listTasks;
-  try {
-    let releaseSlow: (v: any) => void;
-    const slow = new Promise<any>((r) => { releaseSlow = r; });
-    (api as any).listTasks = async () => slow;
-
-    const app = ravnApp() as any;
-    app.selectedProjectId = "P";
-    let timerArmed = 0;
-    app._searchDebounce = createDebounce(
-      () => { void app.runFullTextSearch(); },
-      SEARCH_DEBOUNCE_MS,
-      { setTimer: (_fn: () => void, _ms: number) => ++timerArmed, clearTimer: () => {} },
-    );
-
-    app.filterSearch = "term";
-    app._fullTextMatchIds = new Set(["stale1"]); // leftover from a prior settled query
-    const inFlight = app.runFullTextSearch(); // direct run still in flight…
-    app.scheduleFullTextSearch();             // …and one more keystroke pending its timer
-
-    // User CLEARS the input: everything must be retired immediately.
-    app.filterSearch = "";
-    app.scheduleFullTextSearch();
-
-    assert.deepEqual([...app._fullTextMatchIds], [], "match id set cleared — board instantly unfiltered");
-    assert.equal(app.isDescriptionNotesMatch({ id: "stale1", title: "x" }), false, "no chips after clear");
-
-    // The in-flight response finally resolves — it must be a no-op.
-    releaseSlow!({ tasks: [{ id: "ghost1" }], total: 1, limit: 100, offset: 0 });
-    await inFlight;
-    assert.deepEqual([...app._fullTextMatchIds], [], "late response for the cleared query discarded");
-
-    // No further debounce fires were armed by the clear path.
-    assert.equal(timerArmed, 1, "only the pre-clear keystroke armed a timer; clear cancels instead of scheduling");
-  } finally {
-    (api as any).listTasks = origListTasks;
-  }
-});
-
-test("FullTextSearch: while searching, the done-column cap is bypassed so no matched done task hides behind it", () => {
-  const app = ravnApp() as any;
-  // 25 done tasks; rendered newest-first by completed_at (d00 = Jan 1 oldest …
-  // d24 = Jan 25 newest), so d00–d03 sit behind the default 20-card cut.
-  const doneTasks = Array.from({ length: 25 }, (_, i) => ({
-    id: "d" + String(i).padStart(2, "0"),
-    title: "Done task " + i,
-    status: "done",
-    priority: 3,
-    version: 1,
-    created_at: "",
-    updated_at: "",
-    completed_at: `2026-01-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
-  }));
-  app.selectedProjectId = "P";
-  app.board = { project_id: "P", counts: {}, tasks: { todo: [], doing: [], done: doneTasks } };
-
-  const before = app.columns().find((c: any) => c.status === "done");
-  assert.equal(before.tasks.length, DEFAULT_DONE_LIMIT, "normal 20-card cap applies unfiltered");
-  assert.equal(before.totalCount, 25);
-  assert.ok(!before.tasks.some((t: any) => t.id === "d00"), "oldest done task hidden behind the cut");
-
-  // Server matched the OLDEST done task (far past the default cut) via notes.
-  app.filterSearch = "ancient-term";
-  app._fullTextMatchIds = new Set(["d00"]);
-  const searching = app.columns().find((c: any) => c.status === "done");
-  assert.equal(searching.totalCount, 1);
-  assert.equal(searching.tasks.length, 1, "cap bypassed while searching — no match hides behind the cut");
-  assert.deepEqual(searching.tasks.map((t: any) => t.id), ["d00"]);
-
-  // Clearing restores the normal cap (doneLimit untouched by the bypass).
-  app.filterSearch = "";
-  app.scheduleFullTextSearch();
-  const after = app.columns().find((c: any) => c.status === "done");
-  assert.equal(after.tasks.length, DEFAULT_DONE_LIMIT, "normal cap restored on clear");
-  assert.equal(after.totalCount, 25);
-
-  // Column count pill input stays accurate in both states.
-  assert.equal(app.visibleTaskCount() > 0, true);
-});
-
-test("FullTextSearch: isDescriptionNotesMatch fires only for desc/notes-only hits", () => {
-  const app = ravnApp() as any;
-  app.filterSearch = "zzz";
-  app._fullTextMatchIds = new Set(["id-a", "id-b", "zzz-1234567890abcdefghijklmnop"]);
-
-  assert.equal(app.isDescriptionNotesMatch({ id: "id-a", title: "No term here" }), true, "server-only hit → chip");
-  assert.equal(
-    app.isDescriptionNotesMatch({ id: "id-b", title: "Contains ZZZ in the title" }),
-    false,
-    "title match (any case) → no chip",
-  );
-  assert.equal(
-    app.isDescriptionNotesMatch({ id: "zzz-1234567890abcdefghijklmnop", title: "Term in the ID" }),
-    false,
-    "id match → no chip",
-  );
-  app.filterSearch = "   ";
-  assert.equal(app.isDescriptionNotesMatch({ id: "id-a", title: "x" }), false, "whitespace-only query → never");
-});
-
-test("FullTextSearch: project switch cancels the pending search and retires its in-flight result", async () => {
+test("BoardWiring: project switch cancels the pending search, retires its in-flight result, and re-arms for the new selection", async () => {
   const origGetBoard = api.getBoard;
+  const origListTasks = api.listTasks;
   try {
+    const listCalls: any[] = [];
+    (api as any).listTasks = async (params: any) => {
+      listCalls.push({ ...params });
+      await new Promise((r) => setTimeout(r, 60)); // the left project's query stays slow…
+      return params.project_id === "A"
+        ? { tasks: [{ id: "a-hit" }], total: 1, limit: 100, offset: 0 }
+        : { tasks: [{ id: "b-hit" }], total: 1, limit: 100, offset: 0 };
+    };
     (api as any).getBoard = async (pid: string) => ({
       project_id: pid, counts: {}, tasks: { todo: [], doing: [], done: [] },
     });
 
     const app = ravnApp() as any;
+    app.connectSse = () => {};
     app.projects = [{ id: "A", name: "Alpha" }, { id: "B", name: "Beta" }];
     app.selectedProjectId = "A";
     app.board = { project_id: "A", counts: {}, tasks: {} };
     app.filterSearch = "term";
-    app._fullTextMatchIds = new Set(["a1"]);
 
-    let fired = false;
-    app._searchDebounce = createDebounce(
-      () => { fired = true; },
-      SEARCH_DEBOUNCE_MS,
-      { setTimer: () => 0, clearTimer: () => {} },
-    );
-    app.scheduleFullTextSearch(); // pending run scoped to project A
-    assert.equal(app._searchDebounce.isPending(), true);
+    const inFlight = app.runFullTextSearch(); // A's query initiates immediately…
+    app.pickProject("B");                    // …and the switch lands before it settles
 
-    app.pickProject("B"); // → selectProject() invalidation path
-    assert.deepEqual([...app._fullTextMatchIds], [], "project A's match ids dropped on switch");
-    assert.equal(fired, false, "the pending run for the left project never fires");
-    assert.equal(app._searchDebounce.isPending(), true, "a fresh run is re-armed for the NEW selection");
+    assert.equal(listCalls.some((p) => p.project_id === "A"), true, "A's already-running query completes its request");
+    await inFlight;
+    await new Promise((r) => setTimeout(r, SEARCH_DEBOUNCE_MS + 200)); // let the re-armed B query settle
+
+    assert.equal(listCalls.filter((p) => p.project_id === "B").length, 1, "exactly ONE re-armed query for the new selection");
+    assert.equal(app.isDescriptionNotesMatch({ id: "a-hit", title: "x" }), false, "A's match ids never surface in B");
+    assert.equal(app.isDescriptionNotesMatch({ id: "b-hit", title: "x" }), true, "B's settled query populates the union");
   } finally {
     (api as any).getBoard = origGetBoard;
+    (api as any).listTasks = origListTasks;
   }
 });
 

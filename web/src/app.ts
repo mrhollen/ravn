@@ -7,7 +7,6 @@
 // READ-ONLY here (agents manage leases via MCP).
 
 import { ApiError, api, errMsg, LS_TOKEN, setApiTimeoutMsForTests } from "./api";
-import { boardFromTaskList } from "./board-scope";
 import { acDoneCount as acDoneFor, acProgressLabel as acProgressLabelFor, acRingInner as acRingFor, completedLabel as acCompletedLabelFor } from "./ac-math";
 import { loadStoredSession } from "./identity";
 import { createAuthModule, type AuthModule } from "./modules/auth";
@@ -15,6 +14,10 @@ import { createProjectsModule, LS_PROJECT, type ProjectsModule } from "./modules
 export { LS_PROJECT } from "./modules/projects"; // moved constant — public export unchanged
 import { FOCUSABLE_SELECTOR, focusElementOnceVisible, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { createMenuController, menuFirstLastIndex, type MenuController } from "./modules/menus";
+import { createBoardModule, readStoredCardDensity } from "./modules/board";
+import type { BoardModule, CardDensity } from "./modules/board";
+import { createBoardViewModule } from "./modules/board-view";
+import type { BoardViewModule } from "./modules/board-view";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
 import {
   beginMove,
@@ -32,37 +35,25 @@ import {
   swipeTargetStatus,
   withTimeout,
 } from "./moves";
-import { canApplyDetail, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
+import { canApplyDetail, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS } from "./refresh";
 import { renderMarkdown } from "./md";
 import { MEMBER_ROLES, canManageRoster, memberMutationErrorCopy, normalizeRoster } from "./members";
 import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
 import { dispatchRealtimeEvent, KNOWN_REALTIME_KINDS } from "./realtime";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
 import {
-  DEFAULT_SORT_DIR,
   SORT_OPTIONS,
-  isSortKey,
-  persistHoistParents,
-  persistSort,
   readStoredHoistParents,
   readStoredSort,
-  type SortKey,
 } from "./sort";
 import {
-  buildBoardQueryString,
   isMobileDetailViewport,
   parseBoardQueryParams,
   taskRouteIdFromPath,
   taskRoutePath,
   type BoardQueryParams,
 } from "./routes";
-import {
-  attentionBadgeKind as badgeKindFor,
-  countStalledExpired,
-  hasAnyFilter,
-  isDescriptionNotesMatch as descNotesMatchFor,
-} from "./filters";
-import { visibleColumns, type ColumnView } from "./columns";
+import type { ColumnView } from "./columns";
 import type {
   AcRow,
   ActorInput,
@@ -132,9 +123,18 @@ export {
   taskRoutePath,
 } from "./routes";
 export type { BoardQueryParams } from "./routes";
+// Phase 2 (board) re-exports — moved constants/types keep the existing import
+// surface (tests, main.ts) intact.
+export {
+  LS_CARD_DENSITY,
+  SEARCH_DEBOUNCE_MS,
+  FULLTEXT_SEARCH_LIMIT,
+  isCardDensity,
+  readStoredCardDensity,
+} from "./modules/board";
+export type { CardDensity } from "./modules/board";
 
 export const LS_ACTOR = "ravn.actor";
-export const LS_CARD_DENSITY = "ravn.card_density";
 /** Persisted per-actor board scope (epic T7); "all" means no mine filter. */
 export const LS_TASK_SCOPE = "ravn.task_scope";
 /** Persisted "My projects" filter (epic T7): true → the open project list is fetched
@@ -280,36 +280,11 @@ export const DEFAULT_DONE_LIMIT = 20;
 /** Separator between the segments of a dynamic document.title (WCAG 2.4.2,
  *  task 01M3MMVV92639YJ5822824NTV1): "<task> – <project> – Rävn". */
 export const TITLE_SEPARATOR = " – ";
-/** Debounce window for the server-side description/notes board search. Local
- *  title/id matching stays instant; this only gates the extra round-trip, so
- *  ~250ms keeps typing latency unperceived (same order as SSE_RELOAD_DEBOUNCE_MS). */
-export const SEARCH_DEBOUNCE_MS = 250;
-/** Page size requested for the full-text query. The server clamps to its max
- *  (100), so this is "as many matches as one page can carry" — matches beyond
- *  a full page simply never surface in the union (documented caveat). */
-export const FULLTEXT_SEARCH_LIMIT = 200;
 const POLL_MS = 15_000;
 const MD_CACHE_MAX = 500;
 // Max visual card offset (px) while swiping. Commit/slop thresholds still use
 // the raw finger displacement — this clamp only limits what is drawn.
 const MAX_SWIPE_PX = 96;
-
-// ------------------------------------------------------------- card density
-export type CardDensity = "comfortable" | "compact";
-
-export function isCardDensity(v: unknown): v is CardDensity {
-  return v === "comfortable" || v === "compact";
-}
-
-/** Read persisted card density preference; anything malformed falls back to comfortable. */
-export function readStoredCardDensity(): CardDensity {
-  try {
-    const raw = safeStorage.getItem(LS_CARD_DENSITY);
-    return isCardDensity(raw) ? raw : "comfortable";
-  } catch {
-    return "comfortable";
-  }
-}
 
 /** Copy text to clipboard using the Async Clipboard API, falling back to
  *  hidden textarea + execCommand for plain-HTTP or unsupported environments. */
@@ -783,8 +758,9 @@ export function ravnApp() {
     /** Request-sequence guards: a response may only apply if no NEWER load was
      *  initiated after it started (see web/src/refresh.ts). Internal-only — not
      *  rendered, so deliberately plain fields outside template concerns. The
-     *  list-projects guard moved to modules/projects.ts with its behavior. */
-    _boardSeq: createSequenceGuard(),
+     *  list-projects guard moved to modules/projects.ts with its behavior; the
+     *  board and full-text-search guards live in modules/board-view.ts /
+     *  modules/board.ts (Phase 2 batch B). */
     /** Trailing debounce coalescing SSE-triggered board/projects reloads into
      *  one round per quiet window (SSE_RELOAD_DEBOUNCE_MS). Created in init(). */
     sseReloadDebounce: null as ReturnType<typeof createDebounce> | null,
@@ -1506,101 +1482,191 @@ export function ravnApp() {
     // ------------------------------------------------------------------- board
     selectedProjectId: safeStorage.getItem(LS_PROJECT) ?? "",
     board: null as Board | null,
-
-    /** IDs of tasks known to be blocked right now — derived directly from the
-     *  board snapshot's `blockers` arrays (see syncBlockedFromBoard) plus
-     *  learned from detail fetches (knownBlocked). BOTH structures are scoped to
-     *  `blockedCacheProjectId`, the project they were derived/learned under:
-     *  readers (isBlocked → card badges + the "Unblocked only" filter) see an
-     *  empty cache whenever the scope differs from the selected project, so a
-     *  switch can never render a "blocked" indicator based on ANOTHER
-     *  project's tasks — including entry points that change selectedProjectId
-     *  without going through selectProject() (deep-link / popstate adoption,
-     *  archive fallback, boot). */
-    blockedIds: new Set<string>(),
-    knownBlocked: {} as Record<string, boolean>,
-    knownBlockers: {} as Record<string, BlockerRef[]>,
     blockerPopoverTaskId: null as string | null,
-    /** Project the blocked-state cache belongs to; "" = nothing derived yet. */
-    blockedCacheProjectId: "" as string,
 
+    /** Lazily-built board CORE module (modules/board.ts — Phase 2 batch B):
+     *  blocked-state cache, sort/hoist/density prefs, filters + full-text search.
+     *  The blocked cache and the search debounce/guards are INTERNAL to that
+     *  module; every bound name below stays a plain root field for the template. */
+    _board: null as BoardModule | null,
+
+    /** Build (on first call) or return the board core module bound to THIS component instance. */
+    _boardModule(): BoardModule {
+      if (this._board) return this._board;
+      const m = createBoardModule({
+        // state-in
+        selectedProjectId: () => this.selectedProjectId,
+        board: () => this.board,
+        sortKey: () => this.sortKey,
+        sortDir: () => this.sortDir,
+        hoistParents: () => this.hoistParents,
+        cardDensity: () => this.cardDensity,
+        blockerPopoverTaskId: () => this.blockerPopoverTaskId,
+        filterPriority: () => this.filterPriority,
+        filterAssignee: () => this.filterAssignee,
+        filterUnblocked: () => this.filterUnblocked,
+        filterStalled: () => this.filterStalled,
+        filterNeedsAttention: () => this.filterNeedsAttention,
+        filterDue: () => this.filterDue,
+        filterSearch: () => this.filterSearch,
+        // state-out
+        setSortKey: (v) => {
+          this.sortKey = v;
+        },
+        setSortDir: (v) => {
+          this.sortDir = v;
+        },
+        setHoistParents: (b) => {
+          this.hoistParents = b;
+        },
+        setCardDensity: (v) => {
+          this.cardDensity = v;
+        },
+        setBlockerPopoverTaskId: (v) => {
+          this.blockerPopoverTaskId = v;
+        },
+        setFilterPriority: (v) => {
+          this.filterPriority = v;
+        },
+        setFilterAssignee: (v) => {
+          this.filterAssignee = v;
+        },
+        setFilterUnblocked: (b) => {
+          this.filterUnblocked = b;
+        },
+        setFilterStalled: (b) => {
+          this.filterStalled = b;
+        },
+        setFilterNeedsAttention: (b) => {
+          this.filterNeedsAttention = b;
+        },
+        setFilterDue: (v) => {
+          this.filterDue = v;
+        },
+        setFilterSearch: (v) => {
+          this.filterSearch = v;
+        },
+        // methods-out
+        syncUrlState: (immediate) => this.syncUrlState(immediate),
+      });
+      this._board = m;
+      return m;
+    },
+
+    /** Lazily-built board VIEW module (modules/board-view.ts — Phase 2 batch B):
+     *  columns/counts, URL query sync and the loadBoard lifecycle. The URL-sync
+     *  timer and the board-load sequence guard are INTERNAL to that module. */
+    _boardView: null as BoardViewModule | null,
+
+    /** Build (on first call) or return the board view module bound to THIS component instance. */
+    _boardViewModule(): BoardViewModule {
+      if (this._boardView) return this._boardView;
+      const m = createBoardViewModule({
+        // state-in
+        selectedProjectId: () => this.selectedProjectId,
+        taskScope: () => this.taskScope,
+        board: () => this.board,
+        showArchived: () => this.showArchived,
+        doneLimit: () => this.doneLimit,
+        nowTick: () => this.nowTick,
+        hoistParents: () => this.hoistParents,
+        sortKey: () => this.sortKey,
+        sortDir: () => this.sortDir,
+        filterPriority: () => this.filterPriority,
+        filterAssignee: () => this.filterAssignee,
+        filterUnblocked: () => this.filterUnblocked,
+        filterStalled: () => this.filterStalled,
+        filterNeedsAttention: () => this.filterNeedsAttention,
+        filterDue: () => this.filterDue,
+        filterSearch: () => this.filterSearch,
+        // state-out
+        setBoard: (v) => {
+          this.board = v;
+        },
+        setProjectForbidden: (b) => {
+          this.projectForbidden = b;
+        },
+        setLoadError: (v) => {
+          this.loadError = v;
+        },
+        setSelectedProjectId: (v) => {
+          this.selectedProjectId = v;
+        },
+        setSortKey: (v) => {
+          this.sortKey = v;
+        },
+        setSortDir: (v) => {
+          this.sortDir = v;
+        },
+        setFilterPriority: (v) => {
+          this.filterPriority = v;
+        },
+        setFilterAssignee: (v) => {
+          this.filterAssignee = v;
+        },
+        setFilterUnblocked: (b) => {
+          this.filterUnblocked = b;
+        },
+        setFilterStalled: (b) => {
+          this.filterStalled = b;
+        },
+        setFilterNeedsAttention: (b) => {
+          this.filterNeedsAttention = b;
+        },
+        setFilterDue: (v) => {
+          this.filterDue = v;
+        },
+        setFilterSearch: (v) => {
+          this.filterSearch = v;
+        },
+        // methods-out
+        openAuthModal: () => this.openAuthModal(),
+        archivedColumns: () => this.archivedColumns(),
+        isBlocked: (id) => this._boardModule().isBlocked(id),
+        fullTextMatchIds: () => this._boardModule().fullTextMatchIds(),
+        syncBlocked: (b) => this._boardModule().syncBlockedFromBoard(b),
+        hasActiveFilters: () => this._boardModule().hasActiveFilters(),
+      });
+      this._boardView = m;
+      return m;
+    },
+
+    // -- board core behavior — owned by modules/board.ts (Phase 2 batch B) ----
+    /** Blocked-state cache + subtask meta (project-scoped, fail-closed). */
     isBlocked(id: string): boolean {
-      // Fail closed: a cache owned by another project counts as empty.
-      if (this.blockedCacheProjectId !== this.selectedProjectId) return false;
-      if (this.blockedIds.has(id) || !!this.knownBlocked[id]) return true;
-      const b = this.board;
-      if (b && b.project_id === this.selectedProjectId) {
-        for (const s of STATUSES) {
-          const t = b.tasks[s]?.find((task) => task.id === id);
-          if (t?.blockers && t.blockers.length > 0) return true;
-        }
-      }
-      return false;
+      return this._boardModule().isBlocked(id);
     },
 
-    /** Sync blockedIds directly from a board snapshot's blockers arrays (ticket 01M5XSNHZJ22E3RS7Z4PY4N274).
-     *  Synchronous, zero extra HTTP requests, and works for any task volume (>100 tasks). */
     syncBlockedFromBoard(b: Board): void {
-      if (this.blockedCacheProjectId !== b.project_id) {
-        this.resetBlockedCache(b.project_id);
-      }
-      const blocked = new Set<string>();
-      for (const s of STATUSES) {
-        for (const t of b.tasks[s] ?? []) {
-          if (t.blockers && t.blockers.length > 0) {
-            blocked.add(t.id);
-          }
-        }
-      }
-      this.blockedIds = blocked;
-      this.blockedCacheProjectId = b.project_id;
+      this._boardModule().syncBlockedFromBoard(b);
     },
 
-    /** Drop every derived/learned blocked entry and re-scope the cache to
-     *  `projectId` ("" = fully empty). Called on project switch and whenever
-     *  a board payload arrives for a project the cache does not belong to. */
     resetBlockedCache(projectId: string): void {
-      this.blockedIds = new Set();
-      this.knownBlocked = {};
-      this.knownBlockers = {};
-      this.blockerPopoverTaskId = null;
-      this.blockedCacheProjectId = projectId;
+      this._boardModule().resetBlockedCache(projectId);
     },
 
     taskBlockers(task: TaskSummary): BlockerRef[] {
-      if (this.blockedCacheProjectId !== this.selectedProjectId) return [];
-      if (task.blockers && task.blockers.length > 0) return task.blockers;
-      if (this.knownBlockers[task.id] && this.knownBlockers[task.id].length > 0) {
-        return this.knownBlockers[task.id];
-      }
-      return [];
+      return this._boardModule().taskBlockers(task);
     },
 
     blockerTooltipText(task: TaskSummary): string {
-      const blks = this.taskBlockers(task);
-      if (blks.length > 0) {
-        return "Blocked by: " + blks.map((b) => b.title + " (" + b.status + ")").join(", ");
-      }
-      return "Has an open blocker";
+      return this._boardModule().blockerTooltipText(task);
     },
 
     toggleBlockerPopover(taskId: string): void {
-      this.blockerPopoverTaskId = this.blockerPopoverTaskId === taskId ? null : taskId;
+      this._boardModule().toggleBlockerPopover(taskId);
     },
 
     subtaskTotal(task: TaskSummary): number {
-      return task.subtask_total ?? 0;
+      return this._boardModule().subtaskTotal(task);
     },
 
     subtaskDone(task: TaskSummary): number {
-      return task.subtask_done ?? 0;
+      return this._boardModule().subtaskDone(task);
     },
 
     subtaskProgressPercent(task: TaskSummary): number {
-      const total = task.subtask_total ?? 0;
-      if (total <= 0) return 0;
-      const done = task.subtask_done ?? 0;
-      return Math.min(100, Math.max(0, Math.round((done / total) * 100)));
+      return this._boardModule().subtaskProgressPercent(task);
     },
 
     // ------------------------------------------------------ client-side sorting
@@ -1615,57 +1681,38 @@ export function ravnApp() {
     hoistParents: readStoredHoistParents(),
 
     toggleHoistParents(): void {
-      this.hoistParents = !this.hoistParents;
-      persistHoistParents(this.hoistParents);
+      this._boardModule().toggleHoistParents();
     },
 
-    /** Change handler: x-model has already written the raw value into sortKey;
-     *  normalize it and apply the criterion's default direction. */
     setSort(): void {
-      const k: SortKey = isSortKey(this.sortKey) ? this.sortKey : "";
-      this.sortKey = k;
-      if (k !== "") this.sortDir = DEFAULT_SORT_DIR[k];
-      this.saveSort();
-      this.syncUrlState(true);
+      this._boardModule().setSort();
     },
 
     toggleSortDir(): void {
-      if (this.sortKey === "") return;
-      this.sortDir = this.sortDir === "asc" ? "desc" : "asc";
-      this.saveSort();
-      this.syncUrlState(true);
+      this._boardModule().toggleSortDir();
     },
 
     clearSort(): void {
-      if (this.sortKey === "") return;
-      this.sortKey = "";
-      this.saveSort();
-      this.syncUrlState(true);
+      this._boardModule().clearSort();
     },
 
     saveSort(): void {
-      persistSort(this.sortKey, this.sortDir);
+      this._boardModule().saveSort();
     },
 
     activeSortLabel(): string {
-      const o = SORT_OPTIONS.find((x) => x.value === this.sortKey);
-      return o && o.value !== "" ? o.label : "";
+      return this._boardModule().activeSortLabel();
     },
 
     // ----------------------------------------------------------- card density
     cardDensity: readStoredCardDensity(),
 
     setCardDensity(mode: CardDensity): void {
-      this.cardDensity = mode;
-      try {
-        safeStorage.setItem(LS_CARD_DENSITY, mode);
-      } catch {
-        /* private mode — non-fatal */
-      }
+      this._boardModule().setCardDensity(mode);
     },
 
     toggleCardDensity(): void {
-      this.setCardDensity(this.cardDensity === "comfortable" ? "compact" : "comfortable");
+      this._boardModule().toggleCardDensity();
     },
 
     // ---------------------------------------------------------- archive mgmt
@@ -1682,7 +1729,7 @@ export function ravnApp() {
      *  refreshed by any archive/unarchive that changes the archived set. */
     archivedBoardTasks: null as Record<Status, TaskSummary[]> | null,
     /** Guards the archived-view fetch: rapid toggle-off/toggle-on must let only
-     *  the NEWEST fetch land (mirrors _boardSeq / _searchSeq). */
+     *  the NEWEST fetch land (mirrors the board module's sequence guards). */
     _archivedSeq: createSequenceGuard(),
     /** Done-column bulk archive confirmation step (two-click confirm inline in
      *  the column footer). Distinct from the PROJECT archive's showArchiveConfirm. */
@@ -2292,378 +2339,120 @@ export function ravnApp() {
     filterSearch: "",
 
     // -------------------------------------------- full-text (desc/notes) search
-    // Task 01M5XTAW3RZ4QJCSW9C3CS255R. The board is fetched UNFILTERED and the
-    // title/id substring match stays an instant client-side filter; on top of
-    // it a debounced GET /tasks?search= (which matches title+description+notes
-    // server-side) contributes its task ids to the filtered set in columns().
-    // _fullTextMatchIds = ids the SERVER matched for the last settled query.
-    // _searchSeq retires out-of-order responses (clearing the input bumps it,
-    // so a late response can never repopulate a cleared board filter).
-    _fullTextMatchIds: new Set<string>(),
-    _searchSeq: createSequenceGuard(),
-    _searchDebounce: null as any,
+    // Task 01M5XTAW3RZ4QJCSW9C3CS255R — owned by modules/board.ts (Phase 2 batch B):
+    // the debounced GET /tasks?search= contributes its task ids to the filtered
+    // set; the debounce and sequence guards are module-internal.
 
-    /** Lazy trailing debounce (250ms) over runFullTextSearch. Created on first
-     *  need so plain ravnApp() instances (unit tests, SSR-ish envs) work
-     *  without init(); init() simply lets the first keystroke build it. */
-    ensureSearchDebounce(): { schedule(): void; cancel(): void; isPending(): boolean } {
-      if (!this._searchDebounce) {
-        this._searchDebounce = createDebounce(() => {
-          void this.runFullTextSearch();
-        }, SEARCH_DEBOUNCE_MS);
-      }
-      return this._searchDebounce;
-    },
-
-    /** (Re)arm the description/notes search from ANY filterSearch or project
-     *  change. Non-empty query → trailing-debounced server query. Empty query
-     *  (cleared input / reset filters) → cancel the pending timer, retire any
-     *  in-flight response via the sequence guard, and drop the match id set —
-     *  so the instant local filter alone restores the unfiltered board. */
+    /** (Re)arm the description/notes search — see modules/board.ts. */
     scheduleFullTextSearch(): void {
-      const q = (this.filterSearch ?? "").trim();
-      if (!q || !this.selectedProjectId) {
-        this._searchDebounce?.cancel();
-        this._searchSeq.next(); // invalidate any in-flight response
-        this._fullTextMatchIds = new Set<string>();
-        return;
-      }
-      this.ensureSearchDebounce().schedule();
+      this._boardModule().scheduleFullTextSearch();
     },
 
-    /** The debounced server query itself. Runs ~SEARCH_DEBOUNCE_MS after the
-     *  LAST keystroke (trailing), so a whole typing burst costs one round-
-     *  trip. Stale-response protection: capture the sequence token at START;
-     *  on resolve, apply only if no newer search was initiated AND the query
-     *  and selected project are unchanged (a late response for an older query
-     *  or a different project must never overwrite current state). */
     async runFullTextSearch(): Promise<void> {
-      const q = (this.filterSearch ?? "").trim();
-      const projectId = this.selectedProjectId;
-      if (!q || !projectId) return;
-      const token = this._searchSeq.next();
-      try {
-        const res = await api.listTasks({ project_id: projectId, search: q, limit: FULLTEXT_SEARCH_LIMIT });
-        if (!this._searchSeq.isFresh(token)) return; // newer search or clear superseded us
-        if (projectId !== this.selectedProjectId) return; // project switched mid-flight
-        if ((this.filterSearch ?? "").trim() !== q) return; // query changed without a new run
-        const ids = new Set<string>();
-        for (const t of res.tasks ?? []) ids.add(t.id);
-        this._fullTextMatchIds = ids;
-      } catch {
-        // Best-effort enrichment: on failure the board simply degrades to the
-        // instant local title/id filter (no toast, no broken state). A FAILED
-        // search that is still the newest clears stale ids so old matches of a
-        // superseded query can't linger.
-        if (this._searchSeq.isFresh(token)) this._fullTextMatchIds = new Set<string>();
-      }
+      await this._boardModule().runFullTextSearch();
     },
 
-    /** AC2's match-source indicator: true when the active search matched this
-     *  card ONLY via description/notes — its title and id do NOT contain the
-     *  substring (cards whose title/id already match show no chip). */
+    /** AC2's match-source indicator — see modules/board.ts. */
     isDescriptionNotesMatch(task: TaskSummary): boolean {
-      return descNotesMatchFor(task, this.filterSearch ?? "", this._fullTextMatchIds);
+      return this._boardModule().isDescriptionNotesMatch(task);
     },
 
     availableAssignees(): string[] {
-      const b = this.board;
-      if (!b) return [];
-      const set = new Set<string>();
-      for (const s of STATUSES) {
-        for (const t of b.tasks[s] ?? []) {
-          if (t.assignee?.name) {
-            set.add(t.assignee.name);
-          }
-        }
-      }
-      return Array.from(set).sort();
+      return this._boardModule().availableAssignees();
     },
 
     hasActiveFilters(): boolean {
-      return hasAnyFilter({
-        priority: this.filterPriority,
-        assignee: this.filterAssignee,
-        unblockedOnly: this.filterUnblocked,
-        stalled: this.filterStalled,
-        needsAttention: this.filterNeedsAttention,
-        due: this.filterDue,
-        search: this.filterSearch,
-      });
+      return this._boardModule().hasActiveFilters();
     },
 
     clearFilters(): void {
-      this.filterPriority = "";
-      this.filterAssignee = "";
-      this.filterUnblocked = false;
-      this.filterStalled = false;
-      this.filterNeedsAttention = false;
-      this.filterDue = "";
-      this.filterSearch = "";
-      // Explicit clear (in addition to the filterSearch $watch that does the
-      // same in-browser): cancel any pending debounced search, retire the
-      // in-flight response, drop the desc/notes match set.
-      this.scheduleFullTextSearch();
-      this.syncUrlState(true);
+      this._boardModule().clearFilters();
     },
 
-    /** Number of `doing` tasks that are abandoned/stalled-expired — expired
-     *  claim lease OR no update for > 60 minutes (isStalledExpired). Reads
-     *  `this.nowTick` so the count re-evaluates live every second, exactly like
-     *  claimExpired(). Counts PRE-FILTER board rows by design: the alert
-     *  summarizes the whole project's doing column, not the filtered view. */
+    // -- stalled alert + attention badge — owned by modules/board-view.ts ----
+    /** Number of `doing` tasks that are abandoned/stalled-expired (live, pre-
+     *  filter) — see modules/board-view.ts. */
     stalledExpiredCount(): number {
-      const b = this.board;
-      if (!b) return 0;
-      return countStalledExpired(b.tasks.doing ?? [], this.nowTick);
+      return this._boardViewModule().stalledExpiredCount();
     },
 
-    /** Accessible title/label for the toolbar alert pill: "N abandoned/stalled
-     *  task(s)" — singular/plural aware. */
+    /** Accessible label for the toolbar alert pill — see modules/board-view.ts. */
     stalledAlertLabel(): string {
-      const n = this.stalledExpiredCount();
-      return `${n} abandoned/stalled ${n === 1 ? "task" : "tasks"}`;
+      return this._boardViewModule().stalledAlertLabel();
     },
 
-    /** Invert the Expired/stalled filter and sync the URL immediately (same
-     *  immediacy as every other filter control). The toolbar alert pill is a
-     *  button on this state; the checkbox in the filter bar binds it directly. */
+    /** Invert the Expired/stalled filter and sync the URL immediately. */
     toggleStalledFilter(): void {
-      this.filterStalled = !this.filterStalled;
-      this.syncUrlState(true);
+      this._boardViewModule().toggleStalledFilter();
     },
 
-    /** Which high-signal comment badge a card's meta cluster should show:
-     *  "question" or "handoff" when the task is OPEN (todo/doing) and its
-     *  newest comment has that kind (needsAttention), null otherwise — done
-     *  tasks, routine kinds (progress/note/decision) and no-comment threads
-     *  never badge. Drives the card-question-badge / card-handoff-badge spans. */
+    /** High-signal comment badge for a card — see modules/board-view.ts. */
     attentionBadgeKind(task: TaskSummary): "question" | "handoff" | null {
-      return badgeKindFor(task);
+      return this._boardViewModule().attentionBadgeKind(task);
     },
 
     // -------------------------------------------------------- URL query sync
-    _urlSyncTimer: null as any,
-    _restoringUrlState: false,
+    // Owned by modules/board-view.ts (Phase 2 batch B): the URL-sync timer and
+    // the restore-flag are module-internal; the root keeps the shims.
 
+    /** Query string for the current board state — see modules/board-view.ts. */
     buildBoardQueryString(): string {
-      return buildBoardQueryString({
-        project: this.selectedProjectId,
-        priority: this.filterPriority,
-        owner: this.filterAssignee,
-        due: this.filterDue,
-        unblocked: this.filterUnblocked,
-        stalled: this.filterStalled,
-        attention: this.filterNeedsAttention,
-        q: this.filterSearch,
-        sort: this.sortKey,
-        dir: this.sortDir,
-      });
+      return this._boardViewModule().buildBoardQueryString();
     },
 
     boardUrl(): string {
-      const q = this.buildBoardQueryString();
-      return q ? `/${q}` : "/";
+      return this._boardViewModule().boardUrl();
     },
 
     syncUrlState(immediate = false): void {
-      if (this._restoringUrlState) return;
-      if (typeof window === "undefined" || !window.history?.replaceState) return;
-      if (taskRouteIdFromPath(window.location.pathname) !== null) return;
-      const doSync = () => {
-        this._urlSyncTimer = null;
-        const query = this.buildBoardQueryString();
-        const newUrl = "/" + query + (window.location.hash || "");
-        const currentUrl =
-          (window.location.pathname || "/") +
-          (window.location.search || "") +
-          (window.location.hash || "");
-        if (newUrl !== currentUrl) {
-          window.history.replaceState(null, "", newUrl);
-        }
-      };
-      if (immediate) {
-        if (this._urlSyncTimer) {
-          clearTimeout(this._urlSyncTimer);
-          this._urlSyncTimer = null;
-        }
-        doSync();
-      } else {
-        if (this._urlSyncTimer) clearTimeout(this._urlSyncTimer);
-        this._urlSyncTimer = setTimeout(doSync, 150);
-      }
+      this._boardViewModule().syncUrlState(immediate);
     },
 
     applyQueryParams(params: BoardQueryParams, isPopState = false): void {
-      this._restoringUrlState = true;
-      try {
-        if (params.project) {
-          this.selectedProjectId = params.project;
-        }
-        if (params.priority !== undefined || isPopState) {
-          this.filterPriority = params.priority ?? "";
-        }
-        if (params.owner !== undefined || isPopState) {
-          this.filterAssignee = params.owner ?? "";
-        }
-        if (params.due !== undefined || isPopState) {
-          this.filterDue = params.due ?? "";
-        }
-        if (params.unblocked !== undefined || isPopState) {
-          this.filterUnblocked = params.unblocked ?? false;
-        }
-        if (params.stalled !== undefined || isPopState) {
-          this.filterStalled = params.stalled ?? false;
-        }
-        if (params.attention !== undefined || isPopState) {
-          this.filterNeedsAttention = params.attention ?? false;
-        }
-        if (params.q !== undefined || isPopState) {
-          this.filterSearch = params.q ?? "";
-        }
-        if (params.sort !== undefined) {
-          this.sortKey = params.sort;
-          this.sortDir = params.dir ?? (DEFAULT_SORT_DIR[params.sort as Exclude<SortKey, "">] || "desc");
-        } else if (isPopState) {
-          const s = readStoredSort();
-          this.sortKey = s.key;
-          this.sortDir = s.dir;
-        }
-      } finally {
-        this._restoringUrlState = false;
-      }
+      this._boardViewModule().applyQueryParams(params, isPopState);
     },
 
     initFromUrl(): void {
-      if (typeof window === "undefined" || !window.location) return;
-      const search = window.location.search || "";
-      if (!search) return;
-      const params = parseBoardQueryParams(search);
-      this.applyQueryParams(params, false);
+      this._boardViewModule().initFromUrl();
     },
 
     listTasksParams(): ListTasksParams {
-      const p: ListTasksParams = { project_id: this.selectedProjectId };
-      if (this.filterPriority !== "") p.priority = Number(this.filterPriority);
-      if (this.filterAssignee && this.filterAssignee !== "unassigned") {
-        p.assignee_name = this.filterAssignee;
-      }
-      if (this.filterUnblocked) p.unblocked = true;
-      if (this.filterDue === "overdue") {
-        p.due_before = new Date().toISOString();
-      } else if (this.filterDue === "today") {
-        const end = new Date();
-        end.setHours(23, 59, 59, 999);
-        p.due_before = end.toISOString();
-      } else if (this.filterDue === "week") {
-        const end = new Date();
-        end.setDate(end.getDate() + 7);
-        end.setHours(23, 59, 59, 999);
-        p.due_before = end.toISOString();
-      }
-      if (this.filterSearch.trim()) {
-        p.search = this.filterSearch.trim();
-      }
-      return p;
+      return this._boardViewModule().listTasksParams();
     },
 
-    /** Per-status OPEN counts for the header's project count pill
-     *  (todo·doing·done). Derived from board.tasks — the same arrays the
-     *  columns render — so the pill can never disagree with the board.
-     *  Pre-filter counts by design: it summarizes the whole project, not
-     *  the current filtered view. All three keys are always present in
-     *  board.tasks ([] when empty), so no undefined guards needed beyond
-     *  a missing board. */
+    // -- counts + columns — owned by modules/board-view.ts (Phase 2 batch B) --
+    /** Per-status OPEN counts for the header pill (pre-filter). */
     statusCounts(): Record<Status, number> {
-      const b = this.board;
-      if (!b) return { todo: 0, doing: 0, done: 0 };
-      const counts = {} as Record<Status, number>;
-      for (const s of STATUSES) counts[s] = b.tasks[s]?.length ?? 0;
-      return counts;
+      return this._boardViewModule().statusCounts();
     },
 
-    /** Number of tasks currently VISIBLE across all three columns
-     *  (i.e. after client-side filtering in columns()). The board itself is
-     *  fetched unfiltered, so the delta against totalTaskCount() is exactly
-     *  what the active filters hide — no pagination/archival lives here. */
     visibleTaskCount(): number {
-      let n = 0;
-      for (const col of this.columns()) n += col.totalCount ?? col.tasks.length;
-      return n;
+      return this._boardViewModule().visibleTaskCount();
     },
 
-    /** Total tasks in the project (pre-filter), summed over all statuses. */
     totalTaskCount(): number {
-      const b = this.board;
-      if (!b) return 0;
-      let n = 0;
-      for (const s of STATUSES) n += b.tasks[s]?.length ?? 0;
-      return n;
+      return this._boardViewModule().totalTaskCount();
     },
 
-    /** Tasks hidden by the active filters (never negative). */
     hiddenTaskCount(): number {
-      return Math.max(0, this.totalTaskCount() - this.visibleTaskCount());
+      return this._boardViewModule().hiddenTaskCount();
     },
 
-    /** True when the board should show the filtered-empty-state banner:
-     *  some filter is active, the project actually HAS tasks, yet every
-     *  column renders zero of them. A truly empty project keeps its plain
-     *  empty look (no banner) so the two states stay distinguishable. */
     showFilteredEmptyState(): boolean {
-      // In the archived view the banner's premise (filters hid the LIVE board's
-      // tasks) is false — a zero-count archived set is just an empty archive.
-      if (this.showArchived) return false;
-      if (!this.hasActiveFilters() || !this.board) return false;
-      return this.totalTaskCount() > 0 && this.visibleTaskCount() === 0;
+      return this._boardViewModule().showFilteredEmptyState();
     },
 
-    /** Column-header status dot color (To Do zinc, Doing amber, Done emerald). */
     colDotClass(status: Status): string {
-      return status === "todo"
-        ? "bg-zinc-400"
-        : status === "doing"
-          ? "bg-amber-500"
-          : "bg-emerald-500";
+      return this._boardViewModule().colDotClass(status);
     },
 
-    /** Column-header count pill tint, matching the column's status. */
     colCountPillClass(status: Status): string {
-      if (status === "doing")
-        return "bg-amber-100 text-amber-800 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800";
-      if (status === "done")
-        return "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-800";
-      return "bg-zinc-100 text-zinc-600 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700";
+      return this._boardViewModule().colCountPillClass(status);
     },
 
+    /** Rendered board columns (filters → sort → Done cap) — see module. */
     columns(): ColumnView[] {
-      const b = this.board;
-      // "Show archived" swaps the DATA SOURCE only (same client filters, same
-      // sort): live board rows vs the separately-fetched archived rows. The two
-      // sets are disjoint server-side, so no per-row archival check is needed.
-      const archived = this.archivedColumns();
-      return visibleColumns(
-        (s) => (archived ? archived[s] : b ? b.tasks[s] ?? [] : []),
-        {
-          priority: this.filterPriority,
-          assignee: this.filterAssignee,
-          unblockedOnly: this.filterUnblocked,
-          stalled: this.filterStalled,
-          needsAttention: this.filterNeedsAttention,
-          due: this.filterDue,
-          search: this.filterSearch,
-          nowTick: this.nowTick,
-          isBlocked: (id) => this.isBlocked(id),
-          fullTextMatchIds: this._fullTextMatchIds,
-        },
-        {
-          hoistParents: this.hoistParents,
-          sortKey: this.sortKey,
-          sortDir: this.sortDir,
-          doneLimit: this.doneLimit,
-          showArchived: this.showArchived,
-        },
-      );
+      return this._boardViewModule().columns();
     },
 
     selectProject(): void {
@@ -2687,19 +2476,17 @@ export function ravnApp() {
       // badges (isBlocked()'s scope check also covers the entry points that
       // change selectedProjectId without going through here).
       this.resetBlockedCache(this.selectedProjectId);
-      // Invalidate anything pending for the PREVIOUS project: drop a queued
-      // debounced SSE reload and retire in-flight board loads. (The fresh
-      // loadBoard() below also bumps the sequence, and late payloads fail the
-      // project-ownership check too — this makes the switch explicit.)
-      this.sseReloadDebounce?.cancel();
-      this._boardSeq.next();
-      // Full-text search results belong to the project being LEFT: cancel the
-      // pending debounced query, retire any in-flight response, and drop the
-      // match id set — then re-arm for the new selection if a term is active
-      // (mirrors how selectProject invalidates pending board loads above).
-      this._searchDebounce?.cancel();
-      this._searchSeq.next();
-      this._fullTextMatchIds = new Set<string>();
+       // Invalidate anything pending for the PREVIOUS project: drop a queued
+       // debounced SSE reload and retire in-flight board loads. (The fresh
+       // loadBoard() below also bumps the sequence, and late payloads fail the
+       // project-ownership check too — this makes the switch explicit.)
+       this.sseReloadDebounce?.cancel();
+       this._boardViewModule().invalidatePendingLoads();
+       // Full-text search results belong to the project being LEFT: cancel the
+       // pending debounced query, retire any in-flight response, and drop the
+       // match id set — then re-arm for the new selection if a term is active
+       // (mirrors how selectProject invalidates pending board loads above).
+       this._boardModule().cancelFullTextSearch();
       this.connectSse();
       void this.loadBoard();
       this.scheduleFullTextSearch();
@@ -2708,63 +2495,15 @@ export function ravnApp() {
       this.updateDocumentTitle();
     },
 
+    /** Board fetch lifecycle (sequence guard, per-actor scoping, 401/403
+     *  handling) — owned by modules/board-view.ts (Phase 2 batch B). */
     async loadBoard(silent = false): Promise<void> {
-      if (!this.selectedProjectId) return;
-      const token = this._boardSeq.next(); // newest initiated board load wins
-      // Per-actor scoping (epic T7): when a `mine` scope is active AND we're not in the
-      // archived view, fetch a flat task list via listTasks({ mine }) and reshape it into
-      // the same Board snapshot columns() reads. "All" / archived keep the getBoard path.
-      // (Scoped rows omit the board-only card badges — ac_total/comment_count/etc.) by
-      // design; that only affects which optional chips render in the scoped view.)
-      const scoped = !this.showArchived && this.taskScope !== "all";
-      try {
-        let b: Board;
-        if (scoped) {
-          const res = await api.listTasks({
-            project_id: this.selectedProjectId,
-            mine: this.taskScope as MineScope,
-            limit: 100,
-          });
-          b = boardFromTaskList(this.selectedProjectId, res.tasks);
-        } else {
-          b = await api.getBoard(this.selectedProjectId);
-        }
-        // Out-of-order + project-switch protection: a stale response (a newer
-        // load started after this one, or the user moved to another project in
-        // flight) must never overwrite current state.
-        const mayApply = (): boolean =>
-          shouldApplyBoard({
-            token,
-            latestToken: this._boardSeq.latest(),
-            payloadProjectId: b.project_id,
-            selectedProjectId: this.selectedProjectId,
-          });
-        if (!mayApply()) return; // stale (newer load started) or foreign project — never overwrite
-        this.board = b;
-        this.syncBlockedFromBoard(b);
-        this.projectForbidden = false; // a successful read means access is fine again
-        if (!silent) this.loadError = "";
-      } catch (e) {
-        if (!silent) this.loadError = errMsg(e);
-        if (ApiError.isUnauthorized(e)) {
-          this.openAuthModal();
-        } else if (ApiError.isForbidden(e)) {
-          // Membership scoping: a signed-in session that can't see THIS project. Not a
-          // credential problem (so no auth modal) — show the one-shot "no access" state
-          // and stop the board/SSE from looping on a resource we may not read.
-          this.board = null;
-          this.projectForbidden = true;
-        }
-      }
+      await this._boardViewModule().loadBoard(silent);
     },
 
-    /** Derive which open tasks are blocked directly from the board snapshot's
-     *  blockers arrays (ticket 01M5XSNHZJ22E3RS7Z4PY4N274).
-     *  Kept as an async method for backward compatibility with callers/tests,
-     *  delegating to synchronous syncBlockedFromBoard without any extra HTTP requests. */
+    /** Derive blocked state from a board snapshot — see modules/board.ts. */
     async refreshBlockedSet(b: Board, isStillCurrent?: () => boolean): Promise<void> {
-      if (isStillCurrent && !isStillCurrent()) return;
-      this.syncBlockedFromBoard(b);
+      await this._boardModule().refreshBlockedSet(b, isStillCurrent);
     },
 
     // ------------------------------------------------------------ realtime SSE
@@ -3747,25 +3486,10 @@ export function ravnApp() {
       }
       this.assigneeInputName = t.assignee?.name ?? "";
       this.assigneeInputType = (t.assignee?.type as "human" | "agent") || "human";
-      // Learn the blocked state for card badges (the board diff is authoritative
-      // on poll; details fill in between polls and cover >100-task projects).
-      // Only while the task's project IS the selected one: a detail refresh
-      // that outlives a project switch must neither add entries to nor delete
-      // from the cache of the project now on screen — board loads own the
-      // scope (see blockedCacheProjectId / selectProject).
-      if (t.project_id === this.selectedProjectId) {
-        const kb = { ...this.knownBlocked };
-        const kblks = { ...this.knownBlockers };
-        if (t.blocked) {
-          kb[t.id] = true;
-          kblks[t.id] = t.blockers || [];
-        } else {
-          delete kb[t.id];
-          delete kblks[t.id];
-        }
-        this.knownBlocked = kb;
-        this.knownBlockers = kblks;
-      }
+      // Learn the blocked state for card badges — owned by modules/board.ts
+      // (scope guard: only while the task's project IS the selected one; board
+      // loads own the cache scope, see selectProject).
+      this._boardModule().learnBlockedFromDetail(t.project_id, t.id, t.blocked, t.blockers);
       // Never clobber an in-progress edit of THIS task; a scratchpad that
       // belongs to a DIFFERENT task is discarded so drafts cannot leak across
       // tasks (AC 2).
@@ -5969,7 +5693,7 @@ export function ravnApp() {
         ];
         for (const prop of watchProps) {
           (this as any).$watch(prop, () => {
-            if (!this._restoringUrlState) {
+            if (!this._boardViewModule().isRestoringUrlState()) {
               this.syncUrlState(prop !== "filterSearch");
             }
           });
@@ -5977,9 +5701,9 @@ export function ravnApp() {
         // Full-text search (01M5XTAW3RZ4QJCSW9C3CS255R): EVERY path that mutates
         // the query or the project re-arms the debounced desc/notes search —
         // typed input (both desktop and mobile bind filterSearch), Reset
-        // filters, boot restore from ?q=... (applyQueryParams runs with
-        // _restoringUrlState set, hence these are SEPARATE watchers that
-        // deliberately do NOT gate on it), browser back/forward, and project
+        // filters, boot restore from ?q=... (applyQueryParams runs with the
+        // board-view module's URL-restore flag set, hence these are SEPARATE
+        // watchers that deliberately do NOT gate on it), browser back/forward, and project
         // switches. Clearing the query lands in scheduleFullTextSearch's empty
         // branch: timer cancelled, in-flight retired, match set dropped.
         (this as any).$watch("filterSearch", () => this.scheduleFullTextSearch());
