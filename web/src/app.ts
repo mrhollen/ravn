@@ -11,6 +11,8 @@ import { boardFromTaskList } from "./board-scope";
 import { acDoneCount as acDoneFor, acProgressLabel as acProgressLabelFor, acRingInner as acRingFor, completedLabel as acCompletedLabelFor } from "./ac-math";
 import { loadStoredSession } from "./identity";
 import { createAuthModule, type AuthModule } from "./modules/auth";
+import { createProjectsModule, LS_PROJECT, type ProjectsModule } from "./modules/projects";
+export { LS_PROJECT } from "./modules/projects"; // moved constant — public export unchanged
 import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
 import {
@@ -29,7 +31,7 @@ import {
   swipeTargetStatus,
   withTimeout,
 } from "./moves";
-import { canApplyDetail, coalesceInFlight, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
+import { canApplyDetail, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, shouldApplyBoard } from "./refresh";
 import { renderMarkdown } from "./md";
 import { MEMBER_ROLES, canManageRoster, memberMutationErrorCopy, normalizeRoster } from "./members";
 import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
@@ -131,7 +133,6 @@ export {
 export type { BoardQueryParams } from "./routes";
 
 export const LS_ACTOR = "ravn.actor";
-export const LS_PROJECT = "ravn.project";
 export const LS_CARD_DENSITY = "ravn.card_density";
 /** Persisted per-actor board scope (epic T7); "all" means no mine filter. */
 export const LS_TASK_SCOPE = "ravn.task_scope";
@@ -780,67 +781,88 @@ export function ravnApp() {
 
     /** Request-sequence guards: a response may only apply if no NEWER load was
      *  initiated after it started (see web/src/refresh.ts). Internal-only — not
-     *  rendered, so deliberately plain fields outside template concerns. */
-    _projectSeq: createSequenceGuard(),
+     *  rendered, so deliberately plain fields outside template concerns. The
+     *  list-projects guard moved to modules/projects.ts with its behavior. */
     _boardSeq: createSequenceGuard(),
     /** Trailing debounce coalescing SSE-triggered board/projects reloads into
      *  one round per quiet window (SSE_RELOAD_DEBOUNCE_MS). Created in init(). */
     sseReloadDebounce: null as ReturnType<typeof createDebounce> | null,
 
-    /** In-flight coalescer for loadProjects, created lazily on first use (so
-     *  the closure's `this` is always the live app instance): a concurrent
-     *  duplicate — observed at boot, where Alpine re-runs init() — JOINS the
-     *  running request instead of racing it, so no caller ever resumes against
-     *  state that a sibling call's sequence guard discarded. */
-    _projectsCoalesced: null as ReturnType<typeof coalesceInFlight<boolean[], void>> | null,
+    // -- projects behavior (owned by modules/projects.ts — Phase 2 batch A) ---
+    // Lazily-built module instance + its dependency surface, closed over `this`.
+    // Built on first use (not in the factory body) so the accessors below close
+    // over Alpine's reactive proxy in the browser: every state-out write then flows
+    // through the proxy and re-renders. The bound FIELDS above stay plain root
+    // fields for the same reason — a nested module-owned state object mutated from
+    // its own closures would not be observed by Vue's reactivity (see modules/auth.ts).
+    _projects: null as ProjectsModule | null,
 
+    /** Build (on first call) or return the projects module bound to THIS component instance. */
+    _projectsModule(): ProjectsModule {
+      if (this._projects) return this._projects;
+      const m = createProjectsModule({
+        // state-in
+        projects: () => this.projects,
+        archivedProjects: () => this.archivedProjects,
+        loadError: () => this.loadError,
+        selectedProjectId: () => this.selectedProjectId,
+        myProjectsOnly: () => this.myProjectsOnly,
+        identity: () => this.identity,
+        newProjectDraft: () => this.newProject,
+        projectBusy: () => this.projectBusy,
+        // state-out
+        setProjects: (v) => {
+          this.projects = v;
+        },
+        setArchivedProjects: (v) => {
+          this.archivedProjects = v;
+        },
+        setLoadError: (v) => {
+          this.loadError = v;
+        },
+        setNewProjectDraft: (d) => {
+          this.newProject = d;
+        },
+        setProjectBusy: (b) => {
+          this.projectBusy = b;
+        },
+        setShowNewProject: (b) => {
+          this.showNewProject = b;
+        },
+        // methods-out
+        actor: () => this.actor(),
+        openAuthModal: () => this.openAuthModal(),
+        connectSse: () => this.connectSse(),
+        loadBoard: () => this.loadBoard(),
+        toast: (msg, kind) => {
+          this.toast(msg, kind);
+        },
+        closeProjectMenu: () => this.closeProjectMenu(),
+        adoptSelectedProject: (id) => {
+          this.selectedProjectId = id;
+          try {
+            safeStorage.setItem(LS_PROJECT, id);
+          } catch { /* ignore */ }
+        },
+        focusCreateNameInput: () => {
+          if (typeof document === "undefined") return;
+          this._focusWhenVisible(document.getElementById("cb-new-project-name-input"));
+        },
+      });
+      this._projects = m;
+      return m;
+    },
+
+    /** Project-list lifecycle — owned by modules/projects.ts (Phase 2 batch A):
+     *  parallel open+archived fetch with the sequence guard and in-flight
+     *  coalescing cores (src/refresh.ts); ?mine=created scoping on the OPEN list. */
     loadProjects(silent = false): Promise<void> {
-      if (!this._projectsCoalesced) {
-        this._projectsCoalesced = coalesceInFlight((s: boolean) => this.loadProjectsCore(s));
-      }
-      return this._projectsCoalesced.call(silent);
+      return this._projectsModule().loadProjects(silent);
     },
 
-    async loadProjectsCore(silent: boolean): Promise<void> {
-      const token = this._projectSeq.next(); // newest initiated list-projects wins
-      try {
-        // Two SEPARATE fetches: the endpoint never combines open + archived in
-        // one response (archived=true is a strict filter), so each list gets its
-        // own call. They run in parallel — total latency stays ~1 RTT. A failed
-        // ARCHIVED fetch degrades gracefully: the restore section simply keeps
-        // showing the last known list instead of erroring the boot path.
-        // "My projects" (epic T7): when the filter is on AND a session identity exists,
-        // restrict the OPEN list to this identity's created projects (?mine=created). The
-        // archived fetch stays unscoped (the endpoint never combines archived + mine), and
-        // logged-out views omit the param so they keep seeing every project.
-        const openList = api.listProjects(
-          false,
-          this.myProjectsOnly && this.identity ? "created" : undefined,
-        );
-        const [res, archivedRes] = await Promise.all([
-          openList,
-          api.listProjects(true).catch((e) => {
-            if (!ApiError.isUnauthorized(e)) console.warn("archived projects fetch failed:", e);
-            return null; // keep the previous archivedProjects on failure
-          }),
-        ]);
-        // A slower EARLIER request must never overwrite counts a newer request
-        // already delivered (out-of-order network responses).
-        if (!this._projectSeq.isFresh(token)) return;
-        this.projects = res.projects;
-        if (archivedRes) this.archivedProjects = archivedRes.projects;
-        if (!silent) this.loadError = "";
-      } catch (e) {
-        if (!silent) this.loadError = errMsg(e);
-        if (ApiError.isUnauthorized(e)) {
-          this.openAuthModal();
-        }
-      }
-    },
-
+    /** Menu option label with live task counts — owned by modules/projects.ts. */
     projectOptionLabel(p: ProjectWithCounts): string {
-      const c = p.task_counts;
-      return `${p.name}  (${c.todo}·${c.doing}·${c.done})`;
+      return this._projectsModule().projectOptionLabel(p);
     },
 
     // -------------------------------------------------- projects dropdown (custom)
@@ -862,9 +884,10 @@ export function ravnApp() {
     _bootPromise: null as Promise<void> | null,
     _projectMenuOutsideHandler: null as ((e: Event) => void) | null,
 
+    /** Trigger label: the selected project's option label, or the placeholder —
+     *  owned by modules/projects.ts (Phase 2 batch A). */
     projectSelectLabel(): string {
-      const p = this.projects.find((x) => x.id === this.selectedProjectId);
-      return p ? this.projectOptionLabel(p) : "Select a project…";
+      return this._projectsModule().projectSelectLabel();
     },
 
     toggleProjectMenu(): void {
@@ -1088,40 +1111,14 @@ export function ravnApp() {
      *  form bar below the header, focusing the name field. The `newProject`
      *  draft is deliberately NOT reset here — a dismissed/cancelled form must
      *  keep its typed input (no phantom creation on submit, no loss on return);
-     *  the draft clears only on successful create. */
+     *  the draft clears only on successful create. Behavior owned by modules/projects.ts. */
     openNewProject(): void {
-      this.closeProjectMenu();
-      this.showNewProject = true;
-      if (typeof window === "undefined" || typeof document === "undefined") return;
-      // The name input exists from boot (static markup under an x-show bar);
-      // wait out the display flush before focusing.
-      this._focusWhenVisible(document.getElementById("cb-new-project-name-input"));
+      this._projectsModule().openNewProject();
     },
 
-    async createProject(): Promise<void> {
-      const name = this.newProject.name.trim();
-      if (this.projectBusy || !name) return;
-      this.projectBusy = true;
-      try {
-        const p = await api.createProject({
-          actor: this.actor(),
-          name,
-          description: this.newProject.description.trim() || undefined,
-        });
-        this.showNewProject = false;
-        this.newProject = { name: "", description: "" };
-        await this.loadProjects();
-        this.selectedProjectId = p.id;
-        try {
-          safeStorage.setItem(LS_PROJECT, p.id);
-        } catch { /* ignore */ }
-        this.connectSse();
-        await this.loadBoard();
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.projectBusy = false;
-      }
+    /** Submit the new-project form — behavior owned by modules/projects.ts (Phase 2 batch A). */
+    createProject(): Promise<void> {
+      return this._projectsModule().createProject();
     },
 
     // ------------------------------------------------------------ opencode options

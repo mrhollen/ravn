@@ -96,7 +96,7 @@ later phase; root = deliberately stays in the composition root.
 | Toasts (interface :600–619; methods :715–779) | :600–619, :715–779 | **root** | stays: cross-cutting service every module emits into — extracting it creates a bus that all modules depend on. Revisit in P2 if two or more modules need richer toast behavior |
 | Auth token + session modal + boot-401 continuation (:780–996) | :780–996 | `modules/auth.ts` | **P2 landed (batch A)** — behavior + typed access interface; the 10 bound fields remain root fields (see Phase 2 status note). Pure session client already in `src/identity.ts` |
 | Focus session bookkeeping (:997–1016) | :997–1016 | `src/focus.ts` (existing — fold residual state into its factory) | P2 |
-| Projects list, selection, counts, create-project dialog (:1017–1099, :1336–1380) | :1017–1099, :1336–1380 | `modules/projects.ts` | P2 (sequence guard/coalescing already pure in `src/refresh.ts`) |
+| Projects list, selection, counts, create-project dialog (:1017–1099, :1336–1380) | :1017–1099, :1336–1380 | `modules/projects.ts` | **P2 landed (batch A)** — list lifecycle (sequence guard + in-flight coalescing now module-owned internals), option/select labels and the create-project dialog moved behind the typed `ProjectsDeps`; `LS_PROJECT` moved here too. The bound fields remain root fields (see Phase 2 status note). `selectProject`'s selection cascade and the dropdown controller stay at root until the board/menu slices land |
 | Projects dropdown — custom menu (:1100–1232) ("project menu" ~:1103 in the audit) | :1100–1232 | `modules/menus.ts` | P2 — shared custom-dropdown controller (open/close, arrow-key nav, outside-click) reused by both header menus; per-menu state stays at root until then |
 | Header settings menu (:1233–1335) ("header menu" ~:1240 in the audit) | :1233–1335 | `modules/menus.ts` (controller); its *contents* belong to their own owners (theme → `src/theme.ts`, auth entry → `modules/auth.ts`, auto-refresh → board/live) | P2 |
 | OpenCode options list (:1381–1439) + drawer run panel (:3924–4027) | :1381–1439, :3924–4027 | `modules/opencode.ts` | P2 |
@@ -160,6 +160,19 @@ and the `RelationRow → RelationView` shaping.
   each as `this.x = v`) give the module §4's "no reference to the root"
   guarantee while keeping every binding name, initial value and template
   attribute byte-identical. Non-DOM coverage: `web/test/auth-module.test.ts`.
+
+- `modules/projects.ts` — projects row, same behavior-only pattern (lazy
+  `_projectsModule()`, typed `ProjectsDeps`): the list lifecycle
+  (`loadProjects` + core), the option/select label derivations, and the
+  create-project dialog. The sequence guard and in-flight coalescer are now
+  module-internal state — they were never rendered, so moving them out of the
+  flat namespace is safe. `LS_PROJECT` moved with its main consumer and is
+  re-exported from the root unchanged. Deliberately left at root (for now):
+  `selectProject`'s cross-cutting selection cascade (board/search/SSE/URL —
+  lands with the board slice), `onMyProjectsToggle` (shares `LS_MY_PROJECTS`
+  with its reader + field initializer), and the dropdown controller
+  (next slice, `modules/menus.ts`). Non-DOM coverage:
+  `web/test/projects-module.test.ts`.
 
 Suggested P2 ordering (dependency-driven): `board` → `sse` → `projects` →
 `auth` → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/
