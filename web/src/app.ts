@@ -7,7 +7,6 @@
 // READ-ONLY here (agents manage leases via MCP).
 
 import { ApiError, api, errMsg, LS_TOKEN, setApiTimeoutMsForTests } from "./api";
-import { acDoneCount as acDoneFor, acProgressLabel as acProgressLabelFor, acRingInner as acRingFor, completedLabel as acCompletedLabelFor } from "./ac-math";
 import { loadStoredSession } from "./identity";
 import { createAuthModule, type AuthModule } from "./modules/auth";
 import { createProjectsModule, LS_PROJECT, type ProjectsModule } from "./modules/projects";
@@ -26,6 +25,8 @@ import { createNewTaskModule } from "./modules/new-task";
 import type { NewTaskModule } from "./modules/new-task";
 import { createTaskEditModule } from "./modules/task-edit";
 import type { TaskEditModule } from "./modules/task-edit";
+import { createAcsModule } from "./modules/acs";
+import type { AcsModule } from "./modules/acs";
 import { createProjectSettingsModule } from "./modules/project-settings";
 import type { ProjectSettingsModule } from "./modules/project-settings";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
@@ -102,7 +103,6 @@ import {
   isOverdue,
   initials,
   isTextArtifact,
-  parseChecklistText,
   priorityClass,
   priorityName,
   relTime,
@@ -3106,6 +3106,46 @@ export function ravnApp() {
       return this._taskEdit;
     },
 
+    _acs: null as AcsModule | null,
+
+    /** Lazily-built acceptance-criteria module (modules/acs.ts — Phase 2
+     *  batch C): toggle/add/paste-add/move/drop reorder + the inline edit
+     *  session (start/cancel/save) and delete, plus the four display helpers
+     *  over src/ac-math.ts. All nine AC state fields stay plain root state
+     *  (every one is template-bound); detail patches go through setDetail as
+     *  whole-object reassignments, exactly as the originals did. */
+    _acsModule(): AcsModule {
+      if (this._acs) return this._acs;
+      this._acs = createAcsModule({
+        // state-in
+        detail: () => this.detail,
+        acBusySeq: () => this.acBusySeq,
+        newAcText: () => this.newAcText,
+        addingAc: () => this.addingAc,
+        editingAcSeq: () => this.editingAcSeq,
+        editingAcText: () => this.editingAcText,
+        savingAcSeq: () => this.savingAcSeq,
+        deletingAcSeq: () => this.deletingAcSeq,
+        reorderingAcs: () => this.reorderingAcs,
+        draggedAcSeq: () => this.draggedAcSeq,
+        // state-out
+        setDetail: (t) => { this.detail = t; },
+        setAcBusySeq: (v) => { this.acBusySeq = v; },
+        setNewAcText: (v) => { this.newAcText = v; },
+        setAddingAc: (v) => { this.addingAc = v; },
+        setEditingAcSeq: (v) => { this.editingAcSeq = v; },
+        setEditingAcText: (v) => { this.editingAcText = v; },
+        setSavingAcSeq: (v) => { this.savingAcSeq = v; },
+        setDeletingAcSeq: (v) => { this.deletingAcSeq = v; },
+        setReorderingAcs: (v) => { this.reorderingAcs = v; },
+        setDraggedAcSeq: (v) => { this.draggedAcSeq = v; },
+        // hooks
+        toast: (m, k) => this.toast(m, k),
+        actor: () => this.actor(),
+      });
+      return this._acs;
+    },
+
     startEditing(): void {
       this._taskEditModule().startEditing();
     },
@@ -3653,230 +3693,59 @@ export function ravnApp() {
     reorderingAcs: false,
     draggedAcSeq: 0,
 
-    /** Toggle one criterion; the 200 response carries the updated AC row, which
-     *  is merged back into detail (authoritative). `ev` is the change event —
-     *  on a FAILED toggle it lets us revert the native checkbox: the click flips
-     *  its .checked before we know the server said no, and ac.done is never
-     *  mutated on failure, so Alpine's :checked binding has no diff to re-sync
-     *  and would otherwise leave the box visually checked (split state). */
+    /** [moved → modules/acs.ts] Delegation shims — acceptance criteria: the
+     *  bodies moved verbatim (only `this.` became deps accessors). */
     async toggleAc(ac: AcRow, ev?: Event): Promise<void> {
-      const t = this.detail;
-      if (!t || this.acBusySeq !== 0) return;
-      this.acBusySeq = ac.seq;
-      try {
-        const updated = await api.toggleAc(t.id, ac.seq, this.actor(), !ac.done);
-        const d = this.detail; // may have been refreshed meanwhile — only patch ours
-        if (d && d.id === t.id) {
-          this.detail = {
-            ...d,
-            acceptance_criteria: d.acceptance_criteria.map((x) =>
-              x.seq === updated.seq ? updated : x,
-            ),
-          };
-        }
-      } catch (e) {
-        // ac.done is still its pre-click value — put the DOM back in line with it.
-        // Duck-typed on purpose: unit tests drive this path with a plain fake
-        // event object (no DOM globals exist under node:test).
-        const el = ev?.target as unknown as { checked?: boolean } | null;
-        if (el && typeof el.checked === "boolean") el.checked = ac.done;
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.acBusySeq = 0;
-      }
+      return await this._acsModule().toggleAc(ac, ev);
     },
 
     async addAc(): Promise<void> {
-      const t = this.detail;
-      const lines = parseChecklistText(this.newAcText);
-      if (!t || lines.length === 0 || this.addingAc) return;
-      this.addingAc = true;
-      try {
-        for (const line of lines) {
-          const fresh = await api.addAc(t.id, line, this.actor());
-          const d = this.detail;
-          if (d && d.id === t.id) {
-            this.detail = {
-              ...d,
-              acceptance_criteria: [...d.acceptance_criteria, fresh],
-            };
-          }
-        }
-        this.newAcText = "";
-        if (lines.length > 1) {
-          this.toast(`${lines.length} criteria added`);
-        }
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.addingAc = false;
-      }
+      return await this._acsModule().addAc();
     },
 
     async handleAcPaste(e: ClipboardEvent): Promise<void> {
-      const raw = e.clipboardData?.getData("text") || "";
-      if (!raw.includes("\n")) return;
-      e.preventDefault();
-      const lines = parseChecklistText(raw);
-      if (lines.length === 0) return;
-      const t = this.detail;
-      if (!t || this.addingAc) return;
-      this.addingAc = true;
-      try {
-        for (const line of lines) {
-          const fresh = await api.addAc(t.id, line, this.actor());
-          const d = this.detail;
-          if (d && d.id === t.id) {
-            this.detail = {
-              ...d,
-              acceptance_criteria: [...d.acceptance_criteria, fresh],
-            };
-          }
-        }
-        this.newAcText = "";
-        this.toast(`${lines.length} criteria added`);
-      } catch (err) {
-        this.toast(errMsg(err), "error");
-      } finally {
-        this.addingAc = false;
-      }
+      return await this._acsModule().handleAcPaste(e);
     },
 
     async moveAc(seq: number, direction: "up" | "down"): Promise<void> {
-      const t = this.detail;
-      if (!t || this.reorderingAcs) return;
-      const acs = [...t.acceptance_criteria];
-      const index = acs.findIndex((x) => x.seq === seq);
-      if (index === -1) return;
-      const targetIndex = direction === "up" ? index - 1 : index + 1;
-      if (targetIndex < 0 || targetIndex >= acs.length) return;
-
-      const temp = acs[index];
-      acs[index] = acs[targetIndex];
-      acs[targetIndex] = temp;
-
-      const newSeqs = acs.map((x) => x.seq);
-      this.reorderingAcs = true;
-      try {
-        const updated = await api.reorderAcs(t.id, newSeqs, this.actor());
-        const d = this.detail;
-        if (d && d.id === t.id) {
-          this.detail = {
-            ...d,
-            acceptance_criteria: updated,
-          };
-        }
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.reorderingAcs = false;
-      }
+      return await this._acsModule().moveAc(seq, direction);
     },
 
     async dropAc(targetSeq: number): Promise<void> {
-      const sourceSeq = this.draggedAcSeq;
-      this.draggedAcSeq = 0;
-      if (!sourceSeq || sourceSeq === targetSeq) return;
-      const t = this.detail;
-      if (!t || this.reorderingAcs) return;
-      const acs = [...t.acceptance_criteria];
-      const sourceIdx = acs.findIndex((x) => x.seq === sourceSeq);
-      const targetIdx = acs.findIndex((x) => x.seq === targetSeq);
-      if (sourceIdx === -1 || targetIdx === -1) return;
-      const [item] = acs.splice(sourceIdx, 1);
-      acs.splice(targetIdx, 0, item);
-      const newSeqs = acs.map((x) => x.seq);
-      this.reorderingAcs = true;
-      try {
-        const updated = await api.reorderAcs(t.id, newSeqs, this.actor());
-        const d = this.detail;
-        if (d && d.id === t.id) {
-          this.detail = {
-            ...d,
-            acceptance_criteria: updated,
-          };
-        }
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.reorderingAcs = false;
-      }
+      return await this._acsModule().dropAc(targetSeq);
     },
 
     startEditingAc(ac: AcRow): void {
-      this.editingAcSeq = ac.seq;
-      this.editingAcText = ac.text;
+      this._acsModule().startEditingAc(ac);
     },
 
     cancelEditingAc(): void {
-      this.editingAcSeq = 0;
-      this.editingAcText = "";
+      this._acsModule().cancelEditingAc();
     },
 
     async saveAcEdit(seq: number): Promise<void> {
-      const t = this.detail;
-      const text = this.editingAcText.trim();
-      if (!t || !text || this.savingAcSeq !== 0) return;
-      this.savingAcSeq = seq;
-      try {
-        const updated = await api.editAcText(t.id, seq, text, this.actor());
-        const d = this.detail;
-        if (d && d.id === t.id) {
-          this.detail = {
-            ...d,
-            acceptance_criteria: d.acceptance_criteria.map((x) =>
-              x.seq === seq ? updated : x,
-            ),
-          };
-        }
-        this.editingAcSeq = 0;
-        this.editingAcText = "";
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.savingAcSeq = 0;
-      }
+      return await this._acsModule().saveAcEdit(seq);
     },
 
     async deleteAc(seq: number): Promise<void> {
-      const t = this.detail;
-      if (!t || this.deletingAcSeq !== 0) return;
-      this.deletingAcSeq = seq;
-      try {
-        await api.deleteAc(t.id, seq, this.actor());
-        const d = this.detail;
-        if (d && d.id === t.id) {
-          this.detail = {
-            ...d,
-            acceptance_criteria: d.acceptance_criteria.filter((x) => x.seq !== seq),
-          };
-        }
-        if (this.editingAcSeq === seq) {
-          this.cancelEditingAc();
-        }
-        this.toast("Acceptance criterion removed");
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.deletingAcSeq = 0;
-      }
+      return await this._acsModule().deleteAc(seq);
     },
 
     acDoneCount(): number {
-      return acDoneFor(this.detail?.acceptance_criteria ?? []);
+      return this._acsModule().acDoneCount();
     },
 
     /** AC progress ring inner SVG (geometry + slot math in src/ac-math.ts). */
     acRingInner(): string {
-      return acRingFor(this.detail?.acceptance_criteria ?? []);
+      return this._acsModule().acRingInner();
     },
 
     acProgressLabel(): string {
-      return acProgressLabelFor(this.detail?.acceptance_criteria ?? []);
+      return this._acsModule().acProgressLabel();
     },
 
     completedLabel(ac: AcRow): string {
-      return acCompletedLabelFor(ac);
+      return this._acsModule().completedLabel(ac);
     },
 
     // ----------------------------------------------------------------- comments
