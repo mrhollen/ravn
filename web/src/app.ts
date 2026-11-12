@@ -29,6 +29,7 @@ import { createAcsModule } from "./modules/acs";
 import type { AcsModule } from "./modules/acs";
 import { createCommentsModule } from "./modules/comments";
 import { createArtifactsModule, type ArtifactsModule } from "./modules/artifacts";
+import { createClaimsModule, type ClaimsModule } from "./modules/claims";
 import type { CommentsModule } from "./modules/comments";
 import { createProjectSettingsModule } from "./modules/project-settings";
 import type { ProjectSettingsModule } from "./modules/project-settings";
@@ -3167,7 +3168,31 @@ export function ravnApp() {
         isWebHref: (s) => this.isWebHref(s),
         confirmDiscard: (msg) => this.confirmDiscard(msg),
       });
-      return this._artifacts;
+       return this._artifacts;
+     },
+
+    _claims: null as ClaimsModule | null,
+
+    /** Lazily-built claims module (modules/claims.ts — Phase 2 batch C):
+     *  claim/release/heartbeat flows + the pure display helpers. `claimBusy`
+     *  is template-bound → root; `nowTick`/`_tickerId` are the shared 1s
+     *  ticker also consumed by the board stalled filter → root (see _runBoot). */
+    _claimsModule(): ClaimsModule {
+      if (this._claims) return this._claims;
+      this._claims = createClaimsModule({
+        // state-in
+        detail: () => this.detail,
+        nowTick: () => this.nowTick,
+        claimBusy: () => this.claimBusy,
+        // state-out
+        setClaimBusy: (v) => { this.claimBusy = v; },
+        // hooks
+        toast: (m, k) => this.toast(m, k),
+        actor: () => this.actor(),
+        refreshDetail: (f) => this.refreshDetail(f),
+        loadBoard: (f) => this.loadBoard(f),
+      });
+      return this._claims;
     },
 
     startEditing(): void {
@@ -3896,42 +3921,25 @@ export function ravnApp() {
     },
 
     // ---------------------------------------------------------------- claims
+    // (state + handlers live in modules/claims.ts — Phase 2 batch C)
     claimBusy: false,
     nowTick: Date.now(),
     _tickerId: null as ReturnType<typeof setInterval> | null,
 
     /** Live-ticking MM:SS countdown until lease expiry for the claim capsule. */
     claimCountdown(t?: Pick<TaskSummary, "claim_expires_at"> | null): string {
-      return formatClaimCountdown(t?.claim_expires_at, this.nowTick);
+      return this._claimsModule().claimCountdown(t);
     },
 
-    /** Whether a task's claim lease has EXPIRED. Reads `this.nowTick` (the same
+    /** Whether a task's claim lease has EXPIRED. Reads `nowTick` (the same
      *  value claimCountdown() uses) so Alpine tracks it: the muted "expired"
      *  styling flips live the moment a lease crosses expiry, without any poll. */
     claimExpired(t: Pick<TaskSummary, "claimed_by" | "claim_expires_at">): boolean {
-      return isClaimExpired(t, this.nowTick);
+      return this._claimsModule().claimExpired(t);
     },
 
     async claimCurrentTask(): Promise<void> {
-      const d = this.detail;
-      if (!d || this.claimBusy) return;
-      this.claimBusy = true;
-      try {
-        const fresh = await api.claimTask(d.id, this.actor());
-        if (this.detail && this.detail.id === d.id) {
-          this.detail.status = fresh.status;
-          this.detail.version = fresh.version;
-          this.detail.claimed_by = fresh.claimed_by;
-          this.detail.claim_expires_at = fresh.claim_expires_at;
-          this.detail.updated_at = fresh.updated_at;
-        }
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-        this.toast(`Claimed task as ${this.actor().name}`);
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.claimBusy = false;
-      }
+      return await this._claimsModule().claimCurrentTask();
     },
 
     claimTask(): Promise<void> {
@@ -3939,25 +3947,7 @@ export function ravnApp() {
     },
 
     async releaseCurrentTask(): Promise<void> {
-      const d = this.detail;
-      if (!d || this.claimBusy) return;
-      this.claimBusy = true;
-      try {
-        const fresh = await api.releaseTask(d.id, this.actor());
-        if (this.detail && this.detail.id === d.id) {
-          this.detail.status = fresh.status;
-          this.detail.version = fresh.version;
-          this.detail.claimed_by = undefined;
-          this.detail.claim_expires_at = undefined;
-          this.detail.updated_at = fresh.updated_at;
-        }
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-        this.toast("Released claim on task");
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.claimBusy = false;
-      }
+      return await this._claimsModule().releaseCurrentTask();
     },
 
     releaseTask(): Promise<void> {
@@ -3965,27 +3955,7 @@ export function ravnApp() {
     },
 
     async heartbeatCurrentTask(): Promise<void> {
-      const d = this.detail;
-      if (!d || this.claimBusy) return;
-      this.claimBusy = true;
-      try {
-        const fresh = await api.heartbeatTask(d.id, this.actor());
-        if (this.detail && this.detail.id === d.id) {
-          this.detail.claim_expires_at = fresh.claim_expires_at;
-        }
-        await this.refreshDetail(true);
-        this.toast("Heartbeat recorded — lease extended");
-      } catch (e) {
-        if (ApiError.isNotClaimed(e)) {
-          // No lease exists at all (not a conflict with a live holder) — say
-          // the actionable part plainly instead of echoing the raw body.
-          this.toast("No claim lease on this task — claim it first.", "error");
-        } else {
-          this.toast(errMsg(e), "error");
-        }
-      } finally {
-        this.claimBusy = false;
-      }
+      return await this._claimsModule().heartbeatCurrentTask();
     },
 
     heartbeatTask(): Promise<void> {
