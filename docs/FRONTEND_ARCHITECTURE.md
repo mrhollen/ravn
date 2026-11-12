@@ -119,7 +119,7 @@ later phase; root = deliberately stays in the composition root.
 | New-task form + create flow (:3463–3621) | :3463–3621 | `modules/new-task.ts` | **P2 landed (batch B)** — dialog lifecycle, dirty-draft guard and the whole create flow behind typed `NewTaskDeps`; every bound field (incl. `newTaskTarget`, which the modal header renders) stays plain root state; only the focus session is module-internal. Keyboard dispatch (`n` / Escape cascade) keeps calling the flat surface at root |
 | Task detail drawer state/lifecycle (:3622–3646) + full-page `/tasks/<id>` view (:3647–3923) ("routes" ~:3650 / "detail+AC" in the audit) | :3622–3923 | `modules/detail.ts` (P2 state; `canApplyDetail` ownership guard already pure in `src/refresh.ts`; route helpers P1 in `src/routes.ts`) | P1+P2 |
 | Copy-ID toolbar action (:4028–4181) | :4028–4181 | `modules/detail.ts` (drawer toolbar behavior; clipboard core P1 → `src/util.ts`) | P1+P2 |
-| Quick metadata (priority & due popovers, :4182–4321) + assignee popover (:4322–4398) + title/description edit with dirty drafts (:4399–4584) + notes scratchpad (:4994–5097) | :4182–4584, :4994–5097 | `modules/task-edit.ts` (P2; draft serialize keys already in `src/drafts.ts`) — all "edit a field on the open task" behavior, one module | **PARTIAL (batch B)** — the core edit session (startEditing/cancelEditing, snapshot discard guard, description-draft pair, saveTaskEdit + 409 retry) landed; quick-metadata popovers, assignee popover and the notes scratchpad still ride at root in this row's region |
+| Quick metadata (priority & due popovers, :4182–4321) + assignee popover (:4322–4398) + title/description edit with dirty drafts (:4399–4584) + notes scratchpad (:4994–5097) | :4182–4584, :4994–5097 | `modules/task-edit.ts` (P2; draft serialize keys already in `src/drafts.ts`) — all "edit a field on the open task" behavior, one module | **PARTIAL (batch B)** — core edit session AND quick-metadata popovers + assignee update flows landed (the four-popover mutex writes the status/owner flags through typed setters; `toggleStatusMenu`/`toggleOwnerPopover` stay with the operational bar → detail); only the notes scratchpad still rides at root |
 | Acceptance criteria (:5098–5359) ("detail+AC" ~:5115 in the audit) | :5098–5359 | `modules/acs.ts` | P2 (`parseChecklistText` already pure in `src/util.ts`) |
 | Comments (:5360–5481) | :5360–5481 | `modules/comments.ts` | P2 (draft keys already in `src/drafts.ts`) |
 | Artifacts (:5482–5728) | :5482–5728 | `modules/artifacts.ts` | P2 (`isTextArtifact` already pure in `src/util.ts`) |
@@ -314,14 +314,22 @@ stateful modules rather than one:
   `drafts.test.ts`, so it stays root per the bound-name precedent — remain
   plain root state; the module owns NO closure-internal state (no dialog focus
   session to own). Seven delegation shims keep the surface byte-identical;
-  index.html untouched. The row's quick-metadata popovers, assignee popover and
-  notes scratchpad still ride at root. `descriptionDraftKey` import dropped from
-  app.ts (module-only now). Non-DOM coverage: `web/test/task-edit-module.test.ts`
-  (30 tests, stub state + patched api; the drafts.test.ts surface tests stay
-  unchanged and green through the shims). `app.ts` shrank 5,273 → **5,176**
-  (−97). Burn-down: the re-anchored model priced this FULL row at ≈−298
-  (4,976→4,678 in its tail); the partial landing delivered −97, so ≈−200 of it
-  still rides with the popovers + notes scratchpad when they move.
+  index.html untouched. `descriptionDraftKey` import dropped from app.ts
+  (module-only now). Non-DOM coverage: `web/test/task-edit-module.test.ts`.
+  `app.ts` shrank 5,273 → **5,176** (−97).
+
+  **Continued in `80b2feb`:** the row's quick-metadata popovers
+  (togglePriorityPopover/toggleDuePopover + updatePriority/saveDueDate/
+  clearDueDate/updateDueDate) and assignee update flows (saveAssignee/
+  clearAssignee/updateAssignee) moved into the same module — 9 more shims,
+  suite now at 55 tests (+25; documents the retry's explicit
+  `clear_assignee: false` parity quirk). All eight state fields are
+  template-bound so they stay root; TaskEditDeps grows to 13 state-in /
+  15 state-out / 6 hooks. Only the notes scratchpad remains at root in this
+  row (it rides with the detail cascade — `toggleStatusMenu`/`toggleOwnerPopover`
+  likewise stay for modules/detail.ts). `app.ts` shrank 5,176 → **5,032**
+  (−144; cumulative −241 vs the ≈−298 full-row price — the remainder is the
+  notes scratchpad region).
 
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `task-edit` (core edit session landed; quick-metadata + assignee
