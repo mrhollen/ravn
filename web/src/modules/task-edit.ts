@@ -10,7 +10,15 @@
 //      @input handler + clearDescriptionDraft) over safeStorage;
 //   4. saveTaskEdit — payload assembly with due/assignee set-or-clear
 //      semantics and the version-conflict retry that re-reads the fresh task
-//      (applyDetail hook), preserves the draft and retries once.
+//      (applyDetail hook), preserves the draft and retries once;
+//   5. quick-metadata popovers: togglePriorityPopover/toggleDuePopover (the
+//      four-popover mutex) + updatePriority/saveDueDate/clearDueDate/
+//      updateDueDate with per-write optimistic patching of the open task's
+//      row fields and a one-shot 409 re-read retry;
+//   6. assignee handlers: saveAssignee/clearAssignee/updateAssignee with the
+//      same patch+retry shape (the owner popover's OPEN toggle lives in the
+//      operational-bar region that lands with modules/detail.ts — it seeds
+//      these input fields through the flat root state).
 // Every body moved verbatim from app.ts except `this.` → closure/deps renames
 // (see docs/FRONTEND_ARCHITECTURE.md §2).
 //
@@ -39,18 +47,40 @@ export interface TaskEditDraftState {
 
 // ----------------------------------------------------------------------- deps
 export interface TaskEditDeps {
-  // state-in
+  // state-in — core edit session
   detail: () => TaskDetail | null;
   editDraft: () => TaskEditDraftState;
   editDraftOriginal: () => TaskEditDraftState;
   editingTask: () => boolean;
   savingEdit: () => boolean;
-  // state-out
+  // state-out — core edit session
   setEditingTask: (v: boolean) => void;
   setSavingEdit: (v: boolean) => void;
   setDescShowPreview: (v: boolean) => void;
   setEditDraft: (d: TaskEditDraftState) => void;
   setEditDraftOriginal: (d: TaskEditDraftState) => void;
+  // state-in — quick-metadata popovers + assignee inputs
+  priorityPopoverOpen: () => boolean;
+  duePopoverOpen: () => boolean;
+  dueInputVal: () => string;
+  priorityBusy: () => boolean;
+  dueBusy: () => boolean;
+  assigneeInputName: () => string;
+  assigneeInputType: () => "human" | "agent";
+  assigneeBusy: () => boolean;
+  // state-out — quick-metadata popovers + assignee inputs. The two popover
+  // flags OWNED by the operational bar (status/owner, landed with detail) are
+  // written through these setters so the four-popover mutex stays intact.
+  setPriorityPopoverOpen: (v: boolean) => void;
+  setDuePopoverOpen: (v: boolean) => void;
+  setDueInputVal: (v: string) => void;
+  setPriorityBusy: (v: boolean) => void;
+  setDueBusy: (v: boolean) => void;
+  setOwnerPopoverOpen: (v: boolean) => void;
+  setStatusMenuOpen: (v: boolean) => void;
+  setAssigneeInputName: (v: string) => void;
+  setAssigneeInputType: (v: "human" | "agent") => void;
+  setAssigneeBusy: (v: boolean) => void;
   // hooks — root-owned orchestration that stays outside this module
   toast: (msg: string, kind?: "error" | "info") => number;
   actor: () => ActorInput;
@@ -224,6 +254,218 @@ export function createTaskEditModule(deps: TaskEditDeps) {
     }
   }
 
+  function togglePriorityPopover(): void {
+    deps.setPriorityPopoverOpen(!deps.priorityPopoverOpen());
+    deps.setDuePopoverOpen(false);
+    deps.setStatusMenuOpen(false);
+    deps.setOwnerPopoverOpen(false);
+  }
+
+  function toggleDuePopover(): void {
+    deps.setDuePopoverOpen(!deps.duePopoverOpen());
+    deps.setPriorityPopoverOpen(false);
+    deps.setStatusMenuOpen(false);
+    deps.setOwnerPopoverOpen(false);
+    if (deps.duePopoverOpen() && deps.detail()) {
+      const d = deps.detail();
+      deps.setDueInputVal(d?.due_at ? dueCalendarDate(d.due_at) : "");
+    }
+  }
+
+  async function updatePriority(priority: number): Promise<void> {
+    deps.setPriorityPopoverOpen(false);
+    const d = deps.detail();
+    if (!d || deps.priorityBusy() || d.priority === priority) return;
+    deps.setPriorityBusy(true);
+    const req: UpdateTaskReq = {
+      actor: deps.actor(),
+      version: d.version,
+      priority,
+    };
+    try {
+      const updated = await api.updateTask(d.id, req);
+      const cur = deps.detail();
+      if (cur && cur.id === d.id) {
+        cur.priority = updated.priority;
+        cur.version = updated.version;
+        cur.updated_at = updated.updated_at;
+      }
+      await Promise.all([deps.refreshDetail(true), deps.loadBoard(true)]);
+      deps.toast(`Priority set to P${priority}`);
+    } catch (e) {
+      if (ApiError.isVersionConflict(e)) {
+        try {
+          const fresh = await api.getTask(d.id);
+          deps.applyDetail(fresh);
+          const retryReq: UpdateTaskReq = {
+            actor: deps.actor(),
+            version: fresh.version,
+            priority,
+          };
+          const updated = await api.updateTask(d.id, retryReq);
+          const cur = deps.detail();
+          if (cur && cur.id === d.id) {
+            cur.priority = updated.priority;
+            cur.version = updated.version;
+            cur.updated_at = updated.updated_at;
+          }
+          await Promise.all([deps.refreshDetail(true), deps.loadBoard(true)]);
+          deps.toast(`Priority set to P${priority}`);
+        } catch (e2) {
+          deps.toast(errMsg(e2), "error");
+        }
+      } else {
+        deps.toast(errMsg(e), "error");
+      }
+    } finally {
+      deps.setPriorityBusy(false);
+    }
+  }
+
+  async function saveDueDate(): Promise<void> {
+    deps.setDuePopoverOpen(false);
+    const d = deps.detail();
+    if (!d || deps.dueBusy()) return;
+    const dueIso = dateInputToIso(deps.dueInputVal());
+    await updateDueDate(dueIso);
+  }
+
+  async function clearDueDate(): Promise<void> {
+    deps.setDuePopoverOpen(false);
+    deps.setDueInputVal("");
+    await updateDueDate(null);
+  }
+
+  async function updateDueDate(dueIso?: string | null): Promise<void> {
+    const d = deps.detail();
+    if (!d || deps.dueBusy()) return;
+    deps.setDueBusy(true);
+    const req: UpdateTaskReq = {
+      actor: deps.actor(),
+      version: d.version,
+    };
+    if (dueIso) {
+      req.due_at = dueIso;
+    } else {
+      req.clear_due = true;
+    }
+    try {
+      const updated = await api.updateTask(d.id, req);
+      const cur = deps.detail();
+      if (cur && cur.id === d.id) {
+        cur.due_at = updated.due_at;
+        cur.version = updated.version;
+        cur.updated_at = updated.updated_at;
+        deps.setDueInputVal(updated.due_at ? dueCalendarDate(updated.due_at) : "");
+      }
+      await Promise.all([deps.refreshDetail(true), deps.loadBoard(true)]);
+      deps.toast(dueIso ? "Due date updated" : "Due date cleared");
+    } catch (e) {
+      if (ApiError.isVersionConflict(e)) {
+        try {
+          const fresh = await api.getTask(d.id);
+          deps.applyDetail(fresh);
+          const retryReq: UpdateTaskReq = {
+            actor: deps.actor(),
+            version: fresh.version,
+            due_at: dueIso || undefined,
+            clear_due: !dueIso,
+          };
+          const updated = await api.updateTask(d.id, retryReq);
+          const cur = deps.detail();
+          if (cur && cur.id === d.id) {
+            cur.due_at = updated.due_at;
+            cur.version = updated.version;
+            cur.updated_at = updated.updated_at;
+            deps.setDueInputVal(updated.due_at ? dueCalendarDate(updated.due_at) : "");
+          }
+          await Promise.all([deps.refreshDetail(true), deps.loadBoard(true)]);
+          deps.toast(dueIso ? "Due date updated" : "Due date cleared");
+        } catch (e2) {
+          deps.toast(errMsg(e2), "error");
+        }
+      } else {
+        deps.toast(errMsg(e), "error");
+      }
+    } finally {
+      deps.setDueBusy(false);
+    }
+  }
+
+  async function saveAssignee(): Promise<void> {
+    deps.setOwnerPopoverOpen(false);
+    const d = deps.detail();
+    if (!d || deps.assigneeBusy()) return;
+    const name = deps.assigneeInputName().trim();
+    const type = deps.assigneeInputType() || "human";
+    await updateAssignee(name, type);
+  }
+
+  async function clearAssignee(): Promise<void> {
+    deps.setOwnerPopoverOpen(false);
+    deps.setAssigneeInputName("");
+    await updateAssignee("", "human");
+  }
+
+  async function updateAssignee(name: string, type: "human" | "agent" = "human"): Promise<void> {
+    const d = deps.detail();
+    if (!d || deps.assigneeBusy()) return;
+    deps.setAssigneeBusy(true);
+    const trimmed = name.trim();
+    const req: UpdateTaskReq = {
+      actor: deps.actor(),
+      version: d.version,
+    };
+    if (trimmed) {
+      req.assignee = { name: trimmed, type };
+    } else {
+      req.clear_assignee = true;
+    }
+    try {
+      const updated = await api.updateTask(d.id, req);
+      const cur = deps.detail();
+      if (cur && cur.id === d.id) {
+        cur.assignee = updated.assignee;
+        cur.version = updated.version;
+        cur.updated_at = updated.updated_at;
+        deps.setAssigneeInputName(updated.assignee?.name ?? "");
+        deps.setAssigneeInputType((updated.assignee?.type as "human" | "agent") || "human");
+      }
+      await Promise.all([deps.refreshDetail(true), deps.loadBoard(true)]);
+      deps.toast(trimmed ? `Assigned to ${trimmed}` : "Assignee cleared");
+    } catch (e) {
+      if (ApiError.isVersionConflict(e)) {
+        try {
+          const fresh = await api.getTask(d.id);
+          deps.applyDetail(fresh);
+          const retryReq: UpdateTaskReq = {
+            actor: deps.actor(),
+            version: fresh.version,
+            assignee: trimmed ? { name: trimmed, type } : undefined,
+            clear_assignee: !trimmed,
+          };
+          const updated = await api.updateTask(d.id, retryReq);
+          const cur = deps.detail();
+          if (cur && cur.id === d.id) {
+            cur.assignee = updated.assignee;
+            cur.version = updated.version;
+            cur.updated_at = updated.updated_at;
+            deps.setAssigneeInputName(updated.assignee?.name ?? "");
+            deps.setAssigneeInputType((updated.assignee?.type as "human" | "agent") || "human");
+          }
+          await Promise.all([deps.refreshDetail(true), deps.loadBoard(true)]);
+          deps.toast(trimmed ? `Assigned to ${trimmed}` : "Assignee cleared");
+        } catch (e2) {
+          deps.toast(errMsg(e2), "error");
+        }
+      } else {
+        deps.toast(errMsg(e), "error");
+      }
+    } finally {
+      deps.setAssigneeBusy(false);
+    }
+  }
+
   return {
     startEditing,
     cancelEditing,
@@ -232,6 +474,15 @@ export function createTaskEditModule(deps: TaskEditDeps) {
     saveDescriptionDraft,
     clearDescriptionDraft,
     saveTaskEdit,
+    togglePriorityPopover,
+    toggleDuePopover,
+    updatePriority,
+    saveDueDate,
+    clearDueDate,
+    updateDueDate,
+    saveAssignee,
+    clearAssignee,
+    updateAssignee,
   };
 }
 

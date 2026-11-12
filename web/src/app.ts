@@ -96,8 +96,6 @@ import {
   artifactKindClass,
   claimHint,
   commentKindClass,
-  dateInputToIso,
-  dueCalendarDate,
   dueLabel,
   formatClaimCountdown,
   isClaimExpired,
@@ -2983,136 +2981,28 @@ export function ravnApp() {
     dueBusy: false,
 
     togglePriorityPopover(): void {
-      this.priorityPopoverOpen = !this.priorityPopoverOpen;
-      this.duePopoverOpen = false;
-      this.statusMenuOpen = false;
-      this.ownerPopoverOpen = false;
+      this._taskEditModule().togglePriorityPopover();
     },
 
     toggleDuePopover(): void {
-      this.duePopoverOpen = !this.duePopoverOpen;
-      this.priorityPopoverOpen = false;
-      this.statusMenuOpen = false;
-      this.ownerPopoverOpen = false;
-      if (this.duePopoverOpen && this.detail) {
-        this.dueInputVal = this.detail.due_at ? dueCalendarDate(this.detail.due_at) : "";
-      }
+      this._taskEditModule().toggleDuePopover();
     },
 
+    /** Priority/due/assignee update flows — behavior owned by modules/task-edit.ts (Phase 2 batch B). */
     async updatePriority(priority: number): Promise<void> {
-      this.priorityPopoverOpen = false;
-      const d = this.detail;
-      if (!d || this.priorityBusy || d.priority === priority) return;
-      this.priorityBusy = true;
-      const req: UpdateTaskReq = {
-        actor: this.actor(),
-        version: d.version,
-        priority,
-      };
-      try {
-        const updated = await api.updateTask(d.id, req);
-        if (this.detail && this.detail.id === d.id) {
-          this.detail.priority = updated.priority;
-          this.detail.version = updated.version;
-          this.detail.updated_at = updated.updated_at;
-        }
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-        this.toast(`Priority set to P${priority}`);
-      } catch (e) {
-        if (ApiError.isVersionConflict(e)) {
-          try {
-            const fresh = await api.getTask(d.id);
-            this.applyDetail(fresh);
-            const retryReq: UpdateTaskReq = {
-              actor: this.actor(),
-              version: fresh.version,
-              priority,
-            };
-            const updated = await api.updateTask(d.id, retryReq);
-            if (this.detail && this.detail.id === d.id) {
-              this.detail.priority = updated.priority;
-              this.detail.version = updated.version;
-              this.detail.updated_at = updated.updated_at;
-            }
-            await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-            this.toast(`Priority set to P${priority}`);
-          } catch (e2) {
-            this.toast(errMsg(e2), "error");
-          }
-        } else {
-          this.toast(errMsg(e), "error");
-        }
-      } finally {
-        this.priorityBusy = false;
-      }
+      return await this._taskEditModule().updatePriority(priority);
     },
 
     async saveDueDate(): Promise<void> {
-      this.duePopoverOpen = false;
-      const d = this.detail;
-      if (!d || this.dueBusy) return;
-      const dueIso = dateInputToIso(this.dueInputVal);
-      await this.updateDueDate(dueIso);
+      return await this._taskEditModule().saveDueDate();
     },
 
     async clearDueDate(): Promise<void> {
-      this.duePopoverOpen = false;
-      this.dueInputVal = "";
-      await this.updateDueDate(null);
+      return await this._taskEditModule().clearDueDate();
     },
 
     async updateDueDate(dueIso?: string | null): Promise<void> {
-      const d = this.detail;
-      if (!d || this.dueBusy) return;
-      this.dueBusy = true;
-      const req: UpdateTaskReq = {
-        actor: this.actor(),
-        version: d.version,
-      };
-      if (dueIso) {
-        req.due_at = dueIso;
-      } else {
-        req.clear_due = true;
-      }
-      try {
-        const updated = await api.updateTask(d.id, req);
-        if (this.detail && this.detail.id === d.id) {
-          this.detail.due_at = updated.due_at;
-          this.detail.version = updated.version;
-          this.detail.updated_at = updated.updated_at;
-          this.dueInputVal = updated.due_at ? dueCalendarDate(updated.due_at) : "";
-        }
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-        this.toast(dueIso ? "Due date updated" : "Due date cleared");
-      } catch (e) {
-        if (ApiError.isVersionConflict(e)) {
-          try {
-            const fresh = await api.getTask(d.id);
-            this.applyDetail(fresh);
-            const retryReq: UpdateTaskReq = {
-              actor: this.actor(),
-              version: fresh.version,
-              due_at: dueIso || undefined,
-              clear_due: !dueIso,
-            };
-            const updated = await api.updateTask(d.id, retryReq);
-            if (this.detail && this.detail.id === d.id) {
-              this.detail.due_at = updated.due_at;
-              this.detail.version = updated.version;
-              this.detail.updated_at = updated.updated_at;
-              this.dueInputVal = updated.due_at ? dueCalendarDate(updated.due_at) : "";
-            }
-            await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-            this.toast(dueIso ? "Due date updated" : "Due date cleared");
-          } catch (e2) {
-            this.toast(errMsg(e2), "error");
-          }
-        } else {
-          this.toast(errMsg(e), "error");
-        }
-      } finally {
-        this.dueBusy = false;
-      }
+      return await this._taskEditModule().updateDueDate(dueIso);
     },
 
     // ------------------------------------------------------------ assignee
@@ -3120,76 +3010,17 @@ export function ravnApp() {
     assigneeInputType: "human" as "human" | "agent",
     assigneeBusy: false,
 
+    /** Assignee flows — behavior owned by modules/task-edit.ts (Phase 2 batch B). */
     async saveAssignee(): Promise<void> {
-      this.ownerPopoverOpen = false;
-      const d = this.detail;
-      if (!d || this.assigneeBusy) return;
-      const name = this.assigneeInputName.trim();
-      const type = this.assigneeInputType || "human";
-      await this.updateAssignee(name, type);
+      return await this._taskEditModule().saveAssignee();
     },
 
     async clearAssignee(): Promise<void> {
-      this.ownerPopoverOpen = false;
-      this.assigneeInputName = "";
-      await this.updateAssignee("", "human");
+      return await this._taskEditModule().clearAssignee();
     },
 
     async updateAssignee(name: string, type: "human" | "agent" = "human"): Promise<void> {
-      const d = this.detail;
-      if (!d || this.assigneeBusy) return;
-      this.assigneeBusy = true;
-      const trimmed = name.trim();
-      const req: UpdateTaskReq = {
-        actor: this.actor(),
-        version: d.version,
-      };
-      if (trimmed) {
-        req.assignee = { name: trimmed, type };
-      } else {
-        req.clear_assignee = true;
-      }
-      try {
-        const updated = await api.updateTask(d.id, req);
-        if (this.detail && this.detail.id === d.id) {
-          this.detail.assignee = updated.assignee;
-          this.detail.version = updated.version;
-          this.detail.updated_at = updated.updated_at;
-          this.assigneeInputName = updated.assignee?.name ?? "";
-          this.assigneeInputType = (updated.assignee?.type as "human" | "agent") || "human";
-        }
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-        this.toast(trimmed ? `Assigned to ${trimmed}` : "Assignee cleared");
-      } catch (e) {
-        if (ApiError.isVersionConflict(e)) {
-          try {
-            const fresh = await api.getTask(d.id);
-            this.applyDetail(fresh);
-            const retryReq: UpdateTaskReq = {
-              actor: this.actor(),
-              version: fresh.version,
-              assignee: trimmed ? { name: trimmed, type } : undefined,
-              clear_assignee: !trimmed,
-            };
-            const updated = await api.updateTask(d.id, retryReq);
-            if (this.detail && this.detail.id === d.id) {
-              this.detail.assignee = updated.assignee;
-              this.detail.version = updated.version;
-              this.detail.updated_at = updated.updated_at;
-              this.assigneeInputName = updated.assignee?.name ?? "";
-              this.assigneeInputType = (updated.assignee?.type as "human" | "agent") || "human";
-            }
-            await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-            this.toast(trimmed ? `Assigned to ${trimmed}` : "Assignee cleared");
-          } catch (e2) {
-            this.toast(errMsg(e2), "error");
-          }
-        } else {
-          this.toast(errMsg(e), "error");
-        }
-      } finally {
-        this.assigneeBusy = false;
-      }
+      return await this._taskEditModule().updateAssignee(name, type);
     },
 
     // ------------------------------------------------------------ task edit
@@ -3221,24 +3052,49 @@ export function ravnApp() {
 
     /** Lazily-built task-edit module (modules/task-edit.ts — Phase 2 batch B):
      *  edit session lifecycle + the snapshot discard guard, the description
-     *  draft persistence pair and saveTaskEdit with its version-conflict retry.
-     *  Every field above (incl. the editDraftOriginal snapshot — poked by
-     *  drafts.test.ts) stays plain root state; this module owns nothing. */
+     *  draft persistence pair, saveTaskEdit with its version-conflict retry,
+     *  and the quick-metadata popover toggles/update flows (priority, due) +
+     *  assignee update flows. Every field above (incl. the editDraftOriginal
+     *  snapshot — poked by drafts.test.ts) stays plain root state; this module
+     *  owns nothing. toggleStatusMenu/toggleOwnerPopover stay here (operational
+     *  bar → modules/detail.ts); they seed these popover/input fields through
+     *  the flat root state. */
     _taskEditModule(): TaskEditModule {
       if (this._taskEdit) return this._taskEdit;
       this._taskEdit = createTaskEditModule({
-        // state-in
+        // state-in — core edit session
         detail: () => this.detail,
         editDraft: () => this.editDraft,
         editDraftOriginal: () => this.editDraftOriginal,
         editingTask: () => this.editingTask,
         savingEdit: () => this.savingEdit,
-        // state-out
+        // state-out — core edit session
         setEditingTask: (v) => { this.editingTask = v; },
         setSavingEdit: (v) => { this.savingEdit = v; },
         setDescShowPreview: (v) => { this.descShowPreview = v; },
         setEditDraft: (d) => { this.editDraft = d; },
         setEditDraftOriginal: (d) => { this.editDraftOriginal = d; },
+        // state-in — quick-metadata popovers + assignee inputs
+        priorityPopoverOpen: () => this.priorityPopoverOpen,
+        duePopoverOpen: () => this.duePopoverOpen,
+        dueInputVal: () => this.dueInputVal,
+        priorityBusy: () => this.priorityBusy,
+        dueBusy: () => this.dueBusy,
+        assigneeInputName: () => this.assigneeInputName,
+        assigneeInputType: () => this.assigneeInputType,
+        assigneeBusy: () => this.assigneeBusy,
+        // state-out — quick-metadata popovers + assignee inputs (status/owner
+        // flags are owned by the operational-bar region; written through here)
+        setPriorityPopoverOpen: (v) => { this.priorityPopoverOpen = v; },
+        setDuePopoverOpen: (v) => { this.duePopoverOpen = v; },
+        setDueInputVal: (v) => { this.dueInputVal = v; },
+        setPriorityBusy: (v) => { this.priorityBusy = v; },
+        setDueBusy: (v) => { this.dueBusy = v; },
+        setOwnerPopoverOpen: (v) => { this.ownerPopoverOpen = v; },
+        setStatusMenuOpen: (v) => { this.statusMenuOpen = v; },
+        setAssigneeInputName: (v) => { this.assigneeInputName = v; },
+        setAssigneeInputType: (v) => { this.assigneeInputType = v; },
+        setAssigneeBusy: (v) => { this.assigneeBusy = v; },
         // hooks — root-owned orchestration kept outside the module
         toast: (m, k) => this.toast(m, k),
         actor: () => this.actor(),

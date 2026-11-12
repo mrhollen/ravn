@@ -65,6 +65,18 @@ interface Ctx {
     editingTask: boolean;
     savingEdit: boolean;
     descShowPreview: boolean;
+    // quick-metadata popovers + assignee inputs (flat root fields)
+    priorityPopoverOpen: boolean;
+    duePopoverOpen: boolean;
+    dueInputVal: string;
+    priorityBusy: boolean;
+    dueBusy: boolean;
+    assigneeInputName: string;
+    assigneeInputType: "human" | "agent";
+    assigneeBusy: boolean;
+    // operational-bar flags written through the module's mutex setters
+    statusMenuOpen: boolean;
+    ownerPopoverOpen: boolean;
   };
   counters: Record<string, number>;
   toasts: { msg: string; kind?: string }[];
@@ -81,6 +93,16 @@ function makeCtx(task: TaskDetail | null = makeTask()): Ctx {
     editingTask: false,
     savingEdit: false,
     descShowPreview: true, // stale — startEditing must reset it
+    priorityPopoverOpen: false,
+    duePopoverOpen: false,
+    dueInputVal: "",
+    priorityBusy: false,
+    dueBusy: false,
+    assigneeInputName: "",
+    assigneeInputType: "human",
+    assigneeBusy: false,
+    statusMenuOpen: false,
+    ownerPopoverOpen: false,
   };
   const counters: Record<string, number> = {
     setEditingTask: 0,
@@ -109,6 +131,26 @@ function makeCtx(task: TaskDetail | null = makeTask()): Ctx {
     setDescShowPreview: (v) => { state.descShowPreview = v; counters.setDescShowPreview++; },
     setEditDraft: (d) => { state.editDraft = d; counters.setEditDraft++; },
     setEditDraftOriginal: (d) => { state.editDraftOriginal = d; counters.setEditDraftOriginal++; },
+    // state-in — quick-metadata popovers + assignee inputs
+    priorityPopoverOpen: () => state.priorityPopoverOpen,
+    duePopoverOpen: () => state.duePopoverOpen,
+    dueInputVal: () => state.dueInputVal,
+    priorityBusy: () => state.priorityBusy,
+    dueBusy: () => state.dueBusy,
+    assigneeInputName: () => state.assigneeInputName,
+    assigneeInputType: () => state.assigneeInputType,
+    assigneeBusy: () => state.assigneeBusy,
+    // state-out — popovers/inputs + the operational-bar flags written via mutex
+    setPriorityPopoverOpen: (v) => { state.priorityPopoverOpen = v; },
+    setDuePopoverOpen: (v) => { state.duePopoverOpen = v; },
+    setDueInputVal: (v) => { state.dueInputVal = v; },
+    setPriorityBusy: (v) => { state.priorityBusy = v; },
+    setDueBusy: (v) => { state.dueBusy = v; },
+    setOwnerPopoverOpen: (v) => { state.ownerPopoverOpen = v; },
+    setStatusMenuOpen: (v) => { state.statusMenuOpen = v; },
+    setAssigneeInputName: (v) => { state.assigneeInputName = v; },
+    setAssigneeInputType: (v) => { state.assigneeInputType = v; },
+    setAssigneeBusy: (v) => { state.assigneeBusy = v; },
     // hooks — root-owned orchestration kept outside the module
     toast: (msg, kind) => { toasts.push({ msg, kind }); },
     actor: () => ({ name: "tester", type: "agent" }),
@@ -532,5 +574,372 @@ describe("task-edit module: saveTaskEdit", () => {
     assert.equal(safeStorage.getItem(descriptionDraftKey("T1")), "wip-kept2");
     assert.equal(c.toasts.length, 1);
     assert.equal(c.toasts[0].kind, "error");
+  });
+});
+
+// ------------------------------------------------- quick-metadata popovers (priority & due)
+describe("task-edit module: quick-metadata popover toggles", () => {
+  test("togglePriorityPopover opens and closes the other three popovers (mutex)", () => {
+    const c = makeCtx();
+    c.state.duePopoverOpen = true;
+    c.state.statusMenuOpen = true;
+    c.state.ownerPopoverOpen = true;
+    c.mod.togglePriorityPopover();
+    assert.equal(c.state.priorityPopoverOpen, true);
+    assert.equal(c.state.duePopoverOpen, false);
+    assert.equal(c.state.statusMenuOpen, false);
+    assert.equal(c.state.ownerPopoverOpen, false);
+  });
+
+  test("togglePriorityPopover toggles closed when open", () => {
+    const c = makeCtx();
+    c.state.priorityPopoverOpen = true;
+    c.mod.togglePriorityPopover();
+    assert.equal(c.state.priorityPopoverOpen, false);
+  });
+
+  test("toggleDuePopover seeds dueInputVal from the task's calendar day", () => {
+    const c = makeCtx(makeTask({ due_at: "2026-12-01T05:30:00Z" }));
+    c.state.dueInputVal = "stale";
+    c.mod.toggleDuePopover();
+    assert.equal(c.state.duePopoverOpen, true);
+    assert.equal(c.state.dueInputVal, dueCalendarDate("2026-12-01T05:30:00Z"));
+  });
+
+  test("toggleDuePopover with no due → empty input; other popovers closed", () => {
+    const c = makeCtx(makeTask({ due_at: null }));
+    c.state.priorityPopoverOpen = true;
+    c.state.ownerPopoverOpen = true;
+    c.mod.toggleDuePopover();
+    assert.equal(c.state.dueInputVal, "");
+    assert.equal(c.state.priorityPopoverOpen, false);
+    assert.equal(c.state.ownerPopoverOpen, false);
+  });
+
+  test("toggleDuePopover with NO task loaded does not touch the input", () => {
+    const c = makeCtx(null);
+    c.state.dueInputVal = "stale";
+    c.mod.toggleDuePopover();
+    assert.equal(c.state.duePopoverOpen, true);
+    assert.equal(c.state.dueInputVal, "stale");
+  });
+});
+
+describe("task-edit module: updatePriority", () => {
+  test("guard: no detail → popover closes, no API call", async () => {
+    const c = makeCtx(null);
+    const orig = apiRec().updateTask;
+    let called = 0;
+    apiRec().updateTask = async () => { called++; };
+    try { await c.mod.updatePriority(3); } finally { apiRec().updateTask = orig; }
+    assert.equal(c.state.priorityPopoverOpen, false, "popover closed even on the guard path");
+    assert.equal(called, 0);
+    assert.equal(c.state.priorityBusy, false);
+  });
+
+  test("guard: same priority → no API call", async () => {
+    const c = makeCtx(makeTask({ priority: 2 }));
+    const orig = apiRec().updateTask;
+    let called = 0;
+    apiRec().updateTask = async () => { called++; };
+    try { await c.mod.updatePriority(2); } finally { apiRec().updateTask = orig; }
+    assert.equal(called, 0);
+  });
+
+  test("guard: already busy → no API call", async () => {
+    const c = makeCtx();
+    c.state.priorityBusy = true;
+    const orig = apiRec().updateTask;
+    let called = 0;
+    apiRec().updateTask = async () => { called++; };
+    try { await c.mod.updatePriority(4); } finally { apiRec().updateTask = orig; }
+    assert.equal(called, 0);
+  });
+
+  test("success: patches the open task's row fields in place + fan-out + toast", async () => {
+    const t = makeTask({ priority: 2, version: 7 });
+    const c = makeCtx(t);
+    const orig = apiRec().updateTask;
+    let req!: UpdateTaskReq;
+    apiRec().updateTask = async (_id: string, r: UpdateTaskReq) => {
+      req = r;
+      return { priority: 5, version: 8, updated_at: "2026-11-12T00:00:00Z" };
+    };
+    try { await c.mod.updatePriority(5); } finally { apiRec().updateTask = orig; }
+
+    assert.equal(req.version, 7);
+    assert.equal(req.priority, 5);
+    // in-place patch (same object reference)
+    assert.equal(c.state.detail, t, "detail is the same object");
+    assert.equal(t.priority, 5);
+    assert.equal(t.version, 8);
+    assert.equal(t.updated_at, "2026-11-12T00:00:00Z");
+    assert.equal(c.counters.refreshDetail, 1);
+    assert.equal(c.counters.loadBoard, 1);
+    assert.deepEqual(c.toasts, [{ msg: "Priority set to P5", kind: undefined }]);
+  });
+
+  test("success with a SWITCHED task during flight → no in-place patch", async () => {
+    const t = makeTask({ priority: 2, version: 7 });
+    const c = makeCtx(t);
+    const other = makeTask({ id: "OTHER", priority: 1, version: 3 });
+    const orig = apiRec().updateTask;
+    apiRec().updateTask = async () => {
+      c.state.detail = other; // simulate drawer switching mid-flight
+      return { priority: 5, version: 8, updated_at: "x" };
+    };
+    try { await c.mod.updatePriority(5); } finally { apiRec().updateTask = orig; }
+
+    assert.equal(other.priority, 1, "the other task was NOT patched");
+    assert.equal(c.counters.refreshDetail, 1, "fan-out still happened");
+  });
+
+  test("409 → re-read (no options arg) + applyDetail + retry once with fresh version", async () => {
+    const c = makeCtx(makeTask({ priority: 2, version: 7 }));
+    const origU = apiRec().updateTask;
+    const origG = apiRec().getTask;
+    const getTaskArgs: unknown[][] = [];
+    apiRec().getTask = async (...a: unknown[]) => { getTaskArgs.push(a); return makeTask({ priority: 2, version: 9 }); };
+    let uCalls: UpdateTaskReq[] = [];
+    apiRec().updateTask = async (_id: string, r: UpdateTaskReq) => {
+      uCalls.push(r);
+      if (r.version === 7) throw versionConflict();
+      return { priority: 5, version: 10, updated_at: "x" };
+    };
+    try { await c.mod.updatePriority(5); } finally { apiRec().updateTask = origU; apiRec().getTask = origG; }
+
+    assert.equal(getTaskArgs.length, 1);
+    assert.equal(getTaskArgs[0].length, 1, "re-read passes NO options (parity with the original)");
+    assert.equal(c.applyDetails.length, 1);
+    assert.equal(uCalls.length, 2);
+    assert.equal(uCalls[1].version, 9);
+    assert.equal(uCalls[1].priority, 5);
+    assert.deepEqual(c.toasts, [{ msg: "Priority set to P5", kind: undefined }], "success toast exactly once");
+  });
+
+  test("409 → retry ALSO fails → error toast (no double toast on the success path)", async () => {
+    const c = makeCtx(makeTask({ priority: 2, version: 7 }));
+    const origU = apiRec().updateTask;
+    const origG = apiRec().getTask;
+    apiRec().getTask = async () => makeTask({ version: 8 });
+    apiRec().updateTask = async (_id: string, r: UpdateTaskReq) => {
+      if (r.version === 7) throw versionConflict();
+      throw new ApiError(500, { error: "boom", message: "nope" });
+    };
+    try { await c.mod.updatePriority(5); } finally { apiRec().updateTask = origU; apiRec().getTask = origG; }
+
+    assert.equal(c.toasts.length, 1);
+    assert.equal(c.toasts[0].kind, "error");
+    assert.equal(c.state.priorityBusy, false, "finally resets the busy flag");
+  });
+
+  test("non-conflict error → error toast, busy reset", async () => {
+    const c = makeCtx();
+    const orig = apiRec().updateTask;
+    apiRec().updateTask = async () => { throw new ApiError(403, { error: "forbidden" }); };
+    try { await c.mod.updatePriority(1); } finally { apiRec().updateTask = orig; }
+    assert.equal(c.toasts.length, 1);
+    assert.equal(c.toasts[0].kind, "error");
+    assert.equal(c.state.priorityBusy, false);
+  });
+});
+
+describe("task-edit module: due date save/clear", () => {
+  test("saveDueDate closes the popover and converts the input via the shared helper", async () => {
+    const c = makeCtx();
+    c.state.duePopoverOpen = true;
+    c.state.dueInputVal = "2027-03-15";
+    const orig = apiRec().updateTask;
+    let req!: UpdateTaskReq;
+    apiRec().updateTask = async (_id: string, r: UpdateTaskReq) => {
+      req = r;
+      return { due_at: dateInputToIso("2027-03-15"), version: 8, updated_at: "x" };
+    };
+    try { await c.mod.saveDueDate(); } finally { apiRec().updateTask = orig; }
+
+    assert.equal(c.state.duePopoverOpen, false);
+    assert.equal(req.due_at, dateInputToIso("2027-03-15"));
+    assert.equal(req.clear_due, undefined);
+    assert.equal(c.toasts[0].msg, "Due date updated");
+  });
+
+  test("clearDueDate blanks the input and sends clear_due", async () => {
+    const c = makeCtx(makeTask({ due_at: "2026-06-01T00:00:00Z" }));
+    c.state.dueInputVal = "2026-06-01";
+    const orig = apiRec().updateTask;
+    let req!: UpdateTaskReq;
+    apiRec().updateTask = async (_id: string, r: UpdateTaskReq) => {
+      req = r;
+      return { due_at: null, version: 8, updated_at: "x" };
+    };
+    try { await c.mod.clearDueDate(); } finally { apiRec().updateTask = orig; }
+
+    assert.equal(c.state.duePopoverOpen, false);
+    assert.equal(c.state.dueInputVal, "");
+    assert.equal(req.due_at, undefined);
+    assert.equal(req.clear_due, true);
+    assert.equal(c.toasts[0].msg, "Due date cleared");
+  });
+
+  test("updateDueDate success syncs dueInputVal to the stored calendar day", async () => {
+    const c = makeCtx();
+    const orig = apiRec().updateTask;
+    apiRec().updateTask = async () => ({ due_at: "2027-04-01T09:00:00Z", version: 8, updated_at: "x" });
+    try { await c.mod.updateDueDate("2027-04-01T09:00:00Z"); } finally { apiRec().updateTask = orig; }
+
+    assert.equal(c.state.dueInputVal, dueCalendarDate("2027-04-01T09:00:00Z"));
+  });
+
+  test("updateDueDate guard: no detail or busy → no API call", async () => {
+    const c = makeCtx(null);
+    const orig = apiRec().updateTask;
+    let called = 0;
+    apiRec().updateTask = async () => { called++; };
+    try { await c.mod.updateDueDate("2027-04-01"); } finally { apiRec().updateTask = orig; }
+    assert.equal(called, 0);
+
+    const c2 = makeCtx();
+    c2.state.dueBusy = true;
+    try { await c2.mod.updateDueDate("2027-04-01"); } finally { apiRec().updateTask = orig; }
+    assert.equal(called, 0);
+    assert.equal(c2.state.dueBusy, true, "busy flag untouched on the guard path");
+  });
+
+  test("409 → retry carries the SAME intent (clear variant: due_at undefined + clear_due)", async () => {
+    const c = makeCtx(makeTask({ due_at: "2026-06-01T00:00:00Z", version: 7 }));
+    const origU = apiRec().updateTask;
+    const origG = apiRec().getTask;
+    apiRec().getTask = async () => makeTask({ version: 8 });
+    let uCalls: UpdateTaskReq[] = [];
+    apiRec().updateTask = async (_id: string, r: UpdateTaskReq) => {
+      uCalls.push(r);
+      if (r.version === 7) throw versionConflict();
+      return { due_at: null, version: 9, updated_at: "x" };
+    };
+    try { await c.mod.updateDueDate(null); } finally { apiRec().updateTask = origU; apiRec().getTask = origG; }
+
+    assert.equal(uCalls.length, 2);
+    assert.equal(uCalls[0].clear_due, true);
+    assert.equal(uCalls[1].due_at, undefined, "retry keeps the clear intent");
+    assert.equal(uCalls[1].clear_due, true);
+    assert.equal(c.applyDetails.length, 1);
+    assert.equal(c.toasts.length, 1);
+    assert.equal(c.toasts[0].msg, "Due date cleared");
+  });
+});
+
+// -------------------------------------------------------------------- assignee flows
+describe("task-edit module: assignee save/clear/update", () => {
+  test("saveAssignee closes the owner popover and trims the name", async () => {
+    const c = makeCtx();
+    c.state.ownerPopoverOpen = true;
+    c.state.assigneeInputName = "  bob  ";
+    c.state.assigneeInputType = "agent";
+    const orig = apiRec().updateTask;
+    let req!: UpdateTaskReq;
+    apiRec().updateTask = async (_id: string, r: UpdateTaskReq) => {
+      req = r;
+      return { assignee: { name: "bob", type: "agent" }, version: 8, updated_at: "x" };
+    };
+    try { await c.mod.saveAssignee(); } finally { apiRec().updateTask = orig; }
+
+    assert.equal(c.state.ownerPopoverOpen, false);
+    assert.deepEqual(req.assignee, { name: "bob", type: "agent" });
+    assert.equal(req.clear_assignee, undefined);
+    assert.equal(c.toasts[0].msg, "Assigned to bob");
+  });
+
+  test("clearAssignee blanks the input and sends clear_assignee", async () => {
+    const c = makeCtx(makeTask({ assignee: { name: "old", type: "human" } }));
+    c.state.assigneeInputName = "old";
+    const orig = apiRec().updateTask;
+    let req!: UpdateTaskReq;
+    apiRec().updateTask = async (_id: string, r: UpdateTaskReq) => {
+      req = r;
+      return { assignee: null, version: 8, updated_at: "x" };
+    };
+    try { await c.mod.clearAssignee(); } finally { apiRec().updateTask = orig; }
+
+    assert.equal(c.state.ownerPopoverOpen, false);
+    assert.equal(c.state.assigneeInputName, "");
+    assert.equal(req.assignee, undefined);
+    assert.equal(req.clear_assignee, true);
+    assert.equal(c.toasts[0].msg, "Assignee cleared");
+  });
+
+  test("updateAssignee success patches the row + syncs both input fields from the response", async () => {
+    const c = makeCtx();
+    const orig = apiRec().updateTask;
+    apiRec().updateTask = async () => ({ assignee: { name: "zed", type: "agent" }, version: 8, updated_at: "x" });
+    try { await c.mod.updateAssignee("zed", "agent"); } finally { apiRec().updateTask = orig; }
+
+    assert.deepEqual(c.state.detail?.assignee, { name: "zed", type: "agent" });
+    assert.equal(c.state.detail?.version, 8);
+    assert.equal(c.state.assigneeInputName, "zed");
+    assert.equal(c.state.assigneeInputType, "agent");
+    assert.equal(c.state.assigneeBusy, false);
+  });
+
+  test("updateAssignee with a null response assignee → inputs reset to empty/human", async () => {
+    const c = makeCtx();
+    const orig = apiRec().updateTask;
+    apiRec().updateTask = async () => ({ assignee: null, version: 8, updated_at: "x" });
+    try { await c.mod.updateAssignee("", "human"); } finally { apiRec().updateTask = orig; }
+
+    assert.equal(c.state.assigneeInputName, "");
+    assert.equal(c.state.assigneeInputType, "human");
+  });
+
+  test("guard: no detail or busy → no API call", async () => {
+    const c = makeCtx(null);
+    const orig = apiRec().updateTask;
+    let called = 0;
+    apiRec().updateTask = async () => { called++; };
+    try { await c.mod.updateAssignee("a", "human"); } finally { apiRec().updateTask = orig; }
+    assert.equal(called, 0);
+
+    const c2 = makeCtx();
+    c2.state.assigneeBusy = true;
+    try { await c2.mod.updateAssignee("a", "human"); } finally { apiRec().updateTask = orig; }
+    assert.equal(called, 0);
+  });
+
+  test("409 → re-read + applyDetail + retry with the SAME intent (set variant)", async () => {
+    const c = makeCtx(makeTask({ version: 7 }));
+    const origU = apiRec().updateTask;
+    const origG = apiRec().getTask;
+    apiRec().getTask = async () => makeTask({ version: 8 });
+    let uCalls: UpdateTaskReq[] = [];
+    apiRec().updateTask = async (_id: string, r: UpdateTaskReq) => {
+      uCalls.push(r);
+      if (r.version === 7) throw versionConflict();
+      return { assignee: { name: "bob", type: "human" }, version: 9, updated_at: "x" };
+    };
+    try { await c.mod.updateAssignee("bob", "human"); } finally { apiRec().updateTask = origU; apiRec().getTask = origG; }
+
+    assert.equal(uCalls.length, 2);
+    assert.deepEqual(uCalls[1].assignee, { name: "bob", type: "human" });
+    // parity quirk (original builds `clear_assignee: !trimmed` unconditionally):
+    // the SET variant carries an explicit false, not a missing key.
+    assert.equal(uCalls[1].clear_assignee, false);
+    assert.equal(c.applyDetails.length, 1);
+    assert.equal(c.toasts.length, 1);
+    assert.equal(c.toasts[0].msg, "Assigned to bob");
+  });
+
+  test("409 → retry fails → error toast, busy reset", async () => {
+    const c = makeCtx(makeTask({ version: 7 }));
+    const origU = apiRec().updateTask;
+    const origG = apiRec().getTask;
+    apiRec().getTask = async () => makeTask({ version: 8 });
+    apiRec().updateTask = async (_id: string, r: UpdateTaskReq) => {
+      if (r.version === 7) throw versionConflict();
+      throw new ApiError(500, { error: "boom" });
+    };
+    try { await c.mod.updateAssignee("bob", "human"); } finally { apiRec().updateTask = origU; apiRec().getTask = origG; }
+
+    assert.equal(c.toasts.length, 1);
+    assert.equal(c.toasts[0].kind, "error");
+    assert.equal(c.state.assigneeBusy, false);
   });
 });
