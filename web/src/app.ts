@@ -28,6 +28,7 @@ import type { TaskEditModule } from "./modules/task-edit";
 import { createAcsModule } from "./modules/acs";
 import type { AcsModule } from "./modules/acs";
 import { createCommentsModule } from "./modules/comments";
+import { createArtifactsModule, type ArtifactsModule } from "./modules/artifacts";
 import type { CommentsModule } from "./modules/comments";
 import { createProjectSettingsModule } from "./modules/project-settings";
 import type { ProjectSettingsModule } from "./modules/project-settings";
@@ -99,6 +100,7 @@ import {
   artifactKindClass,
   claimHint,
   commentKindClass,
+  copyTextToClipboard,
   dueLabel,
   formatClaimCountdown,
   isClaimExpired,
@@ -291,51 +293,6 @@ const MD_CACHE_MAX = 500;
 // Max visual card offset (px) while swiping. Commit/slop thresholds still use
 // the raw finger displacement — this clamp only limits what is drawn.
 const MAX_SWIPE_PX = 96;
-
-/** Copy text to clipboard using the Async Clipboard API, falling back to
- *  hidden textarea + execCommand for plain-HTTP or unsupported environments. */
-export async function copyTextToClipboard(text: string): Promise<boolean> {
-  if (!text) return false;
-  let copied = false;
-  try {
-    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      copied = true;
-    } else {
-      copied = copyViaExecCommand(text);
-    }
-  } catch {
-    copied = false;
-  }
-  if (!copied) copied = copyViaExecCommand(text);
-  return copied;
-}
-
-/** Last-resort clipboard write for non-secure contexts (plain http on a LAN),
- *  where navigator.clipboard is unavailable: hidden textarea + execCommand.
- *  Returns true only when the browser reports the copy succeeded. */
-function copyViaExecCommand(text: string): boolean {
-  if (typeof document === "undefined" || !document.body) return false;
-  const ta = document.createElement("textarea");
-  ta.value = text;
-  // Keep it out of the flow, off-screen, and unfocusable by tab order.
-  ta.setAttribute("readonly", "");
-  ta.style.position = "fixed";
-  ta.style.top = "-9999px";
-  ta.style.opacity = "0";
-  document.body.appendChild(ta);
-  ta.focus();
-  ta.select();
-  let ok = false;
-  try {
-    ok = document.execCommand("copy");
-  } catch {
-    ok = false;
-  } finally {
-    ta.remove();
-  }
-  return ok;
-}
 
 // Phase 2 (sse): the SSE preamble — LEGACY_NAMED_SSE_EVENT_KINDS doc + const and the
 // sseTelemetry singleton counters — moved to modules/sse.ts; re-exported below so the
@@ -2846,22 +2803,10 @@ export function ravnApp() {
       this.toast(copied ? "Copied task ID to clipboard" : "Couldn't copy the task ID", copied ? "info" : "error");
     },
 
-    /** Copy an artifact ref (file path or URL) to clipboard with brief visual confirmation. */
+    /** Copy an artifact ref (file path or URL) to clipboard with brief visual confirmation.
+     *  Behavior owned by modules/artifacts.ts. */
     async copyArtifactRef(ref: string, id?: string): Promise<void> {
-      if (!ref) return;
-      const copied = await copyTextToClipboard(ref);
-      if (copied) {
-        if (id) {
-          this.copiedArtifactId = id;
-          if (this.copiedArtifactTimer) clearTimeout(this.copiedArtifactTimer);
-          this.copiedArtifactTimer = setTimeout(() => {
-            if (this.copiedArtifactId === id) this.copiedArtifactId = null;
-          }, 2000);
-        }
-        this.toast("Copied artifact path to clipboard", "info");
-      } else {
-        this.toast("Failed to copy artifact path", "error");
-      }
+      return await this._artifactsModule().copyArtifactRef(ref, id);
     },
 
     /** Fetch GET /tasks/{id} (full resume payload, comment tail 50) and apply it.
@@ -3176,6 +3121,53 @@ export function ravnApp() {
         actor: () => this.actor(),
       });
       return this._comments;
+    },
+
+    _artifacts: null as ArtifactsModule | null,
+
+    /** Lazily-built artifacts module (modules/artifacts.ts — Phase 2 batch C):
+     *  file/drop/paste upload, attach (file or ref), image preview modal, the
+     *  isStored* media predicates, text-preview toggle + fetch and delete.
+     *  All bound state fields stay plain root state; detail artifacts are
+     *  patched via whole-object setDetail reassignment under the same-task
+     *  guard, in-place form/preview writes go through the state-IN getters. */
+    _artifactsModule(): ArtifactsModule {
+      if (this._artifacts) return this._artifacts;
+      this._artifacts = createArtifactsModule({
+        // state-in
+        detail: () => this.detail,
+        artifactForm: () => this.artifactForm,
+        attachingArtifact: () => this.attachingArtifact,
+        previewModal: () => this.previewModal,
+        copiedArtifactId: () => this.copiedArtifactId,
+        copiedArtifactTimer: () => this.copiedArtifactTimer,
+        deletingArtifactId: () => this.deletingArtifactId,
+        artifactTextExpanded: () => this.artifactTextExpanded,
+        artifactTextContent: () => this.artifactTextContent,
+        artifactTextLoading: () => this.artifactTextLoading,
+        artifactTextError: () => this.artifactTextError,
+        artifactDragOver: () => this.artifactDragOver,
+        detailOpen: () => this.detailOpen,
+        // state-out
+        setDetail: (d) => { this.detail = d; },
+        setArtifactForm: (f) => { this.artifactForm = f; },
+        setAttachingArtifact: (v) => { this.attachingArtifact = v; },
+        setPreviewModal: (p) => { this.previewModal = p; },
+        setCopiedArtifactId: (id) => { this.copiedArtifactId = id; },
+        setCopiedArtifactTimer: (t) => { this.copiedArtifactTimer = t; },
+        setDeletingArtifactId: (v) => { this.deletingArtifactId = v; },
+        setArtifactTextExpanded: (r) => { this.artifactTextExpanded = r; },
+        setArtifactTextContent: (r) => { this.artifactTextContent = r; },
+        setArtifactTextLoading: (r) => { this.artifactTextLoading = r; },
+        setArtifactTextError: (r) => { this.artifactTextError = r; },
+        setArtifactDragOver: (v) => { this.artifactDragOver = v; },
+        // hooks
+        toast: (m, k) => this.toast(m, k),
+        actor: () => this.actor(),
+        isWebHref: (s) => this.isWebHref(s),
+        confirmDiscard: (msg) => this.confirmDiscard(msg),
+      });
+      return this._artifacts;
     },
 
     startEditing(): void {
@@ -3838,238 +3830,69 @@ export function ravnApp() {
     artifactTextError: {} as Record<string, string>,
 
     onArtifactFileSelected(event: Event): void {
-      const target = event.target as HTMLInputElement;
-      const file = target.files?.[0] || null;
-      this.artifactForm.file = file;
-      if (file) {
-        if (file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(file.name)) {
-          this.artifactForm.kind = "screenshot";
-        } else {
-          this.artifactForm.kind = "other";
-        }
-      }
+      this._artifactsModule().onArtifactFileSelected(event);
     },
 
     artifactDragOver: false,
 
     async uploadFileArtifact(file: File, summary?: string, kind?: ArtifactKind): Promise<ArtifactRow | null> {
-      const t = this.detail;
-      if (!t || this.attachingArtifact) return null;
-      this.attachingArtifact = true;
-      try {
-        let inferredKind: ArtifactKind = kind || "other";
-        if (!kind) {
-          if (file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(file.name)) {
-            inferredKind = "screenshot";
-          } else if (file.type.includes("text") || file.name.endsWith(".log")) {
-            inferredKind = "log";
-          }
-        }
-        const a = await api.uploadArtifact(
-          t.id,
-          file,
-          inferredKind,
-          summary || file.name,
-          this.actor(),
-        );
-        const d = this.detail;
-        if (d && d.id === t.id) this.detail = { ...d, artifacts: [...d.artifacts, a] };
-        this.toast(`Attached ${a.kind}: ${file.name}`);
-        return a;
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-        return null;
-      } finally {
-        this.attachingArtifact = false;
-      }
+      return await this._artifactsModule().uploadFileArtifact(file, summary, kind);
     },
 
     async handleArtifactDrop(e: DragEvent): Promise<void> {
-      this.artifactDragOver = false;
-      const files = e.dataTransfer?.files;
-      if (!files || files.length === 0) return;
-      for (let i = 0; i < files.length; i++) {
-        await this.uploadFileArtifact(files[i]);
-      }
+      return await this._artifactsModule().handleArtifactDrop(e);
     },
 
     async handlePaste(e: ClipboardEvent): Promise<void> {
-      if (!this.detailOpen || !this.detail) return;
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.kind === "file" && item.type.startsWith("image/")) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (!file) continue;
-          const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-          const ext = item.type.split("/")[1] || "png";
-          const filename = file.name && file.name !== "image.png" ? file.name : `screenshot-${timestamp}.${ext}`;
-          const namedFile = new File([file], filename, {
-            type: item.type,
-          });
-          const a = await this.uploadFileArtifact(namedFile, filename, "screenshot");
-          const target = e.target as HTMLTextAreaElement | null;
-          if (target && target.tagName === "TEXTAREA" && a) {
-            const mdRef = `\n![screenshot](${a.ref})\n`;
-            const start = target.selectionStart ?? target.value.length;
-            const end = target.selectionEnd ?? target.value.length;
-            const val = target.value;
-            target.value = val.slice(0, start) + mdRef + val.slice(end);
-            target.selectionStart = target.selectionEnd = start + mdRef.length;
-            target.dispatchEvent(new Event("input", { bubbles: true }));
-          }
-          break;
-        }
-      }
+      return await this._artifactsModule().handlePaste(e);
     },
 
     resetArtifactForm(): void {
-      this.artifactForm = { open: false, kind: "url", ref: "", summary: "", file: null };
-      const fileInput = document.getElementById("artifactFileInput") as HTMLInputElement | null;
-      if (fileInput) fileInput.value = "";
+      this._artifactsModule().resetArtifactForm();
     },
 
     async attachArtifact(): Promise<void> {
-      const t = this.detail;
-      const file = this.artifactForm.file;
-      const ref = this.artifactForm.ref.trim();
-      if (!t || (!file && !ref) || this.attachingArtifact) return;
-      this.attachingArtifact = true;
-      try {
-        let a: ArtifactRow;
-        if (file) {
-          a = await api.uploadArtifact(
-            t.id,
-            file,
-            this.artifactForm.kind,
-            this.artifactForm.summary.trim() || undefined,
-            this.actor(),
-          );
-        } else {
-          a = await api.addArtifact(
-            t.id,
-            this.artifactForm.kind,
-            ref,
-            this.artifactForm.summary.trim() || undefined,
-            this.actor(),
-          );
-        }
-        const d = this.detail;
-        if (d && d.id === t.id) this.detail = { ...d, artifacts: [...d.artifacts, a] };
-        this.resetArtifactForm();
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.attachingArtifact = false;
-      }
+      return await this._artifactsModule().attachArtifact();
     },
 
     openImagePreview(src: string, alt: string): void {
-      this.previewModal = { open: true, src, alt };
-      const dialog = document.getElementById("artifactPreviewDialog") as HTMLDialogElement | null;
-      if (dialog && typeof dialog.showModal === "function") {
-        if (!dialog.open) {
-          dialog.showModal();
-        }
-      }
+      this._artifactsModule().openImagePreview(src, alt);
     },
 
     closeImagePreview(): void {
-      this.previewModal.open = false;
-      const dialog = document.getElementById("artifactPreviewDialog") as HTMLDialogElement | null;
-      if (dialog && dialog.open && typeof dialog.close === "function") {
-        dialog.close();
-      }
+      this._artifactsModule().closeImagePreview();
     },
 
     isStoredArtifact(ref: string | null | undefined): boolean {
-      return typeof ref === "string" && (ref.startsWith("/artifacts/") || ref.startsWith("/api/v1/artifacts/"));
+      return this._artifactsModule().isStoredArtifact(ref);
     },
 
     isStoredImage(a: { kind: string; ref: string; summary?: string }): boolean {
-      if (!this.isStoredArtifact(a.ref)) return false;
-      if (a.kind === "screenshot") return true;
-      const imageExt = /\.(png|jpe?g|gif|webp|svg|bmp|avif)\b/i;
-      return imageExt.test(a.ref) || imageExt.test(a.summary || "");
+      return this._artifactsModule().isStoredImage(a);
     },
 
     isStoredVideo(a: { kind: string; ref: string; summary?: string }): boolean {
-      if (!this.isStoredArtifact(a.ref)) return false;
-      const videoExt = /\.(mp4|webm|ogg|mov)\b/i;
-      return videoExt.test(a.ref) || videoExt.test(a.summary || "");
+      return this._artifactsModule().isStoredVideo(a);
     },
 
     isStoredAudio(a: { kind: string; ref: string; summary?: string }): boolean {
-      if (!this.isStoredArtifact(a.ref)) return false;
-      const audioExt = /\.(mp3|wav|ogg|aac|flac|m4a)\b/i;
-      return audioExt.test(a.ref) || audioExt.test(a.summary || "");
+      return this._artifactsModule().isStoredAudio(a);
     },
 
     isStoredNonImage(a: { kind: string; ref: string; summary?: string }): boolean {
-      return this.isStoredArtifact(a.ref) && !this.isStoredImage(a) && !this.isStoredVideo(a) && !this.isStoredAudio(a);
+      return this._artifactsModule().isStoredNonImage(a);
     },
 
     isStoredText(a: { kind: string; ref: string; summary?: string }): boolean {
-      if (!a || !a.ref) return false;
-      const isFetchable = this.isStoredArtifact(a.ref) || this.isWebHref(a.ref);
-      return Boolean(isFetchable && isTextArtifact(a));
+      return this._artifactsModule().isStoredText(a);
     },
 
     async toggleArtifactPreview(a: { id: string; ref: string }): Promise<void> {
-      const current = Boolean(this.artifactTextExpanded[a.id]);
-      this.artifactTextExpanded = {
-        ...this.artifactTextExpanded,
-        [a.id]: !current,
-      };
-      if (!current && this.artifactTextContent[a.id] === undefined && !this.artifactTextLoading[a.id]) {
-        this.artifactTextLoading = { ...this.artifactTextLoading, [a.id]: true };
-        this.artifactTextError = { ...this.artifactTextError, [a.id]: "" };
-        try {
-          const res = await fetch(a.ref);
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status} ${res.statusText}`);
-          }
-          const text = await res.text();
-          this.artifactTextContent = { ...this.artifactTextContent, [a.id]: text };
-        } catch (err: any) {
-          this.artifactTextError = {
-            ...this.artifactTextError,
-            [a.id]: err?.message || "Failed to load artifact content",
-          };
-        } finally {
-          this.artifactTextLoading = { ...this.artifactTextLoading, [a.id]: false };
-        }
-      }
+      return await this._artifactsModule().toggleArtifactPreview(a);
     },
 
     async deleteArtifact(artifactId: string): Promise<void> {
-      const t = this.detail;
-      if (!t || this.deletingArtifactId) return;
-      if (!this.confirmDiscard("Are you sure you want to delete this artifact?")) return;
-      this.deletingArtifactId = artifactId;
-      try {
-        await api.deleteArtifact(t.id, artifactId, this.actor());
-        const d = this.detail;
-        if (d && d.id === t.id) {
-          this.detail = {
-            ...d,
-            artifacts: d.artifacts.filter((a) => a.id !== artifactId),
-          };
-        }
-        const nextExpanded = { ...this.artifactTextExpanded };
-        delete nextExpanded[artifactId];
-        this.artifactTextExpanded = nextExpanded;
-        const nextContent = { ...this.artifactTextContent };
-        delete nextContent[artifactId];
-        this.artifactTextContent = nextContent;
-        this.toast("Artifact deleted");
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.deletingArtifactId = "";
-      }
+      return await this._artifactsModule().deleteArtifact(artifactId);
     },
 
     // ---------------------------------------------------------------- claims

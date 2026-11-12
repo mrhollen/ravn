@@ -357,3 +357,50 @@ export function isTextArtifact(a: { kind?: string; ref?: string; summary?: strin
 }
 
 
+
+/** Copy text to clipboard using the Async Clipboard API, falling back to
+ *  hidden textarea + execCommand for plain-HTTP or unsupported environments.
+ *  (Moved from app.ts in Phase 2 batch C so feature modules can import it
+ *  without an app.ts circular.) */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+  let copied = false;
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    } else {
+      copied = copyViaExecCommand(text);
+    }
+  } catch {
+    copied = false;
+  }
+  if (!copied) copied = copyViaExecCommand(text);
+  return copied;
+}
+
+/** Last-resort clipboard write for non-secure contexts (plain http on a LAN),
+ *  where navigator.clipboard is unavailable: hidden textarea + execCommand.
+ *  Returns true only when the browser reports the copy succeeded. */
+function copyViaExecCommand(text: string): boolean {
+  if (typeof document === "undefined" || !document.body) return false;
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  // Keep it out of the flow, off-screen, and unfocusable by tab order.
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.top = "-9999px";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  } finally {
+    ta.remove();
+  }
+  return ok;
+}
