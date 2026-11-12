@@ -1132,46 +1132,9 @@ test("DiscardGuards: requestCloseNewTask uses inline confirmation instead of nat
   }
 });
 
-test("DiscardGuards: projectSettingsDirty is baseline-relative; guarded close honors it", () => {
-  const app = ravnApp() as any;
-  const form = { name: "Alpha", description: "d", opencode_server_url: "", opencode_directory: "", opencode_model: "" };
-  app.projectSettingsForm = { ...form };
-  app.projectSettingsBaseline = { ...form };
-  app.showProjectSettings = true;
-
-  assert.equal(app.projectSettingsDirty(), false, "unmodified form is clean");
-
-  const strict = withConfirm(app, () => {
-    assert.fail("clean close must not call window.confirm");
-    return false;
-  });
-  try {
-    app.requestCloseProjectSettings();
-    assert.equal(app.showProjectSettings, false, "clean settings close without asking");
-  } finally {
-    strict.restore();
-  }
-
-  // Now dirty (re-open the flag): decline keeps the modal (values intact), accept closes it.
-  app.showProjectSettings = true;
-  app.projectSettingsForm = { ...form, name: "Alpha WIP" };
-  assert.equal(app.projectSettingsDirty(), true);
-  const deny = withConfirm(app, false);
-  try {
-    app.requestCloseProjectSettings();
-    assert.equal(app.showProjectSettings, true, "decline keeps the modal");
-    assert.equal(app.projectSettingsForm.name, "Alpha WIP", "draft untouched on decline");
-  } finally {
-    deny.restore();
-  }
-  const allow = withConfirm(app, true);
-  try {
-    app.requestCloseProjectSettings();
-    assert.equal(app.showProjectSettings, false, "accept closes the modal");
-  } finally {
-    allow.restore();
-  }
-});
+// (Phase 2 batch B: "projectSettingsDirty is baseline-relative; guarded close honors it"
+// moved to test/project-settings-module.test.ts — the pristine baseline is now internal
+// to web/src/modules/project-settings.ts and can no longer be poked on the root.)
 
 test("DiscardGuards: editDraftDirty compares against the startEditing snapshot", () => {
   const app = ravnApp() as any;
@@ -1944,21 +1907,14 @@ test("ProjectSettings: form loading, dirty tracking, and saving opencode_agent a
     assert.equal(sentReq.opencode_agent, "plan");
     assert.equal(sentReq.opencode_variant, "low");
 
-    // Now test clearing: if baseline had "plan" and "high", setting to "" sends "" to clear
-    app.projectSettingsBaseline = {
-      name: "Test Project",
-      description: "Desc",
-      opencode_server_url: "",
-      opencode_directory: "",
-      opencode_model: "",
-      opencode_agent: "plan",
-      opencode_variant: "high",
-    };
-    app.projectSettingsForm = {
-      ...app.projectSettingsBaseline,
-      opencode_agent: "",
-      opencode_variant: "",
-    };
+    // Now test clearing: if baseline had "plan" and "high", setting to "" sends "" to clear.
+    // (Phase 2 batch B: the pristine baseline is internal to modules/project-settings.ts —
+    // re-base it by re-opening against the authoritative fetch, then clear the fields.)
+    await app.openProjectSettings();
+    assert.equal(app.projectSettingsForm.opencode_agent, "plan");
+    assert.equal(app.projectSettingsDirty(), false, "re-open re-bases the form");
+    app.projectSettingsForm.opencode_agent = "";
+    app.projectSettingsForm.opencode_variant = "";
 
     await app.saveProjectSettings();
     assert.equal(sentReq.opencode_agent, "");

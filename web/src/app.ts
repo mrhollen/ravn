@@ -20,6 +20,8 @@ import { createBoardViewModule } from "./modules/board-view";
 import type { BoardViewModule } from "./modules/board-view";
 import { createSseModule, sseTelemetry } from "./modules/sse";
 import type { SseModule } from "./modules/sse";
+import { createProjectSettingsModule } from "./modules/project-settings";
+import type { ProjectSettingsModule } from "./modules/project-settings";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
 import {
   beginMove,
@@ -39,7 +41,7 @@ import {
 } from "./moves";
 import { canApplyDetail, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS } from "./refresh";
 import { renderMarkdown } from "./md";
-import { MEMBER_ROLES, canManageRoster, memberMutationErrorCopy, normalizeRoster } from "./members";
+import { MEMBER_ROLES } from "./members";
 import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
 import {
@@ -80,7 +82,6 @@ import type {
   Status,
   TaskDetail,
   TaskSummary,
-  UpdateProjectReq,
   UpdateTaskReq,
 } from "./types";
 import { STATUSES, STATUS_LABEL } from "./types";
@@ -1109,23 +1110,9 @@ export function ravnApp() {
       opencode_agent: "",
       opencode_variant: "",
     },
-    /** Pristine copy of the form captured when the dialog opens (and re-synced
-     *  after the authoritative fetch) — the "has anything actually changed?"
-     *  reference for the discard guard (task 01M3MMZ188XJBGKFSWBGESK79D). */
-    projectSettingsBaseline: {
-      name: "",
-      description: "",
-      opencode_server_url: "",
-      opencode_directory: "",
-      opencode_model: "",
-      opencode_agent: "",
-      opencode_variant: "",
-    },
     projectSettingsBusy: false,
     showArchiveConfirm: false,
     archiveConfirmInput: "",
-    /** Focus session for the project settings modal (trap + restore). */
-    projectSettingsFocus: null as DialogFocus | null,
 
     // ---------------------------------------------------------- members panel (T9)
     /** Roster read state for the settings modal's Members section. "loading" until
@@ -1140,313 +1127,125 @@ export function ravnApp() {
     memberAddName: "",
     memberAddRole: "viewer" as MemberRole,
 
-    /** Client-side manage decision for the roster (owner or stored admin; see
-     *  canManageRoster). Read-only members get the roster with NO write controls. */
-    canManageMembers(): boolean {
-      return canManageRoster(this.membersRoster, this.identity?.name ?? null);
+    _projectSettings: null as ProjectSettingsModule | null,
+
+    /** Lazily-built project-settings module (modules/project-settings.ts — Phase 2
+     *  batch B): the settings form lifecycle + pristine baseline + discard guard,
+     *  the archive-confirm flow, save/restore with the reselection fallback, and
+     *  the in-dialog members panel (T9). The baseline copy and the dialog focus
+     *  session are INTERNAL to that module; every bound name above stays a plain
+     *  root field for the template. */
+    _projectSettingsModule(): ProjectSettingsModule {
+      if (this._projectSettings) return this._projectSettings;
+      this._projectSettings = createProjectSettingsModule({
+        // state-in
+        selectedProjectId: () => this.selectedProjectId,
+        projects: () => this.projects,
+        identity: () => this.identity,
+        showProjectSettings: () => this.showProjectSettings,
+        projectSettingsForm: () => this.projectSettingsForm,
+        projectSettingsBusy: () => this.projectSettingsBusy,
+        archiveConfirmInput: () => this.archiveConfirmInput,
+        membersRoster: () => this.membersRoster,
+        membersBusy: () => this.membersBusy,
+        memberAddName: () => this.memberAddName,
+        memberAddRole: () => this.memberAddRole,
+        // state-out
+        setShowProjectSettings: (v) => { this.showProjectSettings = v; },
+        setProjectSettingsForm: (f) => { this.projectSettingsForm = f; },
+        setProjectSettingsBusy: (v) => { this.projectSettingsBusy = v; },
+        setShowArchiveConfirm: (v) => { this.showArchiveConfirm = v; },
+        setArchiveConfirmInput: (v) => { this.archiveConfirmInput = v; },
+        setSelectedProjectId: (v) => { this.selectedProjectId = v; },
+        clearBoard: () => { this.board = null; },
+        setShowNewProject: (v) => { this.showNewProject = v; },
+        setMembersState: (s) => { this.membersState = s; },
+        setMembersRoster: (r) => { this.membersRoster = r; },
+        setMembersBusy: (v) => { this.membersBusy = v; },
+        setMemberAddName: (v) => { this.memberAddName = v; },
+        setMemberAddRole: (r) => { this.memberAddRole = r; },
+        // hooks — root-owned orchestration kept outside the module
+        toast: (m, k) => this.toast(m, k),
+        actor: () => this.actor(),
+        confirmDiscard: (msg) => this.confirmDiscard(msg),
+        openDialog: (id, sel) => this.openDialog(id, sel),
+        closeDialog: (f) => this.closeDialog(f),
+        focusByTestid: (tid) => {
+          if (typeof window !== "undefined" && typeof document !== "undefined") {
+            this._focusWhenVisible(document.querySelector<HTMLElement>(`[data-testid="${tid}"]`));
+          }
+        },
+        loadProjects: () => this.loadProjects(),
+        loadBoard: () => this.loadBoard(),
+        connectSse: () => this.connectSse(),
+        disconnectSse: (reset) => this.disconnectSse(reset),
+        fetchOpenCodeOptions: (pid, force) => this.fetchOpenCodeOptions(pid, force),
+      });
+      return this._projectSettings;
     },
 
-    /** True when a stored row is ALSO the project owner (ownership derives from
-     *  created_by — the row stays editable; ownership is only badged). */
-    isOwnerMember(username: string): boolean {
-      const o = this.membersRoster?.owner;
-      return !!o && !!username && o.name.trim() === username;
+    openProjectSettings(): Promise<void> {
+      return this._projectSettingsModule().openProjectSettings();
     },
 
-    /** Fetches the roster for the selected project. Never throws — every outcome
-     *  (200 malformed, 403 feature-off/forbidden, 404 not-enabled) lands in
-     *  membersState so the section renders or hides accordingly. */
-    async loadMembers(): Promise<void> {
-      if (!this.selectedProjectId) return;
-      // Membership management only exists on authenticated deployments (a session,
-      // or at least a shared/operator token). In zero-config local mode every GET is
-      // a guaranteed 403 — skip the request entirely: Chromium logs any failed resource
-      // as console.error, and the E2E suite treats that as a test failure.
-      if (!this.identity && !api.getAuthToken()) {
-        this.membersState = "unavailable";
-        return;
-      }
-      const pid = this.selectedProjectId;
-      this.membersState = "loading";
-      try {
-        const raw = await api.listMembers(pid);
-        const roster = normalizeRoster(raw);
-        // Late resolution after the modal closed / project changed: drop it.
-        if (!this.showProjectSettings || this.selectedProjectId !== pid) return;
-        this.membersRoster = roster;
-        this.membersState = roster ? "ready" : "unavailable";
-      } catch {
-        if (this.showProjectSettings && this.selectedProjectId === pid) {
-          this.membersRoster = null;
-          this.membersState = "unavailable";
-        }
-      }
-    },
-
-    /** Add or re-grant (server upsert: 201 created / 200 role-change), then
-     *  refetch — the server emits no membership SSE events, so the local roster
-     *  is the only source of truth. */
-    async addMember(): Promise<void> {
-      if (this.membersBusy || !this.selectedProjectId) return;
-      const username = this.memberAddName.trim();
-      if (!username) return;
-      const role = this.memberAddRole;
-      this.membersBusy = true;
-      try {
-        const resp = await api.addMember(this.selectedProjectId, username, role);
-        this.toast(
-          resp.created ? `${username} added as ${role}` : `${username}'s role is now ${role}`
-        );
-        this.memberAddName = "";
-        await this.loadMembers();
-      } catch (e) {
-        this.toast(memberMutationErrorCopy(e, username), "error");
-        void this.loadMembers(); // server state may have moved — resync the roster
-      } finally {
-        this.membersBusy = false;
-      }
-    },
-
-    /** Role change on an EXISTING row (x-model has already put the new role on
-     *  the row). On failure the refetch below restores the server's value, which
-     *  rolls the <select> back automatically. */
-    async changeMemberRole(username: string): Promise<void> {
-      if (this.membersBusy || !this.selectedProjectId || !this.membersRoster) return;
-      const row = this.membersRoster.members.find((m) => m.username === username);
-      if (!row) return;
-      this.membersBusy = true;
-      try {
-        await api.setMemberRole(this.selectedProjectId, username, row.role);
-        this.toast(`${username} is now ${row.role}`);
-        await this.loadMembers();
-      } catch (e) {
-        this.toast(memberMutationErrorCopy(e, username), "error");
-        void this.loadMembers();
-      } finally {
-        this.membersBusy = false;
-      }
-    },
-
-    async removeMember(username: string): Promise<void> {
-      if (this.membersBusy || !this.selectedProjectId) return;
-      this.membersBusy = true;
-      try {
-        await api.removeMember(this.selectedProjectId, username);
-        this.toast(`${username} removed`);
-        await this.loadMembers();
-      } catch (e) {
-        this.toast(memberMutationErrorCopy(e, username), "error");
-        void this.loadMembers();
-      } finally {
-        this.membersBusy = false;
-      }
-    },
-
-    async openProjectSettings(): Promise<void> {
-      if (!this.selectedProjectId) return;
-      this.showArchiveConfirm = false;
-      this.archiveConfirmInput = "";
-      const p = this.projects.find((x) => x.id === this.selectedProjectId);
-      if (p) {
-        this.projectSettingsForm = {
-          name: p.name,
-          description: p.description ?? "",
-          opencode_server_url: p.opencode_server_url ?? "",
-          opencode_directory: p.opencode_directory ?? "",
-          opencode_model: p.opencode_model ?? "",
-          opencode_agent: p.opencode_agent ?? "",
-          opencode_variant: p.opencode_variant ?? "",
-        };
-      } else {
-        this.projectSettingsForm = {
-          name: "",
-          description: "",
-          opencode_server_url: "",
-          opencode_directory: "",
-          opencode_model: "",
-          opencode_agent: "",
-          opencode_variant: "",
-        };
-      }
-      // Pristine reference for the discard guard (re-synced after the fetch).
-      this.projectSettingsBaseline = { ...this.projectSettingsForm };
-      this.showProjectSettings = true;
-      // Name field first — least destructive control in this dialog.
-      this.projectSettingsFocus = this.openDialog("cb-project-settings", "input");
-
-      // Members panel (T9): fresh per open — the roster + manage decision both
-      // key off selectedProjectId and the session identity.
-      this.memberAddName = "";
-      this.memberAddRole = "viewer";
-      this.membersRoster = null;
-      void this.loadMembers();
-
-      try {
-        const full = await api.getProject(this.selectedProjectId);
-        this.projectSettingsForm = {
-          name: full.name,
-          description: full.description ?? "",
-          opencode_server_url: full.opencode_server_url ?? "",
-          opencode_directory: full.opencode_directory ?? "",
-          opencode_model: full.opencode_model ?? "",
-          opencode_agent: full.opencode_agent ?? "",
-          opencode_variant: full.opencode_variant ?? "",
-        };
-        // The fetch is authoritative — re-base "pristine" on it.
-        this.projectSettingsBaseline = { ...this.projectSettingsForm };
-        if (full.opencode_server_url) {
-          void this.fetchOpenCodeOptions(this.selectedProjectId);
-        }
-      } catch {
-        /* keep current list info */
-      }
-    },
-
-    /** Single close path for the settings modal (save / archive success).
-     *  User-initiated dismissals (× / Cancel / backdrop / Esc) must go through
-     *  requestCloseProjectSettings() so unsaved changes are never lost. */
     closeProjectSettings(): void {
-      this.showProjectSettings = false;
-      this.showArchiveConfirm = false;
-      this.archiveConfirmInput = "";
-      this.closeDialog(this.projectSettingsFocus);
-      this.projectSettingsFocus = null;
+      this._projectSettingsModule().closeProjectSettings();
     },
 
-    /** True when any settings field differs from what was loaded on open. */
     projectSettingsDirty(): boolean {
-      const f = this.projectSettingsForm;
-      const b = this.projectSettingsBaseline;
-      return (
-        (f.name ?? "") !== (b.name ?? "") ||
-        (f.description ?? "") !== (b.description ?? "") ||
-        (f.opencode_server_url ?? "") !== (b.opencode_server_url ?? "") ||
-        (f.opencode_directory ?? "") !== (b.opencode_directory ?? "") ||
-        (f.opencode_model ?? "") !== (b.opencode_model ?? "") ||
-        (f.opencode_agent ?? "") !== (b.opencode_agent ?? "") ||
-        (f.opencode_variant ?? "") !== (b.opencode_variant ?? "")
-      );
+      return this._projectSettingsModule().projectSettingsDirty();
     },
 
-    /** Guarded close for the settings dialog (× / Cancel / backdrop / Esc):
-     *  asks first when unsaved changes would be lost. */
     requestCloseProjectSettings(): void {
-      if (
-        this.projectSettingsDirty() &&
-        !this.confirmDiscard("Discard unsaved project settings changes?")
-      )
-        return;
-      this.closeProjectSettings();
+      this._projectSettingsModule().requestCloseProjectSettings();
     },
 
     openArchiveConfirm(): void {
-      this.showArchiveConfirm = true;
-      this.archiveConfirmInput = "";
-      if (typeof window !== "undefined" && typeof document !== "undefined") {
-        this._focusWhenVisible(document.querySelector<HTMLElement>('[data-testid="archive-confirm-input"]'));
-      }
+      this._projectSettingsModule().openArchiveConfirm();
     },
 
     cancelArchiveConfirm(): void {
-      this.showArchiveConfirm = false;
-      this.archiveConfirmInput = "";
-      if (typeof window !== "undefined" && typeof document !== "undefined") {
-        this._focusWhenVisible(document.querySelector<HTMLElement>('[data-testid="archive-project-btn"]'));
-      }
+      this._projectSettingsModule().cancelArchiveConfirm();
     },
 
     isArchiveInputValid(): boolean {
-      const p = this.projects.find((x) => x.id === this.selectedProjectId);
-      const target = (p ? p.name : this.projectSettingsForm.name).trim();
-      return Boolean(target && this.archiveConfirmInput.trim() === target);
+      return this._projectSettingsModule().isArchiveInputValid();
     },
 
     async archiveProject(): Promise<void> {
-      if (!this.selectedProjectId || !this.isArchiveInputValid() || this.projectSettingsBusy) return;
-      this.projectSettingsBusy = true;
-      const targetId = this.selectedProjectId;
-      try {
-        await api.updateProject(targetId, {
-          actor: this.actor(),
-          archived: true,
-        });
-        this.closeProjectSettings();
-        await this.loadProjects();
-        const stillSelected = this.projects.find((x) => x.id === this.selectedProjectId);
-        if (!stillSelected) {
-          this.selectedProjectId = this.projects[0]?.id ?? "";
-          if (this.selectedProjectId) {
-            try {
-              safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
-            } catch { /* ignore */ }
-            this.connectSse();
-            await this.loadBoard();
-          } else {
-            try {
-              safeStorage.removeItem(LS_PROJECT);
-            } catch { /* ignore */ }
-            this.disconnectSse(true);
-            this.board = null;
-            this.showNewProject = true;
-          }
-        }
-        this.toast("Project archived");
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.projectSettingsBusy = false;
-      }
+      await this._projectSettingsModule().archiveProject();
     },
 
-    /** Restore an ARCHIVED project from the project menu's "Archived" section:
-     *  PUT {archived:false}, then refresh BOTH project lists. The menu stays
-     *  open — the row just disappears (it left `archivedProjects`) and the
-     *  project reappears as a normal option. No board work is needed unless the
-     *  user picks it next (pickProject → selectProject handles that). */
     async restoreProject(projectId: string): Promise<void> {
-      if (!projectId || this.projectSettingsBusy) return;
-      this.projectSettingsBusy = true; // shared busy flag — prevents a double-fire on the same row
-      try {
-        await api.updateProject(projectId, { actor: this.actor(), archived: false });
-        await this.loadProjects();
-        this.toast("Project restored");
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.projectSettingsBusy = false;
-      }
+      await this._projectSettingsModule().restoreProject(projectId);
     },
 
     async saveProjectSettings(): Promise<void> {
-      const name = this.projectSettingsForm.name.trim();
-      if (!this.selectedProjectId || !name || this.projectSettingsBusy) return;
-      this.projectSettingsBusy = true;
-      try {
-        const agentTrim = this.projectSettingsForm.opencode_agent?.trim() ?? "";
-        const variantTrim = this.projectSettingsForm.opencode_variant?.trim() ?? "";
-        const serverUrlTrim = this.projectSettingsForm.opencode_server_url?.trim() ?? "";
-        const directoryTrim = this.projectSettingsForm.opencode_directory?.trim() ?? "";
-        const modelTrim = this.projectSettingsForm.opencode_model?.trim() ?? "";
+      await this._projectSettingsModule().saveProjectSettings();
+    },
 
-        const updatePayload: UpdateProjectReq = {
-          actor: this.actor(),
-          name,
-          description: this.projectSettingsForm.description?.trim() || undefined,
-          opencode_server_url: serverUrlTrim || (this.projectSettingsBaseline.opencode_server_url ? "" : undefined),
-          opencode_directory: directoryTrim || (this.projectSettingsBaseline.opencode_directory ? "" : undefined),
-          opencode_model: modelTrim || (this.projectSettingsBaseline.opencode_model ? "" : undefined),
-          opencode_agent: agentTrim || (this.projectSettingsBaseline.opencode_agent ? "" : undefined),
-          opencode_variant: variantTrim || (this.projectSettingsBaseline.opencode_variant ? "" : undefined),
-        };
-        await api.updateProject(this.selectedProjectId, updatePayload);
-        await this.loadProjects();
-        this.closeProjectSettings();
-        this.toast("Project updated");
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.projectSettingsBusy = false;
-      }
+    canManageMembers(): boolean {
+      return this._projectSettingsModule().canManageMembers();
+    },
+
+    isOwnerMember(username: string): boolean {
+      return this._projectSettingsModule().isOwnerMember(username);
+    },
+
+    loadMembers(): Promise<void> {
+      return this._projectSettingsModule().loadMembers();
+    },
+
+    async addMember(): Promise<void> {
+      await this._projectSettingsModule().addMember();
+    },
+
+    async changeMemberRole(username: string): Promise<void> {
+      await this._projectSettingsModule().changeMemberRole(username);
+    },
+
+    async removeMember(username: string): Promise<void> {
+      await this._projectSettingsModule().removeMember(username);
     },
 
     // ------------------------------------------------------------------- board
