@@ -191,7 +191,8 @@ test.describe('Consolidated header settings menu', () => {
     await expect(toggle).toBeChecked();
     const appState = await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      return { polling: app.polling, pollTimer: app.pollTimer };
+      // pollTimer moved to the SSE module closure (Phase 2) — read it via the TEST-SUPPORT accessor
+      return { polling: app.polling, pollTimer: app._sseModule().pollTimerId() };
     });
     expect(appState.polling).toBe(true);
 
@@ -329,7 +330,8 @@ test.describe('Consolidated header settings menu', () => {
     const appState = () =>
       page.evaluate(() => {
         const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-        return { polling: app.polling, pollTimer: app.pollTimer };
+        // pollTimer moved to the SSE module closure (Phase 2) — read it via the TEST-SUPPORT accessor
+      return { polling: app.polling, pollTimer: app._sseModule().pollTimerId() };
       });
 
     await trigger.click();
@@ -474,11 +476,20 @@ test.describe('Consolidated header settings menu', () => {
     // Ensure no live-indicator
     await expect(page.locator('[data-testid="live-indicator"]')).toHaveCount(0);
 
-    // Fast disconnect test: set delay to 50ms and trigger disconnect
+    // Fast disconnect test: the module's 30s toast delay is a constant now (Phase 2),
+    // so compress it in-page — capture the scheduled callback and fire it immediately.
     await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      app.sseDisconnectDelayMs = 50;
-      app.handleSseDisconnect();
+      const m = app._sseModule();
+      let captured: (() => void) | null = null;
+      const orig = globalThis.setTimeout as any;
+      (globalThis as any).setTimeout = function (fn: () => void, delay?: number) {
+        if (delay === 30000) { captured = fn; return 1; }
+        return orig.apply(this, arguments);
+      };
+      m.handleSseDisconnect();
+      (globalThis as any).setTimeout = orig;
+      captured!();
     });
 
     const toast = page.locator('[data-testid="sse-disconnect-toast"]');
@@ -499,7 +510,7 @@ test.describe('Consolidated header settings menu', () => {
     // Trigger again (AC 4: clear on restore)
     await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      app.showSseDisconnectNotification();
+      app._sseModule().showSseDisconnectNotification();
     });
     await expect(page.locator('[data-testid="sse-disconnect-toast"]')).toBeVisible();
 

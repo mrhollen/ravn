@@ -181,7 +181,7 @@ test.describe('toast notifications', () => {
     await expect(page.locator('[data-testid="live-indicator"]')).toHaveCount(0);
     await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      app.showSseDisconnectNotification();
+      app._sseModule().showSseDisconnectNotification(); // module-routed — Phase 2
     });
     const sseToast = page.locator('[data-testid="sse-disconnect-toast"]');
     await expect(sseToast).toBeVisible();
@@ -189,7 +189,7 @@ test.describe('toast notifications', () => {
     await expect(sseToast).toHaveClass(/border-red-200/);
     await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      app.clearSseDisconnectNotification();
+      app._sseModule().clearSseDisconnectNotification(); // module-routed — Phase 2
     });
 
     // 3. Verify duplicate task advisory live region attributes (AC3)

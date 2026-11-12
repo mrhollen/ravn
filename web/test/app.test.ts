@@ -2331,46 +2331,9 @@ test("HeaderMenu: trigger markup hides initial on desktop (md:hidden) and uses i
   );
 });
 
-test("SSE Disconnect Notification: triggers after delay, persists, clears on restore, and dismisses manually", async () => {
-  const app = ravnApp() as any;
-  app.sseDisconnectDelayMs = 50; // fast test delay
-
-  // 1. Initial state: no notification, timer can be scheduled
-  assert.equal(app.sseDisconnectToastId, null);
-  assert.equal(app.toasts.length, 0);
-
-  // 2. Schedule disconnect timer
-  app.scheduleSseDisconnectTimer();
-  assert.ok(app.sseDisconnectedTimer !== null, "timer must be scheduled");
-
-  // Wait for timer to fire
-  await new Promise((r) => setTimeout(r, 80));
-  assert.ok(app.sseDisconnectToastId !== null, "notification toast must be created");
-  assert.equal(app.toasts.length, 1);
-
-  const toast = app.toasts[0];
-  assert.equal(toast.id, app.sseDisconnectToastId);
-  assert.equal(toast.kind, "error");
-  assert.equal(toast.persistent, true, "notification must be persistent (no auto-expiry)");
-  assert.equal(toast.borderClass, "border-red-200 dark:border-red-800", "notification has red border like blocked tasks");
-  assert.equal(toast.hideErrorPrefix, true);
-  assert.equal(toast.isSseDisconnect, true);
-  assert.match(toast.msg, /Disconnected/);
-
-  // 3. Clear on connection restoration
-  app.clearSseDisconnectNotification();
-  assert.equal(app.sseDisconnectToastId, null, "toast ID cleared upon connection restoration");
-  assert.equal(app.toasts[0]?.leaving, true, "toast starts leaving transition");
-
-  // 4. Test manual dismissal
-  app.toasts = [];
-  app.scheduleSseDisconnectTimer();
-  await new Promise((r) => setTimeout(r, 80));
-  assert.ok(app.sseDisconnectToastId !== null);
-  const toastId = app.sseDisconnectToastId;
-  app.dismissToast(toastId);
-  assert.equal(app.sseDisconnectToastId, null, "manual dismiss clears sseDisconnectToastId");
-});
+// SSE disconnect-notification lifecycle (arm/fire/persist/clear/manual-dismiss)
+// moved to web/src/modules/sse.ts with Phase 2 batch B — covered in
+// test/sse-module.test.ts against createSseModule() with stub deps.
 
 test("CardDensity: readStoredCardDensity defaults to comfortable and validates values", () => {
   safeStorage.clear();

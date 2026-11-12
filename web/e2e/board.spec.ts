@@ -1230,10 +1230,10 @@ test.describe('Web E2E test suite', () => {
     });
     expect(extCommentRes.ok).toBe(true);
 
-    // Trigger pollTick in the running Alpine app
+    // Trigger pollTick in the running Alpine app (pollTick moved to the SSE module — Phase 2)
     await page.evaluate(async () => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      await app.pollTick();
+      await app._sseModule().pollTick();
     });
 
     // Verify comment 57 appears at the bottom without full page reload
@@ -1380,10 +1380,12 @@ test.describe('Web E2E test suite', () => {
     // -------------------------------------------------------------------------
     // AC 3: Reconnection with backoff & timer polling fallback
     // -------------------------------------------------------------------------
-    // Disconnect SSE intentionally via app method and verify backoff progression
+    // Disconnect SSE intentionally via the SSE module and verify backoff progression
+    // (handleSseDisconnect/sseBackoffMs moved to the module closure — Phase 2; the
+    // backoff value is read through the module's TEST-SUPPORT accessor)
     await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      app.handleSseDisconnect();
+      app._sseModule().handleSseDisconnect();
     });
 
     await page.waitForFunction(() => {
@@ -1392,17 +1394,17 @@ test.describe('Web E2E test suite', () => {
     });
     const backoff1 = await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      return app.sseBackoffMs;
+      return app._sseModule().backoffMs();
     });
     expect(backoff1).toBe(4000); // 2000 -> 4000
 
     await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      app.handleSseDisconnect();
+      app._sseModule().handleSseDisconnect();
     });
     const backoff2 = await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      return app.sseBackoffMs;
+      return app._sseModule().backoffMs();
     });
     expect(backoff2).toBe(8000); // 4000 -> 8000
 
@@ -1420,10 +1422,10 @@ test.describe('Web E2E test suite', () => {
     });
     expect(fallbackCreateRes.ok).toBe(true);
 
-    // Trigger timer pollTick fallback
+    // Trigger timer pollTick fallback (module-routed — Phase 2)
     await page.evaluate(async () => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      await app.pollTick();
+      await app._sseModule().pollTick();
     });
 
     // Verify board updated via pollTick fallback
@@ -1441,9 +1443,9 @@ test.describe('Web E2E test suite', () => {
     }, { timeout: 10000 });
     const resetBackoff = await page.evaluate(() => {
       const app = (window as any).Alpine.$data(document.querySelector('[x-data="app()"]'));
-      return app.sseBackoffMs;
+      return app._sseModule().backoffMs();
     });
-    expect(resetBackoff).toBe(2000);
+    expect(resetBackoff).toBe(2000); // successful onopen resets the backoff
   });
 
   test('OpenCode autonomous agent integration: project settings and task start launcher', async ({

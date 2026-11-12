@@ -18,6 +18,8 @@ import { createBoardModule, readStoredCardDensity } from "./modules/board";
 import type { BoardModule, CardDensity } from "./modules/board";
 import { createBoardViewModule } from "./modules/board-view";
 import type { BoardViewModule } from "./modules/board-view";
+import { createSseModule, sseTelemetry } from "./modules/sse";
+import type { SseModule } from "./modules/sse";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
 import {
   beginMove,
@@ -39,7 +41,6 @@ import { canApplyDetail, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNC
 import { renderMarkdown } from "./md";
 import { MEMBER_ROLES, canManageRoster, memberMutationErrorCopy, normalizeRoster } from "./members";
 import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
-import { dispatchRealtimeEvent, KNOWN_REALTIME_KINDS } from "./realtime";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
 import {
   SORT_OPTIONS,
@@ -280,7 +281,6 @@ export const DEFAULT_DONE_LIMIT = 20;
 /** Separator between the segments of a dynamic document.title (WCAG 2.4.2,
  *  task 01M3MMVV92639YJ5822824NTV1): "<task> – <project> – Rävn". */
 export const TITLE_SEPARATOR = " – ";
-const POLL_MS = 15_000;
 const MD_CACHE_MAX = 500;
 // Max visual card offset (px) while swiping. Commit/slop thresholds still use
 // the raw finger displacement — this clamp only limits what is drawn.
@@ -331,40 +331,10 @@ function copyViaExecCommand(text: string): boolean {
   return ok;
 }
 
-/** NAMED-event listener registrations kept for backward compatibility with
- *  server builds that still emit `event: <kind>` frames (pre-fix wire format).
- *  Per the WHATWG spec a named frame ONLY fires listeners registered for that
- *  exact name — onmessage never sees it — so this list must cover every kind
- *  an OLD server can emit. The PRIMARY path is es.onmessage below: current
- *  servers emit unnamed (default) frames with the kind inside the JSON
- *  payload, and dispatchRealtimeEvent() routes by payload.kind — so a brand-
- *  new server-side kind never needs to be added here or anywhere in the
- *  client. "message" is deliberately NOT listed: default frames are handled
- *  by onmessage alone, and registering a named "message" listener too would
- *  double-dispatch every frame. */
-const LEGACY_NAMED_SSE_EVENT_KINDS = [...KNOWN_REALTIME_KINDS];
-
-/** TEST-SUPPORT telemetry for the SSE singleton guarantee (ticket
- *  01M3VJ5PQEAJ60B0QGPNZT8NKP): counts EventSource constructions and close
- *  paths so unit + browser tests can assert "exactly one open stream" without
- *  reaching into a live socket. No production behavior reads these counters —
- *  they only accumulate. Browser tests reach them via the component reference
- *  (`Alpine.$data(root)._sseTelemetry`, see `_sseTelemetry` below) instead of
- *  a window flag, so shipped bundles stay clean. */
-export const sseTelemetry = {
-  /** Every successful `new EventSource(...)` in connectSse(). */
-  opened: 0,
-  /** Every close path that actually closed a live stream (disconnectSse +
-   *  handleSseDisconnect). A double-close can't skew this: the counter fires
-   *  only while `this.sse` is non-null. */
-  closed: 0,
-  /** Currently-open streams = opened − closed. Steady state must be exactly 1
-   *  after boot and STAYS 1 across reconnect cycles (each close+open nets to
-   *  zero). */
-  openCount(): number {
-    return this.opened - this.closed;
-  },
-};
+// Phase 2 (sse): the SSE preamble — LEGACY_NAMED_SSE_EVENT_KINDS doc + const and the
+// sseTelemetry singleton counters — moved to modules/sse.ts; re-exported below so the
+// existing import surface (tests, main.ts) stays intact.
+export { sseTelemetry } from "./modules/sse";
 
 export interface Toast {
   id: number;
@@ -512,9 +482,9 @@ export function ravnApp() {
      *  plays, then drop the row once that animation has finished — Alpine's
      *  x-for removes nodes instantly, so a direct filter would kill the exit. */
     dismissToast(id: number): void {
-      if (this.sseDisconnectToastId === id) {
-        this.sseDisconnectToastId = null;
-      }
+      // The SSE disconnect-toast guard lives in modules/sse.ts — clear it when its × is
+      // clicked so a later disconnect may surface the notification again.
+      this._sseModule().clearSseDisconnectNotificationIf(id);
       this.toasts = this.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t));
       setTimeout(() => {
         this.toasts = this.toasts.filter((t) => t.id !== id);
@@ -2507,300 +2477,77 @@ export function ravnApp() {
     },
 
     // ------------------------------------------------------------ realtime SSE
-    sse: null as EventSource | null,
     sseStatus: "disconnected" as SseConnectionStatus,
-    sseBackoffMs: 2000,
-    sseReconnectTimer: 0 as number,
-    sseDisconnectDelayMs: 30000,
-    sseDisconnectedTimer: null as any,
-    sseDisconnectToastId: null as number | null,
-    // Replay cursor (server-side Last-Event-ID): the last frame id received on
-    // THIS connection + the project it belongs to. Reconnects send it as the
-    // last_event_id query param so the server replays events missed while we
-    // were disconnected; the project match guards against replaying an old
-    // project's backlog after a switch.
-    sseLastEventId: "" as string,
-    sseLastEventProjectId: "" as string,
-    /** TEST-SUPPORT: reference to the module-level SSE singleton counters so
-     *  browser tests can read them via Alpine.$data(root)._sseTelemetry
-     *  (see sseTelemetry above). Carried on the component instead of a window
-     *  flag so shipped bundles stay free of global test hooks. */
+    /** TEST-SUPPORT: component reference to the module-level SSE singleton counters so
+     *  browser tests can read them via Alpine.$data(root)._sseTelemetry (see sseTelemetry in
+     *  modules/sse.ts). Carried on the component instead of a window flag so shipped bundles
+     *  stay clean of global test hooks. */
     _sseTelemetry: sseTelemetry,
 
-    scheduleSseDisconnectTimer(): void {
-      if (this.sseStatus === "connected") return;
-      if (this.sseDisconnectedTimer || this.sseDisconnectToastId) return;
-      this.sseDisconnectedTimer = setTimeout(() => {
-        this.sseDisconnectedTimer = null;
-        if (this.sseStatus !== "connected" && !this.sseDisconnectToastId) {
-          this.showSseDisconnectNotification();
-        }
-      }, this.sseDisconnectDelayMs);
-    },
+    /** Lightweight ~15s poll of board (+ open detail + project counts). No websockets. */
+    polling: true,
 
-    clearSseDisconnectTimer(): void {
-      if (this.sseDisconnectedTimer) {
-        clearTimeout(this.sseDisconnectedTimer);
-        this.sseDisconnectedTimer = null;
-      }
-    },
+    _sse: null as SseModule | null,
 
-    showSseDisconnectNotification(): void {
-      if (this.sseDisconnectToastId) return;
-      this.sseDisconnectToastId = this.toast(
-        "Disconnected from server. Realtime updates paused.",
-        "error",
-        undefined,
-        {
-          persistent: true,
-          borderClass: "border-red-200 dark:border-red-800",
-          hideErrorPrefix: true,
-          isSseDisconnect: true,
-        }
-      );
-    },
-
-    clearSseDisconnectNotification(): void {
-      if (this.sseDisconnectToastId) {
-        const id = this.sseDisconnectToastId;
-        this.sseDisconnectToastId = null;
-        this.dismissToast(id);
-      }
+    _sseModule(): SseModule {
+      if (this._sse) return this._sse;
+      this._sse = createSseModule({
+        // state-in
+        selectedProjectId: () => this.selectedProjectId,
+        projectForbidden: () => this.projectForbidden,
+        authToken: () => this.authToken,
+        polling: () => this.polling,
+        sseStatus: () => this.sseStatus,
+        // state-out
+        setSseStatus: (s) => { this.sseStatus = s; },
+        setProjectForbidden: (v) => { this.projectForbidden = v; },
+        // hooks — root-owned orchestration kept outside the module
+        toast: (m, k, o) => this.toast(m, k, undefined, o),
+        dismissToast: (id) => this.dismissToast(id),
+        scheduleReload: () => { this.sseReloadDebounce?.schedule(); },
+        isDetailOpenFor: (taskId) => Boolean(this.detailOpen && (this.detailId === taskId || this.detail?.id === taskId)),
+        refreshDetail: (taskId) =>
+          this.refreshDetail(true, taskId).then((applied) => {
+            // refreshDetail returns false when the payload was discarded by the ownership guard
+            // (drawer closed or switched mid-flight), and we re-check at settle time even for an
+            // applied payload so a stale SSE event can never fire comment side effects after the
+            // drawer has closed or moved on.
+            if (!applied) return false;
+            if (this.detailOpen && this.detail && this.detail.id === taskId) {
+              void this.initComments(taskId);
+            }
+            return true;
+          }).catch(() => false), // a failed re-fetch must never surface as an unhandled rejection on the stream path
+        refreshOpenDetail: async () => {
+          if (this.detailOpen && this.detail) {
+            await this.refreshDetail(true);
+            void this.initComments(this.detail.id);
+          }
+        },
+        loadProjectsSilent: () => this.loadProjects(true),
+        loadBoardSilent: () => this.loadBoard(true),
+      });
+      return this._sse;
     },
 
     connectSse(): void {
-      this.disconnectSse(false);
-
-      if (typeof window === "undefined" || typeof EventSource === "undefined") {
-        return;
-      }
-
-      if (!this.selectedProjectId) {
-        this.sseStatus = "disconnected";
-        this.scheduleSseDisconnectTimer();
-        return;
-      }
-
-      this.sseStatus = "connecting";
-      // A fresh connect attempt is for a possibly-accessible project; drop any prior
-      // membership-deny state. loadBoard's 403 sets projectForbidden, and the guard in
-      // handleSseDisconnect() stops the reconnect loop while it is active — an EventSource
-      // opened against a denied project errors immediately, so that gate is what prevents
-      // the infinite-reconnect loop (kept synchronous on purpose: existing SSE tests assert
-      // the stream is constructed the moment connectSse() returns).
-      this.projectForbidden = false;
-
-      const token = this.authToken || api.getAuthToken();
-      const params: string[] = [];
-      if (token) {
-        params.push(`token=${encodeURIComponent(token)}`);
-      }
-      // This client reconnects manually on error (see handleSseDisconnect), so
-      // the browser's native Last-Event-ID auto-reconnect never fires — pass the
-      // cursor ourselves and the server replays whatever we missed.
-      if (this.sseLastEventId && this.sseLastEventProjectId === this.selectedProjectId) {
-        params.push(`last_event_id=${encodeURIComponent(this.sseLastEventId)}`);
-      }
-      const url = `/api/v1/projects/${encodeURIComponent(this.selectedProjectId)}/events${
-        params.length ? `?${params.join("&")}` : ""
-      }`;
-
-      let es: EventSource;
-      try {
-        es = new EventSource(url);
-      } catch {
-        this.handleSseDisconnect();
-        return;
-      }
-
-      this.sse = es;
-      sseTelemetry.opened++; // TEST-SUPPORT: count every constructed stream
-
-      es.onopen = () => {
-        if (this.sse === es) {
-          this.sseStatus = "connected";
-          this.sseBackoffMs = 2000;
-          this.clearSseDisconnectTimer();
-          this.clearSseDisconnectNotification();
-        }
-      };
-
-      const onEvent = (e: MessageEvent) => {
-        if (this.sse !== es) return;
-        this.handleSseEvent(e);
-      };
-
-      // PRIMARY PATH: the server emits every event as a DEFAULT (unnamed)
-      // message frame with the kind inside the JSON payload, so this single
-      // onmessage handler receives EVERYTHING — including kinds this client
-      // was never written to know about (dispatchRealtimeEvent() routes by
-      // payload.kind and falls back to the generic refresh for unknown ones).
-      es.onmessage = onEvent;
-
-      // DEFENSE-IN-DEPTH: also listen for the legacy NAMED frames an older
-      // server build may still emit (`event: <kind>`), so a mixed-version
-      // deploy keeps updating the UI. Both paths land in handleSseEvent.
-      for (const kind of LEGACY_NAMED_SSE_EVENT_KINDS) {
-        es.addEventListener(kind, onEvent);
-      }
-
-      es.onerror = () => {
-        if (this.sse !== es) return;
-        this.handleSseDisconnect();
-      };
-    },
-
-    /** Thin adapter over the pure dispatchRealtimeEvent() core (see
-     *  realtime.ts): wires component state and refresh methods in as hooks.
-     *  Routing happens by PAYLOAD KIND, not by EventSource event name — known
-     *  kinds and unknown/future kinds both take the coalesced silent reload,
-     *  plus an in-place drawer re-fetch when the event names the open task. */
-    handleSseEvent(e: MessageEvent): void {
-      try {
-        dispatchRealtimeEvent(
-          { data: e.data, lastEventId: e.lastEventId },
-          {
-            selectedProjectId: () => this.selectedProjectId,
-            isDetailOpenFor: (taskId) =>
-              Boolean(this.detailOpen && (this.detailId === taskId || this.detail?.id === taskId)),
-            advanceCursor: (lastEventId, projectId) => {
-              // MessageEvent.lastEventId carries the SSE frame id — exactly what
-              // a reconnect needs to catch up; the project match guards against
-              // replaying an old project's backlog after a switch.
-              this.sseLastEventId = lastEventId;
-              this.sseLastEventProjectId = projectId ?? "";
-            },
-            scheduleReload: () => {
-              // Coalesced silent reload: a burst of events (agent batch ops)
-              // within SSE_RELOAD_DEBOUNCE_MS schedules ONE board + ONE projects
-              // round after the quiet period instead of N parallel ones. This is
-              // also the generic fallback that keeps the UI in sync for event
-              // kinds this client has never seen.
-              this.sseReloadDebounce?.schedule();
-            },
-            refreshDetail: (taskId) =>
-              this.refreshDetail(true, taskId).then((applied) => {
-                // refreshDetail now returns false when its payload was discarded by
-                // the ownership guard (drawer closed or switched mid-flight) — and
-                // even for an applied payload we re-verify at settle time, so a
-                // stale SSE event can never trigger comment side effects after the
-                // drawer closed or moved on.
-                if (!applied) return false;
-                if (this.detailOpen && this.detail && this.detail.id === taskId) {
-                  void this.initComments(taskId);
-                }
-                return true;
-              }).catch(() => false), // a failed re-fetch must never surface as an unhandled rejection on the stream path
-          }
-        );
-      } catch {
-        /* defensive: dispatchRealtimeEvent never throws, but a stream handler
-           must survive anything the socket can deliver */
-      }
-    },
-
-    handleSseDisconnect(): void {
-      if (this.sse) {
-        this.sse.close();
-        this.sse = null;
-        sseTelemetry.closed++; // TEST-SUPPORT: a live stream was actually closed
-      }
-      // Membership deny: a project we may not access must NOT spin an exponential-
-      // backoff reconnect loop. connectSse's preflight and loadBoard set this on a 403;
-      // surface the one-shot "no access" state (sseStatus disconnected) and stop retrying.
-      if (this.projectForbidden) {
-        this.sseStatus = "disconnected";
-        return;
-      }
-
-      this.sseStatus = "connecting";
-      this.scheduleSseDisconnectTimer();
-
-      if (this.sseReconnectTimer) {
-        window.clearTimeout(this.sseReconnectTimer);
-        this.sseReconnectTimer = 0;
-      }
-
-      const delay = this.sseBackoffMs;
-      // Exponential backoff: 2s, 4s, 8s, up to 16s
-      this.sseBackoffMs = Math.min(this.sseBackoffMs * 2, 16000);
-
-      this.sseReconnectTimer = window.setTimeout(() => {
-        this.sseReconnectTimer = 0;
-        if (this.selectedProjectId) {
-          this.connectSse();
-        } else {
-          this.sseStatus = "disconnected";
-          this.scheduleSseDisconnectTimer();
-        }
-      }, delay);
+      this._sseModule().connectSse();
     },
 
     disconnectSse(resetBackoff = true): void {
-      if (this.sseReconnectTimer) {
-        window.clearTimeout(this.sseReconnectTimer);
-        this.sseReconnectTimer = 0;
-      }
-      if (this.sse) {
-        this.sse.close();
-        this.sse = null;
-        sseTelemetry.closed++; // TEST-SUPPORT: a live stream was actually closed
-      }
-      if (resetBackoff) {
-        this.sseBackoffMs = 2000;
-        this.sseStatus = "disconnected";
-        this.scheduleSseDisconnectTimer();
-        // Intentional teardown (project switch, logout): drop the replay cursor
-        // so a later reconnect starts fresh instead of bursting a stale
-        // backlog. Error-driven reconnects go through disconnectSse(false) and
-        // keep the cursor on purpose.
-        this.sseLastEventId = "";
-        this.sseLastEventProjectId = "";
-      }
+      this._sseModule().disconnectSse(resetBackoff);
     },
-
-    // ------------------------------------------------------------------ polling
-    /** Lightweight ~15s poll of board (+ open detail + project counts). No websockets. */
-    polling: true,
-    pollTimer: 0 as number,
 
     pollingChanged(): void {
-      if (this.polling) this.startPolling();
-      else this.stopPolling();
+      this._sseModule().pollingChanged();
     },
 
-    /** Visible + spoken status word for the mobile "Status & Refresh" SSE button
-     *  (data-testid="mobile-sse-status"). Single source of truth so the button's
-     *  x-text and its :aria-label prefix can never drift apart — WCAG 4.1.2
-     *  requires the accessible name to CONTAIN the visible text, so the label is
-     *  built as sseStatusWord() + ' — ' + the stateful sentence. The mobile-menu
-     *  spec asserts those full sentences unanchored; the prefix preserves them. */
     sseStatusWord(): string {
-      if (this.sseStatus === "connected") return "Live";
-      if (this.sseStatus === "connecting") return "Reconnecting…";
-      return this.polling ? "Polling every 15s" : "Offline — click to connect";
+      return this._sseModule().sseStatusWord();
     },
 
     startPolling(): void {
-      this.stopPolling();
-      this.pollTimer = window.setInterval(() => void this.pollTick(), POLL_MS);
-    },
-
-    stopPolling(): void {
-      if (this.pollTimer) {
-        window.clearInterval(this.pollTimer);
-        this.pollTimer = 0;
-      }
-    },
-
-    async pollTick(): Promise<void> {
-      if (document.hidden || !this.selectedProjectId) return;
-      await this.loadProjects(true);
-      await this.loadBoard(true);
-      if (this.detailOpen && this.detail) {
-        await this.refreshDetail(true);
-        void this.initComments(this.detail.id);
-      }
+      this._sseModule().startPolling();
     },
 
     // ---------------------------------------------------------------- new task
