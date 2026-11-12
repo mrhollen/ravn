@@ -119,7 +119,7 @@ later phase; root = deliberately stays in the composition root.
 | New-task form + create flow (:3463–3621) | :3463–3621 | `modules/new-task.ts` | **P2 landed (batch B)** — dialog lifecycle, dirty-draft guard and the whole create flow behind typed `NewTaskDeps`; every bound field (incl. `newTaskTarget`, which the modal header renders) stays plain root state; only the focus session is module-internal. Keyboard dispatch (`n` / Escape cascade) keeps calling the flat surface at root |
 | Task detail drawer state/lifecycle (:3622–3646) + full-page `/tasks/<id>` view (:3647–3923) ("routes" ~:3650 / "detail+AC" in the audit) | :3622–3923 | `modules/detail.ts` (P2 state; `canApplyDetail` ownership guard already pure in `src/refresh.ts`; route helpers P1 in `src/routes.ts`) | P1+P2 |
 | Copy-ID toolbar action (:4028–4181) | :4028–4181 | `modules/detail.ts` (drawer toolbar behavior; clipboard core P1 → `src/util.ts`) | P1+P2 |
-| Quick metadata (priority & due popovers, :4182–4321) + assignee popover (:4322–4398) + title/description edit with dirty drafts (:4399–4584) + notes scratchpad (:4994–5097) | :4182–4584, :4994–5097 | `modules/task-edit.ts` (P2; draft serialize keys already in `src/drafts.ts`) — all "edit a field on the open task" behavior, one module | P2 |
+| Quick metadata (priority & due popovers, :4182–4321) + assignee popover (:4322–4398) + title/description edit with dirty drafts (:4399–4584) + notes scratchpad (:4994–5097) | :4182–4584, :4994–5097 | `modules/task-edit.ts` (P2; draft serialize keys already in `src/drafts.ts`) — all "edit a field on the open task" behavior, one module | **PARTIAL (batch B)** — the core edit session (startEditing/cancelEditing, snapshot discard guard, description-draft pair, saveTaskEdit + 409 retry) landed; quick-metadata popovers, assignee popover and the notes scratchpad still ride at root in this row's region |
 | Acceptance criteria (:5098–5359) ("detail+AC" ~:5115 in the audit) | :5098–5359 | `modules/acs.ts` | P2 (`parseChecklistText` already pure in `src/util.ts`) |
 | Comments (:5360–5481) | :5360–5481 | `modules/comments.ts` | P2 (draft keys already in `src/drafts.ts`) |
 | Artifacts (:5482–5728) | :5482–5728 | `modules/artifacts.ts` | P2 (`isTextArtifact` already pure in `src/util.ts`) |
@@ -304,9 +304,34 @@ stateful modules rather than one:
   unchanged (they only drive the flat surface and poke the still-root
   `newTaskParentId`). `app.ts` shrank 5,341 → **5,273**.
 
+- `modules/task-edit.ts` (238) — **partial landing of the task-edit row**: the
+  core drawer edit session moved verbatim — startEditing (draft seed + pristine
+  snapshot + saved-draft restore), cancelEditing, the discard guard pair
+  (editDraftDirty / discardEditDraftIfConfirmed), the description draft
+  persistence pair and saveTaskEdit with its due/assignee set-or-clear payload
+  assembly and version-conflict retry (applyDetail hook). All five fields —
+  incl. the `editDraftOriginal` snapshot, never rendered but poked by
+  `drafts.test.ts`, so it stays root per the bound-name precedent — remain
+  plain root state; the module owns NO closure-internal state (no dialog focus
+  session to own). Seven delegation shims keep the surface byte-identical;
+  index.html untouched. The row's quick-metadata popovers, assignee popover and
+  notes scratchpad still ride at root. `descriptionDraftKey` import dropped from
+  app.ts (module-only now). Non-DOM coverage: `web/test/task-edit-module.test.ts`
+  (30 tests, stub state + patched api; the drafts.test.ts surface tests stay
+  unchanged and green through the shims). `app.ts` shrank 5,273 → **5,176**
+  (−97). Burn-down: the re-anchored model priced this FULL row at ≈−298
+  (4,976→4,678 in its tail); the partial landing delivered −97, so ≈−200 of it
+  still rides with the popovers + notes scratchpad when they move.
+
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
-~~auth~~ → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/
-`relations` (drawer surfaces) → `archive`/`batch`/`drag` (board actions) →
+~~auth~~ → `task-edit` (core edit session landed; quick-metadata + assignee
+popovers and the notes scratchpad remain in this row) → `acs`/`comments`/
+`artifacts`/`claims`/`relations` (drawer surfaces) → `detail` **last** —
+REORDERED from its original second position: `openTask`/`closeDetail` are
+cross-cutting cascades writing ~20 flat fields across the not-yet-modularized
+sub-concerns above, so extracted last each cascade write converges to ONE hook
+into an already-landed module (same pattern as `selectProject` before the
+board slice) → `archive`/`batch`/`drag` (board actions) →
 ~~menus~~/~~project-settings~~/~~opencode~~/~~new-task~~ (remaining chrome).
 
 ## 3. The driving constraint (why extraction looks the way it does)
