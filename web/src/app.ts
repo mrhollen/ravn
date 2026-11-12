@@ -22,6 +22,8 @@ import { createSseModule, sseTelemetry } from "./modules/sse";
 import type { SseModule } from "./modules/sse";
 import { createOpenCodeModule } from "./modules/opencode";
 import type { OpenCodeModule } from "./modules/opencode";
+import { createNewTaskModule } from "./modules/new-task";
+import type { NewTaskModule } from "./modules/new-task";
 import { createProjectSettingsModule } from "./modules/project-settings";
 import type { ProjectSettingsModule } from "./modules/project-settings";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
@@ -106,7 +108,6 @@ import {
   relTime,
   safeStorage,
   shortId,
-  splitLines,
   statusLabel,
 } from "./util";
 
@@ -2339,6 +2340,7 @@ export function ravnApp() {
 
     // ---------------------------------------------------------------- new task
     showNewTask: false,
+    /** Target column when creating from a non-To-Do column's quick-add (the modal header renders it). */
     newTaskTarget: "todo" as Status,
     confirmNewTaskDiscard: false,
     newTask: {
@@ -2353,147 +2355,77 @@ export function ravnApp() {
     taskBusy: false,
     /** possible_duplicates advisory from the last create — shown non-blockingly. */
     duplicates: [] as TaskSummary[],
-    /** Focus session for the new-task modal (trap + restore). */
-    newTaskFocus: null as DialogFocus | null,
     /** Parent task ID when creating a subtask via "+ Add subtask". */
     newTaskParentId: null as string | null,
 
+    _newTask: null as NewTaskModule | null,
+
+    /** Lazily-built new-task module (modules/new-task.ts — Phase 2 batch B):
+     *  dialog lifecycle + guarded draft close and the create flow (POST, the
+     *  version-guarded non-todo move, optional subtask link, duplicates
+     *  advisory). Every bound field above stays plain root state; only the
+     *  focus session lives in this module's closure. */
+    _newTaskModule(): NewTaskModule {
+      if (this._newTask) return this._newTask;
+      this._newTask = createNewTaskModule({
+        // state-in
+        selectedProjectId: () => this.selectedProjectId,
+        detail: () => this.detail,
+        newTask: () => this.newTask,
+        taskBusy: () => this.taskBusy,
+        newTaskParentId: () => this.newTaskParentId,
+        newTaskTarget: () => this.newTaskTarget,
+        // state-out
+        setShowNewTask: (v) => { this.showNewTask = v; },
+        setNewTaskTarget: (s) => { this.newTaskTarget = s; },
+        setConfirmNewTaskDiscard: (v) => { this.confirmNewTaskDiscard = v; },
+        setDuplicates: (t) => { this.duplicates = t; },
+        setTaskBusy: (v) => { this.taskBusy = v; },
+        setNewTask: (f) => { this.newTask = f; },
+        setNewTaskParentId: (v) => { this.newTaskParentId = v; },
+        // hooks — root-owned orchestration kept outside the module
+        toast: (m, k) => this.toast(m, k),
+        actor: () => this.actor(),
+        openDialog: (id, sel) => this.openDialog(id, sel),
+        closeDialog: (f) => this.closeDialog(f),
+        loadProjects: () => this.loadProjects(),
+        loadBoard: (force) => this.loadBoard(force),
+        refreshDetail: (force) => this.refreshDetail(force),
+      });
+      return this._newTask;
+    },
+
     openNewSubtask(parentTask: { id: string } | null | undefined): void {
-      if (!parentTask) return;
-      this.openNewTask("todo");
-      this.newTaskParentId = parentTask.id;
+      this._newTaskModule().openNewSubtask(parentTask);
     },
 
     openNewTask(status: Status = "todo"): void {
-      this.newTaskTarget = status;
-      this.confirmNewTaskDiscard = false;
-      this.newTask = {
-        title: "",
-        description: "",
-        priority: 0,
-        due: "",
-        acs: "",
-        assigneeName: "",
-        assigneeType: "human",
-      };
-      this.duplicates = [];
-      this.showNewTask = true;
-      // First form FIELD first (not the submit button) per a11y convention.
-      this.newTaskFocus = this.openDialog('cb-new-task', 'input[x-model="newTask.title"]');
+      this._newTaskModule().openNewTask(status);
     },
 
-    /** Single close path for the new-task modal (create success). User-initiated
-     *  dismissals (× / Cancel / backdrop / Esc) must go through
-     *  requestCloseNewTask() so a half-typed draft is never lost. */
     closeNewTask(): void {
-      this.showNewTask = false;
-      this.confirmNewTaskDiscard = false;
-      this.duplicates = [];
-      this.newTaskParentId = null;
-      this.newTask = {
-        title: "",
-        description: "",
-        priority: 0,
-        due: "",
-        acs: "",
-        assigneeName: "",
-        assigneeType: "human",
-      };
-      this.closeDialog(this.newTaskFocus);
-      this.newTaskFocus = null;
+      this._newTaskModule().closeNewTask();
     },
 
-    /** True when the new-task form holds any content — openNewTask() resets
-     *  every field, so a freshly opened dialog is never dirty. */
     newTaskDirty(): boolean {
-      const n = this.newTask;
-      return Boolean(
-        n.title.trim() ||
-          n.description.trim() ||
-          n.due !== "" ||
-          n.priority !== 0 ||
-          n.assigneeName.trim() ||
-          n.assigneeType !== "human" ||
-          n.acs.trim(),
-      );
+      return this._newTaskModule().newTaskDirty();
     },
 
-    /** Guarded close for the new-task dialog (× / Cancel / backdrop / Esc):
-     *  shows confirmation in the button row when a draft would be lost.
-     *  createTask() closes UNCONDITIONALLY via closeNewTask() after a successful POST. */
     requestCloseNewTask(): void {
-      if (this.newTaskDirty()) {
-        this.confirmNewTaskDiscard = true;
-        return;
-      }
-      this.closeNewTask();
+      this._newTaskModule().requestCloseNewTask();
     },
 
     cancelNewTaskConfirm(): void {
-      this.confirmNewTaskDiscard = false;
+      this._newTaskModule().cancelNewTaskConfirm();
     },
 
     clearDuplicates(): void {
-      this.duplicates = [];
+      this._newTaskModule().clearDuplicates();
     },
 
+    /** Create flow — behavior owned by modules/new-task.ts (Phase 2 batch B). */
     async createTask(): Promise<void> {
-      const title = this.newTask.title.trim();
-      if (this.taskBusy || !title || !this.selectedProjectId) return;
-      this.taskBusy = true;
-      let created: TaskSummary | null = null;
-      const parentId = this.newTaskParentId;
-      try {
-        const assigneeName = this.newTask.assigneeName.trim();
-        const res = await api.createTask({
-          actor: this.actor(),
-          title,
-          description: this.newTask.description.trim() || undefined,
-          project_id: this.selectedProjectId,
-          priority: this.newTask.priority,
-          due_at: dateInputToIso(this.newTask.due),
-          assignee: assigneeName ? { name: assigneeName, type: this.newTask.assigneeType } : undefined,
-          acceptance_criteria: splitLines(this.newTask.acs),
-        });
-        created = res.task;
-        // Target column other than To Do: the create lands in todo (v1) and we
-        // follow up with ONE version-guarded move. A race here is advisory —
-        // the next poll settles the truth.
-        if (this.newTaskTarget !== "todo") {
-          try {
-            await api.updateTask(created.id, {
-              actor: this.actor(),
-              version: created.version,
-              status: this.newTaskTarget,
-            });
-          } catch (e2) {
-            if (!ApiError.isVersionConflict(e2)) throw e2;
-            this.toast("New task changed elsewhere before the move — check its column.", "info");
-          }
-        }
-        if (parentId) {
-          try {
-            await api.addRelation(created.id, parentId, "child", this.actor());
-          } catch (relErr) {
-            this.toast("Task created, but failed to link subtask: " + errMsg(relErr), "error");
-          }
-        }
-        this.duplicates = res.possible_duplicates ?? [];
-        this.closeNewTask();
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.taskBusy = false;
-        if (created) {
-          const promises: Promise<unknown>[] = [this.loadProjects(), this.loadBoard(true)];
-          if (parentId && this.detail && this.detail.id === parentId) {
-            promises.push(this.refreshDetail(true));
-          }
-          void Promise.all(promises);
-        } else {
-          void this.loadBoard(true); // board may have changed even on failure paths we care about
-        }
-      }
+      return await this._newTaskModule().createTask();
     },
 
     // ------------------------------------------------------------ task detail
