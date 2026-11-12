@@ -106,7 +106,7 @@ later phase; root = deliberately stays in the composition root.
 | Projects dropdown — custom menu (:1100–1232) ("project menu" ~:1103 in the audit) | :1100–1232 | `modules/menus.ts` | **P2 landed (batch A)** — open/close, roving arrow/Home/End focus and the capture-phase outside-click listener live in the shared controller; per-menu state (`projectMenuOpen`) stays a root field, and `pickProject`'s close-then-select cascade landed with the board slice (batch B): close via the controller, then the root's selection cascade. Non-DOM coverage: `web/test/menus-module.test.ts` |
 | Header settings menu (:1233–1335) ("header menu" ~:1240 in the audit) | :1233–1335 | `modules/menus.ts` (controller); its *contents* belong to their own owners (theme → `src/theme.ts`, auth entry → `modules/auth.ts`, auto-refresh → board/live) | **P2 landed (batch A)** — same shared controller; the "at most one header menu" mutual exclusion (opening the settings menu collapses the project dropdown) stays at root because both flags are root fields. Non-DOM coverage: `web/test/menus-module.test.ts` |
 | OpenCode options list (:1381–1439) + drawer run panel (:3924–4027) | :1381–1439, :3924–4027 | `modules/opencode.ts` | P2 |
-| Project settings modal (:1440–1468) + members panel T9 (:1469–1790) | :1440–1468, :1469–1790 | `modules/project-settings.ts` | P2 (roster pure core already in `src/members.ts`: `normalizeRoster`, `canManageRoster`, error copy) |
+| Project settings modal (:1440–1468) + members panel T9 (:1469–1790) | :1440–1468, :1469–1790 | `modules/project-settings.ts` | **P2 landed (batch B)** — form lifecycle with the pristine baseline re-based on the authoritative fetch, the discard guard, the archive-confirm flow + save/restore, and the T9 members panel live in the module closure behind typed `ProjectSettingsDeps`; the roster pure core was already in `src/members.ts` (`normalizeRoster`, `canManageRoster`, error copy). The ten bound fields stay root fields; the baseline copy and the focus session are module-internal. Non-DOM coverage: `web/test/project-settings-module.test.ts` |
  | Board state: snapshot, blocked-state cache + derive/sync/reset (:1791–1890), `loadBoard` sequencing | :1791–1890 | `modules/board.ts` (cache + prefs, P2) / `modules/board-view.ts` (`loadBoard` lifecycle) | **P2 landed (batch B)** — scope-guarded blocked cache (board-snapshot sync is in-module, no standalone pure sliver), detail learning seam and reset; the sequence-guarded fetch lifecycle lives with the view pipeline (see status note for the core/view split rationale) |
  | **Board/columns derivation** `columns()` (:2941–3070): filter → sort → done-pagination pipeline; visible/hidden counts + filtered-empty banner (:2906–2921) ("board/columns" ~:2946 in the audit) | :2890–3070 (inside URL-sync section) | `src/filters.ts` + `src/sort.ts` — P1 pure pipeline over plain args; `modules/board-view.ts` owns the state it composes | **P2 landed (batch B)** — composition (filter predicates, sort+hoist, FTS id union, done-cap bypass) in the view module; the flat pure cores are untouched and still imported by it |
 | Archive management: single-task archive/restore w/ version guard + retry-once (:1964–2195); bulk "Archive all Done" (:2196–2256) | :1964–2256 | `modules/archive.ts` | P2 (the locate-row-in-live-archived-detail helper becomes a pure fn with injected state) |
@@ -242,12 +242,35 @@ stateful modules rather than one:
   disconnect-toast guard on a manual × of that toast. E2E specs that drove
   internals now route through `app._sseModule()`; app.test.ts shed its
   internal-poking disconnect-notification test (covered in
-  `web/test/sse-module.test.ts`). `app.ts` shrank 5,807 → **5,554**.
+   `web/test/sse-module.test.ts`). `app.ts` shrank 5,807 → **5,554**.
+
+- `modules/project-settings.ts` (436) — the project settings modal AND its
+  in-dialog T9 members panel: the form lifecycle (seeded from the list row on
+  open, re-based on the authoritative `getProject` fetch), baseline-relative
+  dirty tracking + the confirm-first guarded close, the type-the-name
+  archive-confirm flow with its reselection fallback (next project / new-project
+  prompt when the list empties), `saveProjectSettings`'s baseline-relative
+  empty-string-or-undefined clearing semantics for the opencode fields,
+  `restoreProject`, and the members panel (roster load that short-circuits in
+  zero-config mode, manage decision, add / role-change / remove with their
+  never-throw refetch loops). All ten bound names stay plain root fields; the
+  pristine baseline copy and the dialog focus session are INTERNAL to the
+  module closure (never rendered — safe to leave the flat namespace). DOM focus
+  steps now go through the `focusByTestid` hook so the guard + query stay on the
+  root. The lazy `_projectSettingsModule()` builder wires state-in getters,
+  state-out setters and the 11 orchestration hooks (toast/actor/dialogs/
+  loadProjects/loadBoard/SSE/fetchOpenCodeOptions); sixteen delegation shims
+  keep the public surface byte-identical for index.html. app.test.ts's
+  baseline-poking discard-guard test moved to
+  `web/test/project-settings-module.test.ts` (22 tests, stub deps + patched
+  api), and its agent/variant save test now re-bases by re-opening against a
+  stubbed `getProject` instead of poking the internal baseline. `app.ts` shrank
+  5,554 → **5,353**.
 
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/
 `relations` (drawer surfaces) → `archive`/`batch`/`drag` (board actions) →
-~~menus~~/`project-settings`/`opencode`/`new-task` (remaining chrome).
+~~menus~~/~~project-settings~~/`opencode`/`new-task` (remaining chrome).
 
 ## 3. The driving constraint (why extraction looks the way it does)
 
