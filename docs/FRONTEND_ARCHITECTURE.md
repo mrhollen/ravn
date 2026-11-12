@@ -116,7 +116,7 @@ later phase; root = deliberately stays in the composition root.
  | Full-text (desc/notes) remote search (:2587–2746; constants :228/:232) | :2587–2746 | `src/filters.ts` — P1: result merge/dedupe against live board rows; debounce+in-flight state in `modules/board.ts` (debounce core already in `src/refresh.ts`) | **P2 landed (batch B)** — the 250ms debounce, sequence guard and match-id set are module-internal state; `SEARCH_DEBOUNCE_MS` / `FULLTEXT_SEARCH_LIMIT` moved to `modules/board.ts` and are re-exported from the root unchanged |
  | URL query sync handlers (`syncUrlState`, popstate/deep-link adoption) (:2747–3165) | :2747–3165 | parse/build pure core → `src/routes.ts` (P1); the handlers themselves → `modules/board-view.ts` (board/filter URL parts, P2); boot-time task-route adoption stays composition-root wiring (§5 step 4) | **P2 landed (batch B)** — `syncUrlState` (immediate + 150ms debounced, task-route guard), `applyQueryParams` (popstate full-restore vs partial initial restore) and `initFromUrl` live in the view module; land-target deviates from the originally planned single `board.ts` (see status note) |
 | Realtime SSE: connect/backoff/replay cursor/disconnect (:3166–3418) + polling fallback (:3419–3462); `sseTelemetry` test-support counters (:585–598) | :585–598, :3166–3462 | `modules/sse.ts` (P2 state; pure dispatch already in `src/realtime.ts`, coalescing in `src/refresh.ts`; the thin adapter pattern at app.ts:3310–3360 is the model) | **P2 landed (batch B)** — stream lifecycle, backoff, replay cursor, disconnect toast + polling fallback live in the module closure behind typed `SseDeps` (state-in/out via lambdas; toast/dismiss/reload/refresh hooks). `POLL_MS`, `LEGACY_NAMED_SSE_EVENT_KINDS` (doc + const) and the `sseTelemetry` counters moved here and are re-exported from the root unchanged. The bound `sseStatus` / `polling` fields stay root fields; the EventSource handle, timers, backoff and cursor are module-internal. The root's `dismissToast` clears the disconnect-toast guard through the module seam (`clearSseDisconnectNotificationIf`). Test support: `backoffMs()` / `pollTimerId()` read-only accessors on the returned surface (same pattern as `sseTelemetry`) plus pure helpers `nextBackoffMs` / `shouldSendReplayCursor` / `buildSseUrl`. Non-DOM coverage: `web/test/sse-module.test.ts` |
-| New-task form + create-and-select (:3463–3621) | :3463–3621 | `modules/new-task.ts` | P2 (discard-guard draft helpers already in `src/drafts.ts`) |
+| New-task form + create flow (:3463–3621) | :3463–3621 | `modules/new-task.ts` | **P2 landed (batch B)** — dialog lifecycle, dirty-draft guard and the whole create flow behind typed `NewTaskDeps`; every bound field (incl. `newTaskTarget`, which the modal header renders) stays plain root state; only the focus session is module-internal. Keyboard dispatch (`n` / Escape cascade) keeps calling the flat surface at root |
 | Task detail drawer state/lifecycle (:3622–3646) + full-page `/tasks/<id>` view (:3647–3923) ("routes" ~:3650 / "detail+AC" in the audit) | :3622–3923 | `modules/detail.ts` (P2 state; `canApplyDetail` ownership guard already pure in `src/refresh.ts`; route helpers P1 in `src/routes.ts`) | P1+P2 |
 | Copy-ID toolbar action (:4028–4181) | :4028–4181 | `modules/detail.ts` (drawer toolbar behavior; clipboard core P1 → `src/util.ts`) | P1+P2 |
 | Quick metadata (priority & due popovers, :4182–4321) + assignee popover (:4322–4398) + title/description edit with dirty drafts (:4399–4584) + notes scratchpad (:4994–5097) | :4182–4584, :4994–5097 | `modules/task-edit.ts` (P2; draft serialize keys already in `src/drafts.ts`) — all "edit a field on the open task" behavior, one module | P2 |
@@ -285,10 +285,29 @@ stateful modules rather than one:
   `app.ts` shrank 5,353 → **5,341** — a small net because nothing moved into a
   closure and the cache fields stayed at root.
 
+- `modules/new-task.ts` (224) — the new-task dialog: lifecycle
+  (`openNewTask(status)` / `openNewSubtask(parent)` / single close path
+  `closeNewTask()`), the draft-dirty derivation + confirm-first guarded close,
+  and the whole create flow — payload assembly, the version-guarded non-todo
+  follow-up move (a 409 conflict is advisory; any other failure falls to the
+  outer catch), the optional subtask `child` relation link with its failure
+  toast, the `possible_duplicates` advisory and the post-POST refresh fan-out.
+  Typed `NewTaskDeps`: 6 state-in getters, 7 state-out setters, 8 hooks. Every
+  template-bound name stays a plain root field — including `newTaskTarget`,
+  which the modal header renders via `statusLabel()` and which therefore could
+  NOT be module-internal (learned the hard way: an E2E run caught the missing
+  binding before commit); only the dialog focus session is closure-internal.
+  Eight delegation shims keep the surface byte-identical; the global keyboard
+  dispatch (bare-key open + the Escape cascade) keeps calling those shims at
+  root. Non-DOM coverage: `web/test/new-task-module.test.ts` (18 tests, stub
+  state + patched api); app.test.ts's CreateTask guard/subtask tests are
+  unchanged (they only drive the flat surface and poke the still-root
+  `newTaskParentId`). `app.ts` shrank 5,341 → **5,273**.
+
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/
 `relations` (drawer surfaces) → `archive`/`batch`/`drag` (board actions) →
-~~menus~~/~~project-settings~~/~~opencode~~/`new-task` (remaining chrome).
+~~menus~~/~~project-settings~~/~~opencode~~/~~new-task~~ (remaining chrome).
 
 ## 3. The driving constraint (why extraction looks the way it does)
 
