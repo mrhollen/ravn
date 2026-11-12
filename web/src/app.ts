@@ -24,6 +24,8 @@ import { createOpenCodeModule } from "./modules/opencode";
 import type { OpenCodeModule } from "./modules/opencode";
 import { createNewTaskModule } from "./modules/new-task";
 import type { NewTaskModule } from "./modules/new-task";
+import { createTaskEditModule } from "./modules/task-edit";
+import type { TaskEditModule } from "./modules/task-edit";
 import { createProjectSettingsModule } from "./modules/project-settings";
 import type { ProjectSettingsModule } from "./modules/project-settings";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
@@ -46,7 +48,7 @@ import {
 import { canApplyDetail, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS } from "./refresh";
 import { renderMarkdown } from "./md";
 import { MEMBER_ROLES } from "./members";
-import { commentDraftKey, descriptionDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
+import { commentDraftKey, deserializeCommentDraft, notesDraftKey, serializeCommentDraft } from "./drafts";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
 import {
   SORT_OPTIONS,
@@ -3215,165 +3217,66 @@ export function ravnApp() {
       assigneeType: "human" as "human" | "agent",
     },
 
+    _taskEdit: null as TaskEditModule | null,
+
+    /** Lazily-built task-edit module (modules/task-edit.ts — Phase 2 batch B):
+     *  edit session lifecycle + the snapshot discard guard, the description
+     *  draft persistence pair and saveTaskEdit with its version-conflict retry.
+     *  Every field above (incl. the editDraftOriginal snapshot — poked by
+     *  drafts.test.ts) stays plain root state; this module owns nothing. */
+    _taskEditModule(): TaskEditModule {
+      if (this._taskEdit) return this._taskEdit;
+      this._taskEdit = createTaskEditModule({
+        // state-in
+        detail: () => this.detail,
+        editDraft: () => this.editDraft,
+        editDraftOriginal: () => this.editDraftOriginal,
+        editingTask: () => this.editingTask,
+        savingEdit: () => this.savingEdit,
+        // state-out
+        setEditingTask: (v) => { this.editingTask = v; },
+        setSavingEdit: (v) => { this.savingEdit = v; },
+        setDescShowPreview: (v) => { this.descShowPreview = v; },
+        setEditDraft: (d) => { this.editDraft = d; },
+        setEditDraftOriginal: (d) => { this.editDraftOriginal = d; },
+        // hooks — root-owned orchestration kept outside the module
+        toast: (m, k) => this.toast(m, k),
+        actor: () => this.actor(),
+        confirmDiscard: (msg) => this.confirmDiscard(msg),
+        refreshDetail: (force) => this.refreshDetail(force),
+        loadBoard: (force) => this.loadBoard(force),
+        applyDetail: (t) => { this.applyDetail(t); },
+      });
+      return this._taskEdit;
+    },
+
     startEditing(): void {
-      const t = this.detail;
-      if (!t) return;
-      this.editDraft = {
-        title: t.title ?? "",
-        description: t.description ?? "",
-        priority: t.priority ?? 0,
-        // Calendar day via the shared helper — always equals what the card
-        // shows, and re-saving it round-trips to the same stored day.
-        due: t.due_at ? dueCalendarDate(t.due_at) : "",
-        assigneeName: t.assignee?.name ?? "",
-        assigneeType: (t.assignee?.type as "human" | "agent") || "human",
-      };
-      // Snapshot FIRST (server truth), then layer the local draft on top — see below.
-      this.editDraftOriginal = { ...this.editDraft };
-      const savedDesc = safeStorage.getItem(descriptionDraftKey(t.id));
-      if (savedDesc !== null && savedDesc.trim() !== "") {
-        // Draft auto-save restore (AC 2): the user's unsaved local draft wins
-        // over the server value, while editDraftOriginal keeps the SERVER truth
-        // so dirty-detection and the discard guard stay correct.
-        this.editDraft.description = savedDesc;
-      }
-      // A fresh edit session always starts in Write mode (AC 1).
-      this.descShowPreview = false;
-      this.editingTask = true;
+      this._taskEditModule().startEditing();
     },
 
     cancelEditing(): void {
-      this.editingTask = false;
-      // The Cancel button is an explicit discard of the in-flight edit — drop
-      // the local description draft with it (AC 3). Idempotent if the draft was
-      // already cleared by a confirmed-discard path.
-      this.clearDescriptionDraft();
+      this._taskEditModule().cancelEditing();
     },
 
-    /** True when the in-flight task edit differs from the values loaded when
-     *  edit mode started. Gated on editingTask so a stale snapshot can never
-     *  fire once save/cancel has exited edit mode. */
     editDraftDirty(): boolean {
-      if (!this.editingTask) return false;
-      const d = this.editDraft;
-      const o = this.editDraftOriginal;
-      return (
-        d.title !== o.title ||
-        d.description !== o.description ||
-        d.priority !== o.priority ||
-        d.due !== o.due ||
-        d.assigneeName !== o.assigneeName ||
-        d.assigneeType !== o.assigneeType
-      );
+      return this._taskEditModule().editDraftDirty();
     },
 
-    /** Ask before throwing away an in-flight task edit (shared by the drawer's
-     *  close path and Escape). True = safe to proceed with the discard. */
     discardEditDraftIfConfirmed(): boolean {
-      if (!this.editDraftDirty()) return true;
-      const ok = this.confirmDiscard("Discard unsaved task edits? Changes to this task will be lost.");
-      // An explicitly CONFIRMED discard is exactly when the local description
-      // draft stops existing (AC 3): it lives in storage, so leaving it would
-      // resurrect itself on the next startEditing().
-      if (ok) this.clearDescriptionDraft();
-      return ok;
+      return this._taskEditModule().discardEditDraftIfConfirmed();
     },
 
-    /** Debounced textarea-input handler (@input.debounce.400ms): persists the
-     *  CURRENT description draft under the loaded task's id (AC 2). No task
-     *  loaded → no-op. Blank value → removes the key so nothing stale lingers. */
     saveDescriptionDraft(): void {
-      const id = this.detail?.id;
-      if (!id) return;
-      const raw = this.editDraft.description ?? "";
-      if (raw.trim() !== "") safeStorage.setItem(descriptionDraftKey(id), raw);
-      else safeStorage.removeItem(descriptionDraftKey(id));
+      this._taskEditModule().saveDescriptionDraft();
     },
 
-    /** Drop the loaded task's description draft from storage (AC 3). No-op when
-     *  no task is loaded; safe to call repeatedly. */
     clearDescriptionDraft(): void {
-      const id = this.detail?.id;
-      if (!id) return;
-      safeStorage.removeItem(descriptionDraftKey(id));
+      this._taskEditModule().clearDescriptionDraft();
     },
 
+    /** Save flow — behavior owned by modules/task-edit.ts (Phase 2 batch B). */
     async saveTaskEdit(): Promise<void> {
-      const t = this.detail;
-      const title = this.editDraft.title.trim();
-      if (!t || !title || this.savingEdit) return;
-
-      // Captured BEFORE any await: the draft that gets cleared on success is
-      // the one for THIS task, even if detail moves during the flight (AC 3).
-      const descKey = descriptionDraftKey(t.id);
-      this.savingEdit = true;
-      const req: UpdateTaskReq = {
-        actor: this.actor(),
-        version: t.version,
-        title,
-        description: this.editDraft.description.trim(),
-        priority: this.editDraft.priority,
-      };
-
-      const dueIso = dateInputToIso(this.editDraft.due);
-      if (dueIso) {
-        req.due_at = dueIso;
-      } else if (t.due_at) {
-        req.clear_due = true;
-      }
-
-      const assigneeName = this.editDraft.assigneeName.trim();
-      if (assigneeName) {
-        req.assignee = {
-          name: assigneeName,
-          type: this.editDraft.assigneeType || "human",
-        };
-      } else if (t.assignee) {
-        req.clear_assignee = true;
-      }
-
-      try {
-        await api.updateTask(t.id, req);
-        this.editingTask = false;
-        // Save succeeded → the description is server truth now; the local draft
-        // must not survive (AC 3).
-        safeStorage.removeItem(descKey);
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-      } catch (e) {
-        if (ApiError.isVersionConflict(e)) {
-          try {
-            const fresh = await api.getTask(t.id, { commentLimit: 50 });
-            this.applyDetail(fresh);
-            // Re-apply once using fresh version while preserving user's editDraft
-            const retryReq: UpdateTaskReq = {
-              ...req,
-              version: fresh.version,
-              assignee: assigneeName
-                ? { name: assigneeName, type: this.editDraft.assigneeType || "human" }
-                : undefined,
-              clear_assignee: !assigneeName && !!fresh.assignee,
-            };
-            await api.updateTask(t.id, retryReq);
-            this.editingTask = false;
-            // 409-retry also landed the save → clear the draft exactly once.
-            safeStorage.removeItem(descKey);
-            await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-            this.toast("Changed elsewhere — retried with the fresh version.", "info");
-          } catch (e2) {
-            await this.refreshDetail(true).catch(() => undefined);
-            // Stay in edit mode with editDraft preserved across conflict
-            if (ApiError.isVersionConflict(e2)) {
-              this.toast("Changed elsewhere — refreshed (your edit was not applied).", "info");
-            } else {
-              this.toast(errMsg(e2), "error");
-            }
-          }
-        } else {
-          this.toast(errMsg(e), "error");
-        }
-      } finally {
-        this.savingEdit = false;
-      }
+      return await this._taskEditModule().saveTaskEdit();
     },
 
     // -------------------------------------------------------- drag and drop
