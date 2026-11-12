@@ -867,9 +867,10 @@ test("HeaderMenu: toggle opens/closes; Escape chain and mutual exclusion with th
   assert.equal(app.showMobileMenu, false, "third Esc collapses the mobile strip");
 
   // At most one header menu is live: opening the settings menu collapses the
-  // Projects dropdown first (document-dependent path skipped in Node).
+  // Projects dropdown first (document-dependent path skipped in Node — the
+  // menu controllers own their outside-click listeners and never install one
+  // without a document).
   app.projectMenuOpen = true;
-  app._projectMenuOutsideHandler = null;
   app.openHeaderMenu("first");
   assert.equal(app.headerMenuOpen, true);
   assert.equal(app.projectMenuOpen, false, "opening the settings menu closes the project menu");

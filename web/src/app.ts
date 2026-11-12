@@ -13,7 +13,8 @@ import { loadStoredSession } from "./identity";
 import { createAuthModule, type AuthModule } from "./modules/auth";
 import { createProjectsModule, LS_PROJECT, type ProjectsModule } from "./modules/projects";
 export { LS_PROJECT } from "./modules/projects"; // moved constant — public export unchanged
-import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
+import { FOCUSABLE_SELECTOR, focusElementOnceVisible, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
+import { createMenuController, menuFirstLastIndex, type MenuController } from "./modules/menus";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
 import {
   beginMove,
@@ -882,7 +883,9 @@ export function ravnApp() {
      *  of re-running boot. Null until the first init(); cleared only if that
      *  boot threw a genuine (non-network) error. */
     _bootPromise: null as Promise<void> | null,
-    _projectMenuOutsideHandler: null as ((e: Event) => void) | null,
+    /** Lazily-built Projects-dropdown controller (modules/menus.ts). The
+     *  capture-phase outside-click handler it manages is module-internal state. */
+    _projectMenu: null as MenuController | null,
 
     /** Trigger label: the selected project's option label, or the placeholder —
      *  owned by modules/projects.ts (Phase 2 batch A). */
@@ -895,97 +898,72 @@ export function ravnApp() {
       else this.openProjectMenu("selected");
     },
 
-    /** Open the menu and focus an option: "selected" = current project (or the
-     *  first one when nothing is selected), "first"/"last" for ArrowDown/Up on
-     *  a closed trigger. The capture-phase outside-click listener lives exactly
-     *  as long as the menu is open (removed in closeProjectMenu). */
-    openProjectMenu(focusTarget: "selected" | "first" | "last" = "selected"): void {
-      if (this.projectMenuOpen) return;
-      this.projectMenuOpen = true;
-      if (typeof document !== "undefined") {
-        const onDocClick = (e: Event): void => {
-          // Inside the control (trigger or items): their own handlers decide.
-          const wrap = document.querySelector<HTMLElement>('[data-testid="project-dropdown"]');
-          if (wrap && e.target instanceof Node && wrap.contains(e.target)) return;
-          this.closeProjectMenu(); // outside click — no focus restore
-        };
-        this._projectMenuOutsideHandler = onDocClick;
-        document.addEventListener("click", onDocClick, true);
-      }
-      if (typeof window === "undefined" || typeof document === "undefined") return;
-      // The options exist in the DOM from boot (x-for rendered once; the panel
-      // is merely x-show-hidden), so resolve the target NOW and let
-      // _focusWhenVisible wait out the display flush before focusing.
-      const root = document.querySelector<HTMLElement>('[data-testid="project-menu"]');
-      if (!root) return;
-      const items = Array.from(root.querySelectorAll<HTMLButtonElement>("button"));
-      if (items.length === 0) return;
-      let idx = 0;
-      if (focusTarget === "last") idx = items.length - 1;
-      else if (focusTarget === "selected") {
-        const i = items.findIndex((el) => el.getAttribute("data-project-id") === this.selectedProjectId);
-        if (i !== -1) idx = i;
-      }
-      this._focusWhenVisible(items[idx] ?? null);
+    /** Build (on first call) or return the Projects-dropdown controller bound to
+     *  THIS instance. Shared open/close/roving-nav/outside-click machinery —
+     *  owned by modules/menus.ts (Phase 2 batch A); per-menu testids, the item
+     *  selector and the "selected" initial-focus strategy are injected below. */
+    _projectMenuController(): MenuController {
+      if (this._projectMenu) return this._projectMenu;
+      const m = createMenuController(
+        {
+          isOpen: () => this.projectMenuOpen,
+          setOpen: (b) => {
+            this.projectMenuOpen = b;
+          },
+          panel: () =>
+            typeof document === "undefined" ? null : document.querySelector<HTMLElement>('[data-testid="project-menu"]'),
+          trigger: () =>
+            typeof document === "undefined" ? null : document.querySelector<HTMLElement>('[data-testid="project-select"]'),
+          insideControl: (t) => {
+            if (typeof document === "undefined" || !(t instanceof Node)) return false;
+            const wrap = document.querySelector<HTMLElement>('[data-testid="project-dropdown"]');
+            return !!wrap && wrap.contains(t);
+          },
+        },
+        {
+          itemSelector: "button",
+          activeKind: "button",
+          // "selected" = current project (or the first one when nothing is selected).
+          pickInitial: (items, target) => {
+            if (target === "last") return items.length - 1;
+            if (target === "selected") {
+              const i = items.findIndex((el) => el.getAttribute("data-project-id") === this.selectedProjectId);
+              if (i !== -1) return i;
+            }
+            return 0;
+          },
+        },
+      );
+      this._projectMenu = m;
+      return m;
     },
 
-    /** Focus `el` once it is actually visible. x-show/x-cloak display updates
-     *  flush on Alpine's own schedule — measured LATER than both a single
-     *  requestAnimationFrame AND setTimeout(0) (see focus.ts) — so "focus one
-     *  tick after open" can land while the surface is still display:none and
-     *  .focus() silently no-ops forever. Instead: poll each animation frame
-     *  until visible, bounded by a wall-clock deadline (1500ms) so an element
-     *  that never renders can't spin. Mirrors focusWhenReady(). */
+    /** Open the menu and focus an option: "selected" = current project (or the
+     *  first one when nothing is selected), "first"/"last" for ArrowDown/Up on
+     *  a closed trigger. Shared controller — modules/menus.ts (Phase 2 batch A). */
+    openProjectMenu(focusTarget: "selected" | "first" | "last" = "selected"): void {
+      this._projectMenuController().open(focusTarget);
+    },
+
+    /** Focus `el` once it is actually visible — thin root shim over the shared
+     *  frame-polling helper in src/focus.ts (moved there for modules/menus.ts;
+     *  remaining call sites are the new-project form focus + archive confirm +
+     *  boot/SSE retry buttons). */
     _focusWhenVisible(el: HTMLElement | null): void {
-      if (!el || typeof window === "undefined" || typeof requestAnimationFrame !== "function") return;
-      const isVisible = (n: HTMLElement): boolean =>
-        typeof n.checkVisibility === "function"
-          ? n.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true })
-          : n.offsetParent !== null || getComputedStyle(n).position === "fixed";
-      const deadline = Date.now() + 1500; // ~2s wall-clock horizon, frame-rate independent
-      const step = (): void => {
-        if (isVisible(el)) {
-          el.focus();
-          return;
-        }
-        if (Date.now() >= deadline) return; // never rendered — stop, don't focus blind
-        requestAnimationFrame(step);
-      };
-      step();
+      focusElementOnceVisible(el);
     },
 
     /** Close the menu. `restoreFocus` sends focus back to the trigger (Esc / a
      *  pick); outside clicks close WITHOUT restoring — focus is already where
-     *  the user clicked. */
+     *  the user clicked. Shared controller — modules/menus.ts. */
     closeProjectMenu(restoreFocus = false): void {
-      if (!this.projectMenuOpen) return;
-      this.projectMenuOpen = false;
-      if (this._projectMenuOutsideHandler && typeof document !== "undefined") {
-        document.removeEventListener("click", this._projectMenuOutsideHandler, true);
-        this._projectMenuOutsideHandler = null;
-      }
-      if (restoreFocus && typeof window !== "undefined" && typeof document !== "undefined") {
-        this._focusWhenVisible(document.querySelector<HTMLElement>('[data-testid="project-select"]'));
-      }
+      this._projectMenuController().close(restoreFocus);
     },
 
     /** Arrow/Home/End navigation between menu items (buttons in DOM order —
-     *  project options, then the "+ New project…" action). */
+     *  project options, then the "+ New project…" action). Shared controller — modules/menus.ts. */
     moveProjectFocus(dir: number | "home" | "end"): void {
-      const root =
-        typeof document === "undefined" ? null : document.querySelector<HTMLElement>('[data-testid="project-menu"]');
-      if (!root) return;
-      const items = Array.from(root.querySelectorAll<HTMLButtonElement>("button"));
-      if (items.length === 0) return;
-      const active = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
-      let next: number;
-      if (dir === "home") next = 0;
-      else if (dir === "end") next = items.length - 1;
-      else {
-        const idx = active ? items.indexOf(active) : -1;
-        next = idx === -1 ? (dir > 0 ? 0 : items.length - 1) : Math.min(items.length - 1, Math.max(0, idx + dir));
-      }
-      items[next]?.focus();
+      this._projectMenuController().move(dir);
     },
 
     /** Pick a project from the menu: same semantics as the old native select's
@@ -1015,7 +993,9 @@ export function ravnApp() {
     // only the token entry closes the menu on click (the auth modal's own
     // focus session takes over).
     headerMenuOpen: false,
-    _headerMenuOutsideHandler: null as ((e: Event) => void) | null,
+    /** Lazily-built settings-menu controller (modules/menus.ts); the
+     *  outside-click handler it manages is module-internal state. */
+    _headerMenu: null as MenuController | null,
 
     /** Trigger glyph: the actor's initial, or "You" when no name is set. */
     actorGlyph(): string {
@@ -1028,71 +1008,63 @@ export function ravnApp() {
       else this.openHeaderMenu("first");
     },
 
-    /** Open the menu and focus its first/last focusable control. The
-     *  capture-phase outside-click listener lives exactly as long as the menu
-     *  is open (removed in closeHeaderMenu). Opening it collapses the Projects
-     *  dropdown so at most one header menu is ever live. */
+    /** Build (on first call) or return the settings-menu controller bound to
+     *  THIS instance. Shared open/close/roving-nav/outside-click machinery —
+     *  owned by modules/menus.ts (Phase 2 batch A). */
+    _headerMenuController(): MenuController {
+      if (this._headerMenu) return this._headerMenu;
+      const m = createMenuController(
+        {
+          isOpen: () => this.headerMenuOpen,
+          setOpen: (b) => {
+            this.headerMenuOpen = b;
+          },
+          panel: () =>
+            typeof document === "undefined" ? null : document.querySelector<HTMLElement>('[data-testid="header-menu"]'),
+          trigger: () =>
+            typeof document === "undefined"
+              ? null
+              : document.querySelector<HTMLElement>('[data-testid="header-menu-trigger"]'),
+          insideControl: (t) => {
+            if (typeof document === "undefined" || !(t instanceof Node)) return false;
+            const wrap = document.querySelector<HTMLElement>('[data-testid="header-menu-anchor"]');
+            return !!wrap && wrap.contains(t);
+          },
+        },
+        {
+          itemSelector: FOCUSABLE_SELECTOR,
+          activeKind: "element",
+          pickInitial: (items, target) => menuFirstLastIndex(items.length, target),
+        },
+      );
+      this._headerMenu = m;
+      return m;
+    },
+
+    /** Open the menu and focus its first/last focusable control. Opening it
+     *  collapses the Projects dropdown so at most one header menu is ever live
+     *  (that mutual exclusion stays at the root — both flags are owned here);
+     *  the open/close machinery itself is the shared controller in modules/menus.ts. */
     openHeaderMenu(focusTarget: "first" | "last" = "first"): void {
       if (this.headerMenuOpen) return;
       if (this.projectMenuOpen) this.closeProjectMenu();
-      this.headerMenuOpen = true;
-      if (typeof document !== "undefined") {
-        const onDocClick = (e: Event): void => {
-          // Inside the control (trigger or panel): their own handlers decide.
-          const wrap = document.querySelector<HTMLElement>('[data-testid="header-menu-anchor"]');
-          if (wrap && e.target instanceof Node && wrap.contains(e.target)) return;
-          this.closeHeaderMenu(); // outside click — no focus restore
-        };
-        this._headerMenuOutsideHandler = onDocClick;
-        document.addEventListener("click", onDocClick, true);
-      }
-      if (typeof window === "undefined" || typeof document === "undefined") return;
-      // The controls exist in the DOM from boot (the panel is merely
-      // x-show-hidden), so resolve the target NOW and let _focusWhenVisible
-      // wait out the display flush before focusing.
-      const root = document.querySelector<HTMLElement>('[data-testid="header-menu"]');
-      if (!root) return;
-      const items = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-      if (items.length === 0) return;
-      const idx = focusTarget === "last" ? items.length - 1 : 0;
-      this._focusWhenVisible(items[idx] ?? null);
+      this._headerMenuController().open(focusTarget);
     },
 
     /** Close the menu. `restoreFocus` sends focus back to the trigger (Esc /
      *  programmatic close); outside clicks close WITHOUT restoring — focus is
-     *  already where the user clicked. */
+     *  already where the user clicked. Shared controller — modules/menus.ts. */
     closeHeaderMenu(restoreFocus = false): void {
-      if (!this.headerMenuOpen) return;
-      this.headerMenuOpen = false;
-      if (this._headerMenuOutsideHandler && typeof document !== "undefined") {
-        document.removeEventListener("click", this._headerMenuOutsideHandler, true);
-        this._headerMenuOutsideHandler = null;
-      }
-      if (restoreFocus && typeof window !== "undefined" && typeof document !== "undefined") {
-        this._focusWhenVisible(document.querySelector<HTMLElement>('[data-testid="header-menu-trigger"]'));
-      }
+      this._headerMenuController().close(restoreFocus);
     },
 
     /** Arrow/Home/End navigation between the panel's focusable controls in DOM
      *  order (theme buttons, actor input, auto-refresh checkbox, token item).
      *  The actor input is single-line: Up/Down have no caret role there
      *  (Left/Right do), so arrows uniformly hop controls — same contract as
-     *  the Projects dropdown. */
+     *  the Projects dropdown. Shared controller — modules/menus.ts. */
     moveHeaderFocus(dir: number | "home" | "end"): void {
-      if (typeof document === "undefined") return;
-      const active = document.activeElement;
-      const root = document.querySelector<HTMLElement>('[data-testid="header-menu"]');
-      if (!root) return;
-      const items = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-      if (items.length === 0) return;
-      let next: number;
-      if (dir === "home") next = 0;
-      else if (dir === "end") next = items.length - 1;
-      else {
-        const idx = active instanceof HTMLElement ? items.indexOf(active) : -1;
-        next = idx === -1 ? (dir > 0 ? 0 : items.length - 1) : Math.min(items.length - 1, Math.max(0, idx + dir));
-      }
-      items[next]?.focus();
+      this._headerMenuController().move(dir);
     },
 
     /** "Token: set/none" menu item: close WITHOUT restoring focus — the auth
@@ -6109,5 +6081,3 @@ export function ravnApp() {
     },
   };
 }
-
-export const crowbanApp = ravnApp;

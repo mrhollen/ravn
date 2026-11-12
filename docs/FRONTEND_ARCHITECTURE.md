@@ -96,9 +96,9 @@ later phase; root = deliberately stays in the composition root.
 | Toasts (interface :600–619; methods :715–779) | :600–619, :715–779 | **root** | stays: cross-cutting service every module emits into — extracting it creates a bus that all modules depend on. Revisit in P2 if two or more modules need richer toast behavior |
 | Auth token + session modal + boot-401 continuation (:780–996) | :780–996 | `modules/auth.ts` | **P2 landed (batch A)** — behavior + typed access interface; the 10 bound fields remain root fields (see Phase 2 status note). Pure session client already in `src/identity.ts` |
 | Focus session bookkeeping (:997–1016) | :997–1016 | `src/focus.ts` (existing — fold residual state into its factory) | P2 |
-| Projects list, selection, counts, create-project dialog (:1017–1099, :1336–1380) | :1017–1099, :1336–1380 | `modules/projects.ts` | **P2 landed (batch A)** — list lifecycle (sequence guard + in-flight coalescing now module-owned internals), option/select labels and the create-project dialog moved behind the typed `ProjectsDeps`; `LS_PROJECT` moved here too. The bound fields remain root fields (see Phase 2 status note). `selectProject`'s selection cascade and the dropdown controller stay at root until the board/menu slices land |
-| Projects dropdown — custom menu (:1100–1232) ("project menu" ~:1103 in the audit) | :1100–1232 | `modules/menus.ts` | P2 — shared custom-dropdown controller (open/close, arrow-key nav, outside-click) reused by both header menus; per-menu state stays at root until then |
-| Header settings menu (:1233–1335) ("header menu" ~:1240 in the audit) | :1233–1335 | `modules/menus.ts` (controller); its *contents* belong to their own owners (theme → `src/theme.ts`, auth entry → `modules/auth.ts`, auto-refresh → board/live) | P2 |
+| Projects list, selection, counts, create-project dialog (:1017–1099, :1336–1380) | :1017–1099, :1336–1380 | `modules/projects.ts` | **P2 landed (batch A)** — list lifecycle (sequence guard + in-flight coalescing now module-owned internals), option/select labels and the create-project dialog moved behind the typed `ProjectsDeps`; `LS_PROJECT` moved here too. The bound fields remain root fields (see Phase 2 status note). `selectProject`'s selection cascade stays at root until the board slice lands; the dropdown's menu machinery is in `modules/menus.ts` (batch A) |
+| Projects dropdown — custom menu (:1100–1232) ("project menu" ~:1103 in the audit) | :1100–1232 | `modules/menus.ts` | **P2 landed (batch A)** — open/close, roving arrow/Home/End focus and the capture-phase outside-click listener live in the shared controller; per-menu state (`projectMenuOpen`) stays a root field, and `pickProject`'s close-then-select cascade rides with the board slice. Non-DOM coverage: `web/test/menus-module.test.ts` |
+| Header settings menu (:1233–1335) ("header menu" ~:1240 in the audit) | :1233–1335 | `modules/menus.ts` (controller); its *contents* belong to their own owners (theme → `src/theme.ts`, auth entry → `modules/auth.ts`, auto-refresh → board/live) | **P2 landed (batch A)** — same shared controller; the "at most one header menu" mutual exclusion (opening the settings menu collapses the project dropdown) stays at root because both flags are root fields. Non-DOM coverage: `web/test/menus-module.test.ts` |
 | OpenCode options list (:1381–1439) + drawer run panel (:3924–4027) | :1381–1439, :3924–4027 | `modules/opencode.ts` | P2 |
 | Project settings modal (:1440–1468) + members panel T9 (:1469–1790) | :1440–1468, :1469–1790 | `modules/project-settings.ts` | P2 (roster pure core already in `src/members.ts`: `normalizeRoster`, `canManageRoster`, error copy) |
 | Board state: snapshot, blocked-state cache + derive/sync/reset (:1791–1890), `loadBoard` sequencing | :1791–1890 | `modules/board.ts` (P2 state) — pure sliver P1 in the same file: `blockedIdsFromBoard(board)` set derivation | P1+P2 |
@@ -169,10 +169,21 @@ and the `RelationRow → RelationView` shaping.
   flat namespace is safe. `LS_PROJECT` moved with its main consumer and is
   re-exported from the root unchanged. Deliberately left at root (for now):
   `selectProject`'s cross-cutting selection cascade (board/search/SSE/URL —
-  lands with the board slice), `onMyProjectsToggle` (shares `LS_MY_PROJECTS`
-  with its reader + field initializer), and the dropdown controller
-  (next slice, `modules/menus.ts`). Non-DOM coverage:
+  lands with the board slice) and `onMyProjectsToggle` (shares `LS_MY_PROJECTS`
+  with its reader + field initializer). Non-DOM coverage:
   `web/test/projects-module.test.ts`.
+
+- `modules/menus.ts` — the shared custom-dropdown controller batch A
+  finished: both header menus (project dropdown + settings menu) now run on
+  one `createMenuController(deps, config)` factory — open/close idempotency,
+  the capture-phase outside-click listener (module-owned state), roving
+  arrow/Home/End focus and the "first/last/selected" initial-focus strategy.
+  The bound `projectMenuOpen` / `headerMenuOpen` flags stay root fields (same
+  Alpine state-ownership rationale as above), each menu's testid lookups ride
+  on injected seam lambdas, and the "at most one header menu" mutual
+  exclusion stays at root because it touches both flags. The legacy
+  `crowbanApp` alias export (zero references) was removed in the same slice.
+  Non-DOM coverage: `web/test/menus-module.test.ts`.
 
 Suggested P2 ordering (dependency-driven): `board` → `sse` → `projects` →
 `auth` → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/

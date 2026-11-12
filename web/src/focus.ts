@@ -161,6 +161,32 @@ export function openDialogFocus(root: HTMLElement, opts?: { initialSelector?: st
   return session;
 }
 
+/** Focus `el` once it is actually visible (moved verbatim from app.ts'
+ *  `_focusWhenVisible`, whose remaining root call sites delegate here).
+ *  x-show/x-cloak display updates flush on Alpine's own schedule — measured
+ *  LATER than both a single requestAnimationFrame AND setTimeout(0) — so
+ *  "focus one tick after open" can land while the surface is still display:none
+ *  and .focus() silently no-ops forever. Instead: poll each animation frame
+ *  until visible, bounded by a wall-clock deadline (1500ms) so an element that
+ *  never renders can't spin. */
+export function focusElementOnceVisible(el: HTMLElement | null): void {
+  if (!el || typeof window === "undefined" || typeof requestAnimationFrame !== "function") return;
+  const isVisible = (n: HTMLElement): boolean =>
+    typeof n.checkVisibility === "function"
+      ? n.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true })
+      : n.offsetParent !== null || getComputedStyle(n).position === "fixed";
+  const deadline = Date.now() + 1500; // ~2s wall-clock horizon, frame-rate independent
+  const step = (): void => {
+    if (isVisible(el)) {
+      el.focus();
+      return;
+    }
+    if (Date.now() >= deadline) return; // never rendered — stop, don't focus blind
+    requestAnimationFrame(step);
+  };
+  step();
+}
+
 /** Move focus into `f`'s surface once it is actually rendered.
  *  x-show/x-cloak display updates flush on Alpine's own schedule — measured
  *  LATER than a setTimeout(0) macrotask — so "focus one tick after open" can
