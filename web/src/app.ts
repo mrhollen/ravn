@@ -9,7 +9,8 @@
 import { ApiError, api, errMsg, LS_TOKEN, setApiTimeoutMsForTests } from "./api";
 import { boardFromTaskList } from "./board-scope";
 import { acDoneCount as acDoneFor, acProgressLabel as acProgressLabelFor, acRingInner as acRingFor, completedLabel as acCompletedLabelFor } from "./ac-math";
-import { clearStoredSession, loadStoredSession, normalizeIdentity, storeSession } from "./identity";
+import { loadStoredSession } from "./identity";
+import { createAuthModule, type AuthModule } from "./modules/auth";
 import { FOCUSABLE_SELECTOR, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
 import {
@@ -593,124 +594,113 @@ export function ravnApp() {
      *  reconnect loop; cleared on a successful board load / project change. */
     projectForbidden: false,
 
+    // -- auth behavior (owned by modules/auth.ts — Phase 2 batch A) -------------
+    // Lazily-built module instance + its dependency surface, closed over `this`.
+    // Built on first use (not in the factory body) so the accessors below close
+    // over Alpine's reactive proxy in the browser: every state-out write then flows
+    // through the proxy and re-renders. The bound FIELDS above stay plain root
+    // fields for the same reason — a nested module-owned state object mutated from
+    // its own closures would not be observed by Vue's reactivity (see modules/auth.ts).
+    _auth: null as AuthModule | null,
+
+    /** Build (on first call) or return the auth module bound to THIS component instance. */
+    _authModule(): AuthModule {
+      if (this._auth) return this._auth;
+      const m = createAuthModule({
+        // state-in
+        actorName: () => this.actorName,
+        authToken: () => this.authToken,
+        showAuthModal: () => this.showAuthModal,
+        tokenInput: () => this.tokenInput,
+        authFocus: () => this.authFocus,
+        identity: () => this.identity,
+        loginUsername: () => this.loginUsername,
+        loginPassword: () => this.loginPassword,
+        loadError: () => this.loadError,
+        hasSelectedProject: () => Boolean(this.selectedProjectId),
+        // state-out
+        setAuthToken: (v) => {
+          this.authToken = v;
+        },
+        setShowAuthModal: (v) => {
+          this.showAuthModal = v;
+        },
+        setTokenInput: (v) => {
+          this.tokenInput = v;
+        },
+        setAuthFocus: (f) => {
+          this.authFocus = f;
+        },
+        setIdentity: (id) => {
+          this.identity = id;
+        },
+        setAuthModalTab: (t) => {
+          this.authModalTab = t;
+        },
+        setLoginBusy: (b) => {
+          this.loginBusy = b;
+        },
+        setLoginError: (msg) => {
+          this.loginError = msg;
+        },
+        setLoginPassword: (p) => {
+          this.loginPassword = p;
+        },
+        // methods-out
+        clearLoadError: () => {
+          this.loadError = "";
+        },
+        clearBootError: () => {
+          this.bootError = false;
+        },
+        clearProjectForbidden: () => {
+          this.projectForbidden = false;
+        },
+        loadProjects: (silent) => this.loadProjects(silent),
+        continueBoot: (id) => this.continueBoot(id),
+        connectSse: () => this.connectSse(),
+        disconnectSse: (resetBackoff) => this.disconnectSse(resetBackoff),
+        loadBoard: () => this.loadBoard(),
+        openAuthFocusSession: () => this.openDialog("cb-auth-modal", "input"),
+        closeDialog: (f) => this.closeDialog(f),
+        // DOM seams
+        authModalRoot: () =>
+          typeof document === "undefined" ? null : document.getElementById("cb-auth-modal"),
+        pageActiveElement: () => (typeof document === "undefined" ? null : document.activeElement),
+      });
+      this._auth = m;
+      return m;
+    },
+
     /** The name to show as "acting as". A live session identity wins over the free-form
      *  actor override; otherwise the (trimmed) actor name; otherwise "You". */
     actingIdentityName(): string {
-      return this.identity?.name || this.actorName.trim() || "You";
+      return this._authModule().actingIdentityName();
     },
 
     openAuthModal(tab?: "login" | "token"): void {
-      const wasOpen = this.showAuthModal;
-      this.tokenInput = this.authToken;
-      this.showAuthModal = true;
-      if (tab) this.authModalTab = tab;
-      if (!wasOpen) {
-        // Fresh open: establish the ONE focus session (focus trap + restore-target
-        // capture). Focus the active panel's first input — only the active panel is in
-        // the DOM thanks to x-if, so "input" is unambiguous.
-        this.authFocus = this.openDialog("cb-auth-modal", "input");
-      } else {
-        // Already open (e.g. the boot-401 auto-open lands on the token tab and the user
-        // then clicks Sign in): do NOT re-capture a second focus session — that would
-        // clone a null restore-target and leak the first trap. Just switch panels and,
-        // once x-if has committed the new panel to the DOM, move focus to its input —
-        // but ONLY if focus isn't already inside the modal: a user (or test) may have
-        // focused/typed into the new input before this 0ms timer fires, and re-focusing
-        // then would steal subsequent keystrokes into the first field.
-        setTimeout(() => {
-          const root = document.getElementById("cb-auth-modal");
-          if (!root) return;
-          const active = document.activeElement;
-          if (active instanceof HTMLInputElement && root.contains(active)) return;
-          root.querySelector<HTMLElement>("input")?.focus();
-        }, 0);
-      }
+      this._authModule().openAuthModal(tab);
     },
 
     /** Submit the Sign-in form: exchange credentials for a session token (stored as the
      *  Bearer credential on every call), adopt the returned identity, and resume boot. */
-    async doLogin(): Promise<void> {
-      const username = this.loginUsername.trim();
-      if (!username || !this.loginPassword) {
-        this.loginError = "Enter your username and password.";
-        return;
-      }
-      this.loginBusy = true;
-      this.loginError = "";
-      try {
-        const res = await api.login(username, this.loginPassword);
-        api.setAuthToken(res.token); // becomes the Bearer on all subsequent calls + SSE ?token=
-        this.authToken = api.getAuthToken();
-        const id = normalizeIdentity(res.identity);
-        if (id) {
-          this.identity = id;
-          storeSession(id);
-        }
-        this.loginPassword = ""; // never linger a password in state/DOM
-        this.projectForbidden = false;
-        this.closeAuthModal();
-        this.loadError = "";
-        await this.loadProjects();
-        if (this.loadError) return;
-        const deepLinkedTaskId =
-          typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
-        // Mirror saveAuthToken()'s post-auth continuation: clear boot error, keep a
-        // valid manual selection else auto-select, load board + SSE.
-        this.bootError = false;
-        void this.continueBoot(deepLinkedTaskId);
-      } catch (e) {
-        if (ApiError.isUnauthorized(e)) this.loginError = "Invalid username or password.";
-        else this.loginError = errMsg(e);
-      } finally {
-        this.loginBusy = false;
-      }
+    doLogin(): Promise<void> {
+      return this._authModule().doLogin();
     },
 
     /** Sign out: revoke the session server-side, drop the Bearer credential + identity
      *  cache, and reload so the (now unscoped) lists are authoritative again. Best-effort
      *  revoke — a network failure to DELETE still clears local state. */
-    async logout(): Promise<void> {
-      if (api.getAuthToken()) {
-        try {
-          await api.revokeSession();
-        } catch {
-          /* best-effort: the token is dropped locally regardless */
-        }
-      }
-      api.setAuthToken("");
-      this.authToken = "";
-      this.identity = null;
-      clearStoredSession();
-      this.projectForbidden = false;
-      this.loginError = "";
-      this.disconnectSse(true);
-      void this.loadProjects().then(() => {
-        if (this.selectedProjectId) {
-          void this.loadBoard();
-          this.connectSse();
-        }
-      });
+    logout(): Promise<void> {
+      return this._authModule().logout();
     },
 
     /** Inspect the presenting bearer via GET /auth/session to learn WHO is acting. Fire-
      *  and-forget at boot: a non-session bearer (shared/operator token, or an off-mode
      *  server with no auth route) legitimately returns no identity — that's NOT an error,
      *  so we just clear any stale cached identity in that case without touching the token. */
-    async refreshSessionIdentity(): Promise<void> {
-      if (!api.getAuthToken()) return; // nothing to inspect
-      try {
-        const res = await api.getSession();
-        const id = normalizeIdentity(res.identity);
-        this.identity = id;
-        if (id) storeSession(id);
-        else clearStoredSession();
-      } catch {
-        // No live session for this bearer — drop the cached identity so the header
-        // doesn't keep showing a name whose session is gone. Token is left alone: it
-        // may still be a valid shared/operator/off credential.
-        this.identity = null;
-        clearStoredSession();
-      }
+    refreshSessionIdentity(): Promise<void> {
+      return this._authModule().refreshSessionIdentity();
     },
 
     /** Board-scope change: persist, then reload the board (scope and the archived view
@@ -739,43 +729,15 @@ export function ravnApp() {
 
     /** Single close path for the auth modal (× / Cancel / backdrop / save / clear / Esc). */
     closeAuthModal(): void {
-      this.showAuthModal = false;
-      this.closeDialog(this.authFocus);
-      this.authFocus = null;
+      this._authModule().closeAuthModal();
     },
 
     saveAuthToken(): void {
-      api.setAuthToken(this.tokenInput);
-      this.authToken = api.getAuthToken();
-      this.closeAuthModal();
-      this.loadError = "";
-      void this.loadProjects().then(() => {
-        // A bad/expired token re-triggers the auth modal + loadError inside
-        // loadProjectsCore; leave the boot-error/retry path to surface it.
-        if (this.loadError) return;
-        // First-visit enters the auth modal from a 401 during boot, which left
-        // bootError set — clear it now that projects loaded so the freshly
-        // auto-selected board isn't hidden behind the boot-error overlay.
-        this.bootError = false;
-        const deepLinkedTaskId =
-          typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
-        // Reuse the boot continuation: keeps a valid manual selection, else
-        // auto-selects the first project (canonical server order), persists it,
-        // loads its board + SSE; with zero projects shows the empty state.
-        void this.continueBoot(deepLinkedTaskId);
-      });
+      this._authModule().saveAuthToken();
     },
 
     clearAuthToken(): void {
-      api.setAuthToken("");
-      this.authToken = "";
-      this.tokenInput = "";
-      this.closeAuthModal();
-      this.loadError = "";
-      if (this.selectedProjectId) this.connectSse();
-      void this.loadProjects().then(() => {
-        if (this.selectedProjectId) void this.loadBoard();
-      });
+      this._authModule().clearAuthToken();
     },
 
     // -------------------------------------------------------------- focus session

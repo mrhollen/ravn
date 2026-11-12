@@ -94,7 +94,7 @@ later phase; root = deliberately stays in the composition root.
 | Actor name + `actor()` (:634–649) | :634–649 | **root** | stays: every mutating handler builds the `ActorInput` from it — shared infra in the same class as toasts; revisit only if a module needs it independently |
 | Document title composition (`TITLE_SEPARATOR` :224; `updateDocumentTitle` :675–730) | :675–730 | **root** | stays: 5-line join over `projects`/`detail`; not worth an interface boundary |
 | Toasts (interface :600–619; methods :715–779) | :600–619, :715–779 | **root** | stays: cross-cutting service every module emits into — extracting it creates a bus that all modules depend on. Revisit in P2 if two or more modules need richer toast behavior |
-| Auth token + session modal + boot-401 continuation (:780–996) | :780–996 | `modules/auth.ts` | P2 (pure session client already in `src/identity.ts`) |
+| Auth token + session modal + boot-401 continuation (:780–996) | :780–996 | `modules/auth.ts` | **P2 landed (batch A)** — behavior + typed access interface; the 10 bound fields remain root fields (see Phase 2 status note). Pure session client already in `src/identity.ts` |
 | Focus session bookkeeping (:997–1016) | :997–1016 | `src/focus.ts` (existing — fold residual state into its factory) | P2 |
 | Projects list, selection, counts, create-project dialog (:1017–1099, :1336–1380) | :1017–1099, :1336–1380 | `modules/projects.ts` | P2 (sequence guard/coalescing already pure in `src/refresh.ts`) |
 | Projects dropdown — custom menu (:1100–1232) ("project menu" ~:1103 in the audit) | :1100–1232 | `modules/menus.ts` | P2 — shared custom-dropdown controller (open/close, arrow-key nav, outside-click) reused by both header menus; per-menu state stays at root until then |
@@ -140,6 +140,26 @@ Remaining P1 slivers **not** landed this phase (they ride with their P2
 modules or a follow-up pass): clipboard helper → `util.ts`,
 `formatEventDetail` → `realtime.ts`, the `blockedIdsFromBoard` set derivation,
 and the `RelationRow → RelationView` shaping.
+
+**Phase 2 status (batch A in progress on `main`).** Landed so far:
+
+- `modules/auth.ts` — auth row, a **behavior-only extraction**: all eight
+  handlers moved verbatim behind the typed `AuthDeps` access interface,
+  instantiated lazily by the root's `_authModule()` so every accessor closes
+  over Alpine's reactive proxy (a method call's `this`).
+
+  **State-ownership deviation from §3.3's `{ state, methods }` example —
+  deliberate:** the ten auth fields bound by `index.html` remain plain root
+  fields with verbatim initializers; the module never owns them. Rationale:
+  (a) constraint #2 requires every bound name to stay a top-level entry of
+  `ravnApp()`'s object — nesting state would force ten new forwarding
+  getter/setter pairs on the root for zero gain; (b) Alpine 3.x wraps the
+  x-data object in Vue's reactive proxy, which observes mutations made
+  THROUGH the proxy only — a nested state object captured raw from its own
+  closures is unsafe to mutate. The typed accessor lambdas (root implements
+  each as `this.x = v`) give the module §4's "no reference to the root"
+  guarantee while keeping every binding name, initial value and template
+  attribute byte-identical. Non-DOM coverage: `web/test/auth-module.test.ts`.
 
 Suggested P2 ordering (dependency-driven): `board` → `sse` → `projects` →
 `auth` → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/
