@@ -32,8 +32,14 @@ guardrail (§6) are the only deliverables.
 **6,154** lines and seven pure cores now sit beside the existing flat modules:
 `theme.ts` (48), `sort.ts` (170), `routes.ts` (162), `filters.ts` (159),
 `columns.ts` (86), `keyboard.ts` (133) and `ac-math.ts` (53); `moves.ts` grew
-117 → 180 to host the drag/swipe gesture decisions. Nothing has moved into
+ 117 → 180 to host the drag/swipe gesture decisions. Nothing has moved into
 `modules/` yet — Phase 2 starts from this state.
+
+**After Phase 2 batches A+B (main `44b0228`, measured 2026-11-12):** `app.ts`
+is **5,807** lines and `web/src/modules/` holds its first five feature
+modules — `auth.ts` (265), `projects.ts` (196), `menus.ts` (137),
+`board.ts` (474) and `board-view.ts` (458) — plus their unit tests under
+`web/test/`.
 
 **Target layout:**
 
@@ -86,7 +92,7 @@ later phase; root = deliberately stays in the composition root.
 |---|---:|---|---|
 | Theme types, stored-reader, dark resolution, apply/persist | top :239–256; state :650–735 | `src/theme.ts` | P1 (pure core + LS helpers); thin root adapters keep binding names until P2 |
 | Client-side sort: keys/dirs/options/reader (:257–310), sort state+handlers (:1891–1946), hoist-parents comparator logic (:1897–1909, applied inside `columns()`) | :257–310, :1891–1946, inline in `columns()` | `src/sort.ts` | P1 (comparator + LS round-trip pure); state fields stay at root until the board module (P2) |
-| Card density (reader :311–327; state/toggle :1948–1963) | :311–327, :1948–1963 | `modules/board.ts` | P2 (trivial persisted toggle; rides with the board view prefs) |
+ | Card density (reader :311–327; state/toggle :1948–1963) | :311–327, :1948–1963 | `modules/board.ts` | **P2 landed (batch B)** — toggle + LS round-trip in the module; the bound `cardDensity` field stays at root |
 | Task-route deep-link helpers `taskRouteIdFromPath`/`taskRoutePath` (:328–349); mobile detail viewport check (`isMobileDetailViewport`, :467–483) | :328–349, :467–483 | `src/routes.ts` | P1 (already pure top-level exports — move + re-export) |
 | Board query param parse/build (:350–466); `readStoredTaskScope`/`TaskScope` (:81–109) | :350–466, :81–109 | `src/routes.ts` (query params), `src/filters.ts` (task scope is a board filter) | P1 |
 | Clipboard helper `copyTextToClipboard` (:484+) | :484+ | `src/util.ts` (append) | P1 (DOM glue, no state) |
@@ -96,19 +102,19 @@ later phase; root = deliberately stays in the composition root.
 | Toasts (interface :600–619; methods :715–779) | :600–619, :715–779 | **root** | stays: cross-cutting service every module emits into — extracting it creates a bus that all modules depend on. Revisit in P2 if two or more modules need richer toast behavior |
 | Auth token + session modal + boot-401 continuation (:780–996) | :780–996 | `modules/auth.ts` | **P2 landed (batch A)** — behavior + typed access interface; the 10 bound fields remain root fields (see Phase 2 status note). Pure session client already in `src/identity.ts` |
 | Focus session bookkeeping (:997–1016) | :997–1016 | `src/focus.ts` (existing — fold residual state into its factory) | P2 |
-| Projects list, selection, counts, create-project dialog (:1017–1099, :1336–1380) | :1017–1099, :1336–1380 | `modules/projects.ts` | **P2 landed (batch A)** — list lifecycle (sequence guard + in-flight coalescing now module-owned internals), option/select labels and the create-project dialog moved behind the typed `ProjectsDeps`; `LS_PROJECT` moved here too. The bound fields remain root fields (see Phase 2 status note). `selectProject`'s selection cascade stays at root until the board slice lands; the dropdown's menu machinery is in `modules/menus.ts` (batch A) |
-| Projects dropdown — custom menu (:1100–1232) ("project menu" ~:1103 in the audit) | :1100–1232 | `modules/menus.ts` | **P2 landed (batch A)** — open/close, roving arrow/Home/End focus and the capture-phase outside-click listener live in the shared controller; per-menu state (`projectMenuOpen`) stays a root field, and `pickProject`'s close-then-select cascade rides with the board slice. Non-DOM coverage: `web/test/menus-module.test.ts` |
+| Projects list, selection, counts, create-project dialog (:1017–1099, :1336–1380) | :1017–1099, :1336–1380 | `modules/projects.ts` | **P2 landed (batch A)** — list lifecycle (sequence guard + in-flight coalescing now module-owned internals), option/select labels and the create-project dialog moved behind the typed `ProjectsDeps`; `LS_PROJECT` moved here too. The bound fields remain root fields (see Phase 2 status note). `selectProject`'s selection cascade stayed at root until the board slice and now lands there (batch B): it calls both board modules through their root seams (`resetBlockedCache`, `invalidatePendingLoads`, `cancelFullTextSearch`) plus the SSE/URL wiring. The dropdown's menu machinery is in `modules/menus.ts` (batch A) |
+| Projects dropdown — custom menu (:1100–1232) ("project menu" ~:1103 in the audit) | :1100–1232 | `modules/menus.ts` | **P2 landed (batch A)** — open/close, roving arrow/Home/End focus and the capture-phase outside-click listener live in the shared controller; per-menu state (`projectMenuOpen`) stays a root field, and `pickProject`'s close-then-select cascade landed with the board slice (batch B): close via the controller, then the root's selection cascade. Non-DOM coverage: `web/test/menus-module.test.ts` |
 | Header settings menu (:1233–1335) ("header menu" ~:1240 in the audit) | :1233–1335 | `modules/menus.ts` (controller); its *contents* belong to their own owners (theme → `src/theme.ts`, auth entry → `modules/auth.ts`, auto-refresh → board/live) | **P2 landed (batch A)** — same shared controller; the "at most one header menu" mutual exclusion (opening the settings menu collapses the project dropdown) stays at root because both flags are root fields. Non-DOM coverage: `web/test/menus-module.test.ts` |
 | OpenCode options list (:1381–1439) + drawer run panel (:3924–4027) | :1381–1439, :3924–4027 | `modules/opencode.ts` | P2 |
 | Project settings modal (:1440–1468) + members panel T9 (:1469–1790) | :1440–1468, :1469–1790 | `modules/project-settings.ts` | P2 (roster pure core already in `src/members.ts`: `normalizeRoster`, `canManageRoster`, error copy) |
-| Board state: snapshot, blocked-state cache + derive/sync/reset (:1791–1890), `loadBoard` sequencing | :1791–1890 | `modules/board.ts` (P2 state) — pure sliver P1 in the same file: `blockedIdsFromBoard(board)` set derivation | P1+P2 |
-| **Board/columns derivation** `columns()` (:2941–3070): filter → sort → done-pagination pipeline; visible/hidden counts + filtered-empty banner (:2906–2921) ("board/columns" ~:2946 in the audit) | :2890–3070 (inside URL-sync section) | `src/filters.ts` + `src/sort.ts` — P1 pure pipeline over plain args; `modules/board.ts` owns the state it composes | P1+P2 |
+ | Board state: snapshot, blocked-state cache + derive/sync/reset (:1791–1890), `loadBoard` sequencing | :1791–1890 | `modules/board.ts` (cache + prefs, P2) / `modules/board-view.ts` (`loadBoard` lifecycle) | **P2 landed (batch B)** — scope-guarded blocked cache (board-snapshot sync is in-module, no standalone pure sliver), detail learning seam and reset; the sequence-guarded fetch lifecycle lives with the view pipeline (see status note for the core/view split rationale) |
+ | **Board/columns derivation** `columns()` (:2941–3070): filter → sort → done-pagination pipeline; visible/hidden counts + filtered-empty banner (:2906–2921) ("board/columns" ~:2946 in the audit) | :2890–3070 (inside URL-sync section) | `src/filters.ts` + `src/sort.ts` — P1 pure pipeline over plain args; `modules/board-view.ts` owns the state it composes | **P2 landed (batch B)** — composition (filter predicates, sort+hoist, FTS id union, done-cap bypass) in the view module; the flat pure cores are untouched and still imported by it |
 | Archive management: single-task archive/restore w/ version guard + retry-once (:1964–2195); bulk "Archive all Done" (:2196–2256) | :1964–2256 | `modules/archive.ts` | P2 (the locate-row-in-live-archived-detail helper becomes a pure fn with injected state) |
-| Done-column pagination (`DEFAULT_DONE_LIMIT` :221; :2257–2271) | :2257–2271 | `modules/board.ts` (state) / P1 slice inside the `columns()` pipeline | P1+P2 |
+ | Done-column pagination (`DEFAULT_DONE_LIMIT` :221; :2257–2271) | :2257–2271 | `modules/board-view.ts` (cap + bypass logic) / P1 slice inside the `columns()` pipeline | **P2 landed (batch B)** — the 20-card cut, its count pills and the full-text-search bypass live in the view module; the bound `doneLimit` field stays at root |
 | Multi-select + batch bar (:2272–2406), robust per-task batch execution engine AC3 (:2407–2489), batch actions AC2/AC3 (:2489–2568) | :2272–2568 | `modules/batch.ts` — P1-pure: the per-task execute/retry-once/skip-already-applied engine (`runBatch(tasks, exec)` with an injected executor); P2: selection state + shift-range anchor | P1+P2 |
-| Filters state + predicate application (:2569–2746): priority/assignee/unblocked/stalled/needs-attention/due-window/search predicates | :2569–2746 (+ inline in `columns()`) | `src/filters.ts` — P1: every predicate as a pure fn `(task, ctx) => boolean` + composition helper; `modules/board.ts` owns the `filter*` state fields + `$watch` wiring | P1+P2 |
-| Full-text (desc/notes) remote search (:2587–2746; constants :228/:232) | :2587–2746 | `src/filters.ts` — P1: result merge/dedupe against live board rows; debounce+in-flight state rides with the board module (debounce core already in `src/refresh.ts`) | P1+P2 |
-| URL query sync handlers (`syncUrlState`, popstate/deep-link adoption) (:2747–3165) | :2747–3165 | parse/build pure core → `src/routes.ts` (P1); the handlers themselves → `modules/board.ts` (board/filter URL parts, P2); boot-time task-route adoption stays composition-root wiring (§5 step 4) | P1+P2 |
+ | Filters state + predicate application (:2569–2746): priority/assignee/unblocked/stalled/needs-attention/due-window/search predicates | :2569–2746 (+ inline in `columns()`) | `src/filters.ts` — P1: every predicate as a pure fn `(task, ctx) => boolean` + composition helper; the `filter*` state lives behind typed accessors owned by both board modules | **P2 landed (batch B)** — `hasActiveFilters`, `clearFilters` and `availableAssignees` live in `modules/board.ts`; the local title/search predicate, server-side mapping (`listTasksParams`) and visible/hidden counts compose in `modules/board-view.ts`. The bound `filter*` fields stay at root |
+ | Full-text (desc/notes) remote search (:2587–2746; constants :228/:232) | :2587–2746 | `src/filters.ts` — P1: result merge/dedupe against live board rows; debounce+in-flight state in `modules/board.ts` (debounce core already in `src/refresh.ts`) | **P2 landed (batch B)** — the 250ms debounce, sequence guard and match-id set are module-internal state; `SEARCH_DEBOUNCE_MS` / `FULLTEXT_SEARCH_LIMIT` moved to `modules/board.ts` and are re-exported from the root unchanged |
+ | URL query sync handlers (`syncUrlState`, popstate/deep-link adoption) (:2747–3165) | :2747–3165 | parse/build pure core → `src/routes.ts` (P1); the handlers themselves → `modules/board-view.ts` (board/filter URL parts, P2); boot-time task-route adoption stays composition-root wiring (§5 step 4) | **P2 landed (batch B)** — `syncUrlState` (immediate + 150ms debounced, task-route guard), `applyQueryParams` (popstate full-restore vs partial initial restore) and `initFromUrl` live in the view module; land-target deviates from the originally planned single `board.ts` (see status note) |
 | Realtime SSE: connect/backoff/replay cursor/disconnect (:3166–3418) + polling fallback (:3419–3462); `sseTelemetry` test-support counters (:585–598) | :585–598, :3166–3462 | `modules/sse.ts` (P2 state; pure dispatch already in `src/realtime.ts`, coalescing in `src/refresh.ts`; the thin adapter pattern at app.ts:3310–3360 is the model) | P2 |
 | New-task form + create-and-select (:3463–3621) | :3463–3621 | `modules/new-task.ts` | P2 (discard-guard draft helpers already in `src/drafts.ts`) |
 | Task detail drawer state/lifecycle (:3622–3646) + full-page `/tasks/<id>` view (:3647–3923) ("routes" ~:3650 / "detail+AC" in the audit) | :3622–3923 | `modules/detail.ts` (P2 state; `canApplyDetail` ownership guard already pure in `src/refresh.ts`; route helpers P1 in `src/routes.ts`) | P1+P2 |
@@ -141,7 +147,7 @@ modules or a follow-up pass): clipboard helper → `util.ts`,
 `formatEventDetail` → `realtime.ts`, the `blockedIdsFromBoard` set derivation,
 and the `RelationRow → RelationView` shaping.
 
-**Phase 2 status (batch A in progress on `main`).** Landed so far:
+**Phase 2 status (batches A+B landed on `main`).** Landed so far:
 
 - `modules/auth.ts` — auth row, a **behavior-only extraction**: all eight
   handlers moved verbatim behind the typed `AuthDeps` access interface,
@@ -181,14 +187,50 @@ and the `RelationRow → RelationView` shaping.
   The bound `projectMenuOpen` / `headerMenuOpen` flags stay root fields (same
   Alpine state-ownership rationale as above), each menu's testid lookups ride
   on injected seam lambdas, and the "at most one header menu" mutual
-  exclusion stays at root because it touches both flags. The legacy
-  `crowbanApp` alias export (zero references) was removed in the same slice.
-  Non-DOM coverage: `web/test/menus-module.test.ts`.
+   exclusion stays at root because it touches both flags. The legacy
+   `crowbanApp` alias export (zero references) was removed in the same slice.
+   Non-DOM coverage: `web/test/menus-module.test.ts`.
 
-Suggested P2 ordering (dependency-driven): `board` → `sse` → `projects` →
-`auth` → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/
+**Batch B (main `44b0228`, 2026-11-12)** — the board concern, split into TWO
+stateful modules rather than one:
+
+- `modules/board.ts` (474) — board CORE: the scope-guarded blocked-state
+  cache (board-snapshot sync, detail learning seam, reset), subtask meta,
+  sort/hoist/density prefs, and the filter surface (`hasActiveFilters`,
+  `clearFilters`, `availableAssignees`) plus the debounced full-text search
+  (250ms debounce + sequence guard + match-id set are module-internal; the
+  `SEARCH_DEBOUNCE_MS` / `FULLTEXT_SEARCH_LIMIT` / `LS_CARD_DENSITY` constants
+  and `CardDensity` type moved here, re-exported from the root unchanged).
+
+- `modules/board-view.ts` (458) — board VIEW pipeline: stalled/attention
+  helpers, URL query build/parse/sync (`syncUrlState` incl. the task-route
+  guard and popstate full-restore), `listTasksParams` mapping, counts +
+  `columns()` composition over the flat P1 pure cores (FTS id union, done-cap
+  bypass) and the `loadBoard` lifecycle (sequence guard, mine-scope reshape,
+  401/403 handling).
+
+  **Why two files (deviation from §1's one-module-per-concern):** the board
+  concern's state has two lifecycles — long-lived caches/prefs that survive
+  every render (core) and render-driven derivation plus the fetch lifecycle
+  (view) — and a single file carrying both was trending past the §6 line cap.
+  Both are still "the board module" to the root, which builds them lazily via
+  `_boardModule()` / `_boardViewModule()` and wires their cross-seams
+  (`syncUrlState`, `isBlocked`, `fullTextMatchIds`, `syncBlocked`,
+  `hasActiveFilters`) with setter/getter lambdas in the same style as batch A.
+  Every bound field (snapshot, filters, sort, counts) remains a plain root
+  field; `selectProject`/`pickProject`/`applyDetail` keep their cascades at
+  root and now call both modules through those seams. Non-DOM coverage:
+  `web/test/board-module.test.ts` + `web/test/board-view-module.test.ts` over
+  the shared fake-deps harness (`web/test/board-harness.ts`); app.test.ts shed
+  its 13 internal-poking BlockedCache/FullTextSearch tests for 2 root-wiring
+  regression tests (applyDetail seam; pickProject retire/re-arm). `app.ts`
+  shrank 6,083 → **5,807** (still over the §6 cap — the remaining batches are
+  the plan's reduction path).
+
+Suggested P2 ordering (dependency-driven): ~~board~~ → `sse` → ~~projects~~ →
+~~auth~~ → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/
 `relations` (drawer surfaces) → `archive`/`batch`/`drag` (board actions) →
-`menus`/`project-settings`/`opencode`/`new-task` (remaining chrome).
+~~menus~~/`project-settings`/`opencode`/`new-task` (remaining chrome).
 
 ## 3. The driving constraint (why extraction looks the way it does)
 
