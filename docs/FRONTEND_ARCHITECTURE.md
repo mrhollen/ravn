@@ -105,7 +105,7 @@ later phase; root = deliberately stays in the composition root.
 | Projects list, selection, counts, create-project dialog (:1017–1099, :1336–1380) | :1017–1099, :1336–1380 | `modules/projects.ts` | **P2 landed (batch A)** — list lifecycle (sequence guard + in-flight coalescing now module-owned internals), option/select labels and the create-project dialog moved behind the typed `ProjectsDeps`; `LS_PROJECT` moved here too. The bound fields remain root fields (see Phase 2 status note). `selectProject`'s selection cascade stayed at root until the board slice and now lands there (batch B): it calls both board modules through their root seams (`resetBlockedCache`, `invalidatePendingLoads`, `cancelFullTextSearch`) plus the SSE/URL wiring. The dropdown's menu machinery is in `modules/menus.ts` (batch A) |
 | Projects dropdown — custom menu (:1100–1232) ("project menu" ~:1103 in the audit) | :1100–1232 | `modules/menus.ts` | **P2 landed (batch A)** — open/close, roving arrow/Home/End focus and the capture-phase outside-click listener live in the shared controller; per-menu state (`projectMenuOpen`) stays a root field, and `pickProject`'s close-then-select cascade landed with the board slice (batch B): close via the controller, then the root's selection cascade. Non-DOM coverage: `web/test/menus-module.test.ts` |
 | Header settings menu (:1233–1335) ("header menu" ~:1240 in the audit) | :1233–1335 | `modules/menus.ts` (controller); its *contents* belong to their own owners (theme → `src/theme.ts`, auth entry → `modules/auth.ts`, auto-refresh → board/live) | **P2 landed (batch A)** — same shared controller; the "at most one header menu" mutual exclusion (opening the settings menu collapses the project dropdown) stays at root because both flags are root fields. Non-DOM coverage: `web/test/menus-module.test.ts` |
-| OpenCode options list (:1381–1439) + drawer run panel (:3924–4027) | :1381–1439, :3924–4027 | `modules/opencode.ts` | P2 |
+| OpenCode options list (:1381–1439) + drawer run panel (:3924–4027) | :1381–1439, :3924–4027 | `modules/opencode.ts` | **P2 landed (batch B)** — the options cache read surface (agents/models/variant derivation) and `fetchOpenCodeOptions` (id gate, no-server-URL gate with the open-modal unsaved-URL exception, per-project cache + force, silent catch) live in the module behind typed `OpenCodeDeps`; all three cache fields remain plain root state. The drawer run panel (`taskOpenCodeConfig` + its defaults) stays at root until the detail slice |
 | Project settings modal (:1440–1468) + members panel T9 (:1469–1790) | :1440–1468, :1469–1790 | `modules/project-settings.ts` | **P2 landed (batch B)** — form lifecycle with the pristine baseline re-based on the authoritative fetch, the discard guard, the archive-confirm flow + save/restore, and the T9 members panel live in the module closure behind typed `ProjectSettingsDeps`; the roster pure core was already in `src/members.ts` (`normalizeRoster`, `canManageRoster`, error copy). The ten bound fields stay root fields; the baseline copy and the focus session are module-internal. Non-DOM coverage: `web/test/project-settings-module.test.ts` |
  | Board state: snapshot, blocked-state cache + derive/sync/reset (:1791–1890), `loadBoard` sequencing | :1791–1890 | `modules/board.ts` (cache + prefs, P2) / `modules/board-view.ts` (`loadBoard` lifecycle) | **P2 landed (batch B)** — scope-guarded blocked cache (board-snapshot sync is in-module, no standalone pure sliver), detail learning seam and reset; the sequence-guarded fetch lifecycle lives with the view pipeline (see status note for the core/view split rationale) |
  | **Board/columns derivation** `columns()` (:2941–3070): filter → sort → done-pagination pipeline; visible/hidden counts + filtered-empty banner (:2906–2921) ("board/columns" ~:2946 in the audit) | :2890–3070 (inside URL-sync section) | `src/filters.ts` + `src/sort.ts` — P1 pure pipeline over plain args; `modules/board-view.ts` owns the state it composes | **P2 landed (batch B)** — composition (filter predicates, sort+hoist, FTS id union, done-cap bypass) in the view module; the flat pure cores are untouched and still imported by it |
@@ -264,13 +264,31 @@ stateful modules rather than one:
   baseline-poking discard-guard test moved to
   `web/test/project-settings-module.test.ts` (22 tests, stub deps + patched
   api), and its agent/variant save test now re-bases by re-opening against a
-  stubbed `getProject` instead of poking the internal baseline. `app.ts` shrank
-  5,554 → **5,353**.
+   stubbed `getProject` instead of poking the internal baseline. `app.ts` shrank
+   5,554 → **5,353**.
+
+- `modules/opencode.ts` (113) — the OpenCode options cache + fetch: the
+  `availableOpenCodeAgents` / `availableOpenCodeModels` read surface and the
+  variant derivation (exact ref or model_id match, resolved_model fallback,
+  deduplicated union across all models otherwise — exported as the pure helper
+  `variantsForModels`) plus `fetchOpenCodeOptions` (id gate, no-server-URL gate
+  where an unsaved URL in the open settings modal still counts, per-project
+  cache + force, silent error catch). Unlike its batch B siblings this module
+  owns NO closure-internal state — all three cache fields stay plain root
+  state; the lazy `_opencodeModule()` builder wires six state-in getters and
+  three state-out setters, no hooks. Four delegation shims keep the bound names
+  byte-identical; the project-settings module's `fetchOpenCodeOptions` hook now
+  repoints at this module instead of the root shim. The drawer run panel
+  (`taskOpenCodeConfig` + defaults) stays at root — it rides with the detail
+  slice. Non-DOM coverage: `web/test/opencode-module.test.ts` (20 tests, stub
+  state + patched api); app.test.ts's two OpenCode surface tests are unchanged.
+  `app.ts` shrank 5,353 → **5,341** — a small net because nothing moved into a
+  closure and the cache fields stayed at root.
 
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/
 `relations` (drawer surfaces) → `archive`/`batch`/`drag` (board actions) →
-~~menus~~/~~project-settings~~/`opencode`/`new-task` (remaining chrome).
+~~menus~~/~~project-settings~~/~~opencode~~/`new-task` (remaining chrome).
 
 ## 3. The driving constraint (why extraction looks the way it does)
 
