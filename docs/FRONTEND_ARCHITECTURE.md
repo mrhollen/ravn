@@ -115,7 +115,7 @@ later phase; root = deliberately stays in the composition root.
  | Filters state + predicate application (:2569–2746): priority/assignee/unblocked/stalled/needs-attention/due-window/search predicates | :2569–2746 (+ inline in `columns()`) | `src/filters.ts` — P1: every predicate as a pure fn `(task, ctx) => boolean` + composition helper; the `filter*` state lives behind typed accessors owned by both board modules | **P2 landed (batch B)** — `hasActiveFilters`, `clearFilters` and `availableAssignees` live in `modules/board.ts`; the local title/search predicate, server-side mapping (`listTasksParams`) and visible/hidden counts compose in `modules/board-view.ts`. The bound `filter*` fields stay at root |
  | Full-text (desc/notes) remote search (:2587–2746; constants :228/:232) | :2587–2746 | `src/filters.ts` — P1: result merge/dedupe against live board rows; debounce+in-flight state in `modules/board.ts` (debounce core already in `src/refresh.ts`) | **P2 landed (batch B)** — the 250ms debounce, sequence guard and match-id set are module-internal state; `SEARCH_DEBOUNCE_MS` / `FULLTEXT_SEARCH_LIMIT` moved to `modules/board.ts` and are re-exported from the root unchanged |
  | URL query sync handlers (`syncUrlState`, popstate/deep-link adoption) (:2747–3165) | :2747–3165 | parse/build pure core → `src/routes.ts` (P1); the handlers themselves → `modules/board-view.ts` (board/filter URL parts, P2); boot-time task-route adoption stays composition-root wiring (§5 step 4) | **P2 landed (batch B)** — `syncUrlState` (immediate + 150ms debounced, task-route guard), `applyQueryParams` (popstate full-restore vs partial initial restore) and `initFromUrl` live in the view module; land-target deviates from the originally planned single `board.ts` (see status note) |
-| Realtime SSE: connect/backoff/replay cursor/disconnect (:3166–3418) + polling fallback (:3419–3462); `sseTelemetry` test-support counters (:585–598) | :585–598, :3166–3462 | `modules/sse.ts` (P2 state; pure dispatch already in `src/realtime.ts`, coalescing in `src/refresh.ts`; the thin adapter pattern at app.ts:3310–3360 is the model) | P2 |
+| Realtime SSE: connect/backoff/replay cursor/disconnect (:3166–3418) + polling fallback (:3419–3462); `sseTelemetry` test-support counters (:585–598) | :585–598, :3166–3462 | `modules/sse.ts` (P2 state; pure dispatch already in `src/realtime.ts`, coalescing in `src/refresh.ts`; the thin adapter pattern at app.ts:3310–3360 is the model) | **P2 landed (batch B)** — stream lifecycle, backoff, replay cursor, disconnect toast + polling fallback live in the module closure behind typed `SseDeps` (state-in/out via lambdas; toast/dismiss/reload/refresh hooks). `POLL_MS`, `LEGACY_NAMED_SSE_EVENT_KINDS` (doc + const) and the `sseTelemetry` counters moved here and are re-exported from the root unchanged. The bound `sseStatus` / `polling` fields stay root fields; the EventSource handle, timers, backoff and cursor are module-internal. The root's `dismissToast` clears the disconnect-toast guard through the module seam (`clearSseDisconnectNotificationIf`). Test support: `backoffMs()` / `pollTimerId()` read-only accessors on the returned surface (same pattern as `sseTelemetry`) plus pure helpers `nextBackoffMs` / `shouldSendReplayCursor` / `buildSseUrl`. Non-DOM coverage: `web/test/sse-module.test.ts` |
 | New-task form + create-and-select (:3463–3621) | :3463–3621 | `modules/new-task.ts` | P2 (discard-guard draft helpers already in `src/drafts.ts`) |
 | Task detail drawer state/lifecycle (:3622–3646) + full-page `/tasks/<id>` view (:3647–3923) ("routes" ~:3650 / "detail+AC" in the audit) | :3622–3923 | `modules/detail.ts` (P2 state; `canApplyDetail` ownership guard already pure in `src/refresh.ts`; route helpers P1 in `src/routes.ts`) | P1+P2 |
 | Copy-ID toolbar action (:4028–4181) | :4028–4181 | `modules/detail.ts` (drawer toolbar behavior; clipboard core P1 → `src/util.ts`) | P1+P2 |
@@ -227,7 +227,24 @@ stateful modules rather than one:
   shrank 6,083 → **5,807** (still over the §6 cap — the remaining batches are
   the plan's reduction path).
 
-Suggested P2 ordering (dependency-driven): ~~board~~ → `sse` → ~~projects~~ →
+- `modules/sse.ts` (433) — realtime SSE + polling fallback: EventSource
+  lifecycle with the single-stream guarantee, exponential reconnect backoff
+  (2s→16s), the Last-Event-ID replay cursor, the one-time disconnect toast
+  (30s arm, root-to-module guard clearing via `clearSseDisconnectNotificationIf`)
+  and the ~15s polling fallback. Pure decision helpers extracted for non-DOM
+  tests: `nextBackoffMs`, `shouldSendReplayCursor` (cursor project-match gate),
+  `buildSseUrl`. The root keeps the bound `sseStatus` / `polling` fields, a
+  `_sse` cache + lazy `_sseModule()` builder, and delegation shims for the
+  public surface (`connectSse`, `disconnectSse`, `startPolling`,
+  `pollingChanged`, `sseStatusWord`); boot wiring (beforeunload teardown,
+  post-boot `startPolling`, `continueBoot` connect) is unchanged. The one
+  root→module coupling outside the seams: `dismissToast` clears the
+  disconnect-toast guard on a manual × of that toast. E2E specs that drove
+  internals now route through `app._sseModule()`; app.test.ts shed its
+  internal-poking disconnect-notification test (covered in
+  `web/test/sse-module.test.ts`). `app.ts` shrank 5,807 → **5,554**.
+
+Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `detail` → `task-edit` → `acs`/`comments`/`artifacts`/`claims`/
 `relations` (drawer surfaces) → `archive`/`batch`/`drag` (board actions) →
 ~~menus~~/`project-settings`/`opencode`/`new-task` (remaining chrome).
