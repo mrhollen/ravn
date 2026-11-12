@@ -121,7 +121,7 @@ later phase; root = deliberately stays in the composition root.
 | Copy-ID toolbar action (:4028–4181) | :4028–4181 | `modules/detail.ts` (drawer toolbar behavior; clipboard core P1 → `src/util.ts`) | P1+P2 |
 | Quick metadata (priority & due popovers, :4182–4321) + assignee popover (:4322–4398) + title/description edit with dirty drafts (:4399–4584) + notes scratchpad (:4994–5097) | :4182–4584, :4994–5097 | `modules/task-edit.ts` (P2; draft serialize keys already in `src/drafts.ts`) — all "edit a field on the open task" behavior, one module | **PARTIAL (batch B)** — core edit session AND quick-metadata popovers + assignee update flows landed (the four-popover mutex writes the status/owner flags through typed setters; `toggleStatusMenu`/`toggleOwnerPopover` stay with the operational bar → detail); only the notes scratchpad still rides at root |
 | Acceptance criteria (:5098–5359) ("detail+AC" ~:5115 in the audit) | :5098–5359 | `modules/acs.ts` | **P2 landed (batch C)** — toggle/add/paste-add/move/drop reorder, the inline edit session and delete, plus the four display helpers over `src/ac-math.ts`. All nine state fields are template-bound → stay root; detail patches are whole-object reassignments through `setDetail`. Non-DOM coverage: `web/test/acs-module.test.ts` (34 tests) |
-| Comments (:5360–5481) | :5360–5481 | `modules/comments.ts` | P2 (draft keys already in `src/drafts.ts`) |
+| Comments (:5360–5481) | :5360–5481 | `modules/comments.ts` | **P2 landed (batch C)** — draft reset-then-restore + debounced persistence, older-comment pagination and postComment. All five state fields template-bound → root; `detail.comments` / `commentForm.body` are property writes through the state-IN getter, whole-field writes via setters. Non-DOM coverage: `web/test/comments-module.test.ts` (21 tests) |
 | Artifacts (:5482–5728) | :5482–5728 | `modules/artifacts.ts` | P2 (`isTextArtifact` already pure in `src/util.ts`) |
 | Claims: display helpers + claim/release handlers (:5729–5825). **Exception:** the 1s `nowTick` ticker lives here but is consumed by BOTH claims display and the board stalled filter → `nowTick` stays **root** (shared clock); pure countdown/expiry logic already in `src/util.ts` | :5729–5825 | `modules/claims.ts` (P2) + **root** (`nowTick`) | P2 |
 | Global keyboard: bare-key dispatch `handleGlobalKeydown` + the Escape cascade `dismissTop` (:6129–6204; absent from the Phase 0 audit — the cascade's priority order is the part that breaks silently when a surface is inserted) | :6129–6204 | `src/keyboard.ts` (P1 decisions, LANDED) + **root** (the imperative close steps ride with their P2 surface owners: menus/detail/new-task) | P1 done / rest P2 |
@@ -343,9 +343,23 @@ stateful modules rather than one:
   (47.8s), index.html identical. `app.ts` shrank 5,032 → **4,901** (−131;
   first sub-5,000 crossing of the burn-down).
 
+  **`comments` row landed in `4efc7ad`:** the comments section moved to
+  `modules/comments.ts` (Phase 2 batch C) — draft reset-then-restore +
+  debounced persistence, older-comment pagination math/load and postComment
+  with its draft-key removal. All five state fields are template-bound → stay
+  root; CommentsDeps = 6 state-in / 5 state-out / 2 hooks. `detail.comments`
+  reassignment (mergeComments) and `commentForm.body` clear happen as property
+  writes through the state-IN getter — only whole-field writes use setters.
+  8 shims; commentDraftKey/serialize/deserializeCommentDraft imports dropped
+  from app.ts (notes still own notesDraftKey). Gates: unit **600/600** (+21),
+  build+tsc clean, E2E 189/189 (46.8s), index.html identical. `app.ts` shrank
+  4,901 → **4,856** (−45). Test suite documents two parity quirks:
+  `olderCommentsRemaining` is unclamped without a detail, and the postComment
+  total double-ratchets (merge + explicit +1).
+
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `task-edit` (landed; only the notes scratchpad rides with the
-detail cascade) → ~~acs~~ → `comments`/`artifacts`/`claims`/`relations`
+detail cascade) → ~~acs~~ → ~~comments~~ → `artifacts`/`claims`/`relations`
 (drawer surfaces) → `detail` **last** —
 REORDERED from its original second position: `openTask`/`closeDetail` are
 cross-cutting cascades writing ~20 flat fields across the not-yet-modularized
