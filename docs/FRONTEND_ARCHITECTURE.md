@@ -123,7 +123,7 @@ later phase; root = deliberately stays in the composition root.
 | Acceptance criteria (:5098–5359) ("detail+AC" ~:5115 in the audit) | :5098–5359 | `modules/acs.ts` | **P2 landed (batch C)** — toggle/add/paste-add/move/drop reorder, the inline edit session and delete, plus the four display helpers over `src/ac-math.ts`. All nine state fields are template-bound → stay root; detail patches are whole-object reassignments through `setDetail`. Non-DOM coverage: `web/test/acs-module.test.ts` (34 tests) |
 | Comments (:5360–5481) | :5360–5481 | `modules/comments.ts` | **P2 landed (batch C)** — draft reset-then-restore + debounced persistence, older-comment pagination and postComment. All five state fields template-bound → root; `detail.comments` / `commentForm.body` are property writes through the state-IN getter, whole-field writes via setters. Non-DOM coverage: `web/test/comments-module.test.ts` (21 tests) |
 | Artifacts (:5482–5728) + copy-ref toolbar action | :5482–5728, copy-ref at its original spot | `modules/artifacts.ts` | **P2 landed (batch C)** — 17 methods behind typed `ArtifactsDeps` (13 state-in / 12 state-out incl. `setDetail` / 4 hooks: toast, actor, isWebHref, confirmDiscard): file-selection kind inference, upload/drop/paste flows, attach (file vs ref), preview modal, the `isStored*` media predicates, text-preview toggle + fetch lifecycle, delete with same-task guard + cache cleanup, copy-ref with confirmation timer. All bound state fields stay root; in-place writes (form.file/.kind, modal.open) via state-IN getters, whole-field writes via setters; detail artifacts patch via `setDetail` under the same-task guard. `copyTextToClipboard`/`copyViaExecCommand` moved to `src/util.ts` (no external importers — verified). Non-DOM coverage: `web/test/artifacts-module.test.ts` (32 tests) |
-| Claims: display helpers + claim/release handlers (:5729–5825). **Exception:** the 1s `nowTick` ticker lives here but is consumed by BOTH claims display and the board stalled filter → `nowTick` stays **root** (shared clock); pure countdown/expiry logic already in `src/util.ts` | :5729–5825 | `modules/claims.ts` (P2) + **root** (`nowTick`) | P2 |
+| Claims: display helpers + claim/release handlers (:5729–5825). **Exception:** the 1s `nowTick` ticker lives here but is consumed by BOTH claims display and the board stalled filter → `nowTick` stays **root** (shared clock); pure countdown/expiry logic already in `src/util.ts` | :5729–5825 | `modules/claims.ts` (P2) + **root** (`nowTick`) | **P2 landed (batch C)** — claim/release/heartbeat flows + the two display helpers behind typed `ClaimsDeps`; all three state fields stay root (`claimBusy` template-bound; `nowTick`/`_tickerId` shared clock, started in `_runBoot`); the `claimTask`/`releaseTask`/`heartbeatTask` alias surface stays at root. Non-DOM coverage: `web/test/claims-module.test.ts` (16 tests) |
 | Global keyboard: bare-key dispatch `handleGlobalKeydown` + the Escape cascade `dismissTop` (:6129–6204; absent from the Phase 0 audit — the cascade's priority order is the part that breaks silently when a surface is inserted) | :6129–6204 | `src/keyboard.ts` (P1 decisions, LANDED) + **root** (the imperative close steps ride with their P2 surface owners: menus/detail/new-task) | P1 done / rest P2 |
 | Relations (:5826–6208; `RelationView` interface :621–630) | :5826–6208 | `modules/relations.ts` — P1-pure: `RelationRow → RelationView` shaping | P1+P2 |
 | Drag & drop (:4585–4696) + touch swipe-to-status + per-card move menu (:4697–4960) | :4585–4960 | `modules/drag.ts` (P2 gesture state; pure move core already in `src/moves.ts`: `canMove`, `beginMove/endMove`, `withTimeout` — **extended in Phase 1** with the drag/swipe *decision* helpers: drop legality copy, swipe constants, direction/target/activation/commit) | P2 |
@@ -369,10 +369,21 @@ stateful modules rather than one:
   189/189 (47.9s), index.html identical. `app.ts` shrank 4,856 → **4,679**
   (−177).
 
+  **`claims` row landed in `a5d41d6`:** the claim/release/heartbeat flows and
+  both display helpers moved to `modules/claims.ts` (Phase 2 batch C) behind
+  typed `ClaimsDeps`. All three state fields stay root: `claimBusy` is
+  template-bound, and `nowTick`/`_tickerId` are the shared 1s ticker ALSO
+  consumed by the board stalled filter (started in `_runBoot`) — the docs row's
+  recorded exception. The `claimTask`/`releaseTask`/`heartbeatTask` alias
+  surface stays at root pointing at the `*CurrentTask` shims (`heartbeatTask()`
+  is deliberately unbound in index.html). Gates: unit **648/648** (+16),
+  build+tsc clean, E2E 189/189 (47.4s), index.html identical. `app.ts` shrank
+  4,679 → **4,649** (−30).
+
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `task-edit` (landed; only the notes scratchpad rides with the
 detail cascade) → ~~acs~~ → ~~comments~~ → ~~artifacts~~ →
-`claims`/`relations` (drawer surfaces) → `detail` **last** —
+~~claims~~/`relations` (drawer surfaces) → `detail` **last** —
 REORDERED from its original second position: `openTask`/`closeDetail` are
 cross-cutting cascades writing ~20 flat fields across the not-yet-modularized
 sub-concerns above, so extracted last each cascade write converges to ONE hook
