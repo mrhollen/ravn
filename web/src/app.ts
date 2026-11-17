@@ -45,6 +45,7 @@ import { createCommentsModule } from "./modules/comments";
 import { createArtifactsModule, type ArtifactsModule } from "./modules/artifacts";
 import { createClaimsModule, type ClaimsModule } from "./modules/claims";
 import { createRelationsModule, type RelationView, type RelationsModule } from "./modules/relations";
+import { createBootstrapModule, type BootstrapModule } from "./modules/bootstrap";
 import { createDetailModule, type DetailModule } from "./modules/detail";
 import type { CommentsModule } from "./modules/comments";
 import { createProjectSettingsModule } from "./modules/project-settings";
@@ -54,7 +55,7 @@ import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
 // still consumed at the root (exposed as template glue); everything else moved
 // into modules/drag.ts.
 import { canMove } from "./moves";
-import { createDebounce, SSE_RELOAD_DEBOUNCE_MS } from "./refresh";
+import { createDebounce } from "./refresh"; // SSE_RELOAD_DEBOUNCE_MS moved to modules/bootstrap.ts (Phase 2 bootstrap hatch)
 import { renderMarkdown } from "./md";
 import { MEMBER_ROLES } from "./members";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
@@ -785,11 +786,6 @@ export function ravnApp() {
     /** Flips on at the end of init(); gates the trigger so a pre-boot click
      *  can't open an empty, inert menu (and e2e can wait for it to enable). */
     appBooted: false,
-    /** Boot memo (the init() guard — see init()): holds the in-flight or
-     *  completed _runBoot() promise so a second invocation returns it instead
-     *  of re-running boot. Null until the first init(); cleared only if that
-     *  boot threw a genuine (non-network) error. */
-    _bootPromise: null as Promise<void> | null,
     /** Lazily-built Projects-dropdown controller (modules/menus.ts). The
      *  capture-phase outside-click handler it manages is module-internal state. */
     _projectMenu: null as MenuController | null,
@@ -3810,211 +3806,81 @@ export function ravnApp() {
     },
 
     // ---------------------------------------------------------------------- init
-    /** Boot guard (ticket 01M3VJ5PQEAJ60B0QGPNZT8NKP): Alpine invokes the
-     *  component's init() TWICE per page load — once because x-data auto-runs
-     *  a data object's init method, and again from the root element's explicit
-     *  x-init="init()" (directive order runs x-data first; verified empirically
-     *  against the shipped bundle: two invocation stacks ~6ms apart, the second
-     *  carrying Alpine's `[Alpine] init()` eval frame). The memo makes any
-     *  repeat call return the FIRST boot's promise instead of re-running it, so
-     *  no duplicate ticker intervals, debouncers, window listeners, projects
-     *  fetches or SSE EventSources are created. (loadProjects' in-flight
-     *  coalescer had already masked only the fetch; everything else still
-     *  duplicated — including one open-then-immediately-closed EventSource.)
-     *
-     *  The memo is never re-triggered on a failed boot by design: _runBoot()
-     *  catches every network error into loadError/state, and the boot-error
-     *  screen's Retry runs retryBoot(), which re-runs loadProjects +
-     *  continueBoot directly WITHOUT calling init(). A rejected promise would
-     *  therefore only mean a genuine programming bug — in that case clear the
-     *  memo so a later call can retry. */
-    async init(): Promise<void> {
-      if (!this._bootPromise) {
-        this._bootPromise = this._runBoot();
-        this._bootPromise.catch(() => {
-          // Only reachable on a genuine (non-network) throw — see above.
-          this._bootPromise = null;
-        });
-      }
-      return this._bootPromise;
+    _bootstrap: null as BootstrapModule | null,
+
+    /** Lazily-built boot module (modules/bootstrap.ts — Phase 2 bootstrap
+     *  hatch): owns the one-shot boot sequence (the init memo, ticker +
+     *  SSE-reload debounce creation, window/matchMedia/$watch listener
+     *  registration, first-load deep-link resolution) and the boot-error Retry
+     *  path. Every template-bound name stays flat root state above; only the
+     *  boot memo now lives in the module's closure (never rendered, never poked). */
+    _bootstrapModule(): BootstrapModule {
+      if (this._bootstrap) return this._bootstrap;
+      this._bootstrap = createBootstrapModule({
+        // state-in
+        selectedProjectId: () => this.selectedProjectId,
+        projects: () => this.projects,
+        loadError: () => this.loadError,
+        bootError: () => this.bootError,
+        bootRetrying: () => this.bootRetrying,
+        polling: () => this.polling,
+        themeMq: () => this._themeMq,
+        theme: () => this.theme,
+        // state-out
+        setAppBooted: (v) => { this.appBooted = v; },
+        setBootError: (v) => { this.bootError = v; },
+        setBootRetrying: (v) => { this.bootRetrying = v; },
+        setShowNewProject: (v) => { this.showNewProject = v; },
+        setSelectedProjectId: (v) => { this.selectedProjectId = v; },
+        setIsMobile: (v) => { this.isMobile = v; },
+        setNowTick: (ts) => { this.nowTick = ts; },
+        setTickerId: (id) => { this._tickerId = id; },
+        setSseReloadDebounce: (d) => { this.sseReloadDebounce = d; },
+        // hooks — root-owned orchestration kept outside the module
+        loadProjects: (force) => this.loadProjects(force),
+        loadBoard: (force) => this.loadBoard(force),
+        refreshSessionIdentity: () => this.refreshSessionIdentity(),
+        openDeepLinkedTask: (id) => this.openDeepLinkedTask(id),
+        openDeepLinkedDashboard: (pid, fromBootError) => this.openDeepLinkedDashboard(pid, fromBootError),
+        connectSse: () => this.connectSse(),
+        startPolling: () => this.startPolling(),
+        disconnectSse: (resetBackoff) => this.disconnectSse(resetBackoff),
+        onPopState: () => this.onPopState(),
+        initFromUrl: () => this.initFromUrl(),
+        applyTheme: () => this.applyTheme(),
+        setDocumentTitle: () => this.setDocumentTitle(),
+        scheduleFullTextSearch: () => this.scheduleFullTextSearch(),
+        syncUrlState: (immediate) => this.syncUrlState(immediate),
+        isRestoringUrlState: () => this._boardViewModule().isRestoringUrlState(),
+        focusWhenVisible: (el) => this._focusWhenVisible(el),
+        // Alpine $watch seam — no-op under node:test (no component proxy).
+        watch: (prop, cb) => {
+          if (typeof (this as any).$watch === "function") (this as any).$watch(prop, cb);
+        },
+      });
+      return this._bootstrap;
     },
 
-    /** The actual boot sequence — run at most ONCE per component instance
-     *  (see the init() guard above). Kept as its own method so the memo stays
-     *  trivially inspectable and unit-testable. */
-    async _runBoot(): Promise<void> {
-      this._tickerId = setInterval(() => {
-        this.nowTick = Date.now();
-      }, 1000);
-      if (typeof (this._tickerId as any)?.unref === "function") {
-        (this._tickerId as any).unref();
-      }
-      // Coalescer for SSE-triggered board/projects reloads (handleSseEvent):
-      // a burst of events → ONE round after the quiet window. Created before any
-      // network work so even an early event burst can't fire uncoalesced loads.
-      this.sseReloadDebounce = createDebounce(() => {
-        void this.loadBoard(true);
-        void this.loadProjects(true);
-      }, SSE_RELOAD_DEBOUNCE_MS);
-      if (typeof window !== "undefined") {
-        window.addEventListener("beforeunload", () => {
-          if (this._tickerId) clearInterval(this._tickerId);
-          this.disconnectSse(true);
-        });
-        // Track live OS preference changes — only relevant while in system mode.
-        this._themeMq?.addEventListener("change", () => {
-          if (this.theme === "system") this.applyTheme();
-        });
-        // Mobile breakpoint flag mirroring Tailwind's `md:` (min-width 768px):
-        // drives the x-if on the slide-down panel so its controls never coexist
-        // with their desktop/header instances in the DOM.
-        const mobileMq = window.matchMedia("(min-width: 768px)");
-        this.isMobile = !mobileMq.matches;
-        mobileMq.addEventListener("change", () => {
-          this.isMobile = !mobileMq.matches;
-        });
-        // Browser back/forward is a first-class way into and out of the full-
-        // page task view (/tasks/<id>) — reconcile on every popstate.
-        window.addEventListener("popstate", () => this.onPopState());
-
-        // Restore URL query parameters (filters, sort, project)
-        this.initFromUrl();
-      }
-      if (typeof (this as any).$watch === "function") {
-        const watchProps = [
-          "filterPriority",
-          "filterAssignee",
-          "filterDue",
-          "filterUnblocked",
-          "filterStalled",
-          "filterNeedsAttention",
-          "filterSearch",
-          "sortKey",
-          "sortDir",
-          "selectedProjectId",
-        ];
-        for (const prop of watchProps) {
-          (this as any).$watch(prop, () => {
-            if (!this._boardViewModule().isRestoringUrlState()) {
-              this.syncUrlState(prop !== "filterSearch");
-            }
-          });
-        }
-        // Full-text search (01M5XTAW3RZ4QJCSW9C3CS255R): EVERY path that mutates
-        // the query or the project re-arms the debounced desc/notes search —
-        // typed input (both desktop and mobile bind filterSearch), Reset
-        // filters, boot restore from ?q=... (applyQueryParams runs with the
-        // board-view module's URL-restore flag set, hence these are SEPARATE
-        // watchers that deliberately do NOT gate on it), browser back/forward, and project
-        // switches. Clearing the query lands in scheduleFullTextSearch's empty
-        // branch: timer cancelled, in-flight retired, match set dropped.
-        (this as any).$watch("filterSearch", () => this.scheduleFullTextSearch());
-        (this as any).$watch("selectedProjectId", () => this.scheduleFullTextSearch());
-      }
-      this.applyTheme();
-      if (typeof document !== "undefined") {
-        this.setDocumentTitle();
-      }
-      await this.loadProjects();
-      // Fire-and-forget identity probe: learns WHO the presenting bearer is (multi-user
-      // session) so the header can show it reactively; a non-session/off-mode token
-      // simply resolves to "no identity" without disturbing boot or the token.
-      void this.refreshSessionIdentity();
-      // Deep link: the initial URL may already be a full-page task or dashboard route.
-      const deepLinkedTaskId =
-        typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
-      const deepLinkedDashboardProjectId =
-        typeof window !== "undefined" ? dashboardRouteProjectIdFromPath(window.location.pathname) : null;
-      if (this.loadError) {
-        // Boot projects fetch failed — network blip or backend still starting.
-        // Do NOT validate the selection against an empty list that is the
-        // PRODUCT of the failure: keep selectedProjectId as-is, write nothing
-        // to storage, and open no New Project bar (ticket
-        // 01M3MMYP938G972KY8NF7RGMQR). Surface a boot-error screen with a
-        // Retry that re-runs exactly this continuation once the fetch recovers.
-        if (deepLinkedTaskId) {
-          // A full-page task open carries its own fetch + error/retry state, so
-          // it proceeds even when the projects list failed to load.
-          await this.openDeepLinkedTask(deepLinkedTaskId);
-        } else if (deepLinkedDashboardProjectId) {
-          await this.openDeepLinkedDashboard(deepLinkedDashboardProjectId, true);
-        } else {
-          this.bootError = true;
-          // Move focus to Retry as soon as it is rendered — x-show flushes on
-          // Alpine's own schedule, so poll frames instead of focusing blind
-          // (same convention as the drawer's fetch-failure state).
-          const retryBtn =
-            typeof document === "undefined"
-              ? null
-              : document.querySelector<HTMLElement>('[data-testid="boot-retry-btn"]');
-          this._focusWhenVisible(retryBtn);
-        }
-      } else {
-        await this.continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId);
-      }
-      if (this.polling) this.startPolling();
-      // Boot finished: the Projects dropdown trigger may now be clicked
-      // (e2e helpers wait on it becoming enabled). Set last so a failed
-      // early load can't unlock an inert control.
-      this.appBooted = true;
+    /** Boot entry point — behavior owned by modules/bootstrap.ts (Phase 2
+     *  bootstrap hatch). Memoized there: Alpine's double init() invocation
+     *  returns the FIRST boot's promise on the second call. */
+    init(): Promise<void> {
+      return this._bootstrapModule().init();
     },
 
-    /** Success-path boot continuation, shared by init() and retryBoot():
-     *  validate the stored selection against the freshly loaded list (a stale
-     *  id falls back to the first project), persist it, load the board and
-     *  connect SSE — or invite creating a project when the server is genuinely
-     *  empty. Only ever called AFTER a successful projects fetch. */
-    async continueBoot(
+    /** Success-path boot continuation, shared by init() and retryBoot() —
+     *  behavior owned by modules/bootstrap.ts (Phase 2 bootstrap hatch). */
+    continueBoot(
       deepLinkedTaskId: string | null,
       deepLinkedDashboardProjectId: string | null = null,
     ): Promise<void> {
-      const known = this.projects.some((p) => p.id === this.selectedProjectId);
-      if (!known || !this.selectedProjectId) {
-        this.selectedProjectId = this.projects[0]?.id ?? "";
-      }
-      if (deepLinkedTaskId) {
-        await this.openDeepLinkedTask(deepLinkedTaskId);
-      } else if (deepLinkedDashboardProjectId) {
-        await this.openDeepLinkedDashboard(deepLinkedDashboardProjectId);
-      } else if (this.selectedProjectId) {
-        try {
-          safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
-        } catch { /* ignore */ }
-        await this.loadBoard();
-        this.connectSse();
-        // Boot with a restored search query (?q=…): initFromUrl() applied the
-        // query BEFORE the $watch handlers were registered (init order), so those
-        // initial mutations never fired scheduleFullTextSearch — kick the
-        // debounced desc/notes search here so a shared board-search URL actually
-        // surfaces its matches (empty query is a harmless no-op branch).
-        this.scheduleFullTextSearch();
-      } else {
-        // No projects yet — invite creating one.
-        this.showNewProject = true;
-      }
-      this.syncUrlState(true);
+      return this._bootstrapModule().continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId);
     },
 
-    /** Retry button on the boot-error screen (ticket 01M3MMYP938G972KY8NF7RGMQR):
-     *  re-runs the projects load and — only when it succeeds — the exact same
-     *  continuation as init()'s success path. A second failure keeps the stored
-     *  selection intact and just refreshes the error message; recovery is
-     *  user-driven (no automatic retry loop, same convention as the drawer). */
-    async retryBoot(): Promise<void> {
-      if (!this.bootError || this.bootRetrying) return;
-      this.bootRetrying = true;
-      try {
-        await this.loadProjects();
-        if (this.loadError) return; // still failing — boot-error screen stays up
-        this.bootError = false;
-        const deepLinkedTaskId =
-          typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
-        const deepLinkedDashboardProjectId =
-          typeof window !== "undefined" ? dashboardRouteProjectIdFromPath(window.location.pathname) : null;
-        await this.continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId);
-      } finally {
-        this.bootRetrying = false;
-      }
+    /** Retry button on the boot-error screen — behavior owned by modules/
+     *  bootstrap.ts (Phase 2 bootstrap hatch). */
+    retryBoot(): Promise<void> {
+      return this._bootstrapModule().retryBoot();
     },
   };
 }
