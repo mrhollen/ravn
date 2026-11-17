@@ -108,7 +108,7 @@ later phase; root = deliberately stays in the composition root.
 | Task-route deep-link helpers `taskRouteIdFromPath`/`taskRoutePath` (:328–349); mobile detail viewport check (`isMobileDetailViewport`, :467–483) | :328–349, :467–483 | `src/routes.ts` | P1 (already pure top-level exports — move + re-export) |
 | Board query param parse/build (:350–466); `readStoredTaskScope`/`TaskScope` (:81–109) | :350–466, :81–109 | `src/routes.ts` (query params), `src/filters.ts` (task scope is a board filter) | P1 |
 | Clipboard helper `copyTextToClipboard` (:484+) | :484+ | `src/util.ts` (append) | P1 (DOM glue, no state) |
-| SSE event-detail formatting `formatEventDetail` (:110–219) | :110–219 | `src/realtime.ts` (append) | P1 (pure string building) |
+| SSE event-detail formatting `formatEventDetail` (:110–219) | :110–219 | `src/realtime.ts` (append) | **P1 landed (`81e5871`, close-out F1, 2026-11-17)** — the pure diff formatter was appended verbatim beside the dispatch core in `src/realtime.ts`; the root keeps a local import (the shorthand template bind) plus a re-export, so both the index.html bindings and the legacy `app.formatEventDetail` import surface are byte-identical. Non-DOM coverage: `web/test/realtime.test.ts` |
 | Actor name + `actor()` (:634–649) | :634–649 | **root** | stays: every mutating handler builds the `ActorInput` from it — shared infra in the same class as toasts; revisit only if a module needs it independently |
 | Document title composition (`TITLE_SEPARATOR` :224; `updateDocumentTitle` :675–730) | :675–730 | **root** | stays: 5-line join over `projects`/`detail`; not worth an interface boundary |
 | Toasts (interface :600–619; methods :715–779) | :600–619, :715–779 | **root** | stays: cross-cutting service every module emits into — extracting it creates a bus that all modules depend on. Revisit in P2 if two or more modules need richer toast behavior |
@@ -758,7 +758,7 @@ being raised. **The cap is never raised.**
 allowed to exceed the cap. Today it contains exactly one entry:
 
 ```
-app.ts  — 6,448 lines (measured 2026-11-11)
+app.ts  — 3,606 lines (measured 2026-11-17)
 ```
 
 Rules that keep the allowlist honest and monotonically shrinking:
