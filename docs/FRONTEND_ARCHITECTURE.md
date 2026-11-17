@@ -125,7 +125,7 @@ later phase; root = deliberately stays in the composition root.
 | Artifacts (:5482–5728) + copy-ref toolbar action | :5482–5728, copy-ref at its original spot | `modules/artifacts.ts` | **P2 landed (batch C)** — 17 methods behind typed `ArtifactsDeps` (13 state-in / 12 state-out incl. `setDetail` / 4 hooks: toast, actor, isWebHref, confirmDiscard): file-selection kind inference, upload/drop/paste flows, attach (file vs ref), preview modal, the `isStored*` media predicates, text-preview toggle + fetch lifecycle, delete with same-task guard + cache cleanup, copy-ref with confirmation timer. All bound state fields stay root; in-place writes (form.file/.kind, modal.open) via state-IN getters, whole-field writes via setters; detail artifacts patch via `setDetail` under the same-task guard. `copyTextToClipboard`/`copyViaExecCommand` moved to `src/util.ts` (no external importers — verified). Non-DOM coverage: `web/test/artifacts-module.test.ts` (32 tests) |
 | Claims: display helpers + claim/release handlers (:5729–5825). **Exception:** the 1s `nowTick` ticker lives here but is consumed by BOTH claims display and the board stalled filter → `nowTick` stays **root** (shared clock); pure countdown/expiry logic already in `src/util.ts` | :5729–5825 | `modules/claims.ts` (P2) + **root** (`nowTick`) | **P2 landed (batch C)** — claim/release/heartbeat flows + the two display helpers behind typed `ClaimsDeps`; all three state fields stay root (`claimBusy` template-bound; `nowTick`/`_tickerId` shared clock, started in `_runBoot`); the `claimTask`/`releaseTask`/`heartbeatTask` alias surface stays at root. Non-DOM coverage: `web/test/claims-module.test.ts` (16 tests) |
 | Global keyboard: bare-key dispatch `handleGlobalKeydown` + the Escape cascade `dismissTop` (:6129–6204; absent from the Phase 0 audit — the cascade's priority order is the part that breaks silently when a surface is inserted) | :6129–6204 | `src/keyboard.ts` (P1 decisions, LANDED) + **root** (the imperative close steps ride with their P2 surface owners: menus/detail/new-task) | P1 done / rest P2 |
-| Relations (:5826–6208; `RelationView` interface :621–630) | :5826–6208 | `modules/relations.ts` — P1-pure: `RelationRow → RelationView` shaping | P1+P2 |
+| Relations (:5826–6208; `RelationView` interface :621–630) | :5826–6208 | `modules/relations.ts` — P1-pure: `RelationRow → RelationView` shaping | **P2 landed (batch D)** — combobox nav + filtered candidate list, target selection, the kind-mapped add/remove mutation flows (busy guard + toasts) and the three subtask progress counters behind typed `RelationsDeps`. All bound names stay flat plain root fields via delegation shims; `relationForm` is template-bound state-IN (in-place writes through the getter); the shared `taskTitle(id)` board-row lookup stays at root and is injected as a hook; the `relationForm` resets inside the detail cascade ride with their owners. `RelationView` moved into the module. Pinned quirks: unknown combobox search text passes verbatim to the API (no client-side validation); form kinds `parent`/`child` map to wire kinds `child`/`parent`. Non-DOM coverage: `web/test/relations-module.test.ts` (52 tests) |
 | Drag & drop (:4585–4696) + touch swipe-to-status + per-card move menu (:4697–4960) | :4585–4960 | `modules/drag.ts` (P2 gesture state; pure move core already in `src/moves.ts`: `canMove`, `beginMove/endMove`, `withTimeout` — **extended in Phase 1** with the drag/swipe *decision* helpers: drop legality copy, swipe constants, direction/target/activation/commit) | P2 |
 | Operational bar: drawer popovers + version-guarded `moveStatus` from the drawer (:4961–4993) | :4961–4993 | `modules/detail.ts` (popover state) delegating to the moves core | P2 |
 | Template glue (:6209–6248) — binds module methods into the flat namespace | :6209–6248 | **root** (this is what a composition root IS; never extracted) | stays |
@@ -380,10 +380,28 @@ stateful modules rather than one:
   build+tsc clean, E2E 189/189 (47.4s), index.html identical. `app.ts` shrank
   4,679 → **4,649** (−30).
 
+  (The three external dashboard commits between batches C and D grew
+  `app.ts` back up, 4,649 → 4,982 — hence the batch D below numbers.)
+
+  **`relations` row landed in `53a10fe`:** the relations section (nine
+  methods) moved to `modules/relations.ts` (Phase 2 batch D) behind typed
+  `RelationsDeps` — combobox navigation + the filtered candidate list, target
+  selection, the kind-mapped add/remove mutation flows (busy guard + toasts,
+  in-place form writes through the state-IN getter) and the three subtask
+  progress counters. All bound names stay flat plain root fields via
+  delegation shims; the shared `taskTitle(id)` board-row lookup stays at root
+  and is injected as a hook; the `relationForm` resets inside the detail
+  cascade ride with their owners; the `RelationView` interface moved into the
+  module. Test suite pins two parity quirks: unknown combobox search text
+  passes verbatim to the API (no client-side validation), and form kinds
+  `parent`/`child` map to wire kinds `child`/`parent`. Gates: unit
+  **724/724** (+52), build+tsc clean, E2E 204/204 (49.0s), index.html
+  identical. `app.ts` shrank 4,982 → **4,772** (−210).
+
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `task-edit` (landed; only the notes scratchpad rides with the
 detail cascade) → ~~acs~~ → ~~comments~~ → ~~artifacts~~ →
-~~claims~~/`relations` (drawer surfaces) → `detail` **last** —
+~~claims~~/~~relations~~ (drawer surfaces) → `detail` **last** —
 REORDERED from its original second position: `openTask`/`closeDetail` are
 cross-cutting cascades writing ~20 flat fields across the not-yet-modularized
 sub-concerns above, so extracted last each cascade write converges to ONE hook
