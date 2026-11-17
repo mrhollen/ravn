@@ -38,6 +38,7 @@ import type { NewTaskModule } from "./modules/new-task";
 import { createTaskEditModule } from "./modules/task-edit";
 import type { TaskEditModule } from "./modules/task-edit";
 import { createArchiveModule, type ArchiveModule } from "./modules/archive";
+import { createDragModule, type DragModule, type SwipeState } from "./modules/drag";
 import { createAcsModule } from "./modules/acs";
 import type { AcsModule } from "./modules/acs";
 import { createCommentsModule } from "./modules/comments";
@@ -49,22 +50,10 @@ import type { CommentsModule } from "./modules/comments";
 import { createProjectSettingsModule } from "./modules/project-settings";
 import type { ProjectSettingsModule } from "./modules/project-settings";
 import { escapeAction, globalKeyAction, isEditableTarget } from "./keyboard";
-import {
-  beginMove,
-  canMove,
-  committedSwipeDirection,
-  dropAllowed,
-  endMove,
-  friendlyTransitionError,
-  illegalMoveMessage,
-  MOVE_TIMEOUT_MS,
-  MoveTimedOutError,
-  swipeActivated,
-  swipeDirection as swipeDirFor,
-  swipeTargetLabel as swipeLabelFor,
-  swipeTargetStatus,
-  withTimeout,
-} from "./moves";
+// moves.ts import reduced by Phase 2 batch D (drag slice): only `canMove` is
+// still consumed at the root (exposed as template glue); everything else moved
+// into modules/drag.ts.
+import { canMove } from "./moves";
 import { createDebounce, SSE_RELOAD_DEBOUNCE_MS } from "./refresh";
 import { renderMarkdown } from "./md";
 import { MEMBER_ROLES } from "./members";
@@ -311,9 +300,6 @@ export const DEFAULT_DONE_LIMIT = 20;
  *  task 01M3MMVV92639YJ5822824NTV1): "<task> – <project> – Rävn". */
 export const TITLE_SEPARATOR = " – ";
 const MD_CACHE_MAX = 500;
-// Max visual card offset (px) while swiping. Commit/slop thresholds still use
-// the raw finger displacement — this clamp only limits what is drawn.
-const MAX_SWIPE_PX = 96;
 
 // Phase 2 (sse): the SSE preamble — LEGACY_NAMED_SSE_EVENT_KINDS doc + const and the
 // sseTelemetry singleton counters — moved to modules/sse.ts; re-exported below so the
@@ -3096,93 +3082,78 @@ export function ravnApp() {
     dragOverStatus: null as Status | null,
     isDragging: false,
 
-    /** Template helper: may the CURRENTLY-DRAGGED card be dropped on `status`?
-     *  (False while nothing legal is known — grey-out styling for illegal
-     *  columns reads this. The transition map itself lives in moves.ts.) */
+    _drag: null as DragModule | null,
+
+    /** Build (on first call) or return the drag module bound to THIS component instance. */
+    _dragModule(): DragModule {
+      if (this._drag) return this._drag;
+      const m = createDragModule({
+        // state-in
+        showArchived: () => this.showArchived,
+        board: () => this.board,
+        detail: () => this.detail,
+        draggedTaskId: () => this.draggedTaskId,
+        draggedFromStatus: () => this.draggedFromStatus,
+        dragOverStatus: () => this.dragOverStatus,
+        swipeState: () => this.swipeState,
+        cardMenuTaskId: () => this.cardMenuTaskId,
+        busyTaskIds: () => this.busyTaskIds,
+        isTaskBusy: (id) => this.isTaskBusy(id),
+        // state-out
+        setDraggedTaskId: (v) => {
+          this.draggedTaskId = v;
+        },
+        setDraggedFromStatus: (v) => {
+          this.draggedFromStatus = v;
+        },
+        setDragOverStatus: (v) => {
+          this.dragOverStatus = v;
+        },
+        setIsDragging: (v) => {
+          this.isDragging = v;
+        },
+        setSwipeState: (v) => {
+          this.swipeState = v;
+        },
+        setCardMenuTaskId: (v) => {
+          this.cardMenuTaskId = v;
+        },
+        // methods-out
+        toast: (msg, kind) => this.toast(msg, kind),
+        actor: () => this.actor(),
+        loadBoard: (force) => this.loadBoard(force),
+        refreshDetail: (force) => this.refreshDetail(force),
+        applyDetail: (t) => {
+          this.applyDetail(t);
+        },
+      });
+      this._drag = m;
+      return m;
+    },
+
+    /** Template helper — behavior owned by modules/drag.ts (Phase 2 batch D). */
     dragTargetLegal(status: Status): boolean {
-      return dropAllowed(this.draggedFromStatus, status);
+      return this._dragModule().dragTargetLegal(status);
     },
 
     onDragStart(e: DragEvent, task: TaskSummary, fromStatus: Status): void {
-      // The archived view is read-only for positioning: its cards live in a
-      // separate array the optimistic move code doesn't own, so drag/swipe is
-      // disabled there (Unarchive is the only action available).
-      if (this.showArchived) {
-        e.preventDefault();
-        return;
-      }
-      // Only the card's OWN in-flight move blocks it (per-task lock); tell the
-      // user instead of silently refusing the drag.
-      if (this.isTaskBusy(task.id)) {
-        e.preventDefault();
-        this.toast("That task is still moving — one moment.", "info");
-        return;
-      }
-      this.isDragging = true;
-      this.draggedTaskId = task.id;
-      this.draggedFromStatus = fromStatus;
-      if (e.dataTransfer) {
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", task.id);
-      }
+      this._dragModule().onDragStart(e, task, fromStatus);
     },
 
     onDragEnd(): void {
-      this.draggedTaskId = null;
-      this.draggedFromStatus = null;
-      this.dragOverStatus = null;
-      window.setTimeout(() => {
-        this.isDragging = false;
-      }, 50);
+      this._dragModule().onDragEnd();
     },
 
     onDragOver(e: DragEvent, status: Status): void {
-      if (!this.draggedTaskId || !this.draggedFromStatus) return;
-      // Illegal transition → do NOT preventDefault: the browser then shows a
-      // no-drop cursor and never fires @drop, so illegal columns can't take
-      // the card (the grey-out styling below tells the user why).
-      if (!canMove(this.draggedFromStatus, status)) return;
-      e.preventDefault();
-      if (e.dataTransfer) {
-        e.dataTransfer.dropEffect = "move";
-      }
-      if (this.dragOverStatus !== status) {
-        this.dragOverStatus = status;
-      }
+      this._dragModule().onDragOver(e, status);
     },
 
     onDragLeave(e: DragEvent, status: Status): void {
-      const currentTarget = e.currentTarget as HTMLElement | null;
-      const relatedTarget = e.relatedTarget as Node | null;
-      if (currentTarget && relatedTarget && currentTarget.contains(relatedTarget)) {
-        return;
-      }
-      if (this.dragOverStatus === status) {
-        this.dragOverStatus = null;
-      }
+      this._dragModule().onDragLeave(e, status);
     },
 
     async onDrop(e: DragEvent, targetStatus: Status): Promise<void> {
-      e.preventDefault();
-      const taskId = this.draggedTaskId || e.dataTransfer?.getData("text/plain");
-      const fromStatus = this.draggedFromStatus;
-      this.dragOverStatus = null;
-      this.draggedTaskId = null;
-      this.draggedFromStatus = null;
-      window.setTimeout(() => {
-        this.isDragging = false;
-      }, 50);
-
-      if (!taskId || !fromStatus || fromStatus === targetStatus) {
-        return;
-      }
-      // Belt-and-braces with the dragover guard: a drop on an illegal target
-      // is ignored (with feedback), never sent to the server.
-      if (!canMove(fromStatus, targetStatus)) {
-        this.toast(illegalMoveMessage(fromStatus, targetStatus), "info");
-        return;
-      }
-      await this.moveTaskStatus(taskId, targetStatus);
+      await this._dragModule().onDrop(e, targetStatus);
     },
 
     /** AC1: plain click → open the card's drawer (behavior unchanged).
@@ -3208,7 +3179,8 @@ export function ravnApp() {
     // that direction; the ⋮ button opens a floating "Move to" dropdown anchored
     // to the trigger (absolutely positioned, dismissed by outside clicks and
     // Escape). Both funnel into moveTaskStatus(), so 409-rebase + rollback
-    // behaviour is shared.
+    // behaviour is shared. Behavior owned by modules/drag.ts (Phase 2 batch D);
+    // showMobileMenu/isMobile are CHROME state and stay at root.
     showMobileMenu: false,
     /** Mobile breakpoint flag mirroring Tailwind's `md:` (min-width 768px).
      *  The hamburger's slide-down panel renders x-if'd on this flag so the two
@@ -3218,246 +3190,55 @@ export function ravnApp() {
     isMobile: false,
     cardMenuTaskId: null as string | null,
     swipeState: {
-      id: null as string | null,
+      id: null,
       startX: 0,
       startY: 0,
       dx: 0,
-      fromStatus: null as Status | null,
+      fromStatus: null,
       active: false,
-    },
+    } as SwipeState,
 
     swiping(id: string): boolean {
-      return this.swipeState.active && this.swipeState.id === id;
+      return this._dragModule().swiping(id);
     },
 
     swipeDirection(id: string): "right" | "left" {
-      return swipeDirFor(this.swiping(id), this.swipeState.dx);
+      return this._dragModule().swipeDirection(id);
     },
 
     swipeTargetLabel(id: string): string {
-      return swipeLabelFor(this.swipeState.fromStatus, this.swipeDirection(id));
+      return this._dragModule().swipeTargetLabel(id);
     },
 
     onCardTouchStart(e: TouchEvent, task: TaskSummary): void {
-      // Archived view disables swipe-to-move (see onDragStart).
-      if (this.showArchived) return;
-      if (e.touches.length !== 1) return;
-      const t = e.touches[0];
-      this.swipeState = {
-        id: task.id,
-        startX: t.clientX,
-        startY: t.clientY,
-        dx: 0,
-        fromStatus: task.status,
-        active: false,
-      };
+      this._dragModule().onCardTouchStart(e, task);
     },
 
     onCardTouchMove(e: TouchEvent): void {
-      const s = this.swipeState;
-      if (!s || !s.id) return;
-      const t = e.touches[0];
-      if (!t) return;
-      const dx = t.clientX - s.startX;
-      const dy = t.clientY - s.startY;
-      // Activate once movement is clearly horizontal (past slop, vs vertical).
-      if (!s.active && swipeActivated(dx, dy)) {
-        s.active = true;
-      }
-      if (s.active) {
-        // Clamp only the displayed offset so a long fling can't throw the card
-        // far off-screen; slop + commit thresholds keep using raw dx.
-        s.dx = Math.max(-MAX_SWIPE_PX, Math.min(MAX_SWIPE_PX, dx));
-        // Owning the gesture: stop vertical scroll and suppress the follow-up
-        // compatibility click so the card doesn't open its detail drawer.
-        e.preventDefault();
-      }
+      this._dragModule().onCardTouchMove(e);
     },
 
     onCardTouchEnd(e: TouchEvent, task: TaskSummary): void {
-      const s = this.swipeState;
-      if (!s || !s.id || s.id !== task.id) return;
-      const endX = e.changedTouches[0]?.clientX ?? s.startX + s.dx;
-      const dx = endX - s.startX;
-      this.swipeState = { id: null, startX: 0, startY: 0, dx: 0, fromStatus: null, active: false };
-      if (!s.active || !s.fromStatus) return;
-      const dir = committedSwipeDirection(dx);
-      const target = dir ? swipeTargetStatus(s.fromStatus, dir) : null;
-      if (!target) return;
-      // Swipes move exactly one column at a time. The only adjacent pair that
-      // the domain transition map rejects is done → doing (left-swipe on a Done
-      // card); refuse it with feedback instead of hitting the 400 + rollback.
-      if (!canMove(s.fromStatus, target)) {
-        this.toast(illegalMoveMessage(s.fromStatus, target), "info");
-        return;
-      }
-      void this.moveTaskStatus(task.id, target);
+      this._dragModule().onCardTouchEnd(e, task);
     },
 
     onCardTouchCancel(_e: TouchEvent): void {
-      // A cancelled gesture (system interrupt, etc.) never commits a move —
-      // just snap the card back home via the release transition.
-      this.swipeState = { id: null, startX: 0, startY: 0, dx: 0, fromStatus: null, active: false };
+      this._dragModule().onCardTouchCancel(_e);
     },
 
     toggleCardMenu(id: string): void {
-      this.cardMenuTaskId = this.cardMenuTaskId === id ? null : id;
+      this._dragModule().toggleCardMenu(id);
     },
 
     async moveCardTo(id: string, status: Status): Promise<void> {
-      this.cardMenuTaskId = null;
-      await this.moveTaskStatus(id, status);
+      await this._dragModule().moveCardTo(id, status);
     },
 
-    /** Optimistically move a task to targetStatus, then persist with PATCH.
-     *  Reuses the 409 re-read + re-apply-once logic.
-     *  Rolls back the optimistic board move on failure so no orphan/ghost cards remain.
-     *
-     *  Concurrency (per task, not per board):
-     *   - only a duplicate concurrent move of the SAME taskId is rejected — and
-     *     with a toast, never a silent drop; every other card stays interactive
-     *     while this task's PATCH is in flight (busyTaskIds set);
-     *   - every move PATCH runs under withTimeout(MOVE_TIMEOUT_MS), so a stalled
-     *     request aborts, rolls back, toasts, and releases the per-task lock —
-     *     it can never freeze the card (or the board) until page refresh. */
+    /** Optimistically move a task to targetStatus, then persist with PATCH —
+     *  behavior owned by modules/drag.ts (Phase 2 batch D). The detail module's
+     *  operational bar reaches this through its deps.moveTaskStatus hook. */
     async moveTaskStatus(taskId: string, targetStatus: Status, initialVersion?: number): Promise<void> {
-      // Locate task in current board columns or open detail
-      let currentStatus: Status | null = null;
-      let taskSummary: TaskSummary | null = null;
-      if (this.board) {
-        for (const s of STATUSES) {
-          const found = this.board.tasks[s]?.find((t) => t.id === taskId);
-          if (found) {
-            currentStatus = s;
-            taskSummary = found;
-            break;
-          }
-        }
-      }
-      if (!taskSummary && this.detail && this.detail.id === taskId) {
-        taskSummary = this.detail;
-        currentStatus = this.detail.status;
-      }
-
-      // No-op moves (unknown card, drop onto own column) need no lock at all.
-      if (!taskSummary || !currentStatus || currentStatus === targetStatus) {
-        return;
-      }
-
-      // Per-task in-flight lock: same id already moving → feedback, not silence.
-      if (!beginMove(this.busyTaskIds, taskId)) {
-        this.toast("That task is still moving — one moment.", "info");
-        return;
-      }
-
-      const versionToUse = initialVersion ?? taskSummary.version;
-
-      // Move-related PATCH under the timeout guard. A stall becomes a
-      // MoveTimedOutError so the catch below can roll back + toast honestly; a
-      // real API error passes through untouched (409 handling stays intact).
-      const patch = (version: number): Promise<TaskSummary> =>
-        withTimeout(MOVE_TIMEOUT_MS, (signal) =>
-          api.updateTask(taskId, { actor: this.actor(), version, status: targetStatus }, { signal }),
-        ).then((r) => {
-          if (r.value !== undefined) return r.value;
-          throw r.timedOut ? new MoveTimedOutError() : r.error;
-        });
-
-      // 1. Snapshot board state for rollback
-      const prevBoardTasks: Record<Status, TaskSummary[]> | null = this.board
-        ? {
-            todo: [...this.board.tasks.todo],
-            doing: [...this.board.tasks.doing],
-            done: [...this.board.tasks.done],
-          }
-        : null;
-      const prevBoardCounts = this.board ? { ...this.board.counts } : null;
-      const prevDetailStatus = this.detail && this.detail.id === taskId ? this.detail.status : null;
-
-      const rollback = () => {
-        if (this.board && prevBoardTasks && prevBoardCounts) {
-          this.board.tasks = prevBoardTasks;
-          this.board.counts = prevBoardCounts;
-        }
-        if (this.detail && this.detail.id === taskId && prevDetailStatus !== null) {
-          this.detail.status = prevDetailStatus;
-        }
-      };
-
-      // 2. Optimistic update
-      if (this.board) {
-        this.board.tasks[currentStatus] = this.board.tasks[currentStatus].filter((t) => t.id !== taskId);
-        const movedTask: TaskSummary = { ...taskSummary, status: targetStatus };
-        this.board.tasks[targetStatus] = [...this.board.tasks[targetStatus], movedTask];
-        if (this.board.counts[currentStatus] > 0) {
-          this.board.counts[currentStatus]--;
-        }
-        this.board.counts[targetStatus]++;
-      }
-
-      if (this.detail && this.detail.id === taskId) {
-        this.detail.status = targetStatus;
-      }
-
-      try {
-        const updated = await patch(versionToUse);
-        if (this.board) {
-          const inBoard = this.board.tasks[targetStatus]?.find((t) => t.id === taskId);
-          if (inBoard) {
-            Object.assign(inBoard, updated);
-          }
-        }
-        await Promise.all([
-          this.detail && this.detail.id === taskId ? this.refreshDetail(true) : Promise.resolve(),
-          this.loadBoard(true),
-        ]);
-      } catch (e) {
-        if (ApiError.isVersionConflict(e)) {
-          try {
-            const fresh = await api.getTask(taskId, { commentLimit: 50 });
-            if (this.detail && this.detail.id === taskId) {
-              this.applyDetail(fresh);
-            }
-            if (fresh.status !== targetStatus) {
-              // Retry under the same timeout guard — a stall here must release
-              // the per-task lock too (handled by the e2 branch + finally).
-              await patch(fresh.version);
-            }
-            await Promise.all([
-              this.detail && this.detail.id === taskId ? this.refreshDetail(true) : Promise.resolve(),
-              this.loadBoard(true),
-            ]);
-            this.toast("Changed elsewhere — retried with the fresh version.", "info");
-          } catch (e2) {
-            rollback();
-            await Promise.all([
-              this.detail && this.detail.id === taskId ? this.refreshDetail(true).catch(() => undefined) : Promise.resolve(),
-              this.loadBoard(true).catch(() => undefined),
-            ]);
-            if (ApiError.isVersionConflict(e2)) {
-              this.toast("Changed elsewhere — refreshed (your move was not applied).", "info");
-            } else if (e2 instanceof MoveTimedOutError) {
-              // Server answered the first PATCH with a conflict but never
-              // completed the retry — state may be half-applied, so say "may".
-              this.toast("Move timed out — your change may not have saved. Please try again.", "error");
-            } else {
-              this.toast(friendlyTransitionError(e2) ?? errMsg(e2), "error");
-            }
-          }
-        } else if (e instanceof MoveTimedOutError) {
-          rollback();
-          await this.loadBoard(true).catch(() => undefined);
-          this.toast("Move timed out — your change was not saved. Please try again.", "error");
-        } else {
-          rollback();
-          await this.loadBoard(true).catch(() => undefined);
-          // Server-side rejections (e.g. another agent moved the card mid-drag)
-          // surface with friendly wording for known error shapes, raw text otherwise.
-          this.toast(friendlyTransitionError(e) ?? errMsg(e), "error");
-        }
-      } finally {
-        endMove(this.busyTaskIds, taskId);
-      }
+      await this._dragModule().moveTaskStatus(taskId, targetStatus, initialVersion);
     },
 
     // -------------------------------------------------------- operational bar
