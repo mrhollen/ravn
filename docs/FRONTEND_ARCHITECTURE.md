@@ -780,3 +780,71 @@ Rules that keep the allowlist honest and monotonically shrinking:
 **Failure output.** On violation the test prints every offending file with its
 measured line count vs the cap, plus each allowlisted-but-now-under-cap file
 with an instruction to delete its entry — so the fix is always one-line-able.
+
+ ## 7. Component layer & class-token convention (Phase 3)
+
+Sections 1–6 cover *logic* extraction (pure cores + `createXxx` modules). Phase 3
+adds a third, orthogonal axis: **visual**. The reusable unit is an Alpine
+component's *payload* — typed pure helpers under `web/src/ui/` that take props
+in and return class strings. No DOM nodes, no state, no `x-*` anywhere in the
+layer; because a primitive holds nothing, the flat-root invariant (§3) holds by
+construction. The template still binds one flat namespace — only *where a class
+value is defined* moves.
+
+**Files.**
+
+| File | Exports | Consumed at |
+|---|---|---|
+| `tokens.ts` | single-sourced values: `BUTTON_CLASS`, `FOCUS_RING_CLASS`, status tints (`STATUS_DOT_CLASS` / `_BAR_` / `_PILL_` / `_BADGE_CLASS` per status), card chrome (`CARD_DRAGGING/SELECTED/BUSY/GRAB_CLASS`, `CARD_BORDER`, `CARD_BG`, `CARD_COMPACT_CLASS`, `CARD_ACCENT_DONE_CLASS`), chart SVG paints (`CHART_*`, `CUMULATIVE_*`, `THROUGHPUT_BAR_FILL`), AC-ring strokes | modules import directly: `board-view.ts` (dot + count pill), `dashboard.ts` (bar + badge), `dashboard-charts.ts` (strokes/fills), `ac-math.ts` (ring) |
+| `button.ts` | `btnClass(variant)` over `BUTTON_CLASS` | root glue → new-project create/cancel, sign-out buttons |
+| `menu.ts` | `MENU_PANEL_CLASS`, `menuItemClass({emphasized?, mutedDisabled?})` | root glue → project dropdown panel + option/restore/new-item rows |
+| `empty.ts` | `EMPTY_STATE.{rowHint,text}` (+ raw class constants) | root glue → column "No tasks" hint, projects empty-state `<p>` |
+| `card.ts` | `boardCardClasses(state)` composing selection/drag/claimed/blocked/busy/done-accent with shipped precedence; `CARD_DENSITY_PARTS` + `cardDensityClass(part)` for the three density-dependent sub-part paddings | root glue → board-card article `:class`, claim-capsule / subtask-progress / meta-row parts |
+| `toast.ts` | `Toast` item type (moved from the `app.ts` root, re-exported), `TOAST_BASE_CLASS`, `toastClassList(t)` (kind tint + border override), `toastErrorPrefix(t)` | root glue → toast row `:class` + bold prefix; stack stays root-owned |
+| `dialog.ts` | `createDialogController(deps)` — wraps the `focus.ts` focus session with `open` / `close` / `isOpen` plus onOpen/onClose events; idempotent close; no DOM, no close semantics | **not yet consumed** (below) |
+
+Template call sites reach the primitives through **flat-root glue entries**
+(fields of `ravnApp()`: `btnClass`, `menuPanelClass`, `menuItemClass`,
+`EMPTY_STATE`, `toastBaseClass`, `toastClassList`, `toastErrorPrefix`,
+`boardCardClass(task, status)`, `cardDensityClass(part)`). That is the same
+adapter pattern as every module surface — the template never imports.
+
+**Rules.**
+
+1. **Pure in / pure out.** Props → string(s). State is resolved on the flat
+   root *before* the call: e.g. `boardCardClass` computes claimed (via
+   `claimExpired`), dragging (`draggedTaskId`), selected, blocked and busy at
+   the root and passes a plain `BoardCardState` in. A primitive that needs live
+   state has been written wrong.
+2. **Values lift verbatim from shipped markup; token cutover commits render
+   byte-identically.** Verified per commit by unit tests + E2E, with pixel
+   comparison against pre-change screenshots for the visual surfaces. Where two
+   literals differ *on purpose*, they stay separate tokens — e.g. board count
+   pill `todo: text-zinc-600` vs dashboard badge `todo: text-zinc-700`, and the
+   status dot has no dark variants while the status bar does. Do not "fix" a
+   divergence you don't understand; that is a visual change, out of scope for a
+   cutover.
+3. **Drift is test-locked.** Each primitive has unit tests (`test/ui-*.test.ts`);
+   `test/ui-tokens.test.ts` additionally asserts the tokens are still real
+   (referenced by `style.css`, no orphaned `.btn-*` variants) and locks their
+   literal values. Where a token feeds `index.html` directly, a usage guard
+   asserts the template actually references it (today: `EMPTY_STATE.*`).
+4. **No HTML comments inside start tags.** An inter-attribute comment is parsed
+   by system Chromium as garbage attributes (observed: `<!--="" toast="" …`
+   landing on the element). Template comments go between elements only.
+
+**Why not Alpine components.** Nested subcomponents would introduce a second
+template namespace, a second target for `app.test.ts`, and re-homing of the
+`data-testid` anchors — to buy class-string reuse. The flat-root helper gets
+the same reuse with none of that (§3, rules 1–2).
+
+**Deferred: dialog.ts cutover.** `createDialogController` is shipped and
+unit-tested but consumed nowhere yet. The root already centralizes the session
+mechanics (`openDialog(id, initialSelector?, autoFocus)` / `closeDialog(session)`)
+and every modal module re-implements the same one-line
+`let session: DialogFocus | null` bookkeeping — so the *mechanism* is not
+duplicated. Moving every dialog surface onto a controller object would change
+where open/close event ownership lives; that is a behavior-bearing refactor
+(draft-discard guards, Escape chaining) deserving its own ticket and E2E pass,
+not part of a byte-identical visual cutover. The primitive exists so that
+ticket is a mechanical swap when it lands.
