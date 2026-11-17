@@ -126,7 +126,7 @@ later phase; root = deliberately stays in the composition root.
 | Claims: display helpers + claim/release handlers (:5729–5825). **Exception:** the 1s `nowTick` ticker lives here but is consumed by BOTH claims display and the board stalled filter → `nowTick` stays **root** (shared clock); pure countdown/expiry logic already in `src/util.ts` | :5729–5825 | `modules/claims.ts` (P2) + **root** (`nowTick`) | **P2 landed (batch C)** — claim/release/heartbeat flows + the two display helpers behind typed `ClaimsDeps`; all three state fields stay root (`claimBusy` template-bound; `nowTick`/`_tickerId` shared clock, started in `_runBoot`); the `claimTask`/`releaseTask`/`heartbeatTask` alias surface stays at root. Non-DOM coverage: `web/test/claims-module.test.ts` (16 tests) |
 | Global keyboard: bare-key dispatch `handleGlobalKeydown` + the Escape cascade `dismissTop` (:6129–6204; absent from the Phase 0 audit — the cascade's priority order is the part that breaks silently when a surface is inserted) | :6129–6204 | `src/keyboard.ts` (P1 decisions, LANDED) + **root** (the imperative close steps ride with their P2 surface owners: menus/detail/new-task) | P1 done / rest P2 |
 | Relations (:5826–6208; `RelationView` interface :621–630) | :5826–6208 | `modules/relations.ts` — P1-pure: `RelationRow → RelationView` shaping | **P2 landed (batch D)** — combobox nav + filtered candidate list, target selection, the kind-mapped add/remove mutation flows (busy guard + toasts) and the three subtask progress counters behind typed `RelationsDeps`. All bound names stay flat plain root fields via delegation shims; `relationForm` is template-bound state-IN (in-place writes through the getter); the shared `taskTitle(id)` board-row lookup stays at root and is injected as a hook; the `relationForm` resets inside the detail cascade ride with their owners. `RelationView` moved into the module. Pinned quirks: unknown combobox search text passes verbatim to the API (no client-side validation); form kinds `parent`/`child` map to wire kinds `child`/`parent`. Non-DOM coverage: `web/test/relations-module.test.ts` (52 tests) |
-| Drag & drop (:4585–4696) + touch swipe-to-status + per-card move menu (:4697–4960) | :4585–4960 | `modules/drag.ts` (P2 gesture state; pure move core already in `src/moves.ts`: `canMove`, `beginMove/endMove`, `withTimeout` — **extended in Phase 1** with the drag/swipe *decision* helpers: drop legality copy, swipe constants, direction/target/activation/commit) | P2 |
+ | Drag & drop (:4585–4696) + touch swipe-to-status + per-card move menu (:4697–4960) | :4585–4960 | `modules/drag.ts` (P2 gesture state; pure move core already in `src/moves.ts`: `canMove`, `beginMove/endMove`, `withTimeout` — **extended in Phase 1** with the drag/swipe *decision* helpers: drop legality copy, swipe constants, direction/target/activation/commit) | **P2 landed (batch D, `2704b9b`)** — all three card-repositioning behaviors moved behind typed `DragDeps`: the HTML5 drag/drop lifecycle (archived-view read-only guard, per-task busy lock, illegal-transition grey-out via `dragTargetLegal`, drop guards that never send an illegal move), the touch swipe-to-status gesture state machine (slop + dominance activation, 96px DISPLAYED-dx clamp, commit on raw dx, the one adjacent pair the domain rejects — done→doing left-swipe — refused with feedback), the ⋮ "Move to" menu (`toggleCardMenu`/`moveCardTo`), and the shared optimistic `moveTaskStatus` engine: per-task in-flight lock through the **shared** `busyTaskIds` Set (same object identity as the archive flow, mutated in place via the state-IN getter), timeout-guarded PATCH, 409 re-read + retry-once, rollback of the optimistic board/detail move. All bound fields stay flat root state behind 16 delegation shims; `MAX_SWIPE_PX` became module-local and `SwipeState`/`idleSwipeState()` live in the module (no types.ts change); internal flows (onDrop/onCardTouchEnd/moveCardTo) call the local closure — no self-delegating hook needed because no root test stubs `moveTaskStatus`, which keeps its root shim only for the detail.ts dep. Non-DOM coverage: `web/test/drag-module.test.ts` (44 tests) |
 | Operational bar: drawer popovers + version-guarded `moveStatus` from the drawer (:4961–4993) | :4961–4993 | `modules/detail.ts` (popover state) delegating to the moves core | **landed with the detail row (`04f1822`)** — `toggleStatusMenu` / `toggleOwnerPopover` / `moveStatus` moved with the slice (the task-edit row's deferred riders); popover open-state fields stay root via shims |
 | Template glue (:6209–6248) — binds module methods into the flat namespace | :6209–6248 | **root** (this is what a composition root IS; never extracted) | stays |
 | `init()`/boot (:6249–6448): module instantiation, deep-link adoption, boot fetches, global listeners | :6249–6448 | **root** — if Phase 2 leaves the root still above the §6 cap, extract boot wiring into `modules/bootstrap.ts` as the designated escape hatch (team-lead decision with evidence) | stays / bootstrap |
@@ -433,11 +433,31 @@ stateful modules rather than one:
    module-internal (`archivedSeq`, was root `_archivedSeq`). The four bound
    fields stay flat root state behind seven delegation shims (:1513–1544);
    internal refreshes route back through the root shim via a self-delegating
-   `deps.refreshArchivedView` hook so existing root-level test stubs still
-   intercept them (`selectProject` now calls
-   `resetForProjectSwitch()`). Gates: unit **829/829** (+31), build+tsc clean,
-   E2E 204/204 (48.9s), index.html identical. `app.ts` shrank 4,435 →
-   **4,239** (−196).
+    `deps.refreshArchivedView` hook so existing root-level test stubs still
+    intercept them (`selectProject` now calls
+    `resetForProjectSwitch()`). Gates: unit **829/829** (+31), build+tsc clean,
+    E2E 204/204 (48.9s), index.html identical. `app.ts` shrank 4,435 →
+    **4,239** (−196).
+
+    **`drag` row landed in `2704b9b`:** the board-card repositioning family moved to
+    `modules/drag.ts` behind typed `DragDeps` — the HTML5 drag/drop lifecycle
+    (archived-view read-only guard, per-task busy lock, illegal-transition
+    grey-out via `dragTargetLegal`, drop guards that never send an illegal move),
+    the touch swipe-to-status gesture state machine (slop + dominance activation,
+    96px displayed-dx clamp, commit on raw dx, done→doing left-swipe refused with
+    feedback — the only adjacent pair the domain rejects), the ⋮ "Move to" menu
+    (`toggleCardMenu`/`moveCardTo`), and the shared optimistic `moveTaskStatus`
+    engine: per-task in-flight lock through the **shared** busyTaskIds Set (same
+    object identity as the archive flow, mutated in place via the state-IN getter),
+    PATCH under `withTimeout(MOVE_TIMEOUT_MS)`, 409 re-read + retry-once, rollback
+    of the optimistic board/detail move. All bound fields stay flat root state
+    behind 16 delegation shims (the root `moveTaskStatus` shim survives for the
+    detail.ts hook; internal flows call the local closure — no self-delegating hook
+    since no root test stubs it); `MAX_SWIPE_PX` is module-local, `SwipeState`/
+    `idleSwipeState()` live in the module (no types.ts change). The pure move core
+    (`src/moves.ts`) is untouched; the root's import drops to `canMove` alone
+    (template glue). Gates: unit **873/873** (+44), build+tsc clean, E2E 204/204
+    (48.5s), index.html identical. `app.ts` shrank 4,239 → **4,020** (−219).
 
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `task-edit` (landed; only the notes scratchpad rides with the
@@ -447,7 +467,8 @@ REORDERED from its original second position: `openTask`/`closeDetail` are
 cross-cutting cascades writing ~20 flat fields across the not-yet-modularized
 sub-concerns above, so extracted last each cascade write converges to ONE hook
 into an already-landed module (same pattern as `selectProject` before the
- board slice) → ~~archive~~ (landed, `abc719d`)/`batch`/`drag` (board actions) →
+ board slice) → ~~archive~~ (landed, `abc719d`)/`batch`/~~drag~~ (landed,
+ `2704b9b`) (board actions) →
 ~~menus~~/~~project-settings~~/~~opencode~~/~~new-task~~ (remaining chrome).
 
 ## 3. The driving constraint (why extraction looks the way it does)
