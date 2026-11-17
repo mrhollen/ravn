@@ -24,6 +24,8 @@ test.describe('Board filters, sort, and project URL query sync (01M5XTAXGDEHFNKF
   let taskA1: any;
   let taskA2: any;
   let taskA3: any;
+  let projB: any;
+  let taskB1: any;
 
   test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
     serverUrl = sharedServerUrl;
@@ -55,6 +57,22 @@ test.describe('Board filters, sort, and project URL query sync (01M5XTAXGDEHFNKF
     await postJson(`${serverUrl}/api/v1/tasks/${taskA3.id}/relations`, {
       other_id: taskA2.id,
       kind: 'blocked-by',
+      actor: ACTOR,
+    });
+
+    // Seed Project B (second project) for the user-switch push/history test.
+    projB = await postJson(`${serverUrl}/api/v1/projects`, { name: 'URL Sync Beta', actor: ACTOR });
+    taskB1 = (await postJson(`${serverUrl}/api/v1/tasks`, {
+      project_id: projB.id,
+      title: 'Beta Needle P4',
+      priority: 4,
+      actor: ACTOR,
+    })).task;
+
+    await postJson(`${serverUrl}/api/v1/tasks`, {
+      project_id: projB.id,
+      title: 'Beta Haystack P2',
+      priority: 2,
       actor: ACTOR,
     });
   });
@@ -135,6 +153,55 @@ test.describe('Board filters, sort, and project URL query sync (01M5XTAXGDEHFNKF
     // Both unblocked tasks are now visible
     await expect(page.locator('article', { hasText: 'Alpha Needle P4' })).toBeVisible();
     await expect(page.locator('article', { hasText: 'Alpha Haystack P2' })).toBeVisible();
+  });
+
+  test('user project switch pushes one history entry; Back/Forward restore project + filter set (P4 AC2)', async ({ page }, testInfo) => {
+    const prioritySelect = page.getByRole('combobox', { name: 'Filter by priority' }).first();
+
+    // Land on the plain board route with no stored selection, pick Project A.
+    await page.goto(serverUrl);
+    await selectProjectViaDropdown(page, projA.id);
+    await expectProjectSelected(page, 'URL Sync Alpha');
+
+    // Carry a priority filter into the switch so the pushed entry must encode both
+    // the new project AND the active filter set.
+    await prioritySelect.selectOption('4');
+    await expect.poll(() => page.url()).toContain(`project=${projA.id}`);
+    await expect.poll(() => page.url()).toContain('priority=4');
+    await expect(page.locator('article', { hasText: 'Alpha Needle P4' })).toBeVisible();
+
+    const historyLength = () => page.evaluate(() => window.history.length);
+    const lenAfterA = await historyLength();
+
+    // User-initiated switch to Beta must add exactly ONE history entry (AC2).
+    await selectProjectViaDropdown(page, projB.id);
+    await expectProjectSelected(page, 'URL Sync Beta');
+    expect(await historyLength()).toBe(lenAfterA + 1, 'project switch pushes one entry');
+
+    // The pushed entry carries ?project=B AND the carried priority=4, and the
+    // board applies that filter set in the new project.
+    await expect.poll(() => page.url()).toContain(`project=${projB.id}`);
+    await expect.poll(() => page.url()).toContain('priority=4');
+    await expect(page.locator('article', { hasText: 'Beta Needle P4' })).toBeVisible();
+    await expect(page.locator('article', { hasText: 'Beta Haystack P2' })).not.toBeVisible();
+    // Evidence: switched to Beta with the carried filter applied.
+    await page.screenshot({ path: path.join(testInfo.outputDir, 'url-sync-switched-project.png') });
+
+    // Back → Project A with its filter set restored from the URL.
+    await page.goBack();
+    await expectProjectSelected(page, 'URL Sync Alpha');
+    await expect.poll(() => page.url()).toContain(`project=${projA.id}`);
+    await expect.poll(() => page.url()).toContain('priority=4');
+    await expect(prioritySelect).toHaveValue('4');
+    await expect(page.locator('article', { hasText: 'Alpha Needle P4' })).toBeVisible();
+
+    // Forward → Project B again, filter set intact.
+    await page.goForward();
+    await expectProjectSelected(page, 'URL Sync Beta');
+    await expect.poll(() => page.url()).toContain(`project=${projB.id}`);
+    await expect.poll(() => page.url()).toContain('priority=4');
+    await expect(prioritySelect).toHaveValue('4');
+    await expect(page.locator('article', { hasText: 'Beta Needle P4' })).toBeVisible();
   });
 
   test('deep-link /tasks/<id> works seamlessly alongside query parameters (AC4)', async ({ page }) => {
