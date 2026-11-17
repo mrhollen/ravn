@@ -43,6 +43,7 @@ import { createCommentsModule } from "./modules/comments";
 import { createArtifactsModule, type ArtifactsModule } from "./modules/artifacts";
 import { createClaimsModule, type ClaimsModule } from "./modules/claims";
 import { createRelationsModule, type RelationView, type RelationsModule } from "./modules/relations";
+import { createDetailModule, type DetailModule } from "./modules/detail";
 import type { CommentsModule } from "./modules/comments";
 import { createProjectSettingsModule } from "./modules/project-settings";
 import type { ProjectSettingsModule } from "./modules/project-settings";
@@ -63,10 +64,9 @@ import {
   swipeTargetStatus,
   withTimeout,
 } from "./moves";
-import { canApplyDetail, createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS } from "./refresh";
+import { createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS } from "./refresh";
 import { renderMarkdown } from "./md";
 import { MEMBER_ROLES } from "./members";
-import { notesDraftKey } from "./drafts";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
 import {
   SORT_OPTIONS,
@@ -76,10 +76,8 @@ import {
 import {
   dashboardRoutePath,
   dashboardRouteProjectIdFromPath,
-  isMobileDetailViewport,
   parseBoardQueryParams,
   taskRouteIdFromPath,
-  taskRoutePath,
   type BoardQueryParams,
 } from "./routes";
 import type { ColumnView } from "./columns";
@@ -120,7 +118,6 @@ import {
   artifactKindClass,
   claimHint,
   commentKindClass,
-  copyTextToClipboard,
   dueLabel,
   formatClaimCountdown,
   isClaimExpired,
@@ -2557,9 +2554,6 @@ export function ravnApp() {
     isTaskBusy(id: string): boolean {
       return this.busyTaskIds.has(id);
     },
-    /** Focus session for the drawer (trap + restore). Survives in-drawer task
-     *  switches so focus still returns to the original board trigger. */
-    detailFocus: null as DialogFocus | null,
     /** Human-friendly message from a failed GET /tasks/{id} for the currently
      *  open task — the drawer's error state (ticket 01M3MMYFRMAW7XM6QDTXNQA6ED).
      *  Null while loading or when `detail` is rendered. Set in refreshDetail(),
@@ -2586,190 +2580,129 @@ export function ravnApp() {
      *  instead of popping out of the app. */
     dashboardPushed: false,
 
+    _detail: null as DetailModule | null,
+
+    /** Lazily-built task-detail module (modules/detail.ts — Phase 2 batch D):
+     *  open/close lifecycle + the cascade resets of other modules' state that
+     *  "ride with their owner" (relation form, AC edit session, comment
+     *  counters, artifact copy flag, opencode flags), full-page view + deep-link
+     *  adoption with the two-shape history sync (pushed → back(), deep link →
+     *  replaceState — never back() from a deep link), applyDetail/refreshDetail
+     *  patching with the ownership guard, the operational bar and the notes
+     *  scratchpad. Every bound field above stays plain root state; only the two
+     *  dialog focus sessions live in this module's closure (new-task precedent). */
+    _detailModule(): DetailModule {
+      if (this._detail) return this._detail;
+      this._detail = createDetailModule({
+        // state-in
+        detail: () => this.detail,
+        detailId: () => this.detailId,
+        detailOpen: () => this.detailOpen,
+        fullPageOpen: () => this.fullPageOpen,
+        fullPagePushed: () => this.fullPagePushed,
+        dashboardOpen: () => this.dashboardOpen,
+        selectedProjectId: () => this.selectedProjectId,
+        projects: () => this.projects,
+        detailRetrying: () => this.detailRetrying,
+        statusMenuOpen: () => this.statusMenuOpen,
+        ownerPopoverOpen: () => this.ownerPopoverOpen,
+        priorityPopoverOpen: () => this.priorityPopoverOpen,
+        duePopoverOpen: () => this.duePopoverOpen,
+        notesDirty: () => this.notesDirty,
+        notesDraft: () => this.notesDraft,
+        notesDraftOwner: () => this.notesDraftOwner,
+        savingNotes: () => this.savingNotes,
+        unsavedNotesAction: () => this.unsavedNotesAction,
+        totalComments: () => this.totalComments,
+        copiedArtifactTimer: () => this.copiedArtifactTimer,
+        relationForm: () => this.relationForm,
+        startingOpenCode: () => this.startingOpenCode,
+        showTaskOpenCodeConfig: () => this.showTaskOpenCodeConfig,
+        taskOpenCodeForm: () => this.taskOpenCodeForm,
+        taskOpenCodeBaseline: () => this.taskOpenCodeBaseline,
+        openCodeSessions: () => this.openCodeSessions,
+        openCodeOptions: () => this.openCodeOptions,
+        openCodeOptionsProjectId: () => this.openCodeOptionsProjectId,
+        // state-out
+        setDetail: (v) => { this.detail = v; },
+        setDetailId: (v) => { this.detailId = v; },
+        setDetailOpen: (v) => { this.detailOpen = v; },
+        setFullPageOpen: (v) => { this.fullPageOpen = v; },
+        setFullPagePushed: (v) => { this.fullPagePushed = v; },
+        setDashboardPushed: (v) => { this.dashboardPushed = v; },
+        setSelectedProjectId: (v) => { this.selectedProjectId = v; },
+        setDetailLoadError: (v) => { this.detailLoadError = v; },
+        setDetailRetrying: (v) => { this.detailRetrying = v; },
+        setStatusMenuOpen: (v) => { this.statusMenuOpen = v; },
+        setOwnerPopoverOpen: (v) => { this.ownerPopoverOpen = v; },
+        setPriorityPopoverOpen: (v) => { this.priorityPopoverOpen = v; },
+        setDuePopoverOpen: (v) => { this.duePopoverOpen = v; },
+        setNotesDirty: (v) => { this.notesDirty = v; },
+        setNotesDraft: (v) => { this.notesDraft = v; },
+        setNotesDraftOwner: (v) => { this.notesDraftOwner = v; },
+        setNotesShowPreview: (v) => { this.notesShowPreview = v; },
+        setUnsavedNotesAction: (v) => { this.unsavedNotesAction = v; },
+        setSavingNotes: (v) => { this.savingNotes = v; },
+        setTotalComments: (v) => { this.totalComments = v; },
+        setLoadingOlderComments: (v) => { this.loadingOlderComments = v; },
+        setCopiedArtifactId: (v) => { this.copiedArtifactId = v; },
+        setCopiedArtifactTimer: (v) => { this.copiedArtifactTimer = v; },
+        setEditingTask: (v) => { this.editingTask = v; },
+        setDescShowPreview: (v) => { this.descShowPreview = v; },
+        setAssigneeInputName: (v) => { this.assigneeInputName = v; },
+        setAssigneeInputType: (v) => { this.assigneeInputType = v; },
+        setEditingAcSeq: (v) => { this.editingAcSeq = v; },
+        setEditingAcText: (v) => { this.editingAcText = v; },
+        setNewAcText: (v) => { this.newAcText = v; },
+        setStartingOpenCode: (v) => { this.startingOpenCode = v; },
+        setShowTaskOpenCodeConfig: (v) => { this.showTaskOpenCodeConfig = v; },
+        setTaskOpenCodeForm: (f) => { this.taskOpenCodeForm = f; },
+        setTaskOpenCodeBaseline: (f) => { this.taskOpenCodeBaseline = f; },
+        setOpenCodeSessions: (s) => { this.openCodeSessions = s; },
+        setShowNewProject: (v) => { this.showNewProject = v; },
+        // hooks — root-owned orchestration kept outside the module
+        toast: (m, k, a) => this.toast(m, k, a),
+        actor: () => this.actor(),
+        isTaskBusy: (id) => this.isTaskBusy(id),
+        moveTaskStatus: (id, s, v) => this.moveTaskStatus(id, s, v),
+        editDraftDirty: () => this.editDraftDirty(),
+        discardEditDraftIfConfirmed: () => this.discardEditDraftIfConfirmed(),
+        restoreCommentDraftForTask: (id) => this.restoreCommentDraftForTask(id),
+        initComments: (id) => this.initComments(id),
+        openDialog: (id, sel, af) => this.openDialog(id, sel, af),
+        closeDialog: (f) => this.closeDialog(f),
+        learnBlockedFromDetail: (pid, tid, blocked, blockers) =>
+          this._boardModule().learnBlockedFromDetail(pid, tid, blocked, blockers),
+        updateDocumentTitle: () => this.updateDocumentTitle(),
+        boardUrl: () => this.boardUrl(),
+        loadBoard: (force) => this.loadBoard(force),
+        connectSse: () => this.connectSse(),
+        openAuthModal: () => this.openAuthModal(),
+        closeDashboard: () => this._dashboardModule().closeDashboard(),
+        fetchOpenCodeOptions: (pid) => this.fetchOpenCodeOptions(pid),
+      });
+      return this._detail;
+    },
+
+    /** Open/close lifecycle — behavior owned by modules/detail.ts (Phase 2 batch D). */
     async openTask(id: string): Promise<void> {
-      // Unsaved notes belong to the task being left — ask before dropping them
-      // (AC 3). Re-opening the SAME task is just a refresh: its in-progress
-      // draft is intentionally preserved (see applyDetail).
-      if (this.notesDirty && this.detailOpen && this.detailId !== id) {
-        this.promptUnsavedNotes({ kind: "open", taskId: id });
-        return;
-      }
-      // A dirty task-edit draft belongs to the task being left — same rule as
-      // unsaved notes above. (If both drafts are dirty, the user confirms each
-      // explicitly: the notes prompt first, then this one.)
-      if (this.editDraftDirty() && this.detailId !== id) {
-        if (!this.discardEditDraftIfConfirmed()) return;
-      }
-      // Defensive: a scratchpad that belongs to another task is discarded up
-      // front so it can never surface inside the drawer about to open (AC 2).
-      if (this.notesDraftOwner !== null && this.notesDraftOwner !== id) {
-        this.resetNotesDraft();
-      }
-      // A task switch while the full page is open keeps the URL pointing at the
-      // NEW task (the deep link stays truthful and shareable) without growing
-      // history — replaceState, never push.
-      if (this.fullPageOpen && typeof window !== "undefined" && this.detailId !== id) {
-        window.history.replaceState(null, "", taskRoutePath(id));
-      }
-      // Mobile fallback (task 01M47MWSTTPS14M6XB1A8HFPV1): below md (768px) a
-      // card click opens the FULL-PAGE view via the same /tasks/<id> route the
-      // "Open full page" button pushes, so phones get deep-link + browser-back
-      // semantics for free. At ≥md the wide centered modal is the default.
-      if (!this.fullPageOpen && isMobileDetailViewport()) {
-        this.openFullPage(id);
-      }
-      // In-drawer switch (discard-&-switch): keep the existing session so focus
-      // restoration still targets the element that originally opened the drawer.
-      const switching = this.detailOpen && this.detailFocus !== null;
-      this.detailOpen = true;
-      this.detailId = id;
-      this.detail = null;
-      // Never carry a previous task's error state into the one being opened.
-      this.detailLoadError = null;
-      this.statusMenuOpen = false;
-      this.ownerPopoverOpen = false;
-      this.priorityPopoverOpen = false;
-      this.duePopoverOpen = false;
-      this.relationForm.targetId = "";
-      this.relationForm.search = "";
-      this.relationForm.open = false;
-      this.relationForm.activeIndex = -1;
-      this.editingTask = false;
-      // Write/Preview toggles never outlive an open: every drawer opens in
-      // Write mode for both markdown fields (AC 1).
-      this.descShowPreview = false;
-      // Reset-then-restore: the comment form starts clean so one task's unsaved
-      // comment can never leak into the next, then a stored draft for THIS id is
-      // re-applied (drafts live in localStorage, not state — they survive
-      // navigation/close/reload by design, AC 2).
-      this.restoreCommentDraftForTask(id);
-      this.totalComments = 0;
-      this.loadingOlderComments = false;
-      this.initTaskOpenCodeConfig();
-      if (!switching) {
-        // Defensive: a stale session must never survive to capture a new trigger.
-        this.closeDialog(this.detailFocus);
-        this.detailFocus = null;
-        // The × button is the safe initial focus (not "Start Task in OpenCode").
-        // autoFocus off: content arrives via fetch, so focus moves explicitly
-        // once (below) instead of racing the render.
-        this.detailFocus = this.openDialog('cb-detail-drawer', '[data-testid="detail-close-btn"]', false);
-      }
-      const applied = await this.refreshDetail(false);
-      void this.initComments(id);
-      if (!applied && this.detailOpen) {
-        // The fetch for this task failed (or the drawer closed mid-flight): the
-        // drawer shows its error state. Move focus to Retry as soon as it is
-        // rendered — the block mounts via x-if on Alpine's own schedule, so
-        // _focusWhenVisible polls frames instead of focusing blind.
-        const retryBtn =
-          typeof document === "undefined"
-            ? null
-            : document.querySelector<HTMLElement>('[data-testid="detail-retry-btn"]');
-        this._focusWhenVisible(retryBtn);
-      } else {
-        // Content arrives via fetch; only move focus once the dialog actually has
-        // focusables (no-op if the user already tabbed somewhere inside).
-        this.detailFocus?.focusInitial();
-      }
+      return await this._detailModule().openTask(id);
     },
 
     /** Detail-close entry point for the backdrop, × buttons and Escape —
-     *  valid from BOTH skins (centered modal and full page): asks first when
-     *  notes have unsaved edits (AC 3) or a task-edit draft differs from the
-     *  loaded values (task 01M3MMZ188XJBGKFSWBGESK79D). */
+     *  behavior owned by modules/detail.ts (Phase 2 batch D). */
     requestCloseDetail(): void {
-      if (this.notesDirty) {
-        this.promptUnsavedNotes({ kind: "close" });
-        return;
-      }
-      // A dirty task-edit draft is guarded by the same no-silent-loss rule.
-      if (!this.discardEditDraftIfConfirmed()) return;
-      this.closeDetail();
+      this._detailModule().requestCloseDetail();
     },
 
     closeDetail(syncHistory = true): void {
-      const wasFullPage = this.fullPageOpen;
-      const pushedEntry = this.fullPagePushed;
-      this.statusMenuOpen = false;
-      this.ownerPopoverOpen = false;
-      this.priorityPopoverOpen = false;
-      this.duePopoverOpen = false;
-      this.relationForm.targetId = "";
-      this.relationForm.search = "";
-      this.relationForm.open = false;
-      this.relationForm.activeIndex = -1;
-      this.editingTask = false;
-      // The drawer's error state never outlives its drawer (same rule as the
-      // notes scratchpad). openTask() also clears it, so a re-open starts clean.
-      this.detailLoadError = null;
-      this.editingAcSeq = 0;
-      this.editingAcText = "";
-      this.newAcText = "";
-      this.totalComments = 0;
-      this.loadingOlderComments = false;
-      this.startingOpenCode = false;
-      this.showTaskOpenCodeConfig = false;
-      this.copiedArtifactId = null;
-      if (this.copiedArtifactTimer) {
-        clearTimeout(this.copiedArtifactTimer);
-        this.copiedArtifactTimer = null;
-      }
-      // AC 1: the notes scratchpad never outlives its drawer — otherwise a
-      // dirty draft would leak into whatever task is opened next.
-      this.resetNotesDraft();
-      this.unsavedNotesAction = null;
-      // A confirm session must not outlive its drawer either (defensive).
-      this.closeDialog(this.confirmNotesFocus);
-      this.confirmNotesFocus = null;
-      // Restore focus to the board trigger that opened the drawer.
-      this.closeDialog(this.detailFocus);
-      this.detailFocus = null;
-      this.detailOpen = false;
-      this.fullPageOpen = false;
-      this.fullPagePushed = false;
-      // History sync: a FULL-PAGE close must leave the URL honest. An entry we
-      // pushed is popped — the resulting popstate lands on the prior route
-      // (board "/" or dashboard "/projects/<id>/dashboard"). A deep-linked open
-      // has NO prior entry behind it, so popping would navigate OUT of the app:
-      // replace instead. (When closing from a popstate-driven back or direct
-      // route transition, syncHistory=false skips history mutation.)
-      if (
-        syncHistory &&
-        wasFullPage &&
-        typeof window !== "undefined" &&
-        taskRouteIdFromPath(window.location.pathname) !== null
-      ) {
-        if (pushedEntry) window.history.back();
-        else window.history.replaceState(null, "", this.boardUrl());
-      }
-      // Drawer closed → the tab title reverts to the active view. (Recomputes:
-      // detailOpen is now false, so any stale `detail` object can't leak its
-      // title into the board/dashboard state — WCAG 2.4.2.)
-      this.updateDocumentTitle();
+      this._detailModule().closeDetail(syncHistory);
     },
 
-    /** Switch the open task's detail to the FULL-PAGE view. Pushes /tasks/<id>
-     *  so browser back returns to the previous view (board or dashboard); a URL
-     *  that is already on a task route (deep link) is adopted as-is instead of
-     *  piling another entry on top. `id` defaults to the loaded detail's id —
-     *  openTask() passes it explicitly for mobile opens, where the fetch has not
-     *  landed yet. */
+    /** Switch the open task's detail to the FULL-PAGE view — behavior owned by
+     *  modules/detail.ts (Phase 2 batch D). */
     openFullPage(id?: string): void {
-      const taskId = id ?? this.detail?.id;
-      if (!taskId || typeof window === "undefined") return;
-      if (this.dashboardOpen) {
-        this.dashboardPushed = false;
-        this._dashboardModule().closeDashboard();
-      }
-      this.fullPageOpen = true;
-      if (taskRouteIdFromPath(window.location.pathname) !== taskId) {
-        window.history.pushState(null, "", taskRoutePath(taskId));
-        this.fullPagePushed = true;
-      } else {
-        this.fullPagePushed = false; // deep link — no entry of ours to pop later
-      }
-      this.updateDocumentTitle();
+      this._detailModule().openFullPage(id);
     },
 
     /** Open project dashboard view and push `/projects/<id>/dashboard` onto
@@ -2956,39 +2889,9 @@ export function ravnApp() {
       }
     },
 
-    /** Deep link on first load: /tasks/<id> in the initial URL. Fetches the
-     *  task, adopts its project as the board context (so SSE/poll/relations
-     *  targets are correct), and opens it as a full page. A failed fetch resets
-     *  the URL to "/" so a dead deep link can't strand the history state, and
-     *  still lands the user on a usable board. */
+    /** Deep link on first load: /tasks/<id> — behavior owned by modules/detail.ts (Phase 2 batch D). */
     async openDeepLinkedTask(id: string): Promise<void> {
-      let t: TaskDetail;
-      try {
-        t = await api.getTask(id, { commentLimit: 50 });
-      } catch (e) {
-        if (ApiError.isUnauthorized(e)) this.openAuthModal();
-        else this.toast(errMsg(e), "error");
-        if (typeof window !== "undefined") window.history.replaceState(null, "", this.boardUrl());
-        if (this.selectedProjectId) {
-          await this.loadBoard();
-          this.connectSse();
-        } else {
-          this.showNewProject = true;
-        }
-        return;
-      }
-      if (this.selectedProjectId !== t.project_id) {
-        this.selectedProjectId = t.project_id;
-        try {
-          safeStorage.setItem(LS_PROJECT, t.project_id);
-        } catch { /* private mode */ }
-      }
-      await this.loadBoard();
-      this.connectSse();
-      // The URL was given to us by the browser — we did not push it.
-      this.fullPageOpen = true;
-      this.fullPagePushed = false;
-      await this.openTask(id);
+      return await this._detailModule().openDeepLinkedTask(id);
     },
 
     // ---------------------------------------------------------------- opencode
@@ -3006,103 +2909,31 @@ export function ravnApp() {
       variant: "",
     },
 
+    /** OpenCode start panel — behavior owned by modules/detail.ts (Phase 2 batch D). */
     initTaskOpenCodeConfig(): void {
-      this.showTaskOpenCodeConfig = false;
-      const p = this.projects.find((x) => x.id === this.selectedProjectId);
-      const agent = p?.opencode_agent || this.openCodeOptions?.resolved_agent || "build";
-      const model = p?.opencode_model || this.openCodeOptions?.resolved_model || "";
-      const variant = p?.opencode_variant || this.openCodeOptions?.resolved_variant || "";
-      this.taskOpenCodeForm = { agent, model, variant };
-      this.taskOpenCodeBaseline = { agent, model, variant };
+      this._detailModule().initTaskOpenCodeConfig();
     },
 
     toggleOpenCodeConfig(): void {
-      this.showTaskOpenCodeConfig = !this.showTaskOpenCodeConfig;
-      if (this.showTaskOpenCodeConfig && (!this.openCodeOptions || this.openCodeOptionsProjectId !== this.selectedProjectId)) {
-        void this.fetchOpenCodeOptions(this.selectedProjectId).then((opts) => {
-          if (opts && !this.taskOpenCodeDirty()) {
-            const pNow = this.projects.find((x) => x.id === this.selectedProjectId);
-            const a = pNow?.opencode_agent || opts.resolved_agent || "build";
-            const m = pNow?.opencode_model || opts.resolved_model || "";
-            const v = pNow?.opencode_variant || opts.resolved_variant || "";
-            this.taskOpenCodeForm = { agent: a, model: m, variant: v };
-            this.taskOpenCodeBaseline = { agent: a, model: m, variant: v };
-          }
-        });
-      }
+      this._detailModule().toggleOpenCodeConfig();
     },
 
     taskOpenCodeDirty(): boolean {
-      return (
-        (this.taskOpenCodeForm.agent ?? "") !== (this.taskOpenCodeBaseline.agent ?? "") ||
-        (this.taskOpenCodeForm.model ?? "") !== (this.taskOpenCodeBaseline.model ?? "") ||
-        (this.taskOpenCodeForm.variant ?? "") !== (this.taskOpenCodeBaseline.variant ?? "")
-      );
+      return this._detailModule().taskOpenCodeDirty();
     },
 
     activeOpenCodeSession(d?: TaskDetail | null): StartOpenCodeResponse | null {
-      const target = d === undefined ? this.detail : d;
-      if (!target) return null;
-      const cached = this.openCodeSessions[target.id];
-      if (cached && cached.session_url) return cached;
-      const artifacts = target.artifacts;
-      if (Array.isArray(artifacts)) {
-        for (let i = artifacts.length - 1; i >= 0; i--) {
-          const a = artifacts[i];
-          const ref = a?.ref?.trim();
-          if (a?.summary === "OpenCode autonomous session" && ref) {
-            const idx = ref.lastIndexOf("/session/");
-            const tail = idx !== -1 ? ref.slice(idx + "/session/".length).replace(/[/?#].*$/, "") : "";
-            const session_id = tail || ref;
-            return { session_id, session_url: ref };
-          }
-        }
-      }
-      return null;
+      return this._detailModule().activeOpenCodeSession(d);
     },
 
     async startTaskInOpenCode(customInput?: StartOpenCodeInput): Promise<void> {
-      const d = this.detail;
-      if (!d || this.startingOpenCode) return;
-      this.startingOpenCode = true;
-      try {
-        let input: StartOpenCodeInput | undefined = customInput;
-        if (!input && (this.taskOpenCodeDirty() || this.showTaskOpenCodeConfig)) {
-          const p: StartOpenCodeInput = {};
-          if (this.taskOpenCodeForm.agent?.trim()) p.agent = this.taskOpenCodeForm.agent.trim();
-          if (this.taskOpenCodeForm.model?.trim()) p.model = this.taskOpenCodeForm.model.trim();
-          const variantTrim = this.taskOpenCodeForm.variant?.trim() ?? "";
-          if (variantTrim || (this.taskOpenCodeBaseline.variant ?? "").trim()) {
-            p.variant = variantTrim;
-          }
-          input = p;
-        }
-        const res = await api.startOpenCode(d.id, input);
-        if (res && res.session_url) {
-          this.openCodeSessions = { ...this.openCodeSessions, [d.id]: res };
-        }
-        this.toast(
-          res?.session_id ? `OpenCode session started (${res.session_id})` : "OpenCode session started",
-          "info",
-          res?.session_url ? { label: "Open Session", href: res.session_url } : undefined,
-        );
-        this.showTaskOpenCodeConfig = false;
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.startingOpenCode = false;
-      }
+      return await this._detailModule().startTaskInOpenCode(customInput);
     },
 
     // ------------------------------------------------------------------ copy id
-    /** Copy the FULL task ID to the clipboard from the truncated header badge.
-     *  Prefers the Async Clipboard API and falls back to execCommand for plain-
-     *  http deployments where it is unavailable (see copyTextToClipboard). */
+    /** Copy the FULL task ID to the clipboard — behavior owned by modules/detail.ts (Phase 2 batch D). */
     async copyTaskId(id: string): Promise<void> {
-      if (!id) return;
-      const copied = await copyTextToClipboard(id);
-      this.toast(copied ? "Copied task ID to clipboard" : "Couldn't copy the task ID", copied ? "info" : "error");
+      return await this._detailModule().copyTaskId(id);
     },
 
     /** Copy an artifact ref (file path or URL) to clipboard with brief visual confirmation.
@@ -3111,115 +2942,19 @@ export function ravnApp() {
       return await this._artifactsModule().copyArtifactRef(ref, id);
     },
 
-    /** Fetch GET /tasks/{id} (full resume payload, comment tail 50) and apply it.
-     *  An in-progress notes edit (notesDirty) is NEVER clobbered by a refresh.
-     *  Ownership-guarded (task 01M3MMY78F1TRP6MKDRT0SKQWB): by the time the
-     *  fetch resolves, the drawer may have been closed or switched to another
-     *  task — a payload for a no-longer-active id is discarded (returns false)
-     *  instead of overwriting the active task's detail. */
+    /** Fetch GET /tasks/{id} and apply it — behavior owned by modules/detail.ts (Phase 2 batch D). */
     async refreshDetail(silent = false, idToFetch?: string): Promise<boolean> {
-      const id = idToFetch ?? this.detailId ?? this.detail?.id;
-      if (!id) return false;
-      try {
-        const t = await api.getTask(id, { commentLimit: 50 });
-        if (!canApplyDetail(t.id, this.detailId, this.detailOpen)) {
-          return false; // drawer closed or switched since the fetch started — drop stale payload
-        }
-        this.applyDetail(t);
-        return true;
-      } catch (e) {
-        if (!silent) this.toast(errMsg(e), "error");
-        // Drawer error state (ticket 01M3MMYFRMAW7XM6QDTXNQA6ED): a failed fetch
-        // for the task CURRENTLY open becomes a visible message in the drawer —
-        // previously it left only a bare "Loading task…" with no way out. The
-        // ownership gate mirrors canApplyDetail(): a failure for a task we no
-        // longer have open must not touch the drawer's state. Silent SSE/poll
-        // refreshes flow through here too; they cannot clobber a visible error
-        // (they only refresh its message), and a successful one clears it via
-        // applyDetail(). No automatic retry loop — re-fetching is user-driven
-        // via retryDetailLoad() (the Retry button).
-        if (this.detailOpen && this.detailId === id) {
-          this.detailLoadError =
-            e instanceof ApiError && e.status === 404
-              ? "This task was deleted or no longer exists."
-              : errMsg(e);
-        }
-        return false;
-      }
+      return await this._detailModule().refreshDetail(silent, idToFetch);
     },
 
-    /** Re-fetch the currently open task — the Retry button in the drawer's
-     *  error state (ticket 01M3MMYFRMAW7XM6QDTXNQA6ED). Non-silent, so a second
-     *  failure toasts as well. refreshDetail()'s ownership guard keeps a stale
-     *  result from landing on a task the user switched away mid-flight. */
+    /** Re-fetch the currently open task (drawer Retry button) — behavior owned by
+     *  modules/detail.ts (Phase 2 batch D). */
     async retryDetailLoad(): Promise<void> {
-      if (!this.detailOpen || this.detailRetrying) return;
-      const id = this.detailId;
-      if (!id) return;
-      this.detailRetrying = true;
-      try {
-        await this.refreshDetail(false, id);
-      } finally {
-        this.detailRetrying = false;
-      }
+      return await this._detailModule().retryDetailLoad();
     },
 
     applyDetail(t: TaskDetail): void {
-      // Ownership guard (task 01M3MMY78F1TRP6MKDRT0SKQWB), second layer under
-      // refreshDetail's: covers direct call sites too (409-retry re-reads).
-      // Discarding BEFORE any state write also guarantees a stale/foreign
-      // payload can never reset or clobber an in-progress notes draft.
-      if (!canApplyDetail(t.id, this.detailId, this.detailOpen)) {
-        return;
-      }
-      // A payload that actually lands means the drawer recovered: clear any
-      // pending fetch-error state (ticket 01M3MMYFRMAW7XM6QDTXNQA6ED). Covers
-      // every apply path — refreshDetail success and the 409-rebase re-reads.
-      this.detailLoadError = null;
-      const existingComments = (this.detail && this.detail.id === t.id) ? this.detail.comments : [];
-      const map = new Map<string, CommentRow>();
-      for (const c of existingComments) {
-        map.set(c.id, c);
-      }
-      for (const c of t.comments) {
-        map.set(c.id, c);
-      }
-      const sorted = Array.from(map.values()).sort((a, b) => {
-        const ta = Date.parse(a.created_at);
-        const tb = Date.parse(b.created_at);
-        if (ta !== tb) return ta - tb;
-        return a.id.localeCompare(b.id);
-      });
-      t.comments = sorted;
-      this.detail = t;
-      // Task detail loaded → the tab title names it (WCAG 2.4.2). Covers every
-      // load path: openTask, deep link, popstate and SSE re-fetches (a remote
-      // rename while the drawer is open re-titles the tab too).
-      this.updateDocumentTitle();
-      if (t.comments.length > this.totalComments) {
-        this.totalComments = t.comments.length;
-      }
-      this.assigneeInputName = t.assignee?.name ?? "";
-      this.assigneeInputType = (t.assignee?.type as "human" | "agent") || "human";
-      // Learn the blocked state for card badges — owned by modules/board.ts
-      // (scope guard: only while the task's project IS the selected one; board
-      // loads own the cache scope, see selectProject).
-      this._boardModule().learnBlockedFromDetail(t.project_id, t.id, t.blocked, t.blockers);
-      // Never clobber an in-progress edit of THIS task; a scratchpad that
-      // belongs to a DIFFERENT task is discarded so drafts cannot leak across
-      // tasks (AC 2).
-      if (!(this.notesDirty && this.notesDraftOwner === t.id)) {
-        const savedNotes = safeStorage.getItem(notesDraftKey(t.id));
-        if (savedNotes !== null && savedNotes.trim() !== "") {
-          this.notesDraft = savedNotes;
-          this.notesDirty = true;
-        } else {
-          this.notesDraft = t.notes;
-          this.notesDirty = false;
-        }
-        this.notesDraftOwner = t.id;
-        this.notesShowPreview = false;
-      }
+      this._detailModule().applyDetail(t);
     },
 
     // ------------------------------------------------------------ quick metadata (priority & due)
@@ -3925,33 +3660,18 @@ export function ravnApp() {
     statusMenuOpen: false,
     ownerPopoverOpen: false,
 
+    /** Operational-bar toggles + version-guarded status move — behavior owned
+     *  by modules/detail.ts (Phase 2 batch D). */
     toggleStatusMenu(): void {
-      this.statusMenuOpen = !this.statusMenuOpen;
-      this.ownerPopoverOpen = false;
-      this.priorityPopoverOpen = false;
-      this.duePopoverOpen = false;
+      this._detailModule().toggleStatusMenu();
     },
 
     toggleOwnerPopover(): void {
-      this.ownerPopoverOpen = !this.ownerPopoverOpen;
-      this.statusMenuOpen = false;
-      this.priorityPopoverOpen = false;
-      this.duePopoverOpen = false;
-      if (this.ownerPopoverOpen && this.detail) {
-        this.assigneeInputName = this.detail.assignee?.name ?? "";
-        this.assigneeInputType = (this.detail.assignee?.type as "human" | "agent") || "human";
-      }
+      this._detailModule().toggleOwnerPopover();
     },
 
-    /** Version-guarded status move from detail drawer. On 409 version_conflict:
-     *  re-read the task, re-apply the SAME intent once with the fresh version;
-     *  a second conflict just refreshes and says so (per docs/API.md error contract). */
     async moveStatus(status: Status): Promise<void> {
-      this.statusMenuOpen = false;
-      const t = this.detail;
-      // Per-task: only the open task's own in-flight move blocks its buttons.
-      if (!t || this.isTaskBusy(t.id) || t.status === status) return;
-      await this.moveTaskStatus(t.id, status, t.version);
+      return await this._detailModule().moveStatus(status);
     },
 
     // ------------------------------------------------------------------- notes
@@ -3966,46 +3686,25 @@ export function ravnApp() {
     /** The close/switch held behind the unsaved-notes confirmation — null when
      *  no prompt is on screen. */
     unsavedNotesAction: null as { kind: "close" } | { kind: "open"; taskId: string } | null,
-    /** Focus session for the confirm modal (stacked above the drawer's). */
-    confirmNotesFocus: null as DialogFocus | null,
 
-    /** Clear the notes scratchpad so a closed or abandoned drawer can never
-     *  leak its draft into another task (AC 1 + AC 2). */
-    resetNotesDraft(): void {
-      this.notesDirty = false;
-      this.notesDraft = "";
-      this.notesDraftOwner = null;
-      this.notesShowPreview = false;
-    },
-
+    /** Notes scratchpad + unsaved-notes confirm lifecycle — behavior owned by
+     *  modules/detail.ts (Phase 2 batch D; its confirm focus session is
+     *  closure-internal there, as is resetNotesDraft). */
     saveNotesDraft(): void {
-      const id = this.detail?.id;
-      if (!id) return;
-      const raw = this.notesDraft ?? "";
-      if (raw.trim() !== "") safeStorage.setItem(notesDraftKey(id), raw);
-      else safeStorage.removeItem(notesDraftKey(id));
-    },
-
-    clearNotesDraft(id?: string): void {
-      const targetId = id || this.detail?.id;
-      if (!targetId) return;
-      safeStorage.removeItem(notesDraftKey(targetId));
+      this._detailModule().saveNotesDraft();
     },
 
     /** Show the unsaved-notes confirm and open its focus session. "Keep
      *  editing" (least destructive) receives initial focus. */
     promptUnsavedNotes(action: { kind: "close" } | { kind: "open"; taskId: string }): void {
-      this.unsavedNotesAction = action;
-      this.confirmNotesFocus = this.openDialog("cb-notes-confirm", "button.btn-ghost");
+      this._detailModule().promptUnsavedNotes(action);
     },
 
     /** "Keep editing" — dismiss the prompt, draft untouched. Focus returns to
      *  whatever had focus inside the drawer when the prompt opened (stacked
      *  session: only THIS layer is closed). */
     cancelUnsavedNotes(): void {
-      this.unsavedNotesAction = null;
-      this.closeDialog(this.confirmNotesFocus);
-      this.confirmNotesFocus = null;
+      this._detailModule().cancelUnsavedNotes();
     },
 
     /** "Discard changes" — drop the draft, then run the deferred close/switch.
@@ -4013,49 +3712,13 @@ export function ravnApp() {
      *  focus to the original board trigger (the switch path re-focuses the new
      *  drawer content via openTask). */
     async confirmUnsavedNotes(): Promise<void> {
-      const action = this.unsavedNotesAction;
-      this.unsavedNotesAction = null;
-      if (this.notesDraftOwner) {
-        safeStorage.removeItem(notesDraftKey(this.notesDraftOwner));
-      }
-      this.resetNotesDraft();
-      this.closeDialog(this.confirmNotesFocus);
-      this.confirmNotesFocus = null;
-      if (action?.kind === "open") await this.openTask(action.taskId);
-      else if (action?.kind === "close") this.closeDetail();
+      return await this._detailModule().confirmUnsavedNotes();
     },
 
     /** PUT /notes replaces the whole blob and carries NO version — a concurrent
      *  write can still 409; then we refresh (keeping the user's draft) and say so. */
     async saveNotes(): Promise<void> {
-      const t = this.detail;
-      if (!t || this.savingNotes) return;
-      // AC 3 guard: a draft may only ever be saved to the task it belongs to.
-      // Unreachable through the UI (openTask/closeDetail gate drafts), but if
-      // stale state ever appears we must never PUT one task's draft onto another.
-      if (this.notesDraftOwner !== null && this.notesDraftOwner !== t.id) {
-        this.resetNotesDraft();
-        await this.refreshDetail(true);
-        this.toast("Notes draft was from a different task — discarded and refreshed.", "error");
-        return;
-      }
-      this.savingNotes = true;
-      try {
-        await api.putNotes(t.id, { actor: this.actor(), notes: this.notesDraft });
-        safeStorage.removeItem(notesDraftKey(t.id));
-        this.notesDirty = false;
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-      } catch (e) {
-        if (ApiError.isVersionConflict(e)) {
-          // notesDraft survives the refresh because notesDirty is still true
-          await this.refreshDetail(true).catch(() => undefined);
-          this.toast("Notes changed elsewhere — refreshed. Review before re-saving.", "info");
-        } else {
-          this.toast(errMsg(e), "error");
-        }
-      } finally {
-        this.savingNotes = false;
-      }
+      return await this._detailModule().saveNotes();
     },
 
     // -------------------------------------------------------- acceptance crits
