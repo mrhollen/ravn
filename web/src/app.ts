@@ -63,6 +63,13 @@ import { createDebounce } from "./refresh"; // SSE_RELOAD_DEBOUNCE_MS moved to m
 import { formatEventDetail } from "./realtime";
 import { renderMarkdown } from "./md";
 import { MEMBER_ROLES } from "./members";
+// UI primitive layer (Phase 3) — web/src/ui: typed pure contracts, flat-root
+// entries below. No nested Alpine components; state stays on the root.
+import { btnClass } from "./ui/button";
+import { boardCardClasses, cardDensityClass as uiCardDensityClass, type CardDensityPart } from "./ui/card";
+import { EMPTY_STATE } from "./ui/empty";
+import { MENU_PANEL_CLASS, menuItemClass } from "./ui/menu";
+import { TOAST_BASE_CLASS, toastClassList, toastErrorPrefix } from "./ui/toast";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
 import {
   SORT_OPTIONS,
@@ -205,26 +212,10 @@ const MD_CACHE_MAX = 500;
 // existing import surface (tests, main.ts) stays intact.
 export { sseTelemetry } from "./modules/sse";
 
-export interface Toast {
-  id: number;
-  msg: string;
-  kind: "error" | "info";
-  /** `href` renders an external <a>; `onAction` renders a <button> that runs a
-   *  local JS callback (e.g. Undo) instead — exactly one of the two is set. */
-  action?: { label: string; href?: string; onAction?: () => void };
-  /** Optional border class to override or customize the border. */
-  borderClass?: string;
-  /** When true, the toast will NOT auto-dismiss after 6.5s. */
-  persistent?: boolean;
-  /** When true, suppresses the "Error: " prefix even if kind is "error". */
-  hideErrorPrefix?: boolean;
-  /** Marker for the SSE disconnect notification toast. */
-  isSseDisconnect?: boolean;
-  /** True while the leave transition plays (x-show hides it), then the row is
-   *  dropped from the list. x-for removes nodes instantly, so the exit
-   *  animation has to be driven through x-show first. */
-  leaving?: boolean;
-}
+// Toast item type — single-sourced in ui/toast.ts (Phase 3); re-exported so the
+// existing import surface stays intact.
+import type { Toast } from "./ui/toast";
+export type { Toast };
 
 export function ravnApp() {
   return {
@@ -3501,6 +3492,35 @@ export function ravnApp() {
     priorityName,
     commentKindClass,
     artifactKindClass,
+    // UI primitive layer (Phase 3) — web/src/ui pure contracts. Flat-root
+    // entries the index.html templates bind directly; values byte-identical to
+    // the pre-Phase-3 markup (locked by ui-* unit tests + E2E).
+    btnClass,
+    menuPanelClass: MENU_PANEL_CLASS,
+    menuItemClass,
+    EMPTY_STATE,
+    /** Toast item base chrome (ui/toast.ts) — the row's static :class element. */
+    toastBaseClass: TOAST_BASE_CLASS,
+    toastClassList,
+    toastErrorPrefix,
+    /** Board card's full dynamic :class — see ui/card.ts boardCardClasses; the
+     *  root resolves every state input (selection, drag, claim, block, busy). */
+    boardCardClass(task: TaskSummary, status: Status): string {
+      return boardCardClasses({
+        density: this.cardDensity,
+        selected: this.isTaskSelected(task.id),
+        dragging: this.draggedTaskId === task.id,
+        claimed: !!task.claimed_by && !this.claimExpired(task),
+        blocked: this.isBlocked(task.id),
+        inDoneColumn: status === "done",
+        busy: this.isTaskBusy(task.id),
+      });
+    },
+    /** Density-dependent sub-part padding (claim capsule, etc.) — see
+     *  ui/card.ts CARD_DENSITY_PARTS; resolves `this.cardDensity` internally. */
+    cardDensityClass(part: CardDensityPart): string {
+      return uiCardDensityClass(this.cardDensity, part);
+    },
     isTextArtifact,
     isOverdue,
     dueLabel,

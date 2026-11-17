@@ -39,18 +39,15 @@
            at a glance without relying on color alone. -->
       <div data-testid="toast-stack" role="status" aria-live="polite" aria-atomic="false" class="pointer-events-none fixed right-4 top-4 z-50 flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2">
         <template x-for="t in toasts" :key="t.id">
+          <!-- Toast item contract: ui/toast.ts (flat root entries) — base
+               chrome + kind tint + optional border override, element-for-
+               element identical to the pre-Phase-3 array. -->
           <div
             x-show="!t.leaving"
             :role="t.kind === 'error' ? 'alert' : 'status'"
             :aria-live="t.kind === 'error' ? 'assertive' : 'polite'"
             :data-testid="t.isSseDisconnect ? 'sse-disconnect-toast' : null"
-            class="pointer-events-auto flex items-start gap-2 rounded-lg border px-3 py-2 text-sm shadow-md"
-            :class="[
-              t.kind === 'error'
-                ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
-                : 'border-zinc-200 bg-white text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200',
-              t.borderClass || ''
-            ]"
+            :class="[toastBaseClass, ...toastClassList(t)]"
             x-transition:enter="transition ease-out duration-200"
             x-transition:enter-start="opacity-0 translate-y-2 scale-95"
             x-transition:enter-end="opacity-100 translate-y-0 scale-100"
@@ -65,7 +62,8 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <span class="min-w-0 flex-1">
-              <span class="font-semibold" x-text="t.kind === 'error' && !t.hideErrorPrefix ? 'Error: ' : ''"></span>
+              <!-- Bold "Error: " prefix: ui/toast.ts toastErrorPrefix (flat root). -->
+              <span class="font-semibold" x-text="toastErrorPrefix(t)"></span>
               <span x-text="t.msg"></span>
               <template x-if="t.action">
                 <!-- href → external link (OpenCode sessions); onAction → local JS
@@ -198,6 +196,9 @@
                  it the window-level dismissTop() would re-evaluate the chain
                  with projectMenuOpen already false and also collapse the NEXT
                  layer (e.g. the new-project bar) — one keypress, one layer. -->
+            <!-- Panel class contract: ui/menu.ts MENU_PANEL_CLASS (flat root
+                 entry `menuPanelClass`) — the project-menu pattern's single
+                 source of placement + z-tier + chrome. -->
             <div data-testid="project-menu" role="menu" aria-label="Projects"
                  x-show="projectMenuOpen" x-cloak
                  @keydown.down.prevent="moveProjectFocus(1)"
@@ -205,7 +206,7 @@
                   @keydown.home.prevent="moveProjectFocus('home')"
                   @keydown.end.prevent="moveProjectFocus('end')"
                   @keydown.escape.stop="closeProjectMenu(true)"
-                  class="absolute left-0 right-0 top-full z-40 mt-1.5 max-h-[24rem] min-w-[15rem] overflow-auto rounded-md border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
+                  :class="menuPanelClass">
                <!-- "My projects" filter (AC3): restricts the OPEN list to projects the
                     signed-in identity created (?mine=created). Rendered only while a session
                     identity exists — the server rejects mine=created with no acting actor, so
@@ -221,10 +222,11 @@
                  </div>
                </template>
                <template x-for="p in projects" :key="p.id">
+                <!-- Item contract: ui/menu.ts menuItemClass (flat root entry);
+                     the selected weight stays as the per-row dynamic addition. -->
                 <button type="button" role="menuitem" data-testid="project-option" :data-project-id="p.id"
                         @click="pickProject(p.id)"
-                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-zinc-100 focus-ring dark:hover:bg-zinc-800"
-                        :class="p.id === selectedProjectId ? 'font-semibold' : ''">
+                        :class="[menuItemClass(), p.id === selectedProjectId ? 'font-semibold' : '']">
                   <span class="min-w-0 flex-1 truncate" :title="projectOptionLabel(p)" x-text="projectOptionLabel(p)"></span>
                   <svg x-show="p.id === selectedProjectId" x-cloak class="h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
@@ -246,7 +248,7 @@
                       <button type="button" role="menuitem" data-testid="project-restore" :data-restore-project-id="p.id"
                               :disabled="projectSettingsBusy"
                               @click="restoreProject(p.id)"
-                              class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-zinc-500 hover:bg-zinc-100 focus-ring disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                              :class="menuItemClass({ mutedDisabled: true })"
                               :title="'Restore ' + p.name">
                         <svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h4l3-9 4 18 3-9h4" />
@@ -257,9 +259,9 @@
                   </div>
                 </template>
                <div class="my-1 border-t border-zinc-200 dark:border-zinc-700"></div>
-                <button type="button" role="menuitem" data-testid="new-project-item" @click="openNewProject()"
-                       :aria-expanded="showNewProject ? 'true' : 'false'"
-                       class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm font-medium hover:bg-zinc-100 focus-ring dark:hover:bg-zinc-800">
+                 <button type="button" role="menuitem" data-testid="new-project-item" @click="openNewProject()"
+                        :aria-expanded="showNewProject ? 'true' : 'false'"
+                        :class="menuItemClass({ emphasized: true })">
                 + New project…
               </button>
             </div>
@@ -1048,9 +1050,11 @@ DOM-placed after the collapsible strip: on md+ it renders flush
             Description (markdown, optional)
             <input x-model="newProject.description" class="field mt-1" placeholder="MVP landing page work" />
           </label>
+          <!-- Buttons: ui/button.ts btnClass (flat root entry) — the variant
+               is the prop; shared chrome stays in style.css. -->
           <div class="flex gap-2">
-            <button type="submit" :disabled="projectBusy || !newProject.name.trim()" class="btn-primary">Create project</button>
-            <button type="button" @click="showNewProject = false" class="btn-ghost">Cancel</button>
+            <button type="submit" :disabled="projectBusy || !newProject.name.trim()" :class="btnClass('primary')">Create project</button>
+            <button type="button" @click="showNewProject = false" :class="btnClass('ghost')">Cancel</button>
           </div>
         </form>
       </div>
@@ -1092,7 +1096,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
             Choose another project or sign out.
           </p>
           <div class="mt-4 flex justify-center gap-2">
-            <button type="button" @click="logout()" data-testid="forbidden-sign-out" class="btn-primary">Sign out</button>
+            <button type="button" @click="logout()" data-testid="forbidden-sign-out" :class="btnClass('primary')">Sign out</button>
           </div>
         </div>
 
@@ -1131,7 +1135,9 @@ DOM-placed after the collapsible strip: on md+ it renders flush
         <div x-show="projects.length === 0 && !loadError" x-cloak
              class="mx-auto mt-16 max-w-md rounded-xl border border-zinc-200 bg-white p-6 text-center shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
            <p class="text-sm font-medium text-zinc-700 dark:text-zinc-300">No projects yet.</p>
-           <p class="mt-1 text-xs text-zinc-600 dark:text-zinc-400">Agents create work via MCP; create a project here to start the board.</p>
+           <!-- Empty-body line: ui/empty.ts EMPTY_STATE (flat root entry) — the
+                token carries the full shipped class string. -->
+           <p :class="EMPTY_STATE.text">Agents create work via MCP; create a project here to start the board.</p>
          </div>
 
         <!-- Board loading skeleton (ticket 01M3MMVDQYMJQEP3GPB9BZF4HP): shown while
@@ -1273,7 +1279,13 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                            A hard-coded aria-label on this focusable container overrode the whole subtree
                            for AT, so priority/assignee/due/blocker/claim badges were never announced. With
                            labelledby the name is just the title and every metadata badge stays real,
-                           traversable DOM content; column status comes from the section heading. -->
+                           traversable DOM content; column status comes from the section heading.
+                           Phase 3: the dynamic :class (density, selection marker for the style.css
+                           checkbox rule, drag/claim/block borders + bg with selected>claimed>blocked>
+                           neutral precedence, done-recede, busy/grab cursors) is composed by ui/card.ts
+                           boardCardClasses through the flat-root boardCardClass entry — element-for-
+                           element identical to the pre-Phase-3 array. (No comments INSIDE this tag:
+                           Chromium renders in-tag comments as garbage attributes.) -->
                        <article
                          tabindex="0"
                          :aria-labelledby="'card-title-' + task.id"
@@ -1289,42 +1301,9 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         @keydown.enter.self="openTask(task.id)"
                         @keydown.space.self.prevent="openTask(task.id)"
                         :data-card-density="cardDensity"
-                          class="relative w-full rounded-lg border p-3 text-left shadow-sm transition select-none focus-ring"
-                           :class="[
-                             cardDensity === 'compact' ? 'card-compact' : '',
-                             // AC1: selection marker class — drives the checkbox
-                             // visibility rule in style.css (stays visible while selected).
-                             isTaskSelected(task.id) ? 'has-selection' : '',
-                             draggedTaskId === task.id
-                               ? 'opacity-40 border-dashed border-zinc-400 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900'
-                               : [
-                                    // Uniform 1px FULL-PERIMETER border tinted by state
-                                    // (no thick side accents): SELECTED → indigo ring +
-                                    // fill (wins over every other tint), claimed →
-                                    // indigo, blocked → red, else the standard neutral.
-                                    // An EXPIRED lease is inert — it keeps the neutral
-                                    // border, never the active indigo tint.
-                                    isTaskSelected(task.id)
-                                      ? 'border-indigo-400 ring-2 ring-indigo-300/70 dark:border-indigo-500 dark:ring-indigo-500/40'
-                                     : task.claimed_by && !claimExpired(task)
-                                      ? 'border-indigo-200/80 hover:border-indigo-300 dark:border-indigo-800 dark:hover:border-indigo-700'
-                                     : isBlocked(task.id)
-                                       ? 'border-red-200 hover:border-red-300 dark:border-red-800 dark:hover:border-red-700'
-                                       : 'border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600',
-                                   isTaskSelected(task.id)
-                                     ? 'bg-indigo-50/80 hover:shadow dark:bg-indigo-950/40'
-                                     : 'bg-white hover:shadow dark:bg-zinc-800'
-                                 ],
-                            // Done cards recede slightly (only when not also dragged/busy,
-                            // so those stronger opacity states still win).
-                            col.status === 'done' && draggedTaskId !== task.id && !isTaskBusy(task.id)
-                              ? 'card-accent-done'
-                              : '',
-                           isTaskBusy(task.id)
-                             ? 'pointer-events-none opacity-60'
-                             : 'cursor-grab active:cursor-grabbing'
-                         ]"
-                      >
+                           class="relative w-full rounded-lg border p-3 text-left shadow-sm transition select-none focus-ring"
+                            :class="boardCardClass(task, col.status)"
+                       >
                         <div class="flex items-start justify-between gap-2">
                           <!-- AC1: multi-select checkbox. Space is ALWAYS reserved
                                (opacity toggle, never display) so revealing it on
@@ -1435,7 +1414,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         <div x-show="task.claimed_by" x-cloak data-testid="card-claim-capsule"
                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border"
                              :class="[
-                               cardDensity === 'compact' ? 'mt-1 px-1.5 py-0 text-[10px]' : 'mt-2 px-2 py-0.5 text-[11px]',
+                               cardDensityClass('claimCapsule'),
                                claimExpired(task)
                                  ? 'border-zinc-300/70 bg-zinc-100/80 dark:border-zinc-700/60 dark:bg-zinc-900/50'
                                  : 'border-indigo-200/80 bg-indigo-50/80 dark:border-indigo-800/70 dark:bg-indigo-950/60'
@@ -1467,7 +1446,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                              data-testid="card-subtask-progress"
                              :title="(task.subtask_done ?? 0) + ' of ' + task.subtask_total + ' subtasks done'"
                              class="flex flex-col rounded border border-zinc-200/90 bg-zinc-50/80 dark:border-zinc-700/70 dark:bg-zinc-800/60"
-                             :class="cardDensity === 'compact' ? 'mt-1 p-1 gap-0.5' : 'mt-2 p-1.5 gap-1'">
+                             :class="cardDensityClass('subtaskProgress')">
                           <div class="flex items-center justify-between text-[11px] font-medium leading-none">
                             <span class="inline-flex items-center gap-1"
                                   :class="(task.subtask_done ?? 0) >= task.subtask_total
@@ -1491,7 +1470,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                         </div>
 
                         <div class="card-meta-row flex flex-wrap items-center text-zinc-600 dark:text-zinc-400"
-                             :class="cardDensity === 'compact' ? 'mt-1 gap-x-2 gap-y-0.5 text-[11px]' : 'mt-2 gap-x-3 gap-y-1 text-xs'">
+                             :class="cardDensityClass('metaRow')">
                            <!-- Task short ID: the card's identity chip — muted monospace,
                                 full ULID in the title for copy/lookup. Light text is zinc-600
                                 (not zinc-500): on the zinc-100 chip fill that only reaches
@@ -1718,8 +1697,9 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                      >
                       Drop to move to <span x-text="col.label"></span>
                     </div>
+                    <!-- Column empty hint: ui/empty.ts EMPTY_STATE (flat root entry). -->
                     <p x-show="col.tasks.length === 0 && !(dragOverStatus === col.status && draggedFromStatus !== col.status)" x-cloak
-                        class="px-1 py-3 text-center text-xs italic text-zinc-600 dark:text-zinc-400">No tasks</p>
+                        :class="EMPTY_STATE.rowHint">No tasks</p>
                       <!-- Hidden in the archived view: creating a task into an archive-only column is
                            meaningless (it would land back on the live board anyway). -->
                        <button type="button" x-show="!showArchived" @click="openNewTask(col.status)"

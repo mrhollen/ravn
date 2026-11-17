@@ -36,9 +36,11 @@ import {
   STATUS_PILL_CLASS,
   THROUGHPUT_BAR_FILL,
 } from "../src/ui/tokens";
+import { EMPTY_STATE } from "../src/ui/empty";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CSS = fs.readFileSync(path.resolve(__dirname, "../src/style.css"), "utf-8");
+const INDEX_HTML = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
 
 test("tokens: every button variant class exists in style.css", () => {
   for (const [variant, name] of Object.entries(BUTTON_CLASS)) {
@@ -129,4 +131,20 @@ test("tokens: value tokens are non-empty strings", () => {
     assert.equal(typeof v, "string");
     assert.ok(v.trim().length > 0);
   }
+});
+
+test("tokens: empty-state tints are locked to the shipped strings", () => {
+  // "Shipped" = the board per-column "No tasks" hint and the projects empty
+  // body; byte-for-byte lock so an edit here can never drift the look.
+  // rowHint = the board per-column "No tasks" <p>; text = the projects empty
+  // body line (each token carries its full shipped class string).
+  assert.strictEqual(EMPTY_STATE.rowHint, "px-1 py-3 text-center text-xs italic text-zinc-600 dark:text-zinc-400");
+  assert.strictEqual(EMPTY_STATE.text, "mt-1 text-xs text-zinc-600 dark:text-zinc-400");
+});
+
+test("tokens: empty-state tints are consumed through the flat-root entry", () => {
+  // The templates bind EMPTY_STATE.{rowHint,text} instead of re-typing the
+  // utilities, so guard the USAGE rather than a raw literal in index.html.
+  assert.ok(INDEX_HTML.includes("EMPTY_STATE.rowHint"), "board column hint should bind EMPTY_STATE.rowHint");
+  assert.ok(INDEX_HTML.includes("EMPTY_STATE.text"), "projects empty state should bind EMPTY_STATE.text");
 });

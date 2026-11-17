@@ -25,6 +25,8 @@ import {
   FULLTEXT_SEARCH_LIMIT,
   formatEventDetail,
 } from "../src/app.ts";
+import { MENU_PANEL_CLASS } from "../src/ui/menu";
+import { CARD_SELECTED_CLASS } from "../src/ui/tokens";
 import { localYmd, withFetch, withWindow } from "./test-helpers.ts";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -700,10 +702,15 @@ test("Dropdown: index.html has no standalone New project button and wires the cu
   assert.match(html, /data-testid="project-menu"/);
   assert.match(html, /data-testid="new-project-item"[\s\S]*?@click="openNewProject\(\)"/);
   // Panel sits above board content but BELOW the detail modal (z-[60]) and
-  // toasts (z-50).
-  const panelClass = html.match(/<div data-testid="project-menu"[\s\S]{0,2000}?class="([^"]*)"/)?.[1];
-  assert.ok(panelClass, "menu panel div found");
-  assert.match(panelClass, /z-40/, "menu panel must be z-40 (under modal z-[60] and toasts z-50)");
+  // toasts (z-50). Phase 3: the class contract moved to ui/menu.ts (MENU_PANEL_CLASS,
+  // bound through the flat-root `menuPanelClass` entry) — assert the wiring AND
+  // the z-tier on the single source.
+  assert.match(
+    html,
+    /<div data-testid="project-menu"[\s\S]{0,600}?:class="menuPanelClass"/,
+    "menu panel binds the menuPanelClass flat-root entry",
+  );
+  assert.match(MENU_PANEL_CLASS, /z-40/, "menu panel must be z-40 (under modal z-[60] and toasts z-50)");
   // Escape in the panel must be .stop-scoped: with focus inside the panel this
   // handler closes the menu first, then the window-level dismissTop() would
   // re-evaluate the chain (projectMenuOpen already false) and ALSO collapse the
@@ -3298,8 +3305,14 @@ test("MultiSelect: index.html wires every batch-bar testid the E2E suite depends
   assert.ok(html.includes('data-testid="batch-custom-owner"'));
   assert.ok(html.includes('data-testid="batch-clear-owner"'));
   assert.ok(html.includes('@click="batchArchiveSelected()"'));
-  // Selection styling hooks + the CSS visibility rule.
-  assert.ok(html.includes("isTaskSelected(task.id) ? 'has-selection' : ''"));
+  // Selection styling hooks + the CSS visibility rule. Phase 3: the card's dynamic
+  // :class (including the AC1 selection marker) is composed by ui/card.ts
+  // boardCardClasses through the flat-root `boardCardClass` entry — assert the
+  // wiring AND that the marker token is the one style.css keys off.
+  assert.match(html, /:class="boardCardClass\(task, col\.status\)"/, "card binds the boardCardClass flat-root entry");
+  // The marker value is load-bearing: style.css keys .card-select-checkbox
+  // visibility off it (checked by the CSS rule assertion below).
+  assert.equal(CARD_SELECTED_CLASS, "has-selection");
   const css = fs.readFileSync(path.resolve(__dirname, "../src/style.css"), "utf-8");
   assert.match(css, /\.card-select-checkbox\s*{[^}]*opacity:\s*0/);
 });
