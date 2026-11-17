@@ -38,6 +38,7 @@ import type { NewTaskModule } from "./modules/new-task";
 import { createTaskEditModule } from "./modules/task-edit";
 import type { TaskEditModule } from "./modules/task-edit";
 import { createArchiveModule, type ArchiveModule } from "./modules/archive";
+import { createBatchModule, type BatchModule } from "./modules/batch";
 import { createDragModule, type DragModule, type SwipeState } from "./modules/drag";
 import { createAcsModule } from "./modules/acs";
 import type { AcsModule } from "./modules/acs";
@@ -101,7 +102,6 @@ import type {
   Status,
   TaskDetail,
   TaskSummary,
-  UpdateTaskReq,
 } from "./types";
 import { STATUSES, STATUS_LABEL } from "./types";
 import {
@@ -1565,276 +1565,98 @@ export function ravnApp() {
      *  names to offer as dropdown options (AC2). */
     batchCustomOwner: "",
 
+    // Behavior lives in modules/batch.ts (Phase 2 final sweep) — see module.
+    // All six fields above stay flat root state; these shims keep every
+    // index.html binding and root-level test byte-identical.
+    _batch: null as BatchModule | null,
+
+    _batchModule(): BatchModule {
+      if (this._batch) return this._batch;
+      const m = createBatchModule({
+        // state-in
+        selectedTaskIds: () => this.selectedTaskIds,
+        selectionAnchorId: () => this._selectionAnchorId,
+        batchBusy: () => this.batchBusy,
+        batchMoveMenuOpen: () => this.batchMoveMenuOpen,
+        batchPriorityMenuOpen: () => this.batchPriorityMenuOpen,
+        batchAssignMenuOpen: () => this.batchAssignMenuOpen,
+        board: () => this.board,
+        // state-out
+        setSelectedTaskIds: (v) => { this.selectedTaskIds = v; },
+        setSelectionAnchorId: (v) => { this._selectionAnchorId = v; },
+        setBatchBusy: (v) => { this.batchBusy = v; },
+        setBatchMoveMenuOpen: (v) => { this.batchMoveMenuOpen = v; },
+        setBatchPriorityMenuOpen: (v) => { this.batchPriorityMenuOpen = v; },
+        setBatchAssignMenuOpen: (v) => { this.batchAssignMenuOpen = v; },
+        // methods-out
+        columns: () => this.columns(),
+        availableAssignees: () => this.availableAssignees(),
+        actor: () => this.actor(),
+        toast: (msg, kind) => this.toast(msg, kind),
+        loadBoard: (force) => this.loadBoard(force),
+      });
+      this._batch = m;
+      return m;
+    },
+
     isTaskSelected(id: string): boolean {
-      return this.selectedTaskIds.has(id);
+      return this._batchModule().isTaskSelected(id);
     },
 
     selectedCount(): number {
-      return this.selectedTaskIds.size;
+      return this._batchModule().selectedCount();
     },
 
-    /** AC1: checkbox toggle. Re-anchors range selection to this card so the
-     *  next Shift+Click spans from it. Pure state — no network. */
     toggleSelectTask(id: string): void {
-      const next = new Set(this.selectedTaskIds);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      this.selectedTaskIds = next;
-      this._selectionAnchorId = id;
+      this._batchModule().toggleSelectTask(id);
     },
 
-    /** AC1: Shift+Click range select within ONE column — from the anchored
-     *  card to the clicked card, inclusive, over that column's currently
-     *  RENDERED (post-filter, post-sort, post-cap) order. Additive: cards
-     *  selected in other columns stay selected. Fallbacks keep it predictable:
-     *  no anchor yet → plain toggle of the clicked card (which sets the
-     *  anchor); anchor not visible in this column → plain toggle + re-anchor. */
     rangeSelectInColumn(id: string): void {
-      const anchor = this._selectionAnchorId;
-      if (!anchor) {
-        this.toggleSelectTask(id);
-        return;
-      }
-      const col = this.columns().find((c) => c.tasks.some((t) => t.id === id));
-      const anchorIdx = col ? col.tasks.findIndex((t) => t.id === anchor) : -1;
-      if (!col || anchorIdx < 0) {
-        // The anchor isn't in this column's visible order — a cross-column
-        // range is undefined, so degrade to a single-card toggle here.
-        this.toggleSelectTask(id);
-        return;
-      }
-      const ids = col.tasks.map((t) => t.id);
-      const from = Math.min(anchorIdx, ids.indexOf(id));
-      const to = Math.max(anchorIdx, ids.indexOf(id));
-      const next = new Set(this.selectedTaskIds);
-      for (let i = from; i <= to; i++) next.add(ids[i]);
-      this.selectedTaskIds = next;
-      // Anchor intentionally NOT moved: the next shift-click still spans from it.
+      this._batchModule().rangeSelectInColumn(id);
     },
 
-    /** AC2: select every card currently RENDERED across all three columns —
-     *  exactly the lists columns() hands to the template, so active filters
-     *  AND the Done-cap expansion state are honored by construction (beyond-
-     *  cap older done cards stay out until expanded; search bypasses the cap,
-     *  so a searched set is fully selectable). */
     selectAllVisible(): void {
-      if (!this.board) return;
-      const next = new Set(this.selectedTaskIds);
-      for (const col of this.columns()) for (const t of col.tasks) next.add(t.id);
-      this.selectedTaskIds = next;
+      this._batchModule().selectAllVisible();
     },
 
-    /** AC4 + bar "Clear": drop the whole selection and its transient UI. */
     clearSelection(): void {
-      if (this.selectedTaskIds.size === 0 && !this._selectionAnchorId) return;
-      this.selectedTaskIds = new Set<string>();
-      this._selectionAnchorId = null;
-      this.batchMoveMenuOpen = false;
-      this.batchPriorityMenuOpen = false;
-      this.batchAssignMenuOpen = false;
+      this._batchModule().clearSelection();
     },
 
     _closeBatchMenus(except?: "move" | "priority" | "assign"): void {
-      if (except !== "move") this.batchMoveMenuOpen = false;
-      if (except !== "priority") this.batchPriorityMenuOpen = false;
-      if (except !== "assign") this.batchAssignMenuOpen = false;
+      this._batchModule().closeBatchMenus(except);
     },
 
     toggleBatchMoveMenu(): void {
-      this.batchMoveMenuOpen = !this.batchMoveMenuOpen;
-      if (this.batchMoveMenuOpen) this._closeBatchMenus("move");
+      this._batchModule().toggleBatchMoveMenu();
     },
 
     toggleBatchPriorityMenu(): void {
-      this.batchPriorityMenuOpen = !this.batchPriorityMenuOpen;
-      if (this.batchPriorityMenuOpen) this._closeBatchMenus("priority");
+      this._batchModule().toggleBatchPriorityMenu();
     },
 
     toggleBatchAssignMenu(): void {
-      this.batchAssignMenuOpen = !this.batchAssignMenuOpen;
-      if (this.batchAssignMenuOpen) this._closeBatchMenus("assign");
+      this._batchModule().toggleBatchAssignMenu();
     },
 
-    /** Distinct assignee names present on the current project's tasks (the
-     *  same source as availableAssignees()), plus the owner-droplist "Clear"
-     *  affordance handled in the template. */
     batchAssigneeOptions(): string[] {
-      return this.availableAssignees();
+      return this._batchModule().batchAssigneeOptions();
     },
 
-    /** Owner type for a name: reuse the type already attached to a board row
-     *  carrying that assignee (agents stay agents), else default human. */
-    _assigneeTypeFor(name: string): "human" | "agent" {
-      const b = this.board;
-      if (b) {
-        for (const s of STATUSES) {
-          const row = b.tasks[s]?.find((t) => t.assignee?.name === name);
-          if (row?.assignee?.type === "agent") return "agent";
-        }
-      }
-      return "human";
-    },
-
-    // ---------------------------- AC3: robust batch execution ---------------
-    /** Shared engine for every batch action. Runs per-task, sequentially, each
-     *  PATCH version-guarded with the FRESHEST version in board state; a 409
-     *  re-reads that ONE task (api.getTask) and retries exactly once — the same
-     *  discipline as confirmArchiveAllDone(). Rows are located on board.tasks
-     *  (filters only hide cards, they never remove them from the snapshot); a
-     *  row no longer in the board (SSE refresh raced us) falls back to a direct
-     *  read for its version. Optimistic local mutation per success; ONE final
-     *  silent loadBoard settles counts/blocked state. Selection policy: full
-     *  success clears it, partial failure keeps ONLY the failed ids selected
-     *  so the user can re-run just those. Consolidated summary toast always. */
-    async _runBatch(
-      patchFor: (row: TaskSummary | null) => Partial<UpdateTaskReq>,
-      localApply: ((id: string, row: TaskSummary, result: TaskSummary) => void) | null,
-      alreadyApplied?: (fresh: { archived?: boolean }) => boolean,
-      /** Builds the success message from the ok-count; the engine appends the
-       *  "· N failed" suffix and picks error/info kind itself. */
-      toastText?: (ok: number) => string,
-    ): Promise<void> {
-      const ids = [...this.selectedTaskIds];
-      if (ids.length === 0 || this.batchBusy) return;
-      this.batchBusy = true;
-      this._closeBatchMenus();
-      let ok = 0;
-      const failed: string[] = [];
-      for (const id of ids) {
-        let row: TaskSummary | null = null;
-        if (this.board) {
-          for (const s of STATUSES) {
-            const found = this.board.tasks[s]?.find((t) => t.id === id);
-            if (found) {
-              row = found;
-              break;
-            }
-          }
-        }
-        try {
-          let version = row?.version ?? 0;
-          if (!row) version = (await api.getTask(id, { commentLimit: 1 })).version;
-          try {
-            const result = await api.updateTask(id, {
-              actor: this.actor(),
-              version,
-              ...patchFor(row),
-            });
-            if (row && localApply) localApply(id, row, result);
-            ok++;
-          } catch (e) {
-            if (!ApiError.isVersionConflict(e)) throw e;
-            // Stale version: re-read THIS task and retry once (AC3).
-            const fresh = await api.getTask(id, { commentLimit: 1 });
-            if (alreadyApplied && alreadyApplied(fresh)) {
-              // Someone else already made this exact change — treat as success.
-              if (row && localApply) localApply(id, row, row);
-              ok++;
-              continue;
-            }
-            const result = await api.updateTask(id, {
-              actor: this.actor(),
-              version: fresh.version,
-              ...patchFor(row),
-            });
-            if (row && localApply) localApply(id, row, result);
-            ok++;
-          }
-        } catch {
-          failed.push(id);
-        }
-      }
-      this.batchBusy = false;
-      if (ok > 0) await this.loadBoard(true).catch(() => undefined);
-      if (failed.length === 0) {
-        this.selectedTaskIds = new Set<string>();
-      } else {
-        this.selectedTaskIds = new Set(failed); // keep only the failures selected
-      }
-      this._selectionAnchorId = null;
-      const suffix = failed.length > 0 ? ` · ${failed.length} failed` : "";
-      const base = toastText ? toastText(ok) : `${ok} ${ok === 1 ? "task" : "tasks"}`;
-      this.toast(base + suffix, failed.length > 0 ? "error" : "info");
-    },
-
-    // ---------------------------- batch actions (AC2/AC3) --------------------
-    /** Move every selected card to a status. Rows already in that status are
-     *  still patched (server no-op) so the count stays honest; blocked tasks
-     *  crossing into Done fail per-row and surface in the summary, matching
-     *  the single-move flow's no-override-blockers policy. */
     async batchMoveTo(status: Status): Promise<void> {
-      await this._runBatch(
-        () => ({ status }),
-        (id, row, result) => {
-          if (!this.board) return;
-          const from = row.status;
-          if (from !== status) {
-            this.board.tasks[from] = this.board.tasks[from].filter((t) => t.id !== id);
-            if ((this.board.counts[from] ?? 0) > 0) this.board.counts[from]--;
-            this.board.tasks[status] = [...this.board.tasks[status], { ...row, status }];
-            this.board.counts[status] = (this.board.counts[status] ?? 0) + 1;
-          }
-          const current = this.board.tasks[status].find((t) => t.id === id);
-          if (current) Object.assign(current, result);
-        },
-        undefined,
-        (ok) => `Moved ${ok} ${ok === 1 ? "task" : "tasks"} to ${STATUS_LABEL[status]}`,
-      );
+      await this._batchModule().batchMoveTo(status);
     },
 
     async batchSetPriority(priority: number): Promise<void> {
-      await this._runBatch(
-        () => ({ priority }),
-        (id, row, result) => {
-          if (!this.board || !row.status) return;
-          const bucket = this.board.tasks[row.status];
-          const idx = bucket.findIndex((t) => t.id === id);
-          if (idx >= 0) bucket[idx] = { ...bucket[idx], ...result };
-        },
-        undefined,
-        (ok) => `Updated ${ok} ${ok === 1 ? "task" : "tasks"} to priority P${priority}`,
-      );
+      await this._batchModule().batchSetPriority(priority);
     },
 
-    /** Assign a durable owner to every selected card; name=null clears it.
-     *  The dropdown offers the project's existing assignee names (AC2) with a
-     *  Clear option; when none exist the bar falls back to free text. */
     async batchAssignOwner(name: string | null): Promise<void> {
-      const trimmed = name === null ? "" : name.trim();
-      if (name !== null && trimmed === "") return;
-      const type = this._assigneeTypeFor(trimmed);
-      await this._runBatch(
-        () => (trimmed ? { assignee: { name: trimmed, type } } : { clear_assignee: true }),
-        (id, row, result) => {
-          if (!this.board || !row.status) return;
-          const bucket = this.board.tasks[row.status];
-          const idx = bucket.findIndex((t) => t.id === id);
-          if (idx >= 0) bucket[idx] = { ...bucket[idx], assignee: result.assignee, version: result.version };
-        },
-        undefined,
-        (ok) =>
-          trimmed
-            ? `Assigned ${ok} ${ok === 1 ? "task" : "tasks"} to ${trimmed}`
-            : `Cleared owner on ${ok} ${ok === 1 ? "task" : "tasks"}`,
-      );
+      await this._batchModule().batchAssignOwner(name);
     },
 
-    /** Archive every selected card. Mirrors confirmArchiveAllDone's loop:
-     *  per-row version-guarded PATCH, one re-read + retry on 409 (skipping the
-     *  re-patch when someone already archived it), optimistic removal per
-     *  success, one settling reload at the end. */
     async batchArchiveSelected(): Promise<void> {
-      await this._runBatch(
-        () => ({ archived: true }),
-        (id, row, result) => {
-          if (!this.board) return;
-          const status = row.status || result.status; // status is stable across an archive
-          this.board.tasks[status] = this.board.tasks[status].filter((t) => t.id !== id);
-          if ((this.board.counts[status] ?? 0) > 0) this.board.counts[status]--;
-        },
-        (fresh) => fresh.archived === true,
-        (ok) => `Archived ${ok} selected ${ok === 1 ? "task" : "tasks"}`,
-      );
+      await this._batchModule().batchArchiveSelected();
     },
 
     // ------------------------------------------------------------------ filters
