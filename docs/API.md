@@ -389,6 +389,7 @@ extras (the web frontend uses them directly).
 | `GET  /projects/{id}`                 | project detail (UI)                                      | — |
 | `PUT  /projects/{id}`                 | rename/description/opencode-config edit (UI)             | — |
 | `GET  /projects/{id}/board`           | whole-project board snapshot (UI)                        | — |
+| `GET  /projects/{id}/report/history`  | UTC-aligned opened/completed time series (UI)            | — |
 | `GET  /projects/{id}/events`          | realtime SSE event stream scoped to the project (UI)     | — |
 | `GET  /events?project_id=…`           | same stream, query-scoped; `project_id` required (else `400`) | — |
 | `GET  /tasks`                         | filtered, ordered, paged task summaries                  | `list_tasks` |
@@ -730,6 +731,51 @@ with 3 criteria (1 done) and 2 comments whose most recent is a question renders:
 ```
 
 A row with no criteria and no comments omits all five badge keys.
+
+### GET /projects/{id}/report/history (UI)
+
+UTC-aligned time series of task creations (`opened`) and completions
+(`completed`, `cumulative_completed`) for dashboard charts, computed in memory
+from the project's non-archived tasks.
+
+Query parameters (both optional):
+
+- `days` — positive integer rolling window in days (default `30`; values `> 90`
+  are clamped to `90` rather than rejected; non-numeric or `<= 0` → `400 invalid_input`).
+- `bucket` — `"day"` (default; bucket starts at UTC `00:00:00Z`) or `"week"`
+  (ISO week starting Monday UTC `00:00:00Z`). Any other value → `400 invalid_input`.
+
+`cumulative_completed` is the running total of completed tasks through each
+bucket (including tasks completed before the start of the `days` window so the
+curve reflects cumulative project completions). Historical open-count / true
+burndown is intentionally out of scope (`done` is not terminal and
+`completed_at` clears on reopen).
+
+An empty project (no non-archived tasks) returns HTTP `200` with `"series": []`
+(never `null`). Unknown project → `404 not_found` (`resource: "project"`). Under
+`RAVN_SCOPING=membership`, requires project read (`viewer` or higher) access.
+
+```json
+{
+  "project_id": "01J3YV2NMB4D9C6K8F0H3L5P7Q",
+  "days": 7,
+  "bucket": "day",
+  "series": [
+    {
+      "bucket_start": "2026-09-19T00:00:00Z",
+      "opened": 2,
+      "completed": 0,
+      "cumulative_completed": 3
+    },
+    {
+      "bucket_start": "2026-09-20T00:00:00Z",
+      "opened": 0,
+      "completed": 1,
+      "cumulative_completed": 4
+    }
+  ]
+}
+```
 
 ### GET /projects/{id}/events · GET /events — realtime SSE streams
 

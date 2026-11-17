@@ -358,3 +358,42 @@ func (a *App) handleProjectReport(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, toProjectReport(rep))
 }
+
+// handleProjectReportHistory → GET /api/v1/projects/{id}/report/history:
+// UTC-aligned time-series of opened, completed, and cumulative_completed tasks
+// computed in memory from the project's non-archived tasks. Optional query
+// parameters:
+//
+//	days    positive integer (default 30, clamped to 90; <=0 or non-numeric → 400)
+//	bucket  "day" (UTC 00:00:00Z) or "week" (ISO week Monday UTC 00:00:00Z); default "day"
+//
+// Unknown project → 404; empty project → 200 with empty series ([]).
+func (a *App) handleProjectReportHistory(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pid, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	days, err := parseClampedPositiveInt(q.Get("days"), "days", application.DefaultHistoryDays, application.MaxHistoryDays)
+	if err != nil {
+		writeAppError(w, err, "project", pid)
+		return
+	}
+	bucket, err := parseReportBucket(q.Get("bucket"))
+	if err != nil {
+		writeAppError(w, err, "project", pid)
+		return
+	}
+	// T4: OpRead visibility gate BEFORE loading tasks (zero queries in default
+	// mode; membership mode rejects invisible projects without running it).
+	if _, ok := a.gateProject(w, r, declaredName(r), pid, domain.OpRead); !ok {
+		return
+	}
+	hist, err := a.Projects.ReportHistory(ctx, pid, application.ReportHistoryOptions{Days: days, Bucket: bucket})
+	if err != nil {
+		writeAppError(w, err, "project", pid)
+		return
+	}
+	writeJSON(w, http.StatusOK, toProjectReportHistory(hist))
+}

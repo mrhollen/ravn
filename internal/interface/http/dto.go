@@ -899,3 +899,41 @@ func toProjectReport(rep application.ProjectReport) projectReportDTO {
 	}
 	return out
 }
+
+// --- project report history (time-series) ------------------------------------
+
+// projectReportHistoryDTO is the wire form of application.ProjectReportHistory
+// (GET /api/v1/projects/{id}/report/history). Series is always non-nil ([] when
+// the project has no tasks, never null).
+type projectReportHistoryDTO struct {
+	ProjectID string                   `json:"project_id"`
+	Days      int                      `json:"days"`
+	Bucket    string                   `json:"bucket"`
+	Series    []reportHistoryBucketDTO `json:"series"`
+}
+
+// reportHistoryBucketDTO is one UTC-aligned time bucket in projectReportHistoryDTO.
+type reportHistoryBucketDTO struct {
+	BucketStart         string `json:"bucket_start"`
+	Opened              int    `json:"opened"`
+	Completed           int    `json:"completed"`
+	CumulativeCompleted int    `json:"cumulative_completed"`
+}
+
+func toProjectReportHistory(h application.ProjectReportHistory) projectReportHistoryDTO {
+	out := projectReportHistoryDTO{
+		ProjectID: h.ProjectID.String(),
+		Days:      h.Days,
+		Bucket:    string(h.Bucket),
+		Series:    make([]reportHistoryBucketDTO, 0, len(h.Series)),
+	}
+	for _, pt := range h.Series {
+		out.Series = append(out.Series, reportHistoryBucketDTO{
+			BucketStart:         rfc3339(pt.BucketStart),
+			Opened:              pt.Opened,
+			Completed:           pt.Completed,
+			CumulativeCompleted: pt.CumulativeCompleted,
+		})
+	}
+	return out
+}

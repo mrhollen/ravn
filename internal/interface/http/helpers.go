@@ -420,6 +420,39 @@ func parseTailLimit(v, name string) (int, error) {
 	return n, nil
 }
 
+// parseClampedPositiveInt parses an optional positive integer query parameter.
+// An empty string selects def. Non-numeric or <= 0 values fail with
+// domain.ErrInvalid (→ 400 invalid_input). Values above max are clamped to max
+// rather than rejected (same convention as parsePageParams).
+func parseClampedPositiveInt(v, name string, def, max int) (int, error) {
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%w: %s must be a positive integer, got %q", domain.ErrInvalid, name, v)
+	}
+	if n > max {
+		n = max
+	}
+	return n, nil
+}
+
+// parseReportBucket parses the optional ?bucket query parameter for report
+// history. Empty selects ReportBucketDay ("day"); only "day" or "week" are
+// accepted (else domain.ErrInvalid → 400 invalid_input).
+func parseReportBucket(v string) (application.ReportBucket, error) {
+	if v == "" {
+		return application.ReportBucketDay, nil
+	}
+	switch application.ReportBucket(v) {
+	case application.ReportBucketDay, application.ReportBucketWeek:
+		return application.ReportBucket(v), nil
+	default:
+		return "", fmt.Errorf("%w: bucket must be \"day\" or \"week\", got %q", domain.ErrInvalid, v)
+	}
+}
+
 // extractActor extracts actor metadata for requests where actor can be supplied
 // via body, request headers (X-Actor-Name, X-Actor-Type), or query parameters
 // (actor_name, actor_type, or actor). Returns actorInput and true if an actor was found.

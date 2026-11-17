@@ -284,6 +284,24 @@ export interface Board {
   tasks: Record<Status, TaskSummary[]>; // all three keys always present ([] when empty)
 }
 
+export type ReportHistoryBucket = "day" | "week";
+
+/** One UTC-aligned time bucket in GET /projects/{id}/report/history. */
+export interface ReportHistoryPoint {
+  bucket_start: string; // RFC3339 UTC timestamp (00:00:00Z for day; ISO Monday 00:00:00Z for week)
+  opened: number; // tasks created in this bucket
+  completed: number; // tasks with completed_at in this bucket
+  cumulative_completed: number; // running total of completed tasks through this bucket
+}
+
+/** GET /projects/{id}/report/history — time-series activity for dashboard charts. */
+export interface ProjectReportHistory {
+  project_id: string;
+  days: number; // effective window in days (default 30, clamped <= 90)
+  bucket: ReportHistoryBucket;
+  series: ReportHistoryPoint[]; // [] when the project has no tasks — never null
+}
+
 /** POST /tasks → 201 body: fresh row + advisory duplicate candidates. */
 export interface CreateTaskResponse {
   task: TaskSummary;

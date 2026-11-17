@@ -403,17 +403,26 @@ func TestScoping_MembershipVisibility(t *testing.T) {
 	}
 	forbiddenBody(t, body, "project", "viewer")
 
-	// Board + report inherit the same gate.
-	for _, path := range []string{"/api/v1/projects/" + pLegacy + "/board", "/api/v1/projects/" + pLegacy + "/report"} {
+	// Board + report + report/history inherit the same gate.
+	for _, path := range []string{
+		"/api/v1/projects/" + pLegacy + "/board",
+		"/api/v1/projects/" + pLegacy + "/report",
+		"/api/v1/projects/" + pLegacy + "/report/history",
+	} {
 		code, body = authReq(t, stk.Handler, "GET", path, nil, tokB)
 		if code != http.StatusForbidden {
 			t.Fatalf("bob GET %s = %d, want 403: %s", path, code, body)
 		}
 	}
-	// ...and bob CAN read the visible project's board.
-	code, _ = authReq(t, stk.Handler, "GET", "/api/v1/projects/"+pAlice+"/board", nil, tokB)
-	if code != http.StatusOK {
-		t.Fatalf("bob GET visible board = %d, want 200", code)
+	// ...and bob CAN read the visible project's board and report history.
+	for _, path := range []string{
+		"/api/v1/projects/" + pAlice + "/board",
+		"/api/v1/projects/" + pAlice + "/report/history",
+	} {
+		code, _ = authReq(t, stk.Handler, "GET", path, nil, tokB)
+		if code != http.StatusOK {
+			t.Fatalf("bob GET %s = %d, want 200", path, code)
+		}
 	}
 }
 
