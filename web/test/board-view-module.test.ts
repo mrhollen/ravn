@@ -192,12 +192,20 @@ test("board view: syncUrlState writes the query via replaceState (immediate + de
   assert.equal(replaces, 2);
   assert.equal(url, "/?project=P&q=term2");
 
-  // Full-page task route: board URL sync must stay out of the way.
+  // Full-page task route and dashboard route: board URL sync must stay out of the way.
   const taskWin = {
     location: { pathname: "/tasks/abc", search: "", hash: "" },
     history: { replaceState() { throw new Error("must not write on a task route"); } },
   };
   withWindow(taskWin, () => {
+    createBoardViewModule(makeBoardViewDeps(state)).syncUrlState(true);
+  });
+
+  const dashWin = {
+    location: { pathname: "/projects/proj-1/dashboard", search: "", hash: "" },
+    history: { replaceState() { throw new Error("must not write on a dashboard route"); } },
+  };
+  withWindow(dashWin, () => {
     createBoardViewModule(makeBoardViewDeps(state)).syncUrlState(true);
   });
 });

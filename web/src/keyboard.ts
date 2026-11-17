@@ -40,6 +40,8 @@ export interface EscapeContext {
   showMobileMenu?: boolean;
   /** Multi-selection is the last-resort Escape target (AC4). */
   hasSelection?: boolean;
+  /** Project dashboard view (returns to board when no overlay is open). */
+  dashboardOpen?: boolean;
 }
 
 /** What Escape should do, in strict top-most-first priority order. Null = no
@@ -68,7 +70,8 @@ export type EscapeAction =
   | "close-new-project"
   | "close-card-menu"
   | "close-mobile-menu"
-  | "clear-selection";
+  | "clear-selection"
+  | "close-dashboard";
 
 export function escapeAction(ctx: EscapeContext): EscapeAction | null {
   if (ctx.showShortcutHelp) return "close-help";
@@ -97,6 +100,7 @@ export function escapeAction(ctx: EscapeContext): EscapeAction | null {
   if (ctx.cardMenuOpen) return "close-card-menu";
   if (ctx.showMobileMenu) return "close-mobile-menu";
   if (ctx.hasSelection) return "clear-selection"; // AC4: last resort
+  if (ctx.dashboardOpen) return "close-dashboard";
   return null;
 }
 
@@ -106,15 +110,29 @@ export interface GlobalKeyContext {
   showNewTask?: boolean;
   showProjectSettings?: boolean;
   showShortcutHelp?: boolean;
+  detailOpen?: boolean;
+  showAuthModal?: boolean;
 }
 
-export type GlobalKeyAction = "new-task" | "focus-search" | "toggle-help";
+export type GlobalKeyAction = "new-task" | "focus-search" | "toggle-help" | "toggle-dashboard";
 
 /** Action for a bare (modifier-free, non-editable) keypress — null to ignore.
- *  "/" and "?" always act; "n" only when no tracked surface is open. */
+ *  "/" and "?" always act; "n" only when no tracked surface is open;
+ *  "d" toggles the dashboard when no modal/overlay is open. */
 export function globalKeyAction(key: string, ctx: GlobalKeyContext): GlobalKeyAction | null {
   if (key === "n" || key === "N") {
     return !(ctx.showNewTask || ctx.showProjectSettings || ctx.showShortcutHelp) ? "new-task" : null;
+  }
+  if (key === "d" || key === "D") {
+    return !(
+      ctx.showNewTask ||
+      ctx.showProjectSettings ||
+      ctx.showShortcutHelp ||
+      ctx.detailOpen ||
+      ctx.showAuthModal
+    )
+      ? "toggle-dashboard"
+      : null;
   }
   if (key === "/") return "focus-search";
   if (key === "?") return "toggle-help";

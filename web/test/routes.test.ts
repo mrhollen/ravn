@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import {
   MOBILE_DETAIL_MAX_WIDTH,
   buildBoardQueryString,
+  dashboardRoutePath,
+  dashboardRouteProjectIdFromPath,
   isMobileDetailViewport,
   parseBoardQueryParams,
   taskRouteIdFromPath,
@@ -35,6 +37,36 @@ test("routes: taskRouteIdFromPath — malformed %-sequence falls back to the raw
 test("routes: taskRoutePath encodes the id and pins the /tasks/ prefix", () => {
   assert.equal(taskRoutePath("abc-123"), "/tasks/abc-123");
   assert.equal(taskRoutePath("a b/c?d"), "/tasks/a%20b%2Fc%3Fd");
+});
+
+test("routes: dashboardRouteProjectIdFromPath — valid routes decode, everything else is null", () => {
+  assert.equal(
+    dashboardRouteProjectIdFromPath("/projects/01M75VJ7GWS2M6TZ2K5MVPQ4P6/dashboard"),
+    "01M75VJ7GWS2M6TZ2K5MVPQ4P6",
+  );
+  assert.equal(dashboardRouteProjectIdFromPath("/projects/%30%31ABC/dashboard"), "01ABC");
+  assert.equal(dashboardRouteProjectIdFromPath("/projects/%zz1/dashboard"), "%zz1");
+  assert.equal(dashboardRouteProjectIdFromPath(""), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/"), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/projects"), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/projects/proj-1"), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/projects/proj-1/board"), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/projects//dashboard"), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/projects/%20%20/dashboard"), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/projects/a/b/dashboard"), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/projects/proj-1/dashboard/"), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/projects/proj-1/dashboard/extra"), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/project/proj-1/dashboard"), null);
+  assert.equal(dashboardRouteProjectIdFromPath("/tasks/proj-1"), null);
+});
+
+test("routes: dashboardRoutePath encodes the projectId and round-trips", () => {
+  assert.equal(dashboardRoutePath("proj-123"), "/projects/proj-123/dashboard");
+  assert.equal(dashboardRoutePath("a b/c?d"), "/projects/a%20b%2Fc%3Fd/dashboard");
+  assert.equal(
+    dashboardRouteProjectIdFromPath(dashboardRoutePath("01M75VJ7GWS2M6TZ2K5MVPQ4P6")),
+    "01M75VJ7GWS2M6TZ2K5MVPQ4P6",
+  );
 });
 
 test("routes: parseBoardQueryParams — full valid payload round-trips", () => {

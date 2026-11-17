@@ -22,6 +22,7 @@ import type { SortDir, SortKey } from "../sort";
 import { attentionBadgeKind as badgeKindFor, countStalledExpired } from "../filters";
 import {
   buildBoardQueryString as buildQueryFor,
+  dashboardRouteProjectIdFromPath,
   parseBoardQueryParams,
   taskRouteIdFromPath,
   type BoardQueryParams,
@@ -182,12 +183,21 @@ export function createBoardViewModule(deps: BoardViewDeps): BoardViewModule {
     return q ? `/${q}` : "/";
   }
 
+  function isBoardUrlLockedRoute(): boolean {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      taskRouteIdFromPath(window.location.pathname) !== null ||
+      dashboardRouteProjectIdFromPath(window.location.pathname) !== null
+    );
+  }
+
   function syncUrlState(immediate = false): void {
     if (restoringUrlState) return;
     if (typeof window === "undefined" || !window.history?.replaceState) return;
-    if (taskRouteIdFromPath(window.location.pathname) !== null) return;
+    if (isBoardUrlLockedRoute()) return;
     const doSync = () => {
       urlSyncTimer = null;
+      if (isBoardUrlLockedRoute()) return;
       const query = buildBoardQueryString();
       const newUrl = "/" + query + (window.location.hash || "");
       const currentUrl =

@@ -7,6 +7,15 @@
 
 import { isSortKey, type SortDir, type SortKey } from "./sort";
 
+function decodeRouteSegment(raw: string): string | null {
+  try {
+    const id = decodeURIComponent(raw);
+    return id.trim() === "" ? null : id;
+  } catch {
+    return raw; // malformed %-sequence — use the raw segment rather than throw
+  }
+}
+
 // ------------------------------------------------------ full-page task route
 /** Parse the client-side full-page task route `/tasks/<id>` out of a pathname.
  *  Returns null for the board route ("") or anything that is not exactly one
@@ -15,18 +24,26 @@ import { isSortKey, type SortDir, type SortKey } from "./sort";
  *  cmd/ravn-server), so the pathname can be trusted as-is. */
 export function taskRouteIdFromPath(pathname: string): string | null {
   const m = /^\/tasks\/([^/]+)$/.exec(pathname);
-  if (!m) return null;
-  try {
-    const id = decodeURIComponent(m[1]);
-    return id.trim() === "" ? null : id;
-  } catch {
-    return m[1]; // malformed %-sequence — use the raw segment rather than throw
-  }
+  return m ? decodeRouteSegment(m[1]) : null;
 }
 
 /** Pathname for task `id`'s full-page route. */
 export function taskRoutePath(id: string): string {
   return "/tasks/" + encodeURIComponent(id);
+}
+
+// ---------------------------------------------------- project dashboard route
+/** Parse the client-side project dashboard route `/projects/<id>/dashboard` out
+ *  of a pathname. Returns null for anything that is not exactly one non-empty,
+ *  non-whitespace project id segment under `/projects/<id>/dashboard`. */
+export function dashboardRouteProjectIdFromPath(pathname: string): string | null {
+  const m = /^\/projects\/([^/]+)\/dashboard$/.exec(pathname);
+  return m ? decodeRouteSegment(m[1]) : null;
+}
+
+/** Pathname for project `projectId`'s dashboard route. */
+export function dashboardRoutePath(projectId: string): string {
+  return "/projects/" + encodeURIComponent(projectId) + "/dashboard";
 }
 
 // ---------------------------------------------------------------- URL query sync

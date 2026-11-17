@@ -210,6 +210,41 @@ func TestStaticSPAFallbackServesIndexForDeepLinks(t *testing.T) {
 	}
 }
 
+func TestStaticSPAFallbackServesDashboardDeepLinkWithoutRedirect(t *testing.T) {
+	srv := startStaticTestServer(t)
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	for _, p := range []string{
+		"/projects/01M75VJ7GWS2M6TZ2K5MVPQ4P6/dashboard",
+		"/tasks/01M75VJ7GWS2M6TZ2K5MVPQ4P6",
+	} {
+		t.Run(p, func(t *testing.T) {
+			res, err := client.Get(srv.URL + p)
+			if err != nil {
+				t.Fatalf("GET %s: %v", p, err)
+			}
+			defer res.Body.Close()
+			body, err := io.ReadAll(res.Body)
+			if err != nil {
+				t.Fatalf("read body from %s: %v", p, err)
+			}
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s status = %d, want 200 without redirect (body %s)", p, res.StatusCode, body)
+			}
+			if loc := res.Header.Get("Location"); loc != "" {
+				t.Errorf("GET %s Location = %q, want no redirect", p, loc)
+			}
+			if string(body) != indexHTML {
+				t.Errorf("GET %s body = %q, want the dist index.html content", p, body)
+			}
+		})
+	}
+}
+
 // TestStaticDirectoryRequestIsNeverListed pins down a security property: a
 // directory request must never be delegated to http.FileServer, which would
 // emit an auto-generated HTML listing for any subdirectory lacking index.html

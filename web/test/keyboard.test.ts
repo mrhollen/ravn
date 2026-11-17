@@ -35,6 +35,7 @@ const CHAIN: { set: (c: EscapeContext) => void; token: EscapeAction }[] = [
   { set: (c) => { c.cardMenuOpen = true; }, token: "close-card-menu" },
   { set: (c) => { c.showMobileMenu = true; }, token: "close-mobile-menu" },
   { set: (c) => { c.hasSelection = true; }, token: "clear-selection" },
+  { set: (c) => { c.dashboardOpen = true; }, token: "close-dashboard" },
 ];
 
 test("escapeAction: every level selects its own token when it is the only open surface", () => {
@@ -68,6 +69,14 @@ test("globalKeyAction: bare-key dispatch table", () => {
   assert.equal(globalKeyAction("n", { showNewTask: true }), null);
   assert.equal(globalKeyAction("n", { showProjectSettings: true }), null);
   assert.equal(globalKeyAction("n", { showShortcutHelp: true }), null);
+  // "d" toggles dashboard — both casings, suppressed when overlays/modals are open.
+  assert.equal(globalKeyAction("d", closed), "toggle-dashboard");
+  assert.equal(globalKeyAction("D", closed), "toggle-dashboard");
+  assert.equal(globalKeyAction("d", { showNewTask: true }), null);
+  assert.equal(globalKeyAction("d", { showProjectSettings: true }), null);
+  assert.equal(globalKeyAction("d", { showShortcutHelp: true }), null);
+  assert.equal(globalKeyAction("d", { detailOpen: true }), null);
+  assert.equal(globalKeyAction("d", { showAuthModal: true }), null);
   // "/" and "?" always act, even with surfaces open.
   assert.equal(globalKeyAction("/", closed), "focus-search");
   assert.equal(globalKeyAction("/", { showNewTask: true }), "focus-search");

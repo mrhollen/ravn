@@ -274,7 +274,7 @@
                 :disabled="!appBooted || !selectedProjectId"
                 :aria-pressed="dashboardOpen ? 'true' : 'false'"
                 @click="toggleDashboard()"
-                title="Project dashboard"
+                title="Project dashboard (d)"
                 class="focus-ring inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm font-medium shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                 :class="dashboardOpen
                   ? 'border-indigo-400 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-indigo-300 dark:hover:bg-indigo-900/60'
@@ -477,8 +477,35 @@ DOM-placed after the collapsible strip: on md+ it renders flush
         <template x-if="!isMobile">
         <div class="-mx-4 -mb-2 w-[calc(100%+2rem)] flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-zinc-200/80 bg-zinc-50/70 px-4 py-1.5 text-xs dark:border-zinc-800 dark:bg-zinc-950"
              x-cloak
-             :class="board && !fullPageOpen && !dashboardOpen ? 'flex' : 'hidden'">
+             :class="(board || dashboardOpen) && !fullPageOpen ? 'flex' : 'hidden'">
           <div class="flex min-w-0 flex-wrap items-center gap-2.5">
+            <!-- Docked view navigation (Board <-> Dashboard) -->
+            <nav aria-label="Workspace view"
+                 class="inline-flex items-stretch overflow-hidden rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+              <button type="button" data-testid="docked-board-nav-btn"
+                      @click="closeDashboard()"
+                      :aria-pressed="!dashboardOpen ? 'true' : 'false'"
+                      class="focus-ring inline-flex items-center gap-1 px-2.5 py-1 font-medium transition-colors"
+                      :class="!dashboardOpen
+                        ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                        : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+                Board
+              </button>
+              <span class="w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
+              <button type="button" data-testid="docked-dashboard-nav-btn"
+                      :disabled="!appBooted || !selectedProjectId"
+                      :aria-pressed="dashboardOpen ? 'true' : 'false'"
+                      @click="toggleDashboard()"
+                      title="Project dashboard (d)"
+                      class="focus-ring inline-flex items-center gap-1 px-2.5 py-1 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                      :class="dashboardOpen
+                        ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                        : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
+                Dashboard
+              </button>
+            </nav>
+
+            <div class="flex min-w-0 flex-wrap items-center gap-2.5" x-show="!dashboardOpen" x-cloak>
             <!-- Compact search input (magnifier icon; same x-model as before).
                  The visible "Search" label is deliberate: theme.spec.ts samples
                  its secondary-text contrast (WCAG 1.4.3) on board, so the
@@ -582,10 +609,12 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               <span x-text="stalledExpiredCount()"></span>
               <span>stalled</span>
             </button>
+            </div>
           </div>
 
           <!-- Joined Sort split-capsule: Sort by | direction (+ conditional Clear) -->
-          <div class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+          <div x-show="!dashboardOpen" x-cloak
+               class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
             <label class="flex items-center gap-1.5 px-2.5 py-0.5 text-zinc-700 dark:text-zinc-200" title="Sort cards">
               <span class="text-zinc-600 dark:text-zinc-400">Sort by</span>
               <select x-model="sortKey" @change="setSort()"
@@ -683,6 +712,19 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       :aria-expanded="showNewProject ? 'true' : 'false'"
                       class="btn-secondary w-full">New project</button>
             </div>
+            <button type="button" data-testid="mobile-dashboard-nav-btn"
+                    @click="toggleDashboard(); showMobileMenu = false"
+                    :disabled="!appBooted || !selectedProjectId"
+                    :aria-pressed="dashboardOpen ? 'true' : 'false'"
+                    class="tap-target btn-secondary mt-2 flex w-full items-center justify-center gap-1.5"
+                    :class="dashboardOpen
+                      ? 'border-indigo-400 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-indigo-300 dark:hover:bg-indigo-900/60'
+                      : ''">
+              <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 13h4v8H3v-8zm7-8h4v16h-4V5zm7 4h4v12h-4V9z" />
+              </svg>
+              <span x-text="dashboardOpen ? 'Back to board' : 'Dashboard'"></span>
+            </button>
           </div>
 
           <div class="border-t border-zinc-200 dark:border-zinc-700"></div>

@@ -73,6 +73,8 @@ import {
   readStoredSort,
 } from "./sort";
 import {
+  dashboardRoutePath,
+  dashboardRouteProjectIdFromPath,
   isMobileDetailViewport,
   parseBoardQueryParams,
   taskRouteIdFromPath,
@@ -144,6 +146,8 @@ export type { SortDir, SortKey } from "./sort";
 export {
   MOBILE_DETAIL_MAX_WIDTH,
   buildBoardQueryString,
+  dashboardRoutePath,
+  dashboardRouteProjectIdFromPath,
   isMobileDetailViewport,
   parseBoardQueryParams,
   taskRouteIdFromPath,
@@ -2142,6 +2146,13 @@ export function ravnApp() {
     },
 
     syncUrlState(immediate = false): void {
+      if (
+        this.dashboardOpen ||
+        (typeof window !== "undefined" &&
+          dashboardRouteProjectIdFromPath(window.location.pathname) !== null)
+      ) {
+        return;
+      }
       this._boardViewModule().syncUrlState(immediate);
     },
 
@@ -2232,6 +2243,13 @@ export function ravnApp() {
       void this.loadBoard();
       if (this.dashboardOpen) {
         void this._dashboardModule().loadReport(false);
+        if (
+          typeof window !== "undefined" &&
+          window.history?.replaceState &&
+          this.selectedProjectId
+        ) {
+          window.history.replaceState(null, "", dashboardRoutePath(this.selectedProjectId));
+        }
       }
       this.scheduleFullTextSearch();
       this.syncUrlState(true);
@@ -2343,15 +2361,11 @@ export function ravnApp() {
     },
 
     openDashboard(): void {
-      if (this.fullPageOpen) {
-        this.requestCloseDetail();
-        if (this.fullPageOpen) return;
-      }
-      this._dashboardModule().openDashboard();
+      this._openDashboardNav();
     },
 
     closeDashboard(): void {
-      this._dashboardModule().closeDashboard();
+      this._closeDashboardNav();
     },
 
     toggleDashboard(): void {
@@ -2577,6 +2591,10 @@ export function ravnApp() {
      *  no board entry behind them — closing those must replaceState('/') and
      *  never history.back(), which would navigate out of the app. */
     fullPagePushed: false,
+    /** True when WE pushed /projects/<id>/dashboard via pushState. Deep links
+     *  and popstate navigations set false so closing replaces with boardUrl()
+     *  instead of popping out of the app. */
+    dashboardPushed: false,
 
     async openTask(id: string): Promise<void> {
       // Unsaved notes belong to the task being left — ask before dropping them
@@ -2680,7 +2698,7 @@ export function ravnApp() {
       this.closeDetail();
     },
 
-    closeDetail(): void {
+    closeDetail(syncHistory = true): void {
       const wasFullPage = this.fullPageOpen;
       const pushedEntry = this.fullPagePushed;
       this.statusMenuOpen = false;
@@ -2721,12 +2739,13 @@ export function ravnApp() {
       this.fullPageOpen = false;
       this.fullPagePushed = false;
       // History sync: a FULL-PAGE close must leave the URL honest. An entry we
-      // pushed is popped — the resulting popstate lands on "/" and is a no-op
-      // because state is already closed. A deep-linked open has NO board entry
-      // behind it, so popping would navigate OUT of the app: replace instead.
-      // (When closing from a popstate-driven back, the pathname is already "/"
-      // and neither branch fires — idempotent.)
+      // pushed is popped — the resulting popstate lands on the prior route
+      // (board "/" or dashboard "/projects/<id>/dashboard"). A deep-linked open
+      // has NO prior entry behind it, so popping would navigate OUT of the app:
+      // replace instead. (When closing from a popstate-driven back or direct
+      // route transition, syncHistory=false skips history mutation.)
       if (
+        syncHistory &&
         wasFullPage &&
         typeof window !== "undefined" &&
         taskRouteIdFromPath(window.location.pathname) !== null
@@ -2734,20 +2753,25 @@ export function ravnApp() {
         if (pushedEntry) window.history.back();
         else window.history.replaceState(null, "", this.boardUrl());
       }
-      // Drawer closed → the tab title reverts to the board view. (Recomputes:
+      // Drawer closed → the tab title reverts to the active view. (Recomputes:
       // detailOpen is now false, so any stale `detail` object can't leak its
-      // title into the board state — WCAG 2.4.2.)
+      // title into the board/dashboard state — WCAG 2.4.2.)
       this.updateDocumentTitle();
     },
 
     /** Switch the open task's detail to the FULL-PAGE view. Pushes /tasks/<id>
-     *  so browser back returns to the board; a URL that is already on a task
-     *  route (deep link) is adopted as-is instead of piling another entry on
-     *  top. `id` defaults to the loaded detail's id — openTask() passes it
-     *  explicitly for mobile opens, where the fetch has not landed yet. */
+     *  so browser back returns to the previous view (board or dashboard); a URL
+     *  that is already on a task route (deep link) is adopted as-is instead of
+     *  piling another entry on top. `id` defaults to the loaded detail's id —
+     *  openTask() passes it explicitly for mobile opens, where the fetch has not
+     *  landed yet. */
     openFullPage(id?: string): void {
       const taskId = id ?? this.detail?.id;
       if (!taskId || typeof window === "undefined") return;
+      if (this.dashboardOpen) {
+        this.dashboardPushed = false;
+        this._dashboardModule().closeDashboard();
+      }
       this.fullPageOpen = true;
       if (taskRouteIdFromPath(window.location.pathname) !== taskId) {
         window.history.pushState(null, "", taskRoutePath(taskId));
@@ -2755,17 +2779,97 @@ export function ravnApp() {
       } else {
         this.fullPagePushed = false; // deep link — no entry of ours to pop later
       }
+      this.updateDocumentTitle();
+    },
+
+    /** Open project dashboard view and push `/projects/<id>/dashboard` onto
+     *  browser history unless already on that route. Closes any open task detail
+     *  (prompting on unsaved edits) without calling history.back(). */
+    _openDashboardNav(): void {
+      if (!this.selectedProjectId) return;
+      if (this.detailOpen) {
+        if (this.notesDirty) {
+          this.promptUnsavedNotes({ kind: "close" });
+          return;
+        }
+        if (!this.discardEditDraftIfConfirmed()) return;
+        this.closeDetail(false);
+      }
+      if (!this.dashboardOpen) {
+        this._dashboardModule().openDashboard();
+      }
+      if (typeof window !== "undefined" && window.history?.pushState) {
+        const target = dashboardRoutePath(this.selectedProjectId);
+        if (dashboardRouteProjectIdFromPath(window.location.pathname) !== this.selectedProjectId) {
+          window.history.pushState(null, "", target);
+          this.dashboardPushed = true;
+        } else {
+          this.dashboardPushed = false;
+        }
+      }
+    },
+
+    /** Close project dashboard view and reconcile the URL back to the board.
+     *  When we pushed `/projects/<id>/dashboard`, history.back() pops it so
+     *  Forward returns cleanly; on a deep-linked open (no prior entry),
+     *  replaceState avoids navigating out of the app. */
+    _closeDashboardNav(syncHistory = true): void {
+      const wasOpen = this.dashboardOpen;
+      const pushedEntry = this.dashboardPushed;
+      this.dashboardPushed = false;
+      if (wasOpen) {
+        this._dashboardModule().closeDashboard();
+      }
+      if (
+        syncHistory &&
+        wasOpen &&
+        typeof window !== "undefined" &&
+        dashboardRouteProjectIdFromPath(window.location.pathname) !== null
+      ) {
+        if (pushedEntry && typeof window.history?.back === "function") {
+          window.history.back();
+        } else if (typeof window.history?.replaceState === "function") {
+          window.history.replaceState(null, "", this.boardUrl());
+        }
+      }
+    },
+
+    /** Adopt `/projects/<id>/dashboard` from a popstate navigation without
+     *  pushing history. */
+    _adoptDashboardFromRoute(projectId: string): void {
+      if (this.projects.length > 0 && !this.projects.some((p) => p.id === projectId)) {
+        this.toast("Project not found", "error");
+        if (typeof window !== "undefined") window.history.replaceState(null, "", this.boardUrl());
+        return;
+      }
+      if (this.selectedProjectId !== projectId) {
+        this.selectedProjectId = projectId;
+        try {
+          safeStorage.setItem(LS_PROJECT, projectId);
+        } catch { /* private mode */ }
+        this.resetBlockedCache(projectId);
+        this.dashboardReport = null;
+        this.dashboardError = "";
+        this._dashboardModule().invalidatePendingLoads();
+        this.connectSse();
+        void this.loadBoard();
+      }
+      this.dashboardPushed = false;
+      this._dashboardModule().openDashboard();
     },
 
     /** Reconcile app state with the URL after a browser navigation (back /
-     *  forward). The pathname is the source of truth for the full-page view:
-     *  `/tasks/<id>` opens that task as a full page (adopting its project for
-     *  board/SSE context); anything else closes an open full page. Never
-     *  writes history here — the navigation already happened. */
+     *  forward). The pathname is the source of truth across `/tasks/<id>`,
+     *  `/projects/<id>/dashboard`, and the board `/`. Never writes history for
+     *  forward/back steps — the navigation already happened. */
     onPopState(): void {
       if (typeof window === "undefined") return;
       const id = taskRouteIdFromPath(window.location.pathname);
+      const dashProjectId = dashboardRouteProjectIdFromPath(window.location.pathname);
       if (id) {
+        if (this.dashboardOpen) {
+          this._closeDashboardNav(false);
+        }
         if (!this.detailOpen || this.detailId !== id) {
           void (async (): Promise<void> => {
             try {
@@ -2775,6 +2879,7 @@ export function ravnApp() {
                 try {
                   safeStorage.setItem(LS_PROJECT, t.project_id);
                 } catch { /* private mode */ }
+                this.resetBlockedCache(t.project_id);
                 await this.loadBoard();
               }
               // The entry is already in history — a close must replaceState, not back().
@@ -2792,18 +2897,72 @@ export function ravnApp() {
           // Forward navigation onto the already-open task: just re-arm page mode.
           this.fullPageOpen = true;
           this.fullPagePushed = false;
+          this.updateDocumentTitle();
         }
+      } else if (dashProjectId) {
+        if (this.detailOpen) {
+          this.closeDetail(false);
+        }
+        this._adoptDashboardFromRoute(dashProjectId);
       } else {
-        if (this.fullPageOpen) {
-          this.closeDetail();
+        if (this.detailOpen) {
+          this.closeDetail(false);
+        }
+        if (this.dashboardOpen) {
+          this._closeDashboardNav(false);
         }
         const oldProject = this.selectedProjectId;
         const search = window.location.search || "";
         const params = parseBoardQueryParams(search);
         this.applyQueryParams(params, true);
         if (this.selectedProjectId && this.selectedProjectId !== oldProject) {
+          this.resetBlockedCache(this.selectedProjectId);
           void this.loadBoard();
+          this.connectSse();
         }
+      }
+    },
+
+    /** Deep link on first load: `/projects/<id>/dashboard` in the initial URL.
+     *  Adopts `<id>` as selected project (overriding any stored selection),
+     *  connects SSE, loads the board, and opens the dashboard. */
+    async openDeepLinkedDashboard(projectId: string, fromBootError = false): Promise<void> {
+      const known = this.projects.some((p) => p.id === projectId);
+      if (!known && !fromBootError) {
+        this.toast("Project not found", "error");
+        if (typeof window !== "undefined") window.history.replaceState(null, "", this.boardUrl());
+        const fallbackKnown = this.projects.some((p) => p.id === this.selectedProjectId);
+        if (!fallbackKnown || !this.selectedProjectId) {
+          this.selectedProjectId = this.projects[0]?.id ?? "";
+        }
+        if (this.selectedProjectId) {
+          try {
+            safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
+          } catch { /* ignore */ }
+          await this.loadBoard();
+          this.connectSse();
+        } else {
+          this.showNewProject = true;
+        }
+        return;
+      }
+      if (this.selectedProjectId !== projectId) {
+        this.selectedProjectId = projectId;
+        this.resetBlockedCache(projectId);
+      }
+      if (!fromBootError) {
+        try {
+          safeStorage.setItem(LS_PROJECT, projectId);
+        } catch { /* private mode */ }
+      }
+      this.dashboardReport = null;
+      this.dashboardError = "";
+      this._dashboardModule().invalidatePendingLoads();
+      this.dashboardPushed = false;
+      this._dashboardModule().openDashboard();
+      if (!fromBootError) {
+        this.connectSse();
+        await this.loadBoard();
       }
     },
 
@@ -4428,10 +4587,17 @@ export function ravnApp() {
         showNewTask: this.showNewTask,
         showProjectSettings: this.showProjectSettings,
         showShortcutHelp: this.showShortcutHelp,
+        detailOpen: this.detailOpen,
+        showAuthModal: this.showAuthModal,
       });
       if (action === "new-task") {
         e.preventDefault();
         this.openNewTask("todo");
+      } else if (action === "toggle-dashboard") {
+        if (this.appBooted && this.selectedProjectId) {
+          e.preventDefault();
+          this.toggleDashboard();
+        }
       } else if (action === "focus-search") {
         e.preventDefault();
         const searchInput = document.querySelector('input[x-model="filterSearch"]') as HTMLInputElement | null;
@@ -4475,6 +4641,7 @@ export function ravnApp() {
         cardMenuOpen: Boolean(this.cardMenuTaskId),
         showMobileMenu: this.showMobileMenu,
         hasSelection: this.selectedTaskIds.size > 0,
+        dashboardOpen: this.dashboardOpen,
       });
       if (!act) return;
       switch (act) {
@@ -4553,6 +4720,9 @@ export function ravnApp() {
           // AC4: last-resort Escape clears the multi-selection — only reached
           // when every other surface (drawer, dialogs, menus) is already closed.
           this.clearSelection();
+          break;
+        case "close-dashboard":
+          this.closeDashboard();
           break;
       }
     },
@@ -4712,9 +4882,11 @@ export function ravnApp() {
       // session) so the header can show it reactively; a non-session/off-mode token
       // simply resolves to "no identity" without disturbing boot or the token.
       void this.refreshSessionIdentity();
-      // Deep link: the initial URL may already be a full-page task route.
+      // Deep link: the initial URL may already be a full-page task or dashboard route.
       const deepLinkedTaskId =
         typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
+      const deepLinkedDashboardProjectId =
+        typeof window !== "undefined" ? dashboardRouteProjectIdFromPath(window.location.pathname) : null;
       if (this.loadError) {
         // Boot projects fetch failed — network blip or backend still starting.
         // Do NOT validate the selection against an empty list that is the
@@ -4726,6 +4898,8 @@ export function ravnApp() {
           // A full-page task open carries its own fetch + error/retry state, so
           // it proceeds even when the projects list failed to load.
           await this.openDeepLinkedTask(deepLinkedTaskId);
+        } else if (deepLinkedDashboardProjectId) {
+          await this.openDeepLinkedDashboard(deepLinkedDashboardProjectId, true);
         } else {
           this.bootError = true;
           // Move focus to Retry as soon as it is rendered — x-show flushes on
@@ -4738,7 +4912,7 @@ export function ravnApp() {
           this._focusWhenVisible(retryBtn);
         }
       } else {
-        await this.continueBoot(deepLinkedTaskId);
+        await this.continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId);
       }
       if (this.polling) this.startPolling();
       // Boot finished: the Projects dropdown trigger may now be clicked
@@ -4752,13 +4926,18 @@ export function ravnApp() {
      *  id falls back to the first project), persist it, load the board and
      *  connect SSE — or invite creating a project when the server is genuinely
      *  empty. Only ever called AFTER a successful projects fetch. */
-    async continueBoot(deepLinkedTaskId: string | null): Promise<void> {
+    async continueBoot(
+      deepLinkedTaskId: string | null,
+      deepLinkedDashboardProjectId: string | null = null,
+    ): Promise<void> {
       const known = this.projects.some((p) => p.id === this.selectedProjectId);
       if (!known || !this.selectedProjectId) {
         this.selectedProjectId = this.projects[0]?.id ?? "";
       }
       if (deepLinkedTaskId) {
         await this.openDeepLinkedTask(deepLinkedTaskId);
+      } else if (deepLinkedDashboardProjectId) {
+        await this.openDeepLinkedDashboard(deepLinkedDashboardProjectId);
       } else if (this.selectedProjectId) {
         try {
           safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
@@ -4792,7 +4971,9 @@ export function ravnApp() {
         this.bootError = false;
         const deepLinkedTaskId =
           typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
-        await this.continueBoot(deepLinkedTaskId);
+        const deepLinkedDashboardProjectId =
+          typeof window !== "undefined" ? dashboardRouteProjectIdFromPath(window.location.pathname) : null;
+        await this.continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId);
       } finally {
         this.bootRetrying = false;
       }

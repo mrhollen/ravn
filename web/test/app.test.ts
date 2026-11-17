@@ -3873,6 +3873,238 @@ test("Artifacts: deleteArtifact removes artifact after confirmation and toggleAr
   }
 });
 
+test("DashboardNav: openDashboard / closeDashboard push and pop /projects/<id>/dashboard, and deep-links replaceState", async () => {
+  const origGetReport = api.getProjectReport;
+  const origGetBoard = api.getBoard;
+  const historyStack: string[] = ["/"];
+  let idx = 0;
+  let backCalls = 0;
+  const replaced: string[] = [];
+
+  const syncLoc = (win: any, url: string) => {
+    const q = url.indexOf("?");
+    win.location.pathname = q === -1 ? url : (url.slice(0, q) || "/");
+    win.location.search = q === -1 ? "" : url.slice(q);
+  };
+
+  const win: any = {
+    innerWidth: 1280,
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    location: { pathname: "/", search: "", hash: "" },
+    history: {
+      pushState(_s: unknown, _t: string, url: string) {
+        historyStack.splice(idx + 1);
+        historyStack.push(url);
+        idx = historyStack.length - 1;
+        syncLoc(win, url);
+      },
+      replaceState(_s: unknown, _t: string, url: string) {
+        replaced.push(url);
+        historyStack[idx] = url;
+        syncLoc(win, url);
+      },
+      back() {
+        backCalls++;
+        if (idx > 0) {
+          idx--;
+          syncLoc(win, historyStack[idx]);
+        }
+      },
+    },
+  };
+
+  try {
+    (api as any).getProjectReport = async (pid: string) => ({
+      project_id: pid,
+      counts: { by_status: { todo: 1, doing: 0, done: 0 }, by_priority: {} },
+      active_claims: [],
+      expired_claims: [],
+      stalled_tasks: [],
+      bottlenecks: [],
+      open_blocked_by: [],
+      recently_completed: [],
+      workload: {},
+    });
+    (api as any).getBoard = async (pid: string) => ({
+      project_id: pid,
+      columns: { todo: [], doing: [], done: [] },
+    });
+
+    await withWindow(win, async () => {
+      const app = ravnApp() as any;
+      app.projects = [
+        { id: "proj-a", name: "Alpha" },
+        { id: "proj-b", name: "Beta" },
+      ];
+      app.selectedProjectId = "proj-a";
+      app.appBooted = true;
+
+      // 1. User-driven open pushes /projects/proj-a/dashboard
+      app.openDashboard();
+      assert.equal(app.dashboardOpen, true);
+      assert.equal(app.dashboardPushed, true);
+      assert.equal(win.location.pathname, "/projects/proj-a/dashboard");
+
+      // syncUrlState is a no-op while dashboardOpen
+      app.syncUrlState(true);
+      assert.equal(win.location.pathname, "/projects/proj-a/dashboard");
+
+      // 2. Switching project while on dashboard uses replaceState to update project segment
+      app.selectedProjectId = "proj-b";
+      app.selectProject();
+      assert.equal(win.location.pathname, "/projects/proj-b/dashboard");
+
+      // 3. Closing a pushed dashboard calls history.back()
+      app.closeDashboard();
+      assert.equal(app.dashboardOpen, false);
+      assert.equal(backCalls, 1);
+      assert.equal(win.location.pathname, "/");
+
+      // 4. Deep-linked boot adopts project even if another was stored, without pushing history
+      historyStack.length = 0;
+      historyStack.push("/projects/proj-b/dashboard");
+      idx = 0;
+      syncLoc(win, "/projects/proj-b/dashboard");
+      const app2 = ravnApp() as any;
+      app2.projects = [
+        { id: "proj-a", name: "Alpha" },
+        { id: "proj-b", name: "Beta" },
+      ];
+      app2.selectedProjectId = "proj-a"; // previously stored selection
+      app2.appBooted = true;
+      await app2.continueBoot(null, "proj-b");
+      assert.equal(app2.selectedProjectId, "proj-b");
+      assert.equal(app2.dashboardOpen, true);
+      assert.equal(app2.dashboardPushed, false);
+      assert.equal(win.location.pathname, "/projects/proj-b/dashboard");
+
+      // Closing a deep-linked dashboard uses replaceState (never history.back())
+      const backBefore = backCalls;
+      app2.closeDashboard();
+      assert.equal(backCalls, backBefore);
+      assert.equal(app2.dashboardOpen, false);
+      assert.equal(win.location.pathname, "/");
+      assert.ok(replaced.some((u) => u.startsWith("/?project=proj-b")));
+    });
+  } finally {
+    api.getProjectReport = origGetReport;
+    api.getBoard = origGetBoard;
+  }
+});
+
+test("DashboardNav: board <-> dashboard <-> /tasks/<id> popstate and keyboard shortcuts (d / Escape)", async () => {
+  const origGetReport = api.getProjectReport;
+  const origGetBoard = api.getBoard;
+  const origGetTask = api.getTask;
+
+  const win: any = {
+    innerWidth: 1280,
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    location: { pathname: "/", search: "", hash: "" },
+    history: {
+      pushState(_s: unknown, _t: string, url: string) {
+        win.location.pathname = url;
+        win.location.search = "";
+      },
+      replaceState(_s: unknown, _t: string, url: string) {
+        const q = url.indexOf("?");
+        win.location.pathname = q === -1 ? url : (url.slice(0, q) || "/");
+        win.location.search = q === -1 ? "" : url.slice(q);
+      },
+      back() {},
+    },
+  };
+
+  try {
+    (api as any).getProjectReport = async (pid: string) => ({
+      project_id: pid,
+      counts: { by_status: { todo: 0, doing: 0, done: 0 }, by_priority: {} },
+      active_claims: [],
+      expired_claims: [],
+      stalled_tasks: [],
+      bottlenecks: [],
+      open_blocked_by: [],
+      recently_completed: [],
+      workload: {},
+    });
+    (api as any).getBoard = async (pid: string) => ({
+      project_id: pid,
+      columns: { todo: [], doing: [], done: [] },
+    });
+    (api as any).getTask = async (id: string) => ({
+      id,
+      project_id: "proj-a",
+      title: "Detail Task",
+      status: "todo",
+      priority: 1,
+      comments: [],
+      acceptance_criteria: [],
+      artifacts: [],
+      relations: [],
+      events: [],
+    });
+
+    await withWindow(win, async () => {
+      const app = ravnApp() as any;
+      app.projects = [{ id: "proj-a", name: "Alpha" }];
+      app.selectedProjectId = "proj-a";
+      app.appBooted = true;
+
+      // Keyboard "d" opens dashboard
+      let prevented = false;
+      app.handleGlobalKeydown({
+        key: "d",
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        target: null,
+        preventDefault() { prevented = true; },
+      } as any);
+      assert.equal(prevented, true);
+      assert.equal(app.dashboardOpen, true);
+      assert.equal(win.location.pathname, "/projects/proj-a/dashboard");
+
+      // Opening full-page task from dashboard closes dashboard & pushes /tasks/<id>
+      app.detail = { id: "task-1", title: "Detail Task" };
+      app.detailOpen = true;
+      app.detailId = "task-1";
+      app.openFullPage("task-1");
+      assert.equal(app.dashboardOpen, false);
+      assert.equal(app.fullPageOpen, true);
+      assert.equal(win.location.pathname, "/tasks/task-1");
+
+      // Popstate back to /projects/proj-a/dashboard closes fullPage & opens dashboard
+      win.location.pathname = "/projects/proj-a/dashboard";
+      app.onPopState();
+      assert.equal(app.fullPageOpen, false);
+      assert.equal(app.detailOpen, false);
+      assert.equal(app.dashboardOpen, true);
+
+      // Popstate forward to /tasks/task-1 closes dashboard & opens fullPage
+      win.location.pathname = "/tasks/task-1";
+      app.onPopState();
+      await new Promise((r) => setTimeout(r, 10));
+      assert.equal(app.dashboardOpen, false);
+      assert.equal(app.fullPageOpen, true);
+
+      // Calling openDashboard() directly from fullPage closes detail without back() and pushes dashboard
+      app.openDashboard();
+      assert.equal(app.fullPageOpen, false);
+      assert.equal(app.detailOpen, false);
+      assert.equal(app.dashboardOpen, true);
+      assert.equal(win.location.pathname, "/projects/proj-a/dashboard");
+
+      // Escape closes dashboard when no overlay is open
+      app.dismissTop();
+      assert.equal(app.dashboardOpen, false);
+    });
+  } finally {
+    api.getProjectReport = origGetReport;
+    api.getBoard = origGetBoard;
+    api.getTask = origGetTask;
+  }
+});
+
 
 
 
