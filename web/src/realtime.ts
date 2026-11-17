@@ -1,6 +1,6 @@
 /**
- * Pure dispatch core for inbound realtime (SSE) events — extracted from
- * app.connectSse()/handleSseEvent() so the routing rules are unit-testable
+ * Pure cores for inbound realtime (SSE) events — the dispatch core, extracted
+ * from app.connectSse()/handleSseEvent() so the routing rules are unit-testable
  * without a browser, an EventSource, or the full Alpine component.
  *
  * Wire-format contract (see internal/interface/http/handlers_events.go): the
@@ -14,9 +14,15 @@
  * same, dispatching known kinds to the targeted refresh paths and unknown
  * kinds to the identical safe generic fallback. This module never throws on
  * unknown or malformed shapes: it returns a result descriptor instead.
+ *
+ * Also hosts the pure display-string formatting of event diffs
+ * (`formatEventDetail`, moved from app.ts as Phase 2 close-out F1): it maps an
+ * activity-event payload (kind/before/after) to the strings rendered in the
+ * Task Detail Activity list.
  */
 
 import type { RealtimeEventPayload } from "./types";
+import { shortId } from "./util";
 
 /** The canonical server event kinds this client generation was written
  *  against (mirrors domain.EventKind). Routing does NOT depend on this set —
@@ -167,4 +173,116 @@ export function dispatchRealtimeEvent(
   }
 
   return result;
+}
+
+/** Human-readable event diff formatter for the Task Detail Activity list. */
+export function formatEventDetail(e?: { kind: string; before?: string; after?: string } | null): string {
+  if (!e || !e.kind) return "";
+  let b: any = null;
+  let a: any = null;
+  if (e.before) {
+    try {
+      b = JSON.parse(e.before);
+    } catch {}
+  }
+  if (e.after) {
+    try {
+      a = JSON.parse(e.after);
+    } catch {}
+  }
+
+  switch (e.kind) {
+    case "status-changed": {
+      const from = b?.status;
+      const to = a?.status;
+      if (from && to) return `${from} → ${to}`;
+      if (to) return `status: ${to}`;
+      return "";
+    }
+    case "updated": {
+      const diffs: string[] = [];
+      if (b?.priority !== undefined && a?.priority !== undefined && b.priority !== a.priority) {
+        diffs.push(`P${b.priority} → P${a.priority}`);
+      } else if (a?.priority !== undefined && b?.priority === undefined) {
+        diffs.push(`priority P${a.priority}`);
+      }
+      if (b?.title !== undefined && a?.title !== undefined && b.title !== a.title) {
+        diffs.push("title updated");
+      }
+      if (b?.due_at !== undefined || a?.due_at !== undefined) {
+        if (!a?.due_at) diffs.push("due date cleared");
+        else diffs.push("due date updated");
+      }
+      if (b?.description !== undefined && a?.description !== undefined && b.description !== a.description) {
+        diffs.push("description updated");
+      }
+      return diffs.join(", ");
+    }
+    case "assigned": {
+      const assigneeName = a?.assignee?.name || (typeof a?.assignee === "string" ? a.assignee : "");
+      if (assigneeName) return `assignee: ${assigneeName}`;
+      if (b?.assignee && !a?.assignee) return "owner removed";
+      return "";
+    }
+    case "claimed": {
+      const holder = a?.holder?.name;
+      if (holder) return `claimed by ${holder}`;
+      return "claimed";
+    }
+    case "released": {
+      return "claim released";
+    }
+    case "heartbeat": {
+      return "lease extended";
+    }
+    case "noted": {
+      return "notes updated";
+    }
+    case "commented": {
+      const kind = a?.kind;
+      return kind ? `commented (${kind})` : "commented";
+    }
+    case "ac-toggled": {
+      const seq = a?.seq ?? b?.seq;
+      const done = a?.done;
+      if (seq !== undefined) {
+        return done ? `AC #${seq} completed` : `AC #${seq} reopened`;
+      }
+      return "";
+    }
+    case "ac-added": {
+      const seq = a?.seq;
+      return seq !== undefined ? `AC #${seq} added` : "AC added";
+    }
+    case "ac-updated": {
+      if (a?.reorder || b?.reorder) return "ACs reordered";
+      const seq = a?.seq ?? b?.seq;
+      return seq !== undefined ? `AC #${seq} updated` : "AC updated";
+    }
+    case "ac-removed": {
+      const seq = b?.seq ?? a?.seq;
+      return seq !== undefined ? `AC #${seq} removed` : "AC removed";
+    }
+    case "relation-changed": {
+      const target = a || b;
+      const action = target?.action || (a ? "added" : "removed");
+      const kind = target?.kind ? ` ${target.kind}` : "";
+      const other = target?.other_id ? ` ${shortId(target.other_id)}` : "";
+      return `${action}${kind}${other}`;
+    }
+    case "artifact-added": {
+      const kind = a?.kind || "artifact";
+      const filename = a?.filename ? ` (${a.filename})` : "";
+      return `attached ${kind}${filename}`;
+    }
+    case "artifact-removed": {
+      const kind = b?.kind || a?.kind || "artifact";
+      return `removed ${kind}`;
+    }
+    case "created": {
+      return "task created";
+    }
+    default:
+      return "";
+  }
 }

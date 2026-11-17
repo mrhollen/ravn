@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { dispatchRealtimeEvent, KNOWN_REALTIME_KINDS, type RealtimeDispatchHooks } from "../src/realtime.ts";
+import { dispatchRealtimeEvent, formatEventDetail, KNOWN_REALTIME_KINDS, type RealtimeDispatchHooks } from "../src/realtime.ts";
 import { ravnApp } from "../src/app.ts";
 import { withGlobals } from "./test-helpers.ts";
 
@@ -207,4 +207,134 @@ test("RealtimeDispatch: refreshDashboard hook is optional (omitting it leaves da
   const result = dispatchRealtimeEvent({ data: realtimePayload(), lastEventId: "frame-opt" }, hooks);
   assert.equal(result.status, "dispatched");
   assert.equal(result.dashboardRefreshed, false);
+});
+
+// --- formatEventDetail (moved from app.ts as Phase 2 close-out F1) ---
+
+test("formatEventDetail: empty/unknown input and unknown kinds render nothing", () => {
+  assert.equal(formatEventDetail(null), "");
+  assert.equal(formatEventDetail(undefined), "");
+  assert.equal(formatEventDetail({ kind: "" }), "");
+  assert.equal(formatEventDetail({ kind: "task-archived", after: "{}" }), "", "unknown kind is the safe fallback");
+});
+
+test("formatEventDetail: status-changed renders from → to, or a bare new status", () => {
+  assert.equal(
+    formatEventDetail({ kind: "status-changed", before: JSON.stringify({ status: "todo" }), after: JSON.stringify({ status: "doing" }) }),
+    "todo → doing"
+  );
+  assert.equal(formatEventDetail({ kind: "status-changed", after: JSON.stringify({ status: "done" }) }), "status: done");
+  assert.equal(formatEventDetail({ kind: "status-changed" }), "", "no payload at all renders nothing");
+});
+
+test("formatEventDetail: malformed before/after JSON degrades to the other side, or empty", () => {
+  assert.equal(
+    formatEventDetail({ kind: "status-changed", before: "{not json", after: JSON.stringify({ status: "doing" }) }),
+    "status: doing",
+    "a bad before is treated as absent — the new status still renders"
+  );
+  assert.equal(
+    formatEventDetail({ kind: "updated", before: JSON.stringify({ title: "Old" }), after: "{not json" }),
+    "",
+    "both sides unusable → no diff segments"
+  );
+});
+
+test("formatEventDetail: updated joins every changed field, priority and due-date aware", () => {
+  assert.equal(
+    formatEventDetail({ kind: "updated", before: JSON.stringify({ priority: 2 }), after: JSON.stringify({ priority: 4 }) }),
+    "P2 → P4"
+  );
+  assert.equal(
+    formatEventDetail({ kind: "updated", before: "{}", after: JSON.stringify({ priority: 3 }) }),
+    "priority P3",
+    "a first-set priority has no arrow form"
+  );
+  assert.equal(
+    formatEventDetail({ kind: "updated", before: JSON.stringify({ title: "Old", due_at: "2026-01-01" }), after: JSON.stringify({ title: "New", due_at: null }) }),
+    "title updated, due date cleared"
+  );
+  assert.equal(
+    formatEventDetail({ kind: "updated", before: "{}", after: JSON.stringify({ description: "x", due_at: "2026-01-01" }) }),
+    "due date updated"
+  );
+  assert.equal(formatEventDetail({ kind: "updated", before: "{}", after: "{}" }), "", "unchanged fields render nothing");
+});
+
+test("formatEventDetail: assigned covers object assignee, string assignee and owner removal", () => {
+  assert.equal(
+    formatEventDetail({ kind: "assigned", after: JSON.stringify({ assignee: { name: "alice" } }) }),
+    "assignee: alice"
+  );
+  assert.equal(formatEventDetail({ kind: "assigned", after: JSON.stringify({ assignee: "bob" }) }), "assignee: bob");
+  assert.equal(
+    formatEventDetail({ kind: "assigned", before: JSON.stringify({ assignee: { name: "alice" } }) }),
+    "owner removed"
+  );
+});
+
+test("formatEventDetail: claim lifecycle kinds render their fixed copy", () => {
+  assert.equal(
+    formatEventDetail({ kind: "claimed", after: JSON.stringify({ holder: { name: "bot-1" } }) }),
+    "claimed by bot-1"
+  );
+  assert.equal(formatEventDetail({ kind: "claimed" }), "claimed");
+  assert.equal(formatEventDetail({ kind: "released" }), "claim released");
+  assert.equal(formatEventDetail({ kind: "heartbeat" }), "lease extended");
+});
+
+test("formatEventDetail: noted and commented (with and without comment kind)", () => {
+  assert.equal(formatEventDetail({ kind: "noted" }), "notes updated");
+  assert.equal(formatEventDetail({ kind: "commented", after: JSON.stringify({ kind: "decision" }) }), "commented (decision)");
+  assert.equal(formatEventDetail({ kind: "commented" }), "commented");
+});
+
+test("formatEventDetail: AC events carry the seq, with completion/opening semantics and reorder detection", () => {
+  assert.equal(
+    formatEventDetail({ kind: "ac-toggled", before: JSON.stringify({ seq: 1, done: false }), after: JSON.stringify({ seq: 1, done: true }) }),
+    "AC #1 completed"
+  );
+  assert.equal(formatEventDetail({ kind: "ac-toggled", after: JSON.stringify({ seq: 2, done: false }) }), "AC #2 reopened");
+  assert.equal(formatEventDetail({ kind: "ac-toggled" }), "", "no seq anywhere renders nothing");
+  assert.equal(
+    formatEventDetail({ kind: "ac-added", after: JSON.stringify({ seq: 3, text: "Add test" }) }),
+    "AC #3 added"
+  );
+  assert.equal(formatEventDetail({ kind: "ac-added" }), "AC added");
+  assert.equal(
+    formatEventDetail({ kind: "ac-updated", after: JSON.stringify({ reorder: true, seq: 1 }) }),
+    "ACs reordered",
+    "a reorder flag wins over the per-seq copy"
+  );
+  assert.equal(formatEventDetail({ kind: "ac-updated", before: JSON.stringify({ seq: 4 }) }), "AC #4 updated");
+  assert.equal(
+    formatEventDetail({ kind: "ac-removed", before: JSON.stringify({ seq: 5, text: "x" }) }),
+    "AC #5 removed",
+    "removal reads the seq from BEFORE (the deleted row)"
+  );
+});
+
+test("formatEventDetail: relation-changed composes action + kind + shortened target id", () => {
+  assert.equal(
+    formatEventDetail({ kind: "relation-changed", after: JSON.stringify({ action: "add", kind: "child", other_id: "01M5XTCCKRABBA2Y3N38V8RY63" }) }),
+    "add child 01M5XTCC…"
+  );
+  assert.equal(
+    formatEventDetail({ kind: "relation-changed", before: JSON.stringify({ action: "remove", kind: "blocked-by", other_id: "01M5XTCCKRABBA2Y3N38V8RY63" }) }),
+    "remove blocked-by 01M5XTCC…",
+    "a removal reads the payload from BEFORE (the deleted edge)"
+  );
+});
+
+test("formatEventDetail: artifact attach/remove and created render their copy", () => {
+  assert.equal(
+    formatEventDetail({ kind: "artifact-added", after: JSON.stringify({ kind: "screenshot", filename: "shot.png" }) }),
+    "attached screenshot (shot.png)"
+  );
+  assert.equal(formatEventDetail({ kind: "artifact-added", after: "{}" }), "attached artifact");
+  assert.equal(
+    formatEventDetail({ kind: "artifact-removed", before: JSON.stringify({ kind: "log" }) }),
+    "removed log"
+  );
+  assert.equal(formatEventDetail({ kind: "created" }), "task created");
 });
