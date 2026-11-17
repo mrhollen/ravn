@@ -5,8 +5,44 @@
 // Done cap) lives in src/columns.ts. No DOM, no Alpine — the composition root
 // owns every `filter*` field, the debounce/sequence machinery, and URL sync.
 
-import type { TaskSummary } from "./types";
-import { dueCalendarDate, isOverdue, isStalledExpired, localCalendarToday, needsAttention } from "./util";
+import type { MineScope, TaskSummary } from "./types";
+import { dueCalendarDate, isOverdue, isStalledExpired, localCalendarToday, needsAttention, safeStorage } from "./util";
+
+// ---------------------------------------------------------------------
+// Persisted board-scope state (moved from app.ts — P5 F3). The LS keys live
+// here with their readers; app.ts re-exports the names so the existing
+// import surface stays intact.
+// ---------------------------------------------------------------------
+/** Persisted per-actor board scope (epic T7); "all" means no mine filter. */
+export const LS_TASK_SCOPE = "ravn.task_scope";
+/** Persisted "My projects" filter (epic T7): true → the open project list is fetched
+ *  with ?mine=created so only projects the signed-in identity created are shown. */
+export const LS_MY_PROJECTS = "ravn.my_projects";
+
+/** Board data-source scope: the unscoped default plus the three task `mine` values. */
+export type TaskScope = "all" | MineScope;
+const TASK_SCOPES: readonly TaskScope[] = ["all", "assigned", "created", "activity"];
+
+/** Read + validate the persisted board scope, falling back to "all" on any bad value.
+ *  (The catch is defensive: safeStorage never throws — it swallows storage errors and
+ *  falls back to an in-memory map.) */
+export function readStoredTaskScope(): TaskScope {
+  try {
+    const v = safeStorage.getItem(LS_TASK_SCOPE) ?? "all";
+    return (TASK_SCOPES as readonly string[]).includes(v) ? (v as TaskScope) : "all";
+  } catch {
+    return "all";
+  }
+}
+
+/** Read + validate the persisted "My projects" flag; falls back to false on any bad value. */
+export function readStoredMyProjects(): boolean {
+  try {
+    return safeStorage.getItem(LS_MY_PROJECTS) === "1";
+  } catch {
+    return false;
+  }
+}
 
 /** Active board filter state (state-in). Mirrors the root's `filter*` fields
  *  plus the live ticker; the root builds one snapshot per render. */

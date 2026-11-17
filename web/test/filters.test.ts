@@ -7,6 +7,8 @@ import {
   countStalledExpired,
   hasAnyFilter,
   isDescriptionNotesMatch,
+  LS_MY_PROJECTS,
+  LS_TASK_SCOPE,
   matchesAssignee,
   matchesDueWindow,
   matchesNeedsAttention,
@@ -15,9 +17,12 @@ import {
   matchesStalled,
   matchesUnblocked,
   normalizedSearch,
+  readStoredMyProjects,
+  readStoredTaskScope,
 } from "../src/filters.ts";
 import type { BoardFilterState } from "../src/filters.ts";
 import type { TaskSummary } from "../src/types.ts";
+import { safeStorage } from "../src/util.ts";
 import { localYmd } from "./test-helpers.ts";
 
 // Fixed "now" for stalled/idle assertions — the module takes nowMs as a
@@ -224,4 +229,32 @@ test("applyFilters AND-composes multiple active dimensions in order", () => {
     ),
     ["a"],
   );
+});
+
+// ------------------------------------------------- persisted board-scope state (P5 F3)
+test("readStoredTaskScope: no stored value → 'all'; each valid scope round-trips", () => {
+  safeStorage.removeItem(LS_TASK_SCOPE);
+  assert.equal(readStoredTaskScope(), "all");
+  for (const v of ["all", "assigned", "created", "activity"] as const) {
+    safeStorage.setItem(LS_TASK_SCOPE, v);
+    assert.equal(readStoredTaskScope(), v);
+  }
+});
+
+test("readStoredTaskScope: any unrecognized value falls back to 'all'", () => {
+  for (const bad of ["MINE", "assigned ", "", "all,"]) {
+    safeStorage.setItem(LS_TASK_SCOPE, bad);
+    assert.equal(readStoredTaskScope(), "all", `bad value ${JSON.stringify(bad)} → fallback`);
+  }
+});
+
+test("readStoredMyProjects: '1' → true; missing or any other value → false", () => {
+  safeStorage.removeItem(LS_MY_PROJECTS);
+  assert.equal(readStoredMyProjects(), false, "no stored value → off");
+  safeStorage.setItem(LS_MY_PROJECTS, "1");
+  assert.equal(readStoredMyProjects(), true, "'1' → on");
+  safeStorage.setItem(LS_MY_PROJECTS, "0");
+  assert.equal(readStoredMyProjects(), false, "'0' → off");
+  safeStorage.setItem(LS_MY_PROJECTS, "yes");
+  assert.equal(readStoredMyProjects(), false, "anything but '1' → off");
 });
