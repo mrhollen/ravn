@@ -98,12 +98,22 @@ test.describe('Project Dashboard view (/report)', () => {
       actor: { name: 'stale-bot', type: 'agent' },
       ttl_sec: 1,
     });
-    const expiryMs = Date.parse(lease.claim_expires_at);
-    expect(Number.isNaN(expiryMs)).toBe(false);
-    const waitMs = Math.max(0, expiryMs - Date.now() + 250);
-    if (waitMs > 0 && waitMs < 2500) {
-      await new Promise((r) => setTimeout(r, waitMs));
-    }
+
+    // Wait for the ttl_sec=1 lease to actually expire as seen in the /report
+    // digest — the exact data source this view renders — instead of a blind
+    // sleep against claim_expires_at (which raced under worker load). A server
+    // expiry never reactivates without a new claim, so once the zombie leaves
+    // active_claims the first render below is guaranteed to show exactly one
+    // active claim. Condition poll: no fixed wait duration involved.
+    await expect
+      .poll(async () => {
+        const report = await apiJson(`${serverUrl}/api/v1/projects/${proj.id}/report`, 'GET');
+        return {
+          active: (report.active_claims as Array<{ id: string }>).some((c) => c.id === expiredTask.id),
+          expired: (report.expired_claims as Array<{ id: string }>).some((t) => t.id === expiredTask.id),
+        };
+      }, { timeout: 15_000 })
+      .toEqual({ active: false, expired: true });
 
     // 5. Recently completed task (done, P3, assigned to alice)
     const doneRes = await apiJson(`${serverUrl}/api/v1/tasks`, 'POST', {
