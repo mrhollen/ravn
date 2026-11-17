@@ -8,6 +8,14 @@ import type {
   ReportHistoryBucket,
   ReportHistoryPoint,
 } from "../types";
+import {
+  CHART_AXIS_TEXT_FILL,
+  CHART_GRID_STROKE,
+  CUMULATIVE_AREA_FILL,
+  CUMULATIVE_DOT_CLASSES,
+  CUMULATIVE_LINE_STROKE,
+  THROUGHPUT_BAR_FILL,
+} from "../ui/tokens";
 
 export const DEFAULT_HISTORY_DAYS = 30;
 export const DEFAULT_HISTORY_BUCKET: ReportHistoryBucket = "day";
@@ -453,9 +461,9 @@ function renderGridAndAxesSvg(
       const dash = t.value === 0 ? "" : ` stroke-dasharray="2 3"`;
       return (
         `<line x1="${fmtCoord(xStart)}" y1="${fmtCoord(t.y)}" x2="${fmtCoord(xEnd)}" y2="${fmtCoord(t.y)}"` +
-        ` stroke-width="1"${dash} class="stroke-zinc-200 dark:stroke-zinc-800"></line>` +
+        ` stroke-width="1"${dash} class="${CHART_GRID_STROKE}"></line>` +
         `<text x="${fmtCoord(xStart - 6)}" y="${fmtCoord(t.y + 3.5)}" text-anchor="end"` +
-        ` font-size="11" class="fill-zinc-600 dark:fill-zinc-400 tabular-nums">${escapeSvgText(t.label)}</text>`
+        ` font-size="11" class="${CHART_AXIS_TEXT_FILL} tabular-nums">${escapeSvgText(t.label)}</text>`
       );
     })
     .join("");
@@ -464,7 +472,7 @@ function renderGridAndAxesSvg(
     .map(
       (t) =>
         `<text x="${fmtCoord(t.x)}" y="${fmtCoord(xLabelY)}" text-anchor="middle"` +
-        ` font-size="11" class="fill-zinc-600 dark:fill-zinc-400">${escapeSvgText(t.label)}</text>`,
+        ` font-size="11" class="${CHART_AXIS_TEXT_FILL}">${escapeSvgText(t.label)}</text>`,
     )
     .join("");
 
@@ -484,7 +492,7 @@ export function renderThroughputSvgInner(
       (b) =>
         `<rect data-chart-bar="${b.index}" x="${fmtCoord(b.x)}" y="${fmtCoord(b.y)}"` +
         ` width="${fmtCoord(b.width)}" height="${fmtCoord(b.height)}" rx="2"` +
-        ` class="fill-emerald-500 dark:fill-emerald-400">` +
+        ` class="${THROUGHPUT_BAR_FILL}">` +
         `<title>${escapeSvgText(b.tooltip)}</title></rect>`,
     )
     .join("");
@@ -499,11 +507,11 @@ export function renderCumulativeSvgInner(
   if (model.empty) return "";
   const axes = renderGridAndAxesSvg(model.yTicks, model.xTicks, geom);
   const area = model.areaPath
-    ? `<path d="${model.areaPath}" class="fill-indigo-500/15 dark:fill-indigo-400/15"></path>`
+    ? `<path d="${model.areaPath}" class="${CUMULATIVE_AREA_FILL}"></path>`
     : "";
   const line = model.linePath
     ? `<path data-chart-line="cumulative" d="${model.linePath}" fill="none" stroke-width="2.5"` +
-      ` stroke-linecap="round" stroke-linejoin="round" class="stroke-indigo-600 dark:stroke-indigo-400"></path>`
+      ` stroke-linecap="round" stroke-linejoin="round" class="${CUMULATIVE_LINE_STROKE}"></path>`
     : "";
   const lastIdx = model.points.length - 1;
   const dots = model.points
@@ -511,7 +519,7 @@ export function renderCumulativeSvgInner(
       const r = i === lastIdx ? "4" : "2.5";
       return (
         `<circle data-chart-point="${pt.index}" cx="${fmtCoord(pt.x)}" cy="${fmtCoord(pt.y)}" r="${r}"` +
-        ` stroke-width="1.5" class="fill-indigo-600 dark:fill-indigo-400 stroke-white dark:stroke-zinc-900">` +
+        ` stroke-width="1.5" class="${CUMULATIVE_DOT_CLASSES}">` +
         `<title>${escapeSvgText(pt.tooltip)}</title></circle>`
       );
     })

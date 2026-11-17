@@ -5,6 +5,7 @@
 // snapshot is the caller's concern.
 
 import type { AcRow } from "./types";
+import { AC_RING_DONE_STROKE, AC_RING_OPEN_STROKE } from "./ui/tokens";
 import { actorLabel, relTime } from "./util";
 
 /** Number of criteria checked off — the numerator of the progress ring/label. */
@@ -34,7 +35,8 @@ export function acRingInner(acs: readonly AcRow[]): string {
   const dash = Math.max(slot - gap, 0.5);
   return acs
     .map((ac, i) => {
-      const cls = ac.done ? "stroke-emerald-500" : "stroke-zinc-300 dark:stroke-zinc-600";
+      // Stroke tokens single-sourced in ui/tokens.ts (Phase 3).
+      const cls = ac.done ? AC_RING_DONE_STROKE : AC_RING_OPEN_STROKE;
       return (
         `<circle cx="18" cy="18" r="15.915" fill="none" stroke-width="6" ` +
         `class="${cls}" stroke-dasharray="${dash.toFixed(3)} ${(100 - dash).toFixed(3)}" ` +

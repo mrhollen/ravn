@@ -28,6 +28,7 @@ import {
   type BoardQueryParams,
 } from "../routes";
 import { visibleColumns, type ColumnView } from "../columns";
+import { STATUS_DOT_CLASS, STATUS_PILL_CLASS } from "../ui/tokens";
 import { STATUSES } from "../types";
 import type { Board, ListTasksParams, MineScope, Status, TaskSummary } from "../types";
 
@@ -352,22 +353,16 @@ export function createBoardViewModule(deps: BoardViewDeps): BoardViewModule {
     return totalTaskCount() > 0 && visibleTaskCount() === 0;
   }
 
-  /** Column-header status dot color (To Do zinc, Doing amber, Done emerald). */
+  /** Column-header status dot color (To Do zinc, Doing amber, Done emerald).
+   *  Values single-sourced in ui/tokens.ts (STATUS_DOT_CLASS). */
   function colDotClass(status: Status): string {
-    return status === "todo"
-      ? "bg-zinc-400"
-      : status === "doing"
-        ? "bg-amber-500"
-        : "bg-emerald-500";
+    return STATUS_DOT_CLASS[status];
   }
 
-  /** Column-header count pill tint, matching the column's status. */
+  /** Column-header count pill tint, matching the column's status.
+   *  Values single-sourced in ui/tokens.ts (STATUS_PILL_CLASS). */
   function colCountPillClass(status: Status): string {
-    if (status === "doing")
-      return "bg-amber-100 text-amber-800 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800";
-    if (status === "done")
-      return "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-800";
-    return "bg-zinc-100 text-zinc-600 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700";
+    return STATUS_PILL_CLASS[status];
   }
 
   // ------------------------------------------------------------------ columns

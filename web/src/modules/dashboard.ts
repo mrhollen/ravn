@@ -8,6 +8,7 @@ import { createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, type Timer
 import { STATUSES, STATUS_LABEL } from "../types";
 import type { ActiveClaim, ProjectReport, ProjectReportHistory, ReportHistoryBucket, Status } from "../types";
 import { priorityClass, priorityName } from "../util";
+import { STATUS_BADGE_CLASS, STATUS_BAR_CLASS } from "../ui/tokens";
 import {
   buildCumulativeChartModel,
   buildThroughputChartModel,
@@ -56,17 +57,8 @@ export interface WorkloadEntry {
   unassigned: boolean;
 }
 
-const STATUS_BAR_CLASS: Record<Status, string> = {
-  todo: "bg-zinc-400 dark:bg-zinc-500",
-  doing: "bg-amber-500 dark:bg-amber-400",
-  done: "bg-emerald-500 dark:bg-emerald-400",
-};
-
-const STATUS_BADGE_CLASS: Record<Status, string> = {
-  todo: "bg-zinc-100 text-zinc-700 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:ring-zinc-700",
-  doing: "bg-amber-100 text-amber-800 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800",
-  done: "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-800",
-};
+// Status bar/badge tints are single-sourced in ui/tokens.ts (Phase 3) —
+// STATUS_BAR_CLASS / STATUS_BADGE_CLASS imported below.
 
 /** Total non-archived tasks tallied across all three statuses in the report. */
 export function totalReportTasks(report: ProjectReport | null | undefined): number {
