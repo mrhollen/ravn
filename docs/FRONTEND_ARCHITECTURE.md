@@ -47,6 +47,12 @@ boot wiring moved out of the root through the designated escape hatch (§2 boot
 row). The only remaining planned extraction in this phase is the batch bar
 (`modules/batch.ts`, §2 batch row, final-sweep classification (d)).
 
+**After Phase 2 complete (main `82569db`, measured 2026-11-17):** `app.ts` is
+**3,708** lines and `modules/` gains the last planned extraction — `batch.ts`
+(366) for the multi-select + batch action bar. Every §2 region row is now
+landed or classified permanent root (keyboard dispatch, template glue); no
+further Phase 2 extractions remain on the plan.
+
 **Target layout:**
 
 ```
@@ -117,7 +123,7 @@ later phase; root = deliberately stays in the composition root.
  | **Board/columns derivation** `columns()` (:2941–3070): filter → sort → done-pagination pipeline; visible/hidden counts + filtered-empty banner (:2906–2921) ("board/columns" ~:2946 in the audit) | :2890–3070 (inside URL-sync section) | `src/filters.ts` + `src/sort.ts` — P1 pure pipeline over plain args; `modules/board-view.ts` owns the state it composes | **P2 landed (batch B)** — composition (filter predicates, sort+hoist, FTS id union, done-cap bypass) in the view module; the flat pure cores are untouched and still imported by it |
  | Archive management: single-task archive/restore w/ version guard + retry-once (:1964–2195); bulk "Archive all Done" (:2196–2256) | :1964–2256 (now `modules/archive.ts`) | `modules/archive.ts` (`createArchiveModule`, typed `ArchiveDeps`) | **P2 landed (batch D, `abc719d`)** — all seven archive behaviors (columns derivation, show-toggle AC3, resync, single-task set/unarchive AC1 with version-guard + retry-once, bulk "Archive all Done" AC2 with per-task error accounting, confirm open/cancel) live in the module closure; the sequence guard is module-internal (`archivedSeq`). The four bound fields (`showArchived`, `archivedBoardTasks`, `archiveAllDoneConfirmOpen`, `archiveAllDoneBusy`) stay flat root state; seven delegation shims at :1513–1544 keep every index.html binding and existing root-level test byte-identical (internal refresh calls route back through the root shim via a self-delegating `deps.refreshArchivedView` hook, so test stubs still intercept them). `selectProject` delegates to `resetForProjectSwitch()`. Non-DOM coverage: `web/test/archive-module.test.ts` (31 tests) |
  | Done-column pagination (`DEFAULT_DONE_LIMIT` :221; :2257–2271) | :2257–2271 | `modules/board-view.ts` (cap + bypass logic) / P1 slice inside the `columns()` pipeline | **P2 landed (batch B)** — the 20-card cut, its count pills and the full-text-search bypass live in the view module; the bound `doneLimit` field stays at root |
-| Multi-select + batch bar (:2272–2406), robust per-task batch execution engine AC3 (:2407–2489), batch actions AC2/AC3 (:2489–2568) | :2272–2568 | `modules/batch.ts` — P1-pure: the per-task execute/retry-once/skip-already-applied engine (`runBatch(tasks, exec)` with an injected executor); P2: selection state + shift-range anchor | **final-sweep (2026-11-17): classification (d) — next and last planned extraction.** All six bound fields (`selectedTaskIds`, `_selectionAnchorId` — poked directly by `app.test.ts`, so it cannot go module-internal, `batchBusy`, three menu flags, `batchCustomOwner` — x-model only) stay flat root state; selection methods + the per-task engine move behind typed `BatchDeps`; cross-concern hooks: columns/availableAssignees/actor/toast/loadBoard. Not yet landed |
+| Multi-select + batch bar (:2272–2406), robust per-task batch execution engine AC3 (:2407–2489), batch actions AC2/AC3 (:2489–2568) | :2272–2568 | `modules/batch.ts` — P1-pure: the per-task execute/retry-once/skip-already-applied engine (`runBatch(tasks, exec)` with an injected executor); P2: selection state + shift-range anchor | **P2 landed (`82569db`, final sweep 2026-11-17)** — the last planned extraction. All six bound fields (`selectedTaskIds`, `_selectionAnchorId` — poked directly by `app.test.ts`, so it cannot go module-internal, `batchBusy`, three menu flags, `batchCustomOwner` — x-model only) stay flat root state; selection methods + the per-task engine moved behind typed `BatchDeps`. Cross-concern hooks: columns/availableAssignees/actor/toast/loadBoard. Fifteen delegation shims at :1602–1660 — incl. `_closeBatchMenus`, which the final sweep initially classified module-internal (tsc caught the Escape cascade's `"close-batch-menus"` step, which must close the open dropdown WITHOUT touching the selection — a deliberately different behavior from `clearSelection`). `runBatch` + `assigneeTypeFor` stay internal (no template binding, no root test reference). Non-DOM coverage: `web/test/batch-module.test.ts` (16 tests) |
  | Filters state + predicate application (:2569–2746): priority/assignee/unblocked/stalled/needs-attention/due-window/search predicates | :2569–2746 (+ inline in `columns()`) | `src/filters.ts` — P1: every predicate as a pure fn `(task, ctx) => boolean` + composition helper; the `filter*` state lives behind typed accessors owned by both board modules | **P2 landed (batch B)** — `hasActiveFilters`, `clearFilters` and `availableAssignees` live in `modules/board.ts`; the local title/search predicate, server-side mapping (`listTasksParams`) and visible/hidden counts compose in `modules/board-view.ts`. The bound `filter*` fields stay at root |
  | Full-text (desc/notes) remote search (:2587–2746; constants :228/:232) | :2587–2746 | `src/filters.ts` — P1: result merge/dedupe against live board rows; debounce+in-flight state in `modules/board.ts` (debounce core already in `src/refresh.ts`) | **P2 landed (batch B)** — the 250ms debounce, sequence guard and match-id set are module-internal state; `SEARCH_DEBOUNCE_MS` / `FULLTEXT_SEARCH_LIMIT` moved to `modules/board.ts` and are re-exported from the root unchanged |
  | URL query sync handlers (`syncUrlState`, popstate/deep-link adoption) (:2747–3165) | :2747–3165 | parse/build pure core → `src/routes.ts` (P1); the handlers themselves → `modules/board-view.ts` (board/filter URL parts, P2); boot-time task-route adoption stays composition-root wiring (§5 step 4) | **P2 landed (batch B)** — `syncUrlState` (immediate + 150ms debounced, task-route guard), `applyQueryParams` (popstate full-restore vs partial initial restore) and `initFromUrl` live in the view module; land-target deviates from the originally planned single `board.ts` (see status note) |
@@ -153,7 +159,7 @@ modules or a follow-up pass): clipboard helper → `util.ts`,
 `formatEventDetail` → `realtime.ts`, the `blockedIdsFromBoard` set derivation,
 and the `RelationRow → RelationView` shaping.
 
-**Phase 2 status (batches A+B landed on `main`).** Landed so far:
+**Phase 2 status (complete — every §2 row landed or classified permanent root).** Landed:
 
 - `modules/auth.ts` — auth row, a **behavior-only extraction**: all eight
   handlers moved verbatim behind the typed `AuthDeps` access interface,
@@ -484,6 +490,32 @@ stateful modules rather than one:
    spec-only fix lands in a follow-up commit; unrelated to this extraction),
    index.html byte-identical. `app.ts` shrank 4,020 → **3,886** (−134).
 
+   **`batch` row landed in `82569db` (final sweep, 2026-11-17) — the last
+   planned extraction.** The multi-select + batch bar moved to
+   `modules/batch.ts` (366 lines) behind typed `BatchDeps`: seven state-in
+   getters (the six bound fields incl. `_selectionAnchorId`, plus `board` — the
+   same live object, mutated in place so optimistic moves stay Alpine-visible),
+   six state-out setters and five hooks (`columns`, `availableAssignees`,
+   `actor`, `toast`, `loadBoard`). Moved: the selection family (toggle with
+   Set REPLACEMENT — Alpine's proxy never sees in-place mutations —, shift-range
+   from an anchor with additive-only spans + cross-column degrade, select-all-VISIBLE over `columns()` output so the done-cap holds, clear), the three-menu
+   mutual exclusion, `batchAssigneeOptions`, and the AC3 engine `runBatch` —
+   per-task version-guarded PATCH, 409 → re-read ONE task via `getTask(id)` +
+   retry-once, already-applied skip (fresh row shows the effect), optimistic
+   board move + count deltas, keep-ONLY-the-failed-ids selection policy and the
+   consolidated success/error toast over the settling silent
+   `loadBoard(true)`. `runBatch`/`assigneeTypeFor` are module-internal (no
+   binding, no root-test reference); `closeBatchMenus` is exposed as the root
+   `_closeBatchMenus` because the Escape cascade's `"close-batch-menus"` step
+   must close the open dropdown WITHOUT clearing the selection — a behavior
+   distinct from `clearSelection` (the initial internal-only classification was
+   overturned by tsc, which caught the call in `dismissTop`). Fifteen delegation
+   shims keep every index.html binding and root-level test byte-identical;
+   `UpdateTaskReq` dropped from app.ts's imports. Gates: unit **900/900** (+16),
+   build+tsc clean, E2E 204/204 (48.2s — the full suite with the dashboard
+   lease-expiry spec fix in the tree; that fix ships in its own commit),
+   index.html byte-identical. `app.ts` shrank 3,886 → **3,708** (−178).
+
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `task-edit` (landed; only the notes scratchpad rides with the
 detail cascade) → ~~acs~~ → ~~comments~~ → ~~artifacts~~ →
@@ -492,13 +524,13 @@ REORDERED from its original second position: `openTask`/`closeDetail` are
 cross-cutting cascades writing ~20 flat fields across the not-yet-modularized
 sub-concerns above, so extracted last each cascade write converges to ONE hook
 into an already-landed module (same pattern as `selectProject` before the
- board slice) → ~~archive~~ (landed, `abc719d`)/`batch`/**next-and-last**/
-  ~~drag~~ (landed,
-  `2704b9b`) (board actions) →
+ board slice) → ~~archive~~ (landed, `abc719d`)/~~drag~~ (landed,
+ `2704b9b`)/~~batch~~ (landed, `82569db`) (board actions) →
  ~~menus~~/~~project-settings~~/~~opencode~~/~~new-task~~ (remaining chrome).
  Final sweep (2026-11-17) closes every other row: `bootstrap` landed
- (`796aa3d`), keyboard and template glue classified as permanent root, leaving
- ONLY the batch bar as a planned extraction.
+ (`796aa3d`), keyboard and template glue classified as permanent root, and the
+ batch bar landed last (`82569db`) — every §2 region is now either a module or
+ classified; no planned Phase 2 extraction remains.
 
 ## 3. The driving constraint (why extraction looks the way it does)
 
