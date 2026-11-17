@@ -41,6 +41,12 @@ modules — `auth.ts` (265), `projects.ts` (196), `menus.ts` (137),
 `board.ts` (474) and `board-view.ts` (458) — plus their unit tests under
 `web/test/`.
 
+**After the final-sweep bootstrap hatch (main `796aa3d`, measured 2026-11-17):**
+`app.ts` is **3,886** lines and `modules/` gains `bootstrap.ts` (288) — the
+boot wiring moved out of the root through the designated escape hatch (§2 boot
+row). The only remaining planned extraction in this phase is the batch bar
+(`modules/batch.ts`, §2 batch row, final-sweep classification (d)).
+
 **Target layout:**
 
 ```
@@ -111,7 +117,7 @@ later phase; root = deliberately stays in the composition root.
  | **Board/columns derivation** `columns()` (:2941–3070): filter → sort → done-pagination pipeline; visible/hidden counts + filtered-empty banner (:2906–2921) ("board/columns" ~:2946 in the audit) | :2890–3070 (inside URL-sync section) | `src/filters.ts` + `src/sort.ts` — P1 pure pipeline over plain args; `modules/board-view.ts` owns the state it composes | **P2 landed (batch B)** — composition (filter predicates, sort+hoist, FTS id union, done-cap bypass) in the view module; the flat pure cores are untouched and still imported by it |
  | Archive management: single-task archive/restore w/ version guard + retry-once (:1964–2195); bulk "Archive all Done" (:2196–2256) | :1964–2256 (now `modules/archive.ts`) | `modules/archive.ts` (`createArchiveModule`, typed `ArchiveDeps`) | **P2 landed (batch D, `abc719d`)** — all seven archive behaviors (columns derivation, show-toggle AC3, resync, single-task set/unarchive AC1 with version-guard + retry-once, bulk "Archive all Done" AC2 with per-task error accounting, confirm open/cancel) live in the module closure; the sequence guard is module-internal (`archivedSeq`). The four bound fields (`showArchived`, `archivedBoardTasks`, `archiveAllDoneConfirmOpen`, `archiveAllDoneBusy`) stay flat root state; seven delegation shims at :1513–1544 keep every index.html binding and existing root-level test byte-identical (internal refresh calls route back through the root shim via a self-delegating `deps.refreshArchivedView` hook, so test stubs still intercept them). `selectProject` delegates to `resetForProjectSwitch()`. Non-DOM coverage: `web/test/archive-module.test.ts` (31 tests) |
  | Done-column pagination (`DEFAULT_DONE_LIMIT` :221; :2257–2271) | :2257–2271 | `modules/board-view.ts` (cap + bypass logic) / P1 slice inside the `columns()` pipeline | **P2 landed (batch B)** — the 20-card cut, its count pills and the full-text-search bypass live in the view module; the bound `doneLimit` field stays at root |
-| Multi-select + batch bar (:2272–2406), robust per-task batch execution engine AC3 (:2407–2489), batch actions AC2/AC3 (:2489–2568) | :2272–2568 | `modules/batch.ts` — P1-pure: the per-task execute/retry-once/skip-already-applied engine (`runBatch(tasks, exec)` with an injected executor); P2: selection state + shift-range anchor | P1+P2 |
+| Multi-select + batch bar (:2272–2406), robust per-task batch execution engine AC3 (:2407–2489), batch actions AC2/AC3 (:2489–2568) | :2272–2568 | `modules/batch.ts` — P1-pure: the per-task execute/retry-once/skip-already-applied engine (`runBatch(tasks, exec)` with an injected executor); P2: selection state + shift-range anchor | **final-sweep (2026-11-17): classification (d) — next and last planned extraction.** All six bound fields (`selectedTaskIds`, `_selectionAnchorId` — poked directly by `app.test.ts`, so it cannot go module-internal, `batchBusy`, three menu flags, `batchCustomOwner` — x-model only) stay flat root state; selection methods + the per-task engine move behind typed `BatchDeps`; cross-concern hooks: columns/availableAssignees/actor/toast/loadBoard. Not yet landed |
  | Filters state + predicate application (:2569–2746): priority/assignee/unblocked/stalled/needs-attention/due-window/search predicates | :2569–2746 (+ inline in `columns()`) | `src/filters.ts` — P1: every predicate as a pure fn `(task, ctx) => boolean` + composition helper; the `filter*` state lives behind typed accessors owned by both board modules | **P2 landed (batch B)** — `hasActiveFilters`, `clearFilters` and `availableAssignees` live in `modules/board.ts`; the local title/search predicate, server-side mapping (`listTasksParams`) and visible/hidden counts compose in `modules/board-view.ts`. The bound `filter*` fields stay at root |
  | Full-text (desc/notes) remote search (:2587–2746; constants :228/:232) | :2587–2746 | `src/filters.ts` — P1: result merge/dedupe against live board rows; debounce+in-flight state in `modules/board.ts` (debounce core already in `src/refresh.ts`) | **P2 landed (batch B)** — the 250ms debounce, sequence guard and match-id set are module-internal state; `SEARCH_DEBOUNCE_MS` / `FULLTEXT_SEARCH_LIMIT` moved to `modules/board.ts` and are re-exported from the root unchanged |
  | URL query sync handlers (`syncUrlState`, popstate/deep-link adoption) (:2747–3165) | :2747–3165 | parse/build pure core → `src/routes.ts` (P1); the handlers themselves → `modules/board-view.ts` (board/filter URL parts, P2); boot-time task-route adoption stays composition-root wiring (§5 step 4) | **P2 landed (batch B)** — `syncUrlState` (immediate + 150ms debounced, task-route guard), `applyQueryParams` (popstate full-restore vs partial initial restore) and `initFromUrl` live in the view module; land-target deviates from the originally planned single `board.ts` (see status note) |
@@ -124,12 +130,12 @@ later phase; root = deliberately stays in the composition root.
 | Comments (:5360–5481) | :5360–5481 | `modules/comments.ts` | **P2 landed (batch C)** — draft reset-then-restore + debounced persistence, older-comment pagination and postComment. All five state fields template-bound → root; `detail.comments` / `commentForm.body` are property writes through the state-IN getter, whole-field writes via setters. Non-DOM coverage: `web/test/comments-module.test.ts` (21 tests) |
 | Artifacts (:5482–5728) + copy-ref toolbar action | :5482–5728, copy-ref at its original spot | `modules/artifacts.ts` | **P2 landed (batch C)** — 17 methods behind typed `ArtifactsDeps` (13 state-in / 12 state-out incl. `setDetail` / 4 hooks: toast, actor, isWebHref, confirmDiscard): file-selection kind inference, upload/drop/paste flows, attach (file vs ref), preview modal, the `isStored*` media predicates, text-preview toggle + fetch lifecycle, delete with same-task guard + cache cleanup, copy-ref with confirmation timer. All bound state fields stay root; in-place writes (form.file/.kind, modal.open) via state-IN getters, whole-field writes via setters; detail artifacts patch via `setDetail` under the same-task guard. `copyTextToClipboard`/`copyViaExecCommand` moved to `src/util.ts` (no external importers — verified). Non-DOM coverage: `web/test/artifacts-module.test.ts` (32 tests) |
 | Claims: display helpers + claim/release handlers (:5729–5825). **Exception:** the 1s `nowTick` ticker lives here but is consumed by BOTH claims display and the board stalled filter → `nowTick` stays **root** (shared clock); pure countdown/expiry logic already in `src/util.ts` | :5729–5825 | `modules/claims.ts` (P2) + **root** (`nowTick`) | **P2 landed (batch C)** — claim/release/heartbeat flows + the two display helpers behind typed `ClaimsDeps`; all three state fields stay root (`claimBusy` template-bound; `nowTick`/`_tickerId` shared clock, started in `_runBoot`); the `claimTask`/`releaseTask`/`heartbeatTask` alias surface stays at root. Non-DOM coverage: `web/test/claims-module.test.ts` (16 tests) |
-| Global keyboard: bare-key dispatch `handleGlobalKeydown` + the Escape cascade `dismissTop` (:6129–6204; absent from the Phase 0 audit — the cascade's priority order is the part that breaks silently when a surface is inserted) | :6129–6204 | `src/keyboard.ts` (P1 decisions, LANDED) + **root** (the imperative close steps ride with their P2 surface owners: menus/detail/new-task) | P1 done / rest P2 |
+| Global keyboard: bare-key dispatch `handleGlobalKeydown` + the Escape cascade `dismissTop` (:6129–6204; absent from the Phase 0 audit — the cascade's priority order is the part that breaks silently when a surface is inserted) | :6129–6204 | `src/keyboard.ts` (P1 decisions, LANDED) + **root** (the imperative close steps ride with their P2 surface owners: menus/detail/new-task) | **final-sweep (2026-11-17): closed — category (c).** The pure dispatch table (`globalKeyAction`/`escapeAction`) already landed in `src/keyboard.ts` in Phase 1; the residual root `dismissTop`/`handleGlobalKeydown` is imperative composition wiring whose close steps deliberately call each surface's OWN module through its root shim, so extracting them would only relocate one-line cascade steps |
 | Relations (:5826–6208; `RelationView` interface :621–630) | :5826–6208 | `modules/relations.ts` — P1-pure: `RelationRow → RelationView` shaping | **P2 landed (batch D)** — combobox nav + filtered candidate list, target selection, the kind-mapped add/remove mutation flows (busy guard + toasts) and the three subtask progress counters behind typed `RelationsDeps`. All bound names stay flat plain root fields via delegation shims; `relationForm` is template-bound state-IN (in-place writes through the getter); the shared `taskTitle(id)` board-row lookup stays at root and is injected as a hook; the `relationForm` resets inside the detail cascade ride with their owners. `RelationView` moved into the module. Pinned quirks: unknown combobox search text passes verbatim to the API (no client-side validation); form kinds `parent`/`child` map to wire kinds `child`/`parent`. Non-DOM coverage: `web/test/relations-module.test.ts` (52 tests) |
  | Drag & drop (:4585–4696) + touch swipe-to-status + per-card move menu (:4697–4960) | :4585–4960 | `modules/drag.ts` (P2 gesture state; pure move core already in `src/moves.ts`: `canMove`, `beginMove/endMove`, `withTimeout` — **extended in Phase 1** with the drag/swipe *decision* helpers: drop legality copy, swipe constants, direction/target/activation/commit) | **P2 landed (batch D, `2704b9b`)** — all three card-repositioning behaviors moved behind typed `DragDeps`: the HTML5 drag/drop lifecycle (archived-view read-only guard, per-task busy lock, illegal-transition grey-out via `dragTargetLegal`, drop guards that never send an illegal move), the touch swipe-to-status gesture state machine (slop + dominance activation, 96px DISPLAYED-dx clamp, commit on raw dx, the one adjacent pair the domain rejects — done→doing left-swipe — refused with feedback), the ⋮ "Move to" menu (`toggleCardMenu`/`moveCardTo`), and the shared optimistic `moveTaskStatus` engine: per-task in-flight lock through the **shared** `busyTaskIds` Set (same object identity as the archive flow, mutated in place via the state-IN getter), timeout-guarded PATCH, 409 re-read + retry-once, rollback of the optimistic board/detail move. All bound fields stay flat root state behind 16 delegation shims; `MAX_SWIPE_PX` became module-local and `SwipeState`/`idleSwipeState()` live in the module (no types.ts change); internal flows (onDrop/onCardTouchEnd/moveCardTo) call the local closure — no self-delegating hook needed because no root test stubs `moveTaskStatus`, which keeps its root shim only for the detail.ts dep. Non-DOM coverage: `web/test/drag-module.test.ts` (44 tests) |
 | Operational bar: drawer popovers + version-guarded `moveStatus` from the drawer (:4961–4993) | :4961–4993 | `modules/detail.ts` (popover state) delegating to the moves core | **landed with the detail row (`04f1822`)** — `toggleStatusMenu` / `toggleOwnerPopover` / `moveStatus` moved with the slice (the task-edit row's deferred riders); popover open-state fields stay root via shims |
 | Template glue (:6209–6248) — binds module methods into the flat namespace | :6209–6248 | **root** (this is what a composition root IS; never extracted) | stays |
-| `init()`/boot (:6249–6448): module instantiation, deep-link adoption, boot fetches, global listeners | :6249–6448 | **root** — if Phase 2 leaves the root still above the §6 cap, extract boot wiring into `modules/bootstrap.ts` as the designated escape hatch (team-lead decision with evidence) | stays / bootstrap |
+| `init()`/boot (:6249–6448): module instantiation, deep-link adoption, boot fetches, global listeners | :6249–6448 | **root** — if Phase 2 leaves the root still above the §6 cap, extract boot wiring into `modules/bootstrap.ts` as the designated escape hatch (team-lead decision with evidence) | **P2 landed (`796aa3d`, final sweep 2026-11-17)** — `_runBoot` + the double-init memo + `continueBoot` moved to `modules/bootstrap.ts`; see status note below |
 
 **Phase 1 status (completed on main `ab1644d`, 2026-11-11).** Landed, in slice
 order — every commit is behavior-parity-only with its own unit tests (post-
@@ -456,8 +462,27 @@ stateful modules rather than one:
     since no root test stubs it); `MAX_SWIPE_PX` is module-local, `SwipeState`/
     `idleSwipeState()` live in the module (no types.ts change). The pure move core
     (`src/moves.ts`) is untouched; the root's import drops to `canMove` alone
-    (template glue). Gates: unit **873/873** (+44), build+tsc clean, E2E 204/204
-    (48.5s), index.html identical. `app.ts` shrank 4,239 → **4,020** (−219).
+     (template glue). Gates: unit **873/873** (+44), build+tsc clean, E2E 204/204
+     (48.5s), index.html identical. `app.ts` shrank 4,239 → **4,020** (−219).
+
+   **`bootstrap` row landed in `796aa3d` (final sweep, 2026-11-17):** the
+   designated escape hatch was used — the boot wiring moved to
+   `modules/bootstrap.ts` (288 lines) behind typed `BootstrapDeps`. Moved:
+   `_runBoot` in full (ticker + beforeunload parity, theme/mq listeners, the
+   mobile-breakpoint mq flag, popstate, `initFromUrl`, and all twelve `$watch`
+   registrations), selection validation, deep-link adoption and
+   `continueBoot`, plus `retryBoot`. The double-init memo (ticket
+   01M3VJ5PQEAJ60B0QGPNZT8NKP) became module-closure state — the root field
+   `_bootPromise` is GONE (no test pokes it); `_tickerId` / `sseReloadDebounce`
+   are mirrored back onto the root via setters because `app.test.ts` asserts on
+   both. Root keeps a lazy `_bootstrapModule()` builder + one-line
+   `init()`/`continueBoot()`/`retryBoot()` shims; the `$watch` registration is a
+   deps seam that no-ops under node:test, and the returned surface exposes a
+   test-support `bootPromise()` accessor (same read-only pattern as sse.ts's
+   `backoffMs`). Gates: unit **884/884** (+11), build+tsc clean, E2E 203/204 —
+   the single failure being the pre-existing dashboard lease-expiry race (the
+   spec-only fix lands in a follow-up commit; unrelated to this extraction),
+   index.html byte-identical. `app.ts` shrank 4,020 → **3,886** (−134).
 
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `task-edit` (landed; only the notes scratchpad rides with the
@@ -467,9 +492,13 @@ REORDERED from its original second position: `openTask`/`closeDetail` are
 cross-cutting cascades writing ~20 flat fields across the not-yet-modularized
 sub-concerns above, so extracted last each cascade write converges to ONE hook
 into an already-landed module (same pattern as `selectProject` before the
- board slice) → ~~archive~~ (landed, `abc719d`)/`batch`/~~drag~~ (landed,
- `2704b9b`) (board actions) →
-~~menus~~/~~project-settings~~/~~opencode~~/~~new-task~~ (remaining chrome).
+ board slice) → ~~archive~~ (landed, `abc719d`)/`batch`/**next-and-last**/
+  ~~drag~~ (landed,
+  `2704b9b`) (board actions) →
+ ~~menus~~/~~project-settings~~/~~opencode~~/~~new-task~~ (remaining chrome).
+ Final sweep (2026-11-17) closes every other row: `bootstrap` landed
+ (`796aa3d`), keyboard and template glue classified as permanent root, leaving
+ ONLY the batch bar as a planned extraction.
 
 ## 3. The driving constraint (why extraction looks the way it does)
 
