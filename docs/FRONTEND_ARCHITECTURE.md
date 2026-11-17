@@ -109,7 +109,7 @@ later phase; root = deliberately stays in the composition root.
 | Project settings modal (:1440–1468) + members panel T9 (:1469–1790) | :1440–1468, :1469–1790 | `modules/project-settings.ts` | **P2 landed (batch B)** — form lifecycle with the pristine baseline re-based on the authoritative fetch, the discard guard, the archive-confirm flow + save/restore, and the T9 members panel live in the module closure behind typed `ProjectSettingsDeps`; the roster pure core was already in `src/members.ts` (`normalizeRoster`, `canManageRoster`, error copy). The ten bound fields stay root fields; the baseline copy and the focus session are module-internal. Non-DOM coverage: `web/test/project-settings-module.test.ts` |
  | Board state: snapshot, blocked-state cache + derive/sync/reset (:1791–1890), `loadBoard` sequencing | :1791–1890 | `modules/board.ts` (cache + prefs, P2) / `modules/board-view.ts` (`loadBoard` lifecycle) | **P2 landed (batch B)** — scope-guarded blocked cache (board-snapshot sync is in-module, no standalone pure sliver), detail learning seam and reset; the sequence-guarded fetch lifecycle lives with the view pipeline (see status note for the core/view split rationale) |
  | **Board/columns derivation** `columns()` (:2941–3070): filter → sort → done-pagination pipeline; visible/hidden counts + filtered-empty banner (:2906–2921) ("board/columns" ~:2946 in the audit) | :2890–3070 (inside URL-sync section) | `src/filters.ts` + `src/sort.ts` — P1 pure pipeline over plain args; `modules/board-view.ts` owns the state it composes | **P2 landed (batch B)** — composition (filter predicates, sort+hoist, FTS id union, done-cap bypass) in the view module; the flat pure cores are untouched and still imported by it |
-| Archive management: single-task archive/restore w/ version guard + retry-once (:1964–2195); bulk "Archive all Done" (:2196–2256) | :1964–2256 | `modules/archive.ts` | P2 (the locate-row-in-live-archived-detail helper becomes a pure fn with injected state) |
+ | Archive management: single-task archive/restore w/ version guard + retry-once (:1964–2195); bulk "Archive all Done" (:2196–2256) | :1964–2256 (now `modules/archive.ts`) | `modules/archive.ts` (`createArchiveModule`, typed `ArchiveDeps`) | **P2 landed (batch D, `abc719d`)** — all seven archive behaviors (columns derivation, show-toggle AC3, resync, single-task set/unarchive AC1 with version-guard + retry-once, bulk "Archive all Done" AC2 with per-task error accounting, confirm open/cancel) live in the module closure; the sequence guard is module-internal (`archivedSeq`). The four bound fields (`showArchived`, `archivedBoardTasks`, `archiveAllDoneConfirmOpen`, `archiveAllDoneBusy`) stay flat root state; seven delegation shims at :1513–1544 keep every index.html binding and existing root-level test byte-identical (internal refresh calls route back through the root shim via a self-delegating `deps.refreshArchivedView` hook, so test stubs still intercept them). `selectProject` delegates to `resetForProjectSwitch()`. Non-DOM coverage: `web/test/archive-module.test.ts` (31 tests) |
  | Done-column pagination (`DEFAULT_DONE_LIMIT` :221; :2257–2271) | :2257–2271 | `modules/board-view.ts` (cap + bypass logic) / P1 slice inside the `columns()` pipeline | **P2 landed (batch B)** — the 20-card cut, its count pills and the full-text-search bypass live in the view module; the bound `doneLimit` field stays at root |
 | Multi-select + batch bar (:2272–2406), robust per-task batch execution engine AC3 (:2407–2489), batch actions AC2/AC3 (:2489–2568) | :2272–2568 | `modules/batch.ts` — P1-pure: the per-task execute/retry-once/skip-already-applied engine (`runBatch(tasks, exec)` with an injected executor); P2: selection state + shift-range anchor | P1+P2 |
  | Filters state + predicate application (:2569–2746): priority/assignee/unblocked/stalled/needs-attention/due-window/search predicates | :2569–2746 (+ inline in `columns()`) | `src/filters.ts` — P1: every predicate as a pure fn `(task, ctx) => boolean` + composition helper; the `filter*` state lives behind typed accessors owned by both board modules | **P2 landed (batch B)** — `hasActiveFilters`, `clearFilters` and `availableAssignees` live in `modules/board.ts`; the local title/search predicate, server-side mapping (`listTasksParams`) and visible/hidden counts compose in `modules/board-view.ts`. The bound `filter*` fields stay at root |
@@ -419,8 +419,25 @@ stateful modules rather than one:
    merged set; `activeOpenCodeSession` falls back to the full ref as id when a
    matching artifact has no `/session/` segment; a deferred OPEN confirm drops
    the stale draft and re-owns the scratchpad to the reopened task. Gates:
-   unit **798/798** (+74), build+tsc clean, E2E 204/204 (48.0s), index.html
-   identical. `app.ts` shrank 4,772 → **4,435** (−337).
+    unit **798/798** (+74), build+tsc clean, E2E 204/204 (48.0s), index.html
+    identical. `app.ts` shrank 4,772 → **4,435** (−337).
+
+   **`archive` row landed in `abc719d`:** the archived-view feature moved to
+   `modules/archive.ts` behind typed `ArchiveDeps`. Moved: `archivedColumns`,
+   `toggleShowArchived` (AC3), `refreshArchivedView`, `setTaskArchived` (AC1)
+   with its version-guard + retry-once, the bulk "Archive all Done" confirm
+   flow (`openArchiveAllDoneConfirm` / `cancelArchiveAllDoneConfirm` /
+   `confirmArchiveAllDone`) with per-task error accounting (non-409 → failed;
+   conflict → re-read via getTask → retry once → still-failing counts
+   failed), and the project-switch reset. The sequence guard is now
+   module-internal (`archivedSeq`, was root `_archivedSeq`). The four bound
+   fields stay flat root state behind seven delegation shims (:1513–1544);
+   internal refreshes route back through the root shim via a self-delegating
+   `deps.refreshArchivedView` hook so existing root-level test stubs still
+   intercept them (`selectProject` now calls
+   `resetForProjectSwitch()`). Gates: unit **829/829** (+31), build+tsc clean,
+   E2E 204/204 (48.9s), index.html identical. `app.ts` shrank 4,435 →
+   **4,239** (−196).
 
 Suggested P2 ordering (dependency-driven): ~~board~~ → ~~sse~~ → ~~projects~~ →
 ~~auth~~ → `task-edit` (landed; only the notes scratchpad rides with the
@@ -430,7 +447,7 @@ REORDERED from its original second position: `openTask`/`closeDetail` are
 cross-cutting cascades writing ~20 flat fields across the not-yet-modularized
 sub-concerns above, so extracted last each cascade write converges to ONE hook
 into an already-landed module (same pattern as `selectProject` before the
-board slice) → `archive`/`batch`/`drag` (board actions) →
+ board slice) → ~~archive~~ (landed, `abc719d`)/`batch`/`drag` (board actions) →
 ~~menus~~/~~project-settings~~/~~opencode~~/~~new-task~~ (remaining chrome).
 
 ## 3. The driving constraint (why extraction looks the way it does)
