@@ -7,8 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test:unit": "node --import jiti/register --test test/*.test.ts",
-    "test:unit:coverage": "node --import jiti/register --test --experimental-test-coverage test/*.test.ts",
+    "test:unit": "node --experimental-strip-types --import ./test/register-ts.mjs --test test/*.test.ts",
+    "test:unit:coverage": "node --experimental-strip-types --import ./test/register-ts.mjs --test --experimental-test-coverage test/*.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
