@@ -28,7 +28,9 @@ import type {
   OpenCodeOptionsResponse,
   Project,
   ProjectReport,
+  ProjectReportHistory,
   RelationRow,
+  ReportHistoryBucket,
   StartOpenCodeInput,
   StartOpenCodeResponse,
   TaskDetail,
@@ -362,6 +364,24 @@ export const api = {
     }
     const s = qs.toString();
     return request<ProjectReport>(`/projects/${encodeURIComponent(projectId)}/report${s ? `?${s}` : ""}`);
+  },
+
+  /** Time-series activity digest (opened, completed, cumulative_completed) for dashboard charts. */
+  getProjectReportHistory(
+    projectId: string,
+    opts?: { days?: number; bucket?: ReportHistoryBucket },
+  ): Promise<ProjectReportHistory> {
+    const qs = new URLSearchParams();
+    if (opts?.days !== undefined && Number.isFinite(opts.days) && opts.days > 0) {
+      qs.set("days", String(Math.trunc(opts.days)));
+    }
+    if (opts?.bucket) {
+      qs.set("bucket", opts.bucket);
+    }
+    const s = qs.toString();
+    return request<ProjectReportHistory>(
+      `/projects/${encodeURIComponent(projectId)}/report/history${s ? `?${s}` : ""}`,
+    );
   },
 
   // --- membership management (multi-user T9) ----------------------------------

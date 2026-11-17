@@ -19,11 +19,14 @@ import { createBoardViewModule } from "./modules/board-view";
 import type { BoardViewModule } from "./modules/board-view";
 import {
   createDashboardModule,
+  DEFAULT_HISTORY_BUCKET,
   DEFAULT_STALLED_MINUTES,
   formatIdleMinutes,
+  type CumulativeSummary,
   type DashboardModule,
   type PriorityBreakdownEntry,
   type StatusSummaryEntry,
+  type ThroughputSummary,
   type WorkloadEntry,
 } from "./modules/dashboard";
 import { createSseModule, sseTelemetry } from "./modules/sse";
@@ -95,8 +98,10 @@ import type {
   OpenCodeModelOption,
   OpenCodeOptionsResponse,
   ProjectReport,
+  ProjectReportHistory,
   ProjectWithCounts,
   RelationRow,
+  ReportHistoryBucket,
   SessionIdentity,
   SseConnectionStatus,
   StartOpenCodeInput,
@@ -2305,6 +2310,10 @@ export function ravnApp() {
     dashboardReport: null as ProjectReport | null,
     dashboardLoading: false,
     dashboardError: "",
+    dashboardHistory: null as ProjectReportHistory | null,
+    dashboardHistoryLoading: false,
+    dashboardHistoryError: "",
+    dashboardHistoryBucket: DEFAULT_HISTORY_BUCKET as ReportHistoryBucket,
     dashboardStalledMinutes: DEFAULT_STALLED_MINUTES,
     _dashboard: null as DashboardModule | null,
 
@@ -2314,12 +2323,18 @@ export function ravnApp() {
         selectedProjectId: () => this.selectedProjectId,
         dashboardOpen: () => this.dashboardOpen,
         dashboardReport: () => this.dashboardReport,
+        dashboardHistory: () => this.dashboardHistory,
+        historyBucket: () => this.dashboardHistoryBucket,
         stalledMinutes: () => this.dashboardStalledMinutes,
         nowTick: () => this.nowTick,
         setDashboardOpen: (open) => { this.dashboardOpen = open; },
         setDashboardReport: (rep) => { this.dashboardReport = rep; },
         setDashboardLoading: (loading) => { this.dashboardLoading = loading; },
         setDashboardError: (err) => { this.dashboardError = err; },
+        setDashboardHistory: (hist) => { this.dashboardHistory = hist; },
+        setDashboardHistoryLoading: (loading) => { this.dashboardHistoryLoading = loading; },
+        setDashboardHistoryError: (err) => { this.dashboardHistoryError = err; },
+        setHistoryBucket: (bucket) => { this.dashboardHistoryBucket = bucket; },
         setProjectForbidden: (v) => { this.projectForbidden = v; },
         openAuthModal: () => this.openAuthModal(),
         updateDocumentTitle: () => this.updateDocumentTitle(),
@@ -2346,6 +2361,42 @@ export function ravnApp() {
 
     async loadDashboardReport(silent = false): Promise<void> {
       await this._dashboardModule().loadReport(silent);
+    },
+
+    async loadDashboardHistory(silent = false): Promise<void> {
+      await this._dashboardModule().loadHistory(silent);
+    },
+
+    async setDashboardHistoryBucket(bucket: ReportHistoryBucket): Promise<void> {
+      await this._dashboardModule().setHistoryBucket(bucket);
+    },
+
+    isDashboardHistoryEmpty(): boolean {
+      return this._dashboardModule().isHistoryEmpty();
+    },
+
+    dashboardThroughputSummary(): ThroughputSummary {
+      return this._dashboardModule().throughputModel().summary;
+    },
+
+    dashboardCumulativeSummary(): CumulativeSummary {
+      return this._dashboardModule().cumulativeModel().summary;
+    },
+
+    dashboardThroughputSvgInner(): string {
+      return this._dashboardModule().throughputSvgInner();
+    },
+
+    dashboardCumulativeSvgInner(): string {
+      return this._dashboardModule().cumulativeSvgInner();
+    },
+
+    dashboardThroughputAriaLabel(): string {
+      return this._dashboardModule().throughputAriaLabel();
+    },
+
+    dashboardCumulativeAriaLabel(): string {
+      return this._dashboardModule().cumulativeAriaLabel();
     },
 
     dashboardProjectName(): string {

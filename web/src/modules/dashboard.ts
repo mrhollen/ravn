@@ -6,8 +6,23 @@
 import { ApiError, api, errMsg } from "../api";
 import { createDebounce, createSequenceGuard, SSE_RELOAD_DEBOUNCE_MS, type TimerApi } from "../refresh";
 import { STATUSES, STATUS_LABEL } from "../types";
-import type { ActiveClaim, ProjectReport, Status } from "../types";
+import type { ActiveClaim, ProjectReport, ProjectReportHistory, ReportHistoryBucket, Status } from "../types";
 import { priorityClass, priorityName } from "../util";
+import {
+  buildCumulativeChartModel,
+  buildThroughputChartModel,
+  cumulativeAriaLabel,
+  DEFAULT_HISTORY_BUCKET,
+  DEFAULT_HISTORY_DAYS,
+  isHistoryEmpty,
+  renderCumulativeSvgInner,
+  renderThroughputSvgInner,
+  throughputAriaLabel,
+  type CumulativeSummary,
+  type ThroughputSummary,
+} from "./dashboard-charts";
+
+export { DEFAULT_HISTORY_BUCKET, DEFAULT_HISTORY_DAYS, type CumulativeSummary, type ThroughputSummary };
 
 /** Default idle threshold (minutes) for stalled task reporting. */
 export const DEFAULT_STALLED_MINUTES = 60;
@@ -168,12 +183,18 @@ export interface DashboardDeps {
   selectedProjectId(): string;
   dashboardOpen(): boolean;
   dashboardReport(): ProjectReport | null;
+  dashboardHistory(): ProjectReportHistory | null;
+  historyBucket(): ReportHistoryBucket;
   stalledMinutes(): number;
   nowTick(): number;
   setDashboardOpen(open: boolean): void;
   setDashboardReport(report: ProjectReport | null): void;
   setDashboardLoading(loading: boolean): void;
   setDashboardError(err: string): void;
+  setDashboardHistory(history: ProjectReportHistory | null): void;
+  setDashboardHistoryLoading(loading: boolean): void;
+  setDashboardHistoryError(err: string): void;
+  setHistoryBucket(bucket: ReportHistoryBucket): void;
   setProjectForbidden(forbidden: boolean): void;
   openAuthModal(): void;
   updateDocumentTitle(): void;
@@ -182,6 +203,7 @@ export interface DashboardDeps {
 
 export function createDashboardModule(deps: DashboardDeps) {
   const reportSeq = createSequenceGuard();
+  const historySeq = createSequenceGuard();
   const refreshDebounce = createDebounce(
     () => {
       if (deps.dashboardOpen() && deps.selectedProjectId()) {
@@ -192,12 +214,59 @@ export function createDashboardModule(deps: DashboardDeps) {
     deps.timers,
   );
 
+  async function loadHistory(silent = false): Promise<void> {
+    const projectId = deps.selectedProjectId();
+    if (!projectId) {
+      deps.setDashboardHistory(null);
+      deps.setDashboardHistoryLoading(false);
+      deps.setDashboardHistoryError("");
+      return;
+    }
+
+    const token = historySeq.next();
+    if (!silent || !deps.dashboardHistory()) {
+      deps.setDashboardHistoryLoading(true);
+      deps.setDashboardHistoryError("");
+    }
+
+    const bucket = deps.historyBucket();
+    try {
+      const history = await api.getProjectReportHistory(projectId, {
+        days: DEFAULT_HISTORY_DAYS,
+        bucket,
+      });
+      if (!historySeq.isFresh(token) || deps.selectedProjectId() !== projectId) return;
+      if (history.project_id && history.project_id !== projectId) return;
+      if (deps.historyBucket() !== bucket) return;
+      deps.setDashboardHistory(history);
+      deps.setDashboardHistoryError("");
+    } catch (e) {
+      if (!historySeq.isFresh(token) || deps.selectedProjectId() !== projectId) return;
+      if (!silent || !deps.dashboardHistory()) {
+        deps.setDashboardHistoryError(errMsg(e));
+      }
+      if (ApiError.isUnauthorized(e)) {
+        deps.openAuthModal();
+      } else if (ApiError.isForbidden(e)) {
+        deps.setDashboardHistory(null);
+        deps.setProjectForbidden(true);
+      }
+    } finally {
+      if (historySeq.isFresh(token)) {
+        deps.setDashboardHistoryLoading(false);
+      }
+    }
+  }
+
   async function loadReport(silent = false): Promise<void> {
     const projectId = deps.selectedProjectId();
     if (!projectId) {
       deps.setDashboardReport(null);
       deps.setDashboardLoading(false);
       deps.setDashboardError("");
+      deps.setDashboardHistory(null);
+      deps.setDashboardHistoryLoading(false);
+      deps.setDashboardHistoryError("");
       return;
     }
 
@@ -206,10 +275,15 @@ export function createDashboardModule(deps: DashboardDeps) {
       deps.setDashboardLoading(true);
       deps.setDashboardError("");
     }
+    if (!silent || !deps.dashboardHistory()) {
+      deps.setDashboardHistoryLoading(true);
+      deps.setDashboardHistoryError("");
+    }
 
     const stalled = deps.stalledMinutes();
     const opts = stalled > 0 && stalled !== DEFAULT_STALLED_MINUTES ? { stalledMinutes: stalled } : undefined;
 
+    let reportOk = false;
     try {
       const report = await api.getProjectReport(projectId, opts);
       if (!reportSeq.isFresh(token) || deps.selectedProjectId() !== projectId) return;
@@ -217,6 +291,7 @@ export function createDashboardModule(deps: DashboardDeps) {
       deps.setDashboardReport(report);
       deps.setDashboardError("");
       deps.setProjectForbidden(false);
+      reportOk = true;
     } catch (e) {
       if (!reportSeq.isFresh(token) || deps.selectedProjectId() !== projectId) return;
       if (!silent || !deps.dashboardReport()) {
@@ -226,13 +301,29 @@ export function createDashboardModule(deps: DashboardDeps) {
         deps.openAuthModal();
       } else if (ApiError.isForbidden(e)) {
         deps.setDashboardReport(null);
+        deps.setDashboardHistory(null);
         deps.setProjectForbidden(true);
       }
     } finally {
       if (reportSeq.isFresh(token)) {
         deps.setDashboardLoading(false);
       }
+      if (!reportOk && reportSeq.isFresh(token)) {
+        deps.setDashboardHistoryLoading(false);
+      }
     }
+
+    if (reportOk && reportSeq.isFresh(token) && deps.selectedProjectId() === projectId) {
+      await loadHistory(silent);
+    }
+  }
+
+  async function setHistoryBucket(bucket: ReportHistoryBucket): Promise<void> {
+    if (deps.historyBucket() === bucket && deps.dashboardHistory()) return;
+    deps.setHistoryBucket(bucket);
+    deps.setDashboardHistory(null);
+    deps.setDashboardHistoryError("");
+    await loadHistory(false);
   }
 
   function refreshDashboard(): void {
@@ -259,11 +350,16 @@ export function createDashboardModule(deps: DashboardDeps) {
 
   function invalidatePendingLoads(): void {
     reportSeq.next();
+    historySeq.next();
     refreshDebounce.cancel();
+    deps.setDashboardHistory(null);
+    deps.setDashboardHistoryError("");
   }
 
   return {
     loadReport,
+    loadHistory,
+    setHistoryBucket,
     refreshDashboard,
     openDashboard,
     closeDashboard,
@@ -276,6 +372,17 @@ export function createDashboardModule(deps: DashboardDeps) {
     workloadEntries: () => workloadEntries(deps.dashboardReport()),
     activeClaimRemaining: (claim: ActiveClaim) =>
       formatRemainingSeconds(effectiveRemainingSec(claim, deps.nowTick())),
+    isHistoryEmpty: () => isHistoryEmpty(deps.dashboardHistory()),
+    throughputModel: () => buildThroughputChartModel(deps.dashboardHistory(), deps.historyBucket()),
+    cumulativeModel: () => buildCumulativeChartModel(deps.dashboardHistory(), deps.historyBucket()),
+    throughputSvgInner: () =>
+      renderThroughputSvgInner(buildThroughputChartModel(deps.dashboardHistory(), deps.historyBucket())),
+    cumulativeSvgInner: () =>
+      renderCumulativeSvgInner(buildCumulativeChartModel(deps.dashboardHistory(), deps.historyBucket())),
+    throughputAriaLabel: () =>
+      throughputAriaLabel(buildThroughputChartModel(deps.dashboardHistory(), deps.historyBucket())),
+    cumulativeAriaLabel: () =>
+      cumulativeAriaLabel(buildCumulativeChartModel(deps.dashboardHistory(), deps.historyBucket())),
   };
 }
 

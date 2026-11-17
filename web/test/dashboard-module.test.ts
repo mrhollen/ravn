@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { api, ApiError } from "../src/api.ts";
 import {
   createDashboardModule,
+  DEFAULT_HISTORY_BUCKET,
   DEFAULT_STALLED_MINUTES,
   effectiveRemainingSec,
   formatIdleMinutes,
@@ -15,7 +16,7 @@ import {
   workloadEntries,
   type DashboardDeps,
 } from "../src/modules/dashboard.ts";
-import type { ProjectReport } from "../src/types.ts";
+import type { ProjectReport, ProjectReportHistory, ReportHistoryBucket } from "../src/types.ts";
 import { withFetch } from "./test-helpers.ts";
 
 function sampleReport(overrides: Partial<ProjectReport> = {}): ProjectReport {
@@ -84,6 +85,28 @@ function emptyReport(projectId = "proj-empty"): ProjectReport {
     open_blocked_by: [],
     recently_completed: [],
     workload: {},
+  };
+}
+
+function sampleHistory(overrides: Partial<ProjectReportHistory> = {}): ProjectReportHistory {
+  return {
+    project_id: "proj-1",
+    days: 30,
+    bucket: "day",
+    series: [
+      { bucket_start: "2026-11-15T00:00:00Z", opened: 2, completed: 1, cumulative_completed: 4 },
+      { bucket_start: "2026-11-16T00:00:00Z", opened: 1, completed: 2, cumulative_completed: 6 },
+    ],
+    ...overrides,
+  };
+}
+
+function emptyHistory(projectId = "proj-empty", bucket: ReportHistoryBucket = "day"): ProjectReportHistory {
+  return {
+    project_id: projectId,
+    days: 30,
+    bucket,
+    series: [],
   };
 }
 
@@ -170,23 +193,32 @@ test("Dashboard: workloadEntries maps '' to Unassigned and sorts count desc with
 
 // ------------------------------------------------------------------ api client
 
-test("Dashboard API: getProjectReport builds URL and optional stalled_minutes/since params", async () => {
+test("Dashboard API: getProjectReport & getProjectReportHistory build URLs and query params", async () => {
   const urls: string[] = [];
   await withFetch(async (url: string | URL) => {
-    urls.push(String(url));
-    return new Response(JSON.stringify(emptyReport("p 1")), {
+    const u = String(url);
+    urls.push(u);
+    const body = u.includes("/report/history") ? emptyHistory("p 1") : emptyReport("p 1");
+    return new Response(JSON.stringify(body), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
   }, async () => {
     await api.getProjectReport("p 1");
     await api.getProjectReport("proj-2", { stalledMinutes: 90, since: "2026-11-15T00:00:00Z" });
+    await api.getProjectReportHistory("p 1");
+    await api.getProjectReportHistory("proj-2", { days: 60, bucket: "week" });
   });
 
   assert.equal(urls[0], "/api/v1/projects/p%201/report");
   assert.equal(
     urls[1],
     "/api/v1/projects/proj-2/report?stalled_minutes=90&since=2026-11-15T00%3A00%3A00Z",
+  );
+  assert.equal(urls[2], "/api/v1/projects/p%201/report/history");
+  assert.equal(
+    urls[3],
+    "/api/v1/projects/proj-2/report/history?days=60&bucket=week",
   );
 });
 
@@ -197,6 +229,7 @@ function makeModuleFixture(overrides: Partial<{
   open: boolean;
   stalledMinutes: number;
   nowTick: number;
+  bucket: ReportHistoryBucket;
 }> = {}) {
   const state = {
     projectId: overrides.projectId ?? "proj-1",
@@ -204,6 +237,10 @@ function makeModuleFixture(overrides: Partial<{
     report: null as ProjectReport | null,
     loading: false,
     error: "",
+    history: null as ProjectReportHistory | null,
+    historyLoading: false,
+    historyError: "",
+    bucket: overrides.bucket ?? DEFAULT_HISTORY_BUCKET,
     forbidden: false,
     stalledMinutes: overrides.stalledMinutes ?? DEFAULT_STALLED_MINUTES,
     nowTick: overrides.nowTick ?? Date.parse("2026-11-16T12:10:00Z"),
@@ -211,18 +248,23 @@ function makeModuleFixture(overrides: Partial<{
     titleUpdates: 0,
   };
   const scheduled: Array<{ fn: () => void; ms: number; cleared: boolean }> = [];
-  let nextTimerId = 1;
 
   const deps: DashboardDeps = {
     selectedProjectId: () => state.projectId,
     dashboardOpen: () => state.open,
     dashboardReport: () => state.report,
+    dashboardHistory: () => state.history,
+    historyBucket: () => state.bucket,
     stalledMinutes: () => state.stalledMinutes,
     nowTick: () => state.nowTick,
     setDashboardOpen: (v) => { state.open = v; },
     setDashboardReport: (r) => { state.report = r; },
     setDashboardLoading: (v) => { state.loading = v; },
     setDashboardError: (e) => { state.error = e; },
+    setDashboardHistory: (h) => { state.history = h; },
+    setDashboardHistoryLoading: (v) => { state.historyLoading = v; },
+    setDashboardHistoryError: (e) => { state.historyError = e; },
+    setHistoryBucket: (b) => { state.bucket = b; },
     setProjectForbidden: (v) => { state.forbidden = v; },
     openAuthModal: () => { state.authOpened++; },
     updateDocumentTitle: () => { state.titleUpdates++; },
@@ -238,26 +280,38 @@ function makeModuleFixture(overrides: Partial<{
       },
     },
   };
-  void nextTimerId;
   return { state, scheduled, mod: createDashboardModule(deps) };
 }
 
-test("Dashboard module: openDashboard / closeDashboard / toggleDashboard manage state, title, and fetch", async () => {
+test("Dashboard module: openDashboard / closeDashboard / toggleDashboard manage state, title, report, and history", async () => {
   const { state, mod } = makeModuleFixture();
   const report = sampleReport();
+  const history = sampleHistory();
 
-  await withFetch(async () => new Response(JSON.stringify(report), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  }), async () => {
+  await withFetch(async (url: string | URL) => {
+    const body = String(url).includes("/report/history") ? history : report;
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, async () => {
     mod.openDashboard();
     assert.equal(state.open, true);
     assert.equal(state.titleUpdates, 1);
     await new Promise((r) => setTimeout(r, 0));
     assert.deepEqual(state.report, report);
+    assert.deepEqual(state.history, history);
     assert.equal(state.loading, false);
+    assert.equal(state.historyLoading, false);
     assert.equal(mod.totalTasks(), 10);
     assert.equal(mod.isEmpty(), false);
+    assert.equal(mod.isHistoryEmpty(), false);
+    assert.equal(mod.throughputModel().summary.totalCompleted, 3);
+    assert.equal(mod.cumulativeModel().summary.latestTotal, 6);
+    assert.match(mod.throughputSvgInner(), /data-chart-bar=/);
+    assert.match(mod.cumulativeSvgInner(), /data-chart-line="cumulative"/);
+    assert.match(mod.throughputAriaLabel(), /Throughput bar chart/);
+    assert.match(mod.cumulativeAriaLabel(), /Cumulative completed tasks/);
     assert.equal(mod.statusEntries()[0].count, 3);
     assert.equal(mod.priorityEntries()[2].count, 4);
     assert.equal(mod.workloadEntries()[0].label, "ada");
@@ -270,6 +324,88 @@ test("Dashboard module: openDashboard / closeDashboard / toggleDashboard manage 
     mod.toggleDashboard();
     assert.equal(state.open, true);
     await new Promise((r) => setTimeout(r, 0));
+  });
+});
+
+test("Dashboard module: setHistoryBucket toggles day/week, skips redundant fetches, and drops stale bucket responses", async () => {
+  const { state, mod } = makeModuleFixture({ open: true });
+  const urls: string[] = [];
+  let resolveWeek!: (r: Response) => void;
+
+  await withFetch((url: string | URL) => {
+    const u = String(url);
+    urls.push(u);
+    if (u.includes("bucket=week")) {
+      return new Promise<Response>((res) => { resolveWeek = res; });
+    }
+    return Promise.resolve(
+      new Response(JSON.stringify(sampleHistory({ bucket: "day" })), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  }, async () => {
+    await mod.loadHistory(false);
+    assert.equal(state.history?.bucket, "day");
+    assert.equal(urls.length, 1);
+
+    // Clicking active bucket when history is already loaded does not refetch.
+    await mod.setHistoryBucket("day");
+    assert.equal(urls.length, 1);
+
+    // Switch to week, then rapidly switch back to day before week resolves.
+    const weekReq = mod.setHistoryBucket("week");
+    assert.equal(state.bucket, "week");
+    assert.equal(state.history, null);
+    await mod.setHistoryBucket("day");
+    assert.equal(state.bucket, "day");
+    assert.equal(state.history?.bucket, "day");
+
+    resolveWeek(
+      new Response(JSON.stringify(sampleHistory({ bucket: "week" })), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await weekReq;
+    assert.equal(state.history?.bucket, "day", "stale week response must not overwrite day");
+  });
+});
+
+test("Dashboard module: loadHistory handles empty project, 401 unauthorized, 403 forbidden, and server errors", async () => {
+  const { state, mod } = makeModuleFixture({ projectId: "" });
+  await mod.loadHistory();
+  assert.equal(state.history, null);
+  assert.equal(state.historyLoading, false);
+  assert.equal(state.historyError, "");
+
+  state.projectId = "proj-1";
+  await withFetch(async () => new Response(JSON.stringify({ error: "internal", message: "history boom" }), {
+    status: 500,
+    headers: { "content-type": "application/json" },
+  }), async () => {
+    await mod.loadHistory(false);
+    assert.equal(state.historyError, "history boom");
+    assert.equal(state.historyLoading, false);
+  });
+
+  await withFetch(async () => new Response(JSON.stringify({ error: "unauthorized", message: "auth required" }), {
+    status: 401,
+    headers: { "content-type": "application/json" },
+  }), async () => {
+    await mod.loadHistory(false);
+    assert.equal(state.authOpened, 1);
+    assert.equal(state.historyError, "auth required");
+  });
+
+  await withFetch(async () => new Response(JSON.stringify({ error: "forbidden", message: "no access" }), {
+    status: 403,
+    headers: { "content-type": "application/json" },
+  }), async () => {
+    state.history = sampleHistory();
+    await mod.loadHistory(false);
+    assert.equal(state.forbidden, true);
+    assert.equal(state.history, null);
   });
 });
 
@@ -307,12 +443,15 @@ test("Dashboard module: sequence guard and project-switch check drop stale respo
   let resolveFirst!: (r: Response) => void;
   let call = 0;
 
-  await withFetch(() => {
+  await withFetch((url: string | URL) => {
     call++;
     if (call === 1) {
       return new Promise<Response>((res) => { resolveFirst = res; });
     }
-    return Promise.resolve(new Response(JSON.stringify(sampleReport({ project_id: "proj-2" })), {
+    const body = String(url).includes("/report/history")
+      ? sampleHistory({ project_id: "proj-2" })
+      : sampleReport({ project_id: "proj-2" });
+    return Promise.resolve(new Response(JSON.stringify(body), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
@@ -322,6 +461,7 @@ test("Dashboard module: sequence guard and project-switch check drop stale respo
     const second = mod.loadReport(false);
     await second;
     assert.equal(state.report?.project_id, "proj-2");
+    assert.equal(state.history?.project_id, "proj-2");
 
     resolveFirst(new Response(JSON.stringify(emptyReport("proj-1")), {
       status: 200,
@@ -332,7 +472,7 @@ test("Dashboard module: sequence guard and project-switch check drop stale respo
   });
 });
 
-test("Dashboard module: refreshDashboard coalesces bursts and skips when closed or invalidated", async () => {
+test("Dashboard module: refreshDashboard coalesces bursts, refreshes report+history, and skips when closed or invalidated", async () => {
   const { state, scheduled, mod } = makeModuleFixture({ open: false });
 
   mod.refreshDashboard();
@@ -345,22 +485,27 @@ test("Dashboard module: refreshDashboard coalesces bursts and skips when closed 
   assert.equal(scheduled[0].cleared, true, "trailing debounce cancels earlier timer");
   assert.equal(scheduled[1].cleared, false);
 
-  let fetches = 0;
-  await withFetch(async () => {
-    fetches++;
-    return new Response(JSON.stringify(sampleReport()), {
+  const fetchedUrls: string[] = [];
+  await withFetch(async (url: string | URL) => {
+    const u = String(url);
+    fetchedUrls.push(u);
+    const body = u.includes("/report/history") ? sampleHistory() : sampleReport();
+    return new Response(JSON.stringify(body), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
   }, async () => {
     scheduled[1].fn();
-    await new Promise((r) => setTimeout(r, 0));
-    assert.equal(fetches, 1);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(fetchedUrls.length, 2);
+    assert.ok(fetchedUrls[0].endsWith("/report"));
+    assert.ok(fetchedUrls[1].includes("/report/history"));
 
-    // invalidatePendingLoads cancels an armed refresh
+    // invalidatePendingLoads cancels an armed refresh and clears stale history
     mod.refreshDashboard();
     assert.equal(scheduled[2].cleared, false);
     mod.invalidatePendingLoads();
     assert.equal(scheduled[2].cleared, true);
+    assert.equal(state.history, null);
   });
 });

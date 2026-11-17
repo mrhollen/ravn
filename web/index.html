@@ -1910,6 +1910,131 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </section>
               </div>
 
+              <!-- Row 2: Throughput & Cumulative Completed Charts (/report/history) -->
+              <section data-testid="dashboard-charts" aria-labelledby="dash-charts-heading"
+                       class="flex flex-col gap-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="min-w-0">
+                    <h3 id="dash-charts-heading" class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                      Activity &amp; Completion Trends
+                    </h3>
+                    <p class="text-xs text-zinc-600 dark:text-zinc-400"
+                       x-text="'Last ' + (dashboardHistory?.days ?? 30) + ' days · UTC ' + (dashboardHistoryBucket === 'week' ? 'weekly' : 'daily') + ' buckets'"></p>
+                  </div>
+                  <div role="group" aria-label="Chart time bucket" data-testid="dashboard-bucket-toggle"
+                       class="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 dark:border-zinc-700 dark:bg-zinc-800">
+                    <button type="button" data-testid="dashboard-bucket-day"
+                            @click="setDashboardHistoryBucket('day')"
+                            :aria-pressed="dashboardHistoryBucket === 'day'"
+                            :class="dashboardHistoryBucket === 'day'
+                              ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100'
+                              : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'"
+                            class="focus-ring tap-target rounded-md px-3 py-1 text-xs font-medium transition-colors">
+                      Day
+                    </button>
+                    <button type="button" data-testid="dashboard-bucket-week"
+                            @click="setDashboardHistoryBucket('week')"
+                            :aria-pressed="dashboardHistoryBucket === 'week'"
+                            :class="dashboardHistoryBucket === 'week'
+                              ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100'
+                              : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'"
+                            class="focus-ring tap-target rounded-md px-3 py-1 text-xs font-medium transition-colors">
+                      Week
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Charts loading state -->
+                <div x-show="dashboardHistoryLoading && !dashboardHistory" x-cloak
+                     data-testid="dashboard-charts-loading" role="status" aria-live="polite"
+                     class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <template x-for="slot in [0, 1]" :key="'chart-skel-' + slot">
+                    <div class="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                      <div class="h-4 w-40 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800"></div>
+                      <div class="mt-4 h-44 w-full animate-pulse rounded-lg bg-zinc-100 dark:bg-zinc-800/70"></div>
+                    </div>
+                  </template>
+                </div>
+
+                <!-- Charts error state -->
+                <div x-show="dashboardHistoryError && !dashboardHistory && !dashboardHistoryLoading" x-cloak
+                     data-testid="dashboard-charts-error" role="alert" aria-live="assertive"
+                     class="rounded-xl border border-red-200 bg-white p-4 text-center shadow-sm dark:border-red-800 dark:bg-zinc-900">
+                  <p class="text-sm font-semibold text-red-700 dark:text-red-400">Could not load activity history</p>
+                  <p class="mt-1 break-words text-xs text-zinc-600 dark:text-zinc-400" x-text="dashboardHistoryError"></p>
+                  <div class="mt-3 flex justify-center">
+                    <button type="button" data-testid="dashboard-charts-retry-btn" @click="loadDashboardHistory(false)" class="btn-secondary text-xs">Retry charts</button>
+                  </div>
+                </div>
+
+                <!-- Charts grid -->
+                <div x-show="dashboardHistory" x-cloak class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <!-- Throughput chart -->
+                  <section data-testid="dashboard-throughput-chart" aria-labelledby="dash-throughput-heading"
+                           class="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <div class="flex items-center gap-2">
+                        <h4 id="dash-throughput-heading" class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Throughput</h4>
+                        <span class="inline-flex items-center gap-1 text-[11px] text-zinc-600 dark:text-zinc-400">
+                          <span class="inline-block h-2 w-2 rounded-xs bg-emerald-500 dark:bg-emerald-400" aria-hidden="true"></span>
+                          <span x-text="'Completed / ' + dashboardHistoryBucket"></span>
+                        </span>
+                      </div>
+                      <span data-testid="dashboard-throughput-summary"
+                            class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium tabular-nums text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                            x-text="dashboardThroughputSummary().totalCompleted + ' completed · avg ' + dashboardThroughputSummary().averagePerBucket + '/' + dashboardHistoryBucket"></span>
+                    </div>
+
+                    <template x-if="isDashboardHistoryEmpty()">
+                      <p data-testid="dashboard-throughput-empty"
+                         class="mt-3 rounded-lg border border-dashed border-zinc-200 px-3 py-10 text-center text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
+                        No throughput history yet. Complete tasks to see per-bucket velocity.
+                      </p>
+                    </template>
+                    <div x-show="!isDashboardHistoryEmpty()" class="mt-3">
+                      <svg viewBox="0 0 640 220" role="img"
+                           data-testid="dashboard-throughput-svg"
+                           :aria-label="dashboardThroughputAriaLabel()"
+                           class="h-auto w-full select-none">
+                        <g x-html="dashboardThroughputSvgInner()"></g>
+                      </svg>
+                    </div>
+                  </section>
+
+                  <!-- Cumulative completed chart -->
+                  <section data-testid="dashboard-cumulative-chart" aria-labelledby="dash-cumulative-heading"
+                           class="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <div class="flex items-center gap-2">
+                        <h4 id="dash-cumulative-heading" class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Cumulative Completed</h4>
+                        <span class="inline-flex items-center gap-1 text-[11px] text-zinc-600 dark:text-zinc-400">
+                          <span class="inline-block h-0.5 w-3 rounded-full bg-indigo-600 dark:bg-indigo-400" aria-hidden="true"></span>
+                          Running total
+                        </span>
+                      </div>
+                      <span data-testid="dashboard-cumulative-summary"
+                            class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium tabular-nums text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                            x-text="dashboardCumulativeSummary().latestTotal + ' total · +' + dashboardCumulativeSummary().windowGain + ' in window'"></span>
+                    </div>
+
+                    <template x-if="isDashboardHistoryEmpty()">
+                      <p data-testid="dashboard-cumulative-empty"
+                         class="mt-3 rounded-lg border border-dashed border-zinc-200 px-3 py-10 text-center text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
+                        No completion history yet. Running total appears once tasks exist.
+                      </p>
+                    </template>
+                    <div x-show="!isDashboardHistoryEmpty()" class="mt-3">
+                      <svg viewBox="0 0 640 220" role="img"
+                           data-testid="dashboard-cumulative-svg"
+                           :aria-label="dashboardCumulativeAriaLabel()"
+                           class="h-auto w-full select-none">
+                        <g x-html="dashboardCumulativeSvgInner()"></g>
+                      </svg>
+                    </div>
+                  </section>
+                </div>
+              </section>
+
               <!-- Row 2: Active & Expired Claims + Workload Distribution -->
               <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <!-- Active & expired claims -->
