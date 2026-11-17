@@ -270,7 +270,7 @@ test("sse module: connectSse opens one stream with token; reconnect sends replay
   assert.equal(sseTelemetry.openCount(), 1, "exactly one open stream after a reconnect cycle");
 
   // intentional teardown clears the cursor → no last_event_id on the next connect
-  m.disconnectSse(true);
+  withCapturedGlobalSetTimeout(() => m.disconnectSse(true)); // resetBackoff=true arms the bare 30s timer
   m.connectSse();
   assert.doesNotMatch(FakeEventSource.instances[2].url, /last_event_id/);
 });
@@ -296,9 +296,18 @@ test("sse module: connectSse with no selected project stays disconnected and arm
   installWindowFakes();
   installFakeEventSource();
   const m = createSseModule(deps as never);
-  m.connectSse();
-  assert.equal(FakeEventSource.instances.length, 0, "no stream without a project");
-  assert.equal(deps.calls[deps.calls.length - 1], "setSseStatus:disconnected");
+  // scheduleSseDisconnectTimer arms via the GLOBAL (bare) setTimeout, which the
+  // window fakes above do NOT capture. Without this wrapper a REAL 30s timer is
+  // scheduled and the node:test child stays alive ~30s after every test here —
+  // P5 F5 root-caused this as the unit suite's fixed wall-time floor. Keep the
+  // wrap on every call path below that can reach scheduleSseDisconnectTimer.
+  withCapturedGlobalSetTimeout((captured) => {
+    m.connectSse();
+    assert.equal(FakeEventSource.instances.length, 0, "no stream without a project");
+    assert.equal(deps.calls[deps.calls.length - 1], "setSseStatus:disconnected");
+    assert.equal(captured.length, 1, "no-project path arms the disconnect toast timer");
+    assert.equal(captured[0].delay, SSE_DISCONNECT_TOAST_DELAY_MS);
+  });
 });
 
 // ------------------------------------------------------------------ reconnect loop
@@ -309,8 +318,8 @@ test("sse module: handleSseDisconnect backs off exponentially and reconnects whi
   installFakeEventSource();
   const m = createSseModule(deps as never);
 
-  m.connectSse(); // one live stream
-  m.handleSseDisconnect();
+  m.connectSse(); // one live stream (project selected → no toast timer armed)
+  withCapturedGlobalSetTimeout(() => m.handleSseDisconnect()); // bare 30s arm — see note above
   assert.equal(FakeEventSource.instances[0].closed, true, "live stream closed");
   assert.equal(sseTelemetry.openCount(), 0);
   assert.ok(deps.calls.includes("setSseStatus:connecting"), "UI shows connecting while retrying");
@@ -320,7 +329,7 @@ test("sse module: handleSseDisconnect backs off exponentially and reconnects whi
   assert.equal(fakes.timeouts[0].delay, 2000);
   fakes.timeouts[0].fn();
   assert.equal(FakeEventSource.instances.length, 2, "reconnected");
-  m.handleSseDisconnect();
+  withCapturedGlobalSetTimeout(() => m.handleSseDisconnect()); // keep the bare capture on every handle call
   assert.equal(fakes.timeouts[1].delay, 4000, "backoff doubled");
 });
 
@@ -331,7 +340,7 @@ test("sse module: membership deny stops the reconnect loop", () => {
   installFakeEventSource();
   const m = createSseModule(deps as never);
 
-  m.handleSseDisconnect();
+  withCapturedGlobalSetTimeout(() => m.handleSseDisconnect()); // keep the bare capture on every handle call
   assert.equal(fakes.timeouts.length, 0, "no reconnect scheduled while the project is forbidden");
   assert.equal(deps.calls[deps.calls.length - 1], "setSseStatus:disconnected");
 });
@@ -346,7 +355,7 @@ test("sse module: onopen resets backoff and clears the disconnect notification",
   m.connectSse();
   FakeEventSource.instances[0].fireOpen();
   assert.ok(deps.calls.includes("setSseStatus:connected"));
-  m.handleSseDisconnect(); // after a successful connect, backoff must restart at 2s
+  withCapturedGlobalSetTimeout(() => m.handleSseDisconnect()); // after connect, backoff restarts at 2s
   assert.equal(fakes.timeouts[fakes.timeouts.length - 1].delay, 2000, "backoff reset by a successful open");
 });
 
