@@ -66,6 +66,8 @@ export interface RealtimeDispatchHooks {
   scheduleReload: () => void;
   /** Targeted in-place re-fetch of the open drawer's task (returns applied). */
   refreshDetail: (taskId: string) => Promise<boolean> | boolean;
+  /** Silent refresh of the open project dashboard view. */
+  refreshDashboard?: () => void;
 }
 
 export type RealtimeDispatchStatus = "empty" | "malformed" | "scoped-out" | "dispatched";
@@ -80,6 +82,7 @@ export interface RealtimeDispatchResult {
   cursorAdvanced: boolean;
   reloadScheduled: boolean;
   detailRefreshTaskId?: string;
+  dashboardRefreshed: boolean;
 }
 
 /** A realtime payload must be an object with a non-empty string kind. */
@@ -99,6 +102,7 @@ export function dispatchRealtimeEvent(
     knownKind: false,
     cursorAdvanced: false,
     reloadScheduled: false,
+    dashboardRefreshed: false,
   });
 
   if (!msg.data) {
@@ -132,6 +136,7 @@ export function dispatchRealtimeEvent(
     knownKind: KNOWN_REALTIME_KINDS.has(payload.kind),
     cursorAdvanced: false,
     reloadScheduled: false,
+    dashboardRefreshed: false,
   };
 
   // Advance the replay cursor: the frame id is exactly what a reconnect needs
@@ -147,6 +152,11 @@ export function dispatchRealtimeEvent(
   // round after the quiet period via the debounce inside scheduleReload.
   hooks.scheduleReload();
   result.reloadScheduled = true;
+
+  if (hooks.refreshDashboard) {
+    hooks.refreshDashboard();
+    result.dashboardRefreshed = true;
+  }
 
   // Targeted in-place refresh: when the event names a task and the drawer is
   // open for it, re-fetch that detail (comments/notes/claim/status) instead of

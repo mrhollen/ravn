@@ -11,6 +11,7 @@ function realtimeDispatchFixture(overrides: { selectedProjectId?: string | null;
     cursor: [] as Array<{ lastEventId: string; projectId: string | null | undefined }>,
     reloads: 0,
     detailRefreshes: [] as string[],
+    dashboardRefreshes: 0,
   };
   const hooks: RealtimeDispatchHooks = {
     selectedProjectId: () => overrides.selectedProjectId ?? "proj-1",
@@ -24,6 +25,9 @@ function realtimeDispatchFixture(overrides: { selectedProjectId?: string | null;
     refreshDetail: (taskId) => {
       calls.detailRefreshes.push(taskId);
       return Promise.resolve(true);
+    },
+    refreshDashboard: () => {
+      calls.dashboardRefreshes++;
     },
   };
   return { calls, hooks };
@@ -53,6 +57,8 @@ test("RealtimeDispatch: known kind routes to the coalesced reload + in-place dra
   assert.deepEqual(calls.cursor, [{ lastEventId: "frame-123", projectId: "proj-1" }]);
   assert.equal(result.reloadScheduled, true, "coalesced board + projects refresh scheduled");
   assert.equal(calls.reloads, 1);
+  assert.equal(result.dashboardRefreshed, true, "dashboard refresh hook invoked");
+  assert.equal(calls.dashboardRefreshes, 1);
   assert.equal(result.detailRefreshTaskId, "task-9", "open drawer re-fetched in place");
   assert.deepEqual(calls.detailRefreshes, ["task-9"]);
 });
@@ -92,6 +98,7 @@ test("RealtimeDispatch: malformed / non-object payloads are dropped quietly — 
     );
     assert.equal(result.status, "malformed", `body ${JSON.stringify(body)}`);
     assert.equal(calls.reloads, 0, `body ${JSON.stringify(body)}: no pointless refresh`);
+    assert.equal(calls.dashboardRefreshes, 0, `body ${JSON.stringify(body)}: no dashboard refresh`);
     assert.equal(calls.cursor.length, 0, `body ${JSON.stringify(body)}: cursor untouched`);
   }
 });
@@ -115,7 +122,9 @@ test("RealtimeDispatch: events for another project are scoped out — no cursor 
 
   assert.equal(result.status, "scoped-out");
   assert.equal(result.reloadScheduled, false);
+  assert.equal(result.dashboardRefreshed, false);
   assert.equal(calls.reloads, 0);
+  assert.equal(calls.dashboardRefreshes, 0);
   assert.equal(result.cursorAdvanced, false, "a foreign-project frame must not poison the replay cursor");
   assert.equal(calls.cursor.length, 0);
 });
@@ -185,4 +194,17 @@ test("connectSse: onmessage is the primary handler; legacy named listeners cover
     assert.ok(!es.namedListeners.includes("message"), "'message' must NOT be a named listener — it would double-dispatch every frame");
   });
   if (instances[0]) instances[0].close();
+});
+
+test("RealtimeDispatch: refreshDashboard hook is optional (omitting it leaves dashboardRefreshed=false)", () => {
+  const hooks: RealtimeDispatchHooks = {
+    selectedProjectId: () => "proj-1",
+    isDetailOpenFor: () => false,
+    advanceCursor: () => {},
+    scheduleReload: () => {},
+    refreshDetail: () => false,
+  };
+  const result = dispatchRealtimeEvent({ data: realtimePayload(), lastEventId: "frame-opt" }, hooks);
+  assert.equal(result.status, "dispatched");
+  assert.equal(result.dashboardRefreshed, false);
 });

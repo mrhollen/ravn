@@ -17,6 +17,15 @@ import { createBoardModule, readStoredCardDensity } from "./modules/board";
 import type { BoardModule, CardDensity } from "./modules/board";
 import { createBoardViewModule } from "./modules/board-view";
 import type { BoardViewModule } from "./modules/board-view";
+import {
+  createDashboardModule,
+  DEFAULT_STALLED_MINUTES,
+  formatIdleMinutes,
+  type DashboardModule,
+  type PriorityBreakdownEntry,
+  type StatusSummaryEntry,
+  type WorkloadEntry,
+} from "./modules/dashboard";
 import { createSseModule, sseTelemetry } from "./modules/sse";
 import type { SseModule } from "./modules/sse";
 import { createOpenCodeModule } from "./modules/opencode";
@@ -70,6 +79,7 @@ import {
 import type { ColumnView } from "./columns";
 import type {
   AcRow,
+  ActiveClaim,
   ActorInput,
   ArtifactKind,
   ArtifactRow,
@@ -84,6 +94,7 @@ import type {
   OpenCodeAgentOption,
   OpenCodeModelOption,
   OpenCodeOptionsResponse,
+  ProjectReport,
   ProjectWithCounts,
   RelationRow,
   SessionIdentity,
@@ -114,6 +125,7 @@ import {
   safeStorage,
   shortId,
   statusLabel,
+  timeOfDay,
 } from "./util";
 
 // ---------------------------------------------------------------------------
@@ -393,6 +405,8 @@ export function ravnApp() {
       const taskTitle = this.detailOpen ? ((this.detail?.title ?? "").trim()) : "";
       if (taskTitle && projectName) {
         document.title = `${taskTitle}${TITLE_SEPARATOR}${projectName}${TITLE_SEPARATOR}Rävn`;
+      } else if (this.dashboardOpen && projectName) {
+        document.title = `Dashboard${TITLE_SEPARATOR}${projectName}${TITLE_SEPARATOR}Rävn`;
       } else if (projectName) {
         document.title = `${projectName}${TITLE_SEPARATOR}Rävn`;
       } else {
@@ -2205,8 +2219,15 @@ export function ravnApp() {
        // match id set — then re-arm for the new selection if a term is active
        // (mirrors how selectProject invalidates pending board loads above).
        this._boardModule().cancelFullTextSearch();
+       // Dashboard report belongs to the project being LEFT: clear and reload if open.
+       this.dashboardReport = null;
+       this.dashboardError = "";
+       this._dashboardModule().invalidatePendingLoads();
       this.connectSse();
       void this.loadBoard();
+      if (this.dashboardOpen) {
+        void this._dashboardModule().loadReport(false);
+      }
       this.scheduleFullTextSearch();
       this.syncUrlState(true);
       // User-driven project switch → the tab title follows (WCAG 2.4.2).
@@ -2274,9 +2295,89 @@ export function ravnApp() {
         },
         loadProjectsSilent: () => this.loadProjects(true),
         loadBoardSilent: () => this.loadBoard(true),
+        refreshDashboard: () => { this._dashboardModule().refreshDashboard(); },
       });
       return this._sse;
     },
+
+    // -------------------------------------------------------------- dashboard
+    dashboardOpen: false,
+    dashboardReport: null as ProjectReport | null,
+    dashboardLoading: false,
+    dashboardError: "",
+    dashboardStalledMinutes: DEFAULT_STALLED_MINUTES,
+    _dashboard: null as DashboardModule | null,
+
+    _dashboardModule(): DashboardModule {
+      if (this._dashboard) return this._dashboard;
+      this._dashboard = createDashboardModule({
+        selectedProjectId: () => this.selectedProjectId,
+        dashboardOpen: () => this.dashboardOpen,
+        dashboardReport: () => this.dashboardReport,
+        stalledMinutes: () => this.dashboardStalledMinutes,
+        nowTick: () => this.nowTick,
+        setDashboardOpen: (open) => { this.dashboardOpen = open; },
+        setDashboardReport: (rep) => { this.dashboardReport = rep; },
+        setDashboardLoading: (loading) => { this.dashboardLoading = loading; },
+        setDashboardError: (err) => { this.dashboardError = err; },
+        setProjectForbidden: (v) => { this.projectForbidden = v; },
+        openAuthModal: () => this.openAuthModal(),
+        updateDocumentTitle: () => this.updateDocumentTitle(),
+      });
+      return this._dashboard;
+    },
+
+    openDashboard(): void {
+      if (this.fullPageOpen) {
+        this.requestCloseDetail();
+        if (this.fullPageOpen) return;
+      }
+      this._dashboardModule().openDashboard();
+    },
+
+    closeDashboard(): void {
+      this._dashboardModule().closeDashboard();
+    },
+
+    toggleDashboard(): void {
+      if (this.dashboardOpen) this.closeDashboard();
+      else this.openDashboard();
+    },
+
+    async loadDashboardReport(silent = false): Promise<void> {
+      await this._dashboardModule().loadReport(silent);
+    },
+
+    dashboardProjectName(): string {
+      return this.projects.find((p) => p.id === this.selectedProjectId)?.name ?? "";
+    },
+
+    dashboardTotalTasks(): number {
+      return this._dashboardModule().totalTasks();
+    },
+
+    isDashboardEmpty(): boolean {
+      return this._dashboardModule().isEmpty();
+    },
+
+    dashboardStatusEntries(): StatusSummaryEntry[] {
+      return this._dashboardModule().statusEntries();
+    },
+
+    dashboardPriorityEntries(): PriorityBreakdownEntry[] {
+      return this._dashboardModule().priorityEntries();
+    },
+
+    dashboardWorkloadEntries(): WorkloadEntry[] {
+      return this._dashboardModule().workloadEntries();
+    },
+
+    dashboardClaimRemaining(claim: ActiveClaim): string {
+      return this._dashboardModule().activeClaimRemaining(claim);
+    },
+
+    formatIdleMinutes,
+    timeOfDay,
 
     connectSse(): void {
       this._sseModule().connectSse();

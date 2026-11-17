@@ -137,6 +137,8 @@ export interface SseDeps {
   refreshOpenDetail: () => Promise<void>;
   loadProjectsSilent: () => Promise<void>;
   loadBoardSilent: () => Promise<void>;
+  /** Silent dashboard report refresh when the dashboard view is open. */
+  refreshDashboard?: () => void;
 }
 
 export function createSseModule(deps: SseDeps) {
@@ -312,6 +314,7 @@ export function createSseModule(deps: SseDeps) {
             deps.scheduleReload();
           },
           refreshDetail: (taskId) => deps.refreshDetail(taskId),
+          refreshDashboard: deps.refreshDashboard ? () => deps.refreshDashboard?.() : undefined,
         }
       );
     } catch {
@@ -416,6 +419,7 @@ export function createSseModule(deps: SseDeps) {
     await deps.loadProjectsSilent();
     await deps.loadBoardSilent();
     await deps.refreshOpenDetail();
+    deps.refreshDashboard?.();
   }
 
   return {

@@ -27,6 +27,7 @@ import type {
   SessionResponse,
   OpenCodeOptionsResponse,
   Project,
+  ProjectReport,
   RelationRow,
   StartOpenCodeInput,
   StartOpenCodeResponse,
@@ -345,6 +346,22 @@ export const api = {
   /** Whole-project board snapshot in one round-trip. */
   getBoard(projectId: string): Promise<Board> {
     return request<Board>(`/projects/${projectId}/board`);
+  },
+
+  /** Single-call project health digest (status/priority counts, claims, stalled, bottlenecks, completed, workload). */
+  getProjectReport(
+    projectId: string,
+    opts?: { stalledMinutes?: number; since?: string },
+  ): Promise<ProjectReport> {
+    const qs = new URLSearchParams();
+    if (opts?.stalledMinutes !== undefined && opts.stalledMinutes > 0) {
+      qs.set("stalled_minutes", String(Math.trunc(opts.stalledMinutes)));
+    }
+    if (opts?.since) {
+      qs.set("since", opts.since);
+    }
+    const s = qs.toString();
+    return request<ProjectReport>(`/projects/${encodeURIComponent(projectId)}/report${s ? `?${s}` : ""}`);
   },
 
   // --- membership management (multi-user T9) ----------------------------------

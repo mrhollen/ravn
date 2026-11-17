@@ -302,6 +302,64 @@ export interface ProjectReportHistory {
   series: ReportHistoryPoint[]; // [] when the project has no tasks — never null
 }
 
+// --- project report (GET /projects/{id}/report) ----------------------------
+
+export interface ReportCounts {
+  by_status: Record<Status, number>;
+  by_priority: Record<string, number>;
+}
+
+export interface ReportTaskRef {
+  id: string;
+  title: string;
+}
+
+export interface ActiveClaim {
+  id: string;
+  title: string;
+  claimed_by?: ActorRef;
+  claim_expires_at: string;
+  remaining_sec: number;
+}
+
+export interface StalledTask {
+  id: string;
+  title: string;
+  last_activity_at: string;
+  idle_minutes: number;
+}
+
+export interface Bottleneck {
+  id: string;
+  title: string;
+  blocks: number;
+}
+
+export interface BlockedGroup {
+  blocker: ReportTaskRef;
+  blocked: ReportTaskRef[];
+}
+
+export interface RecentlyCompleted {
+  id: string;
+  title: string;
+  completed_at: string;
+  assignee?: ActorRef;
+}
+
+/** GET /projects/{id}/report — single-call project health digest. */
+export interface ProjectReport {
+  project_id: string;
+  counts: ReportCounts;
+  active_claims: ActiveClaim[];
+  expired_claims: ReportTaskRef[];
+  stalled_tasks: StalledTask[];
+  bottlenecks: Bottleneck[];
+  open_blocked_by: BlockedGroup[];
+  recently_completed: RecentlyCompleted[];
+  workload: Record<string, number>;
+}
+
 /** POST /tasks → 201 body: fresh row + advisory duplicate candidates. */
 export interface CreateTaskResponse {
   task: TaskSummary;
