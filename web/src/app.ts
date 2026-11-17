@@ -1734,6 +1734,28 @@ export function ravnApp() {
         ) {
           window.history.replaceState(null, "", dashboardRoutePath(this.selectedProjectId));
         }
+      } else {
+        // P4 project-in-URL: a user-initiated switch on the plain board route
+        // is a NAVIGATION — push a history entry so browser Back/Forward step
+        // across projects (popstate's board branch restores ?project= plus the
+        // full filter set, app.ts onPopState). Dashboard mode keeps its
+        // replaceState behavior above. The equality guard makes this a no-op
+        // when the $watch-driven syncUrlState below computes the same URL and
+        // prevents duplicate entries if that watch raced ahead of us.
+        // Programmatic adoptions (boot stored selection, deep links) never run
+        // selectProject, so they keep their replaceState/no-history behavior.
+        if (
+          typeof window !== "undefined" &&
+          window.history?.pushState &&
+          this.selectedProjectId
+        ) {
+          const target = this.boardUrl() + (window.location.hash || "");
+          const current =
+            (window.location.pathname || "/") +
+            (window.location.search || "") +
+            (window.location.hash || "");
+          if (target !== current) window.history.pushState(null, "", target);
+        }
       }
       this.scheduleFullTextSearch();
       this.syncUrlState(true);

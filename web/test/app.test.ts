@@ -4005,6 +4005,119 @@ test("DashboardNav: openDashboard / closeDashboard push and pop /projects/<id>/d
   }
 });
 
+test("ProjectInUrl (P4): user switch pushes /?project=<id>; Back/Forward restore project + filters; adoption never pushes", async () => {
+  const origGetBoard = api.getBoard;
+  // Start where boot left us: the stored project A on the board route, no filters.
+  const historyStack: string[] = ["/?project=proj-a"];
+  let idx = 0;
+  const syncLoc = (win: any, url: string) => {
+    const q = url.indexOf("?");
+    win.location.pathname = q === -1 ? url : (url.slice(0, q) || "/");
+    win.location.search = q === -1 ? "" : url.slice(q);
+  };
+  const win: any = {
+    innerWidth: 1280,
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    location: { pathname: "/", search: "?project=proj-a", hash: "" },
+    history: {
+      pushState(_s: unknown, _t: string, url: string) {
+        historyStack.splice(idx + 1);
+        historyStack.push(url);
+        idx = historyStack.length - 1;
+        syncLoc(win, url);
+      },
+      replaceState(_s: unknown, _t: string, url: string) {
+        historyStack[idx] = url;
+        syncLoc(win, url);
+      },
+      back() {
+        if (idx > 0) {
+          idx--;
+          syncLoc(win, historyStack[idx]);
+        }
+      },
+      forward() {
+        if (idx < historyStack.length - 1) {
+          idx++;
+          syncLoc(win, historyStack[idx]);
+        }
+      },
+    },
+  };
+
+  try {
+    (api as any).getBoard = async (pid: string) => ({
+      project_id: pid,
+      columns: { todo: [], doing: [], done: [] },
+    });
+
+    await withWindow(win, async () => {
+      const app = ravnApp() as any;
+      app.projects = [
+        { id: "proj-a", name: "Alpha" },
+        { id: "proj-b", name: "Beta" },
+      ];
+      app.selectedProjectId = "proj-a";
+      app.appBooted = true;
+
+      // Priority filter on A — in the browser this fires $watch → syncUrlState;
+      // under node:test the root no-ops $watch, so invoke the same immediate
+      // sync explicitly. Filter writes REPLACE in place (no history pollution).
+      app.filterPriority = "4";
+      app.syncUrlState(true);
+      assert.equal(historyStack.length, 1, "filter sync replaces in place and never pushes");
+      assert.equal(win.location.search, "?project=proj-a&priority=4");
+
+      // P4: a user-initiated project switch PUSHES one history entry carrying
+      // the new project + the active filter set.
+      app.pickProject("proj-b");
+      assert.equal(app.selectedProjectId, "proj-b");
+      assert.equal(historyStack.length, 2, "project switch must add exactly one history entry");
+      assert.equal(win.location.search, "?project=proj-b&priority=4");
+
+      // Back → the browser pops to A's entry; the app reconciles (onPopState's
+      // board branch) and restores project AND the full filter set from the URL.
+      win.history.back();
+      assert.equal(win.location.search, "?project=proj-a&priority=4");
+      app.onPopState();
+      assert.equal(app.selectedProjectId, "proj-a", "back restores project A");
+      assert.equal(app.filterPriority, "4", "back restores A's filter set");
+
+      // On A the user clears the priority → replaces in place (A entry unfiltered).
+      app.filterPriority = "";
+      app.syncUrlState(true);
+      assert.equal(win.location.search, "?project=proj-a");
+
+      // Forward → B's pushed entry restores both project and filters again.
+      win.history.forward();
+      assert.equal(win.location.search, "?project=proj-b&priority=4");
+      app.onPopState();
+      assert.equal(app.selectedProjectId, "proj-b", "forward restores project B");
+      assert.equal(app.filterPriority, "4", "forward restores B's filter set");
+
+      // Deep-link adoption at boot never pushes: a fresh root adopting the
+      // stored selection A + a dashboard deep link for B keeps one entry.
+      historyStack.length = 0;
+      historyStack.push("/projects/proj-b/dashboard");
+      idx = 0;
+      syncLoc(win, "/projects/proj-b/dashboard");
+      const app2 = ravnApp() as any;
+      app2.projects = [
+        { id: "proj-a", name: "Alpha" },
+        { id: "proj-b", name: "Beta" },
+      ];
+      app2.selectedProjectId = "proj-a"; // previously stored selection
+      app2.appBooted = true;
+      await app2.continueBoot(null, "proj-b");
+      assert.equal(app2.selectedProjectId, "proj-b");
+      assert.equal(historyStack.length, 1, "boot deep-link adoption must not push");
+      assert.equal(win.location.pathname, "/projects/proj-b/dashboard");
+    });
+  } finally {
+    api.getBoard = origGetBoard;
+  }
+});
+
 test("DashboardNav: board <-> dashboard <-> /tasks/<id> popstate and keyboard shortcuts (d / Escape)", async () => {
   const origGetReport = api.getProjectReport;
   const origGetBoard = api.getBoard;
