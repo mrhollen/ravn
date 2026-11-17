@@ -42,6 +42,7 @@ import type { AcsModule } from "./modules/acs";
 import { createCommentsModule } from "./modules/comments";
 import { createArtifactsModule, type ArtifactsModule } from "./modules/artifacts";
 import { createClaimsModule, type ClaimsModule } from "./modules/claims";
+import { createRelationsModule, type RelationView, type RelationsModule } from "./modules/relations";
 import type { CommentsModule } from "./modules/comments";
 import { createProjectSettingsModule } from "./modules/project-settings";
 import type { ProjectSettingsModule } from "./modules/project-settings";
@@ -340,17 +341,6 @@ export interface Toast {
    *  dropped from the list. x-for removes nodes instantly, so the exit
    *  animation has to be driven through x-show first. */
   leaving?: boolean;
-}
-
-interface RelationView {
-  key: string;
-  label: string;
-  otherId: string;
-  title: string;
-  status?: Status;
-  isBlocker?: boolean;
-  badgeClass?: string;
-  raw: RelationRow;
 }
 
 export function ravnApp() {
@@ -3503,7 +3493,33 @@ export function ravnApp() {
         refreshDetail: (f) => this.refreshDetail(f),
         loadBoard: (f) => this.loadBoard(f),
       });
-      return this._claims;
+       return this._claims;
+    },
+
+    _relations: null as RelationsModule | null,
+
+    /** Lazily-built relations module (modules/relations.ts — Phase 2 batch D):
+     *  the add-relation combobox (search/filter/keyboard nav), the RelationRow
+     *  → RelationView shaping for the relations list, the subtask progress
+     *  counters and the add/remove mutation flows. The template-bound
+     *  `relationForm` stays a plain root field — in-place writes go through
+     *  the state-IN getter; the shared `taskTitle` lookup is injected as a
+     *  hook (root-owned generic board helper). */
+    _relationsModule(): RelationsModule {
+      if (this._relations) return this._relations;
+      this._relations = createRelationsModule({
+        // state-in
+        detail: () => this.detail,
+        board: () => this.board,
+        relationForm: () => this.relationForm,
+        // hooks
+        toast: (m, k) => this.toast(m, k),
+        actor: () => this.actor(),
+        refreshDetail: (f) => this.refreshDetail(f),
+        loadBoard: (f) => this.loadBoard(f),
+        taskTitle: (id) => this.taskTitle(id),
+      });
+      return this._relations;
     },
 
     startEditing(): void {
@@ -4283,276 +4299,50 @@ export function ravnApp() {
       activeIndex: -1,
     },
 
+    /** Add-relation combobox + RelationRow → RelationView shaping owned by
+     *  modules/relations.ts (Phase 2 batch D); `relationForm` stays root. */
     selectRelationTarget(t: TaskSummary): void {
-      this.relationForm.targetId = t.id;
-      this.relationForm.search = `${t.title} (${shortId(t.id)})`;
-      this.relationForm.open = false;
-      this.relationForm.activeIndex = -1;
+      this._relationsModule().selectRelationTarget(t);
     },
 
     onRelationComboboxKeyDown(dir: "up" | "down"): void {
-      const list = this.filteredRelationTasks();
-      if (list.length === 0) return;
-      this.relationForm.open = true;
-      if (dir === "down") {
-        this.relationForm.activeIndex = (this.relationForm.activeIndex + 1) % list.length;
-      } else {
-        this.relationForm.activeIndex =
-          this.relationForm.activeIndex <= 0 ? list.length - 1 : this.relationForm.activeIndex - 1;
-      }
+      this._relationsModule().onRelationComboboxKeyDown(dir);
     },
 
     onRelationComboboxEnter(): void {
-      const list = this.filteredRelationTasks();
-      if (this.relationForm.open && this.relationForm.activeIndex >= 0 && this.relationForm.activeIndex < list.length) {
-        this.selectRelationTarget(list[this.relationForm.activeIndex]);
-      } else if (!this.relationForm.busy && (this.relationForm.targetId || this.relationForm.search.trim())) {
-        this.addRelation();
-      }
+      this._relationsModule().onRelationComboboxEnter();
     },
 
     filteredRelationTasks(): TaskSummary[] {
-      const d = this.detail;
-      const b = this.board;
-      if (!b || !d) return [];
-      const currentId = d.id;
-      const kind = this.relationForm.kind;
-      const q = (this.relationForm.search || "").trim().toLowerCase();
-
-      // Collect all tasks except current task
-      const all: TaskSummary[] = [];
-      const seen = new Set<string>();
-      for (const s of STATUSES) {
-        for (const t of b.tasks[s] ?? []) {
-          if (t.id !== currentId && !seen.has(t.id)) {
-            seen.add(t.id);
-            all.push(t);
-          }
-        }
-      }
-
-      // AC3: exclude tasks already related with the same kind
-      const existingRelations = d.relations ?? [];
-      const isAlreadyRelated = (taskId: string): boolean => {
-        return existingRelations.some((r) => {
-          if (kind === "parent") {
-            return r.kind === "child" && r.task_id === d.id && r.other_task_id === taskId;
-          } else if (kind === "child") {
-            return r.kind === "child" && r.task_id === taskId && r.other_task_id === d.id;
-          } else if (kind === "blocked-by") {
-            return r.kind === "blocked-by" && r.task_id === d.id && r.other_task_id === taskId;
-          } else if (kind === "blocking") {
-            return r.kind === "blocked-by" && r.task_id === taskId && r.other_task_id === d.id;
-          } else if (kind === "duplicate-of") {
-            return r.kind === "duplicate-of" && (r.task_id === taskId || r.other_task_id === taskId);
-          } else if (kind === "related") {
-            return r.kind === "related" && (r.task_id === taskId || r.other_task_id === taskId);
-          }
-          return false;
-        });
-      };
-
-      const eligible = all.filter((t) => !isAlreadyRelated(t.id));
-
-      // Filter by search query
-      const filtered = q
-        ? eligible.filter((t) => {
-            const sid = shortId(t.id).toLowerCase();
-            return (
-              t.title.toLowerCase().includes(q) ||
-              t.id.toLowerCase().includes(q) ||
-              sid.includes(q) ||
-              t.status.toLowerCase().includes(q)
-            );
-          })
-        : eligible;
-
-      // AC2: If kind is 'blocked-by', sort open tasks before done tasks
-      if (kind === "blocked-by") {
-        return filtered.sort((a, b) => {
-          if (a.status === "done" && b.status !== "done") return 1;
-          if (a.status !== "done" && b.status === "done") return -1;
-          return a.priority - b.priority;
-        });
-      }
-
-      return filtered;
+      return this._relationsModule().filteredRelationTasks();
     },
 
     availableRelationTasks(): TaskSummary[] {
-      return this.filteredRelationTasks();
+      return this._relationsModule().availableRelationTasks();
     },
 
-    /** Resolve relation edges to display rows (direction-aware for child and
-     *  blocked-by; the wire never exposes a "parent" kind). */
     relationRows(): RelationView[] {
-      const d = this.detail;
-      if (!d) return [];
-      const me = d.id;
-      const b = this.board;
-      return d.relations.map((r) => {
-        let label: string;
-        let otherId: string;
-        let isBlocker = false;
-        let badgeClass = "bg-zinc-100 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300";
-        if (r.kind === "child") {
-          // Stored edge: task_id is the child, other_task_id the parent.
-          if (r.task_id === me) {
-            label = "Parent";
-            otherId = r.other_task_id;
-            badgeClass = "bg-purple-100 text-purple-800 ring-1 ring-purple-300 dark:bg-purple-950 dark:text-purple-300 dark:ring-purple-800";
-          } else {
-            label = "Child";
-            otherId = r.task_id;
-            badgeClass = "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:ring-indigo-800";
-          }
-        } else if (r.kind === "blocked-by") {
-          if (r.task_id === me) {
-            label = "Blocked by";
-            otherId = r.other_task_id;
-            isBlocker = true;
-            badgeClass = "bg-red-100 text-red-800 ring-1 ring-red-300 dark:bg-red-950 dark:text-red-300 dark:ring-red-800 font-bold";
-          } else {
-            label = "Blocking";
-            otherId = r.task_id;
-            badgeClass = "bg-amber-100 text-amber-800 ring-1 ring-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-800";
-          }
-        } else if (r.kind === "duplicate-of") {
-          if (r.task_id === me) {
-            label = "Duplicate of";
-            otherId = r.other_task_id;
-          } else {
-            label = "Duplicated by";
-            otherId = r.task_id;
-          }
-          badgeClass = "bg-zinc-100 text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700";
-        } else {
-          label = "Related to";
-          otherId = r.task_id === me ? r.other_task_id : r.task_id;
-          badgeClass = "bg-sky-100 text-sky-800 ring-1 ring-sky-300 dark:bg-sky-950 dark:text-sky-300 dark:ring-sky-800";
-        }
-
-        let status: Status | undefined;
-        if (b) {
-          for (const s of STATUSES) {
-            const found = b.tasks[s]?.find((t) => t.id === otherId);
-            if (found) {
-              status = found.status;
-              break;
-            }
-          }
-        }
-
-        return {
-          key: `${r.task_id}:${r.other_task_id}:${r.kind}`,
-          label,
-          otherId,
-          title: this.taskTitle(otherId),
-          status,
-          isBlocker,
-          badgeClass,
-          raw: r,
-        };
-      });
+      return this._relationsModule().relationRows();
     },
 
     detailSubtaskTotal(): number {
-      const d = this.detail;
-      if (!d) return 0;
-      let total = 0;
-      for (const r of d.relations) {
-        if (r.kind === "child" && r.other_task_id === d.id) {
-          total++;
-        }
-      }
-      return total;
+      return this._relationsModule().detailSubtaskTotal();
     },
 
     detailSubtaskDone(): number {
-      const d = this.detail;
-      if (!d) return 0;
-      let done = 0;
-      const b = this.board;
-      for (const r of d.relations) {
-        if (r.kind === "child" && r.other_task_id === d.id) {
-          if (b) {
-            for (const s of STATUSES) {
-              const row = b.tasks[s]?.find((t) => t.id === r.task_id);
-              if (row && row.status === "done") {
-                done++;
-                break;
-              }
-            }
-          }
-        }
-      }
-      return done;
+      return this._relationsModule().detailSubtaskDone();
     },
 
     detailSubtaskPercent(): number {
-      const total = this.detailSubtaskTotal();
-      if (total <= 0) return 0;
-      return Math.min(100, Math.round((this.detailSubtaskDone() / total) * 100));
+      return this._relationsModule().detailSubtaskPercent();
     },
 
     async addRelation(): Promise<void> {
-      const d = this.detail;
-      let targetId = this.relationForm.targetId.trim();
-      if (!targetId && this.relationForm.search.trim()) {
-        const q = this.relationForm.search.trim();
-        const match = this.filteredRelationTasks().find(
-          (t) =>
-            t.id === q ||
-            t.id.toLowerCase() === q.toLowerCase() ||
-            shortId(t.id).toLowerCase() === q.toLowerCase(),
-        );
-        targetId = match ? match.id : q;
-      }
-      const kind = this.relationForm.kind;
-      if (!d || !targetId || this.relationForm.busy) return;
-      if (targetId === d.id) {
-        this.toast("Cannot relate a task to itself", "error");
-        return;
-      }
-      this.relationForm.busy = true;
-      try {
-        if (kind === "parent") {
-          // Setting target as parent of this task -> this task is a child of target
-          await api.addRelation(d.id, targetId, "child", this.actor());
-        } else if (kind === "child") {
-          // Setting target as child of this task -> this task is a parent of target
-          await api.addRelation(d.id, targetId, "parent", this.actor());
-        } else if (kind === "blocking") {
-          // This task blocks target -> target is blocked by this task
-          await api.addRelation(targetId, d.id, "blocked-by", this.actor());
-        } else {
-          // blocked-by, duplicate-of, related
-          await api.addRelation(d.id, targetId, kind, this.actor());
-        }
-        this.relationForm.targetId = "";
-        this.relationForm.search = "";
-        this.relationForm.open = false;
-        this.relationForm.activeIndex = -1;
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-        this.toast("Relation added");
-      } catch (e) {
-        // Surface 409 parent conflict or any error verbatim without corrupting state
-        this.toast(errMsg(e), "error");
-      } finally {
-        this.relationForm.busy = false;
-      }
+      return await this._relationsModule().addRelation();
     },
 
     async removeRelation(r: RelationRow): Promise<void> {
-      const d = this.detail;
-      if (!d) return;
-      try {
-        await api.removeRelation(r.task_id, r.other_task_id, r.kind, this.actor());
-        await Promise.all([this.refreshDetail(true), this.loadBoard(true)]);
-        this.toast("Relation removed");
-      } catch (e) {
-        this.toast(errMsg(e), "error");
-      }
+      return await this._relationsModule().removeRelation(r);
     },
 
     taskTitle(id: string): string {
