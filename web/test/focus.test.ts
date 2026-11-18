@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { FOCUSABLE_SELECTOR, focusableIn, nextTrapIndex, openDialogFocus, pickFocusable, focusWhenReady } from "../src/focus.ts";
-import { withGlobals } from "./test-helpers.ts";
+import { FakeEl, keydownEv, makeDoc, withGlobals } from "./test-helpers.ts";
 
 test("FocusTrap: nextTrapIndex wraps forward and backward (AC1)", () => {
   // 4 focusables: Tab from last wraps to first; Shift+Tab from first wraps to last.
@@ -53,81 +53,9 @@ test("FocusTrap: pickFocusable keeps tabbable AND visible elements only", () => 
   assert.deepEqual(pickFocusable([]), []);
 });
 
-// ---------------------------------------------------------------------------
-// Minimal hand-rolled DOM fakes for the dialog-level tests — no DOM library.
-// FakeEl stands in for the browser's HTMLElement (the ONLY runtime global
-// focus.ts touches, via instanceof) and carries just enough shape for what the
-// module actually calls: querySelector(All), checkVisibility, contains, focus.
-// ---------------------------------------------------------------------------
-
-class FakeEl {
-  tabIndex = 0;
-  focused = false;
-  visible = true;
-  offsetParent: unknown = {};
-  position = "static"; // consulted by the getComputedStyle fallback only
-  detached = false;
-  parent: FakeEl | null = null;
-  doc: any = null; // owning fake document (wired so focus() moves activeElement)
-  focusables: FakeEl[] = []; // stand-in result of querySelectorAll(FOCUSABLE_SELECTOR)
-  selectorHits: Record<string, FakeEl> = {}; // stand-in for querySelector(sel)
-  seenSelectors: string[] = [];
-  focusCount = 0;
-
-  focus(): void {
-    this.focusCount++;
-    if (this.doc) this.doc.activeElement = this;
-  }
-  contains(o: unknown): boolean {
-    let n = o as FakeEl | null;
-    while (n && typeof (n as any).parent !== "undefined") {
-      if (n === this) return true;
-      n = n.parent;
-    }
-    return false;
-  }
-  querySelector(sel: string): FakeEl | null {
-    this.seenSelectors.push(sel);
-    return this.selectorHits[sel] ?? null;
-  }
-  querySelectorAll(sel: string): FakeEl[] {
-    this.seenSelectors.push(sel);
-    return this.focusables;
-  }
-  checkVisibility(): boolean {
-    return this.visible;
-  }
-}
-
-function makeDoc(active: unknown = null): any {
-  const doc: any = {
-    activeElement: active,
-    body: { focused: false, focus(this: any) { this.focused = true; } },
-    listeners: {} as Record<string, (e: any) => void>,
-    removedListeners: [] as string[],
-    addEventListener(t: string, fn: (e: any) => void) { doc.listeners[t] = fn; },
-    removeEventListener(t: string, fn: unknown) {
-      if (doc.listeners[t] === fn) delete doc.listeners[t];
-      doc.removedListeners.push(t);
-    },
-    contains(el: unknown): boolean {
-      return !!el && !((el as FakeEl).detached ?? false);
-    },
-  };
-  return doc;
-}
-
-function keydownEv(key: string, target: unknown, extra: Record<string, unknown> = {}): any {
-  const e: any = {
-    key,
-    target,
-    shiftKey: false,
-    defaultPrevented: false,
-    preventDefault() { this.defaultPrevented = true; },
-    ...extra,
-  };
-  return e;
-}
+// The FakeEl / makeDoc / keydownEv DOM fakes used below are shared from
+// ./test-helpers.ts (also consumed by the root-level dialog tests in
+// test/app.test.ts).
 
 test("FocusTrap: focusableIn returns [] when there is no document (SSR-safe)", () => {
   assert.deepEqual(focusableIn({ querySelectorAll: () => [] } as any), []);
