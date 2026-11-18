@@ -53,6 +53,27 @@ row). The only remaining planned extraction in this phase is the batch bar
 landed or classified permanent root (keyboard dispatch, template glue); no
 further Phase 2 extractions remain on the plan.
 
+**After Phases 3–5 (main `1901f53`, measured 2026-11-17):** `app.ts` is
+**3,626** lines. `modules/` holds all twenty-two feature modules — the Phase 2
+set plus `acs.ts`, `archive.ts`, `artifacts.ts`, `claims.ts`, `comments.ts`,
+`dashboard.ts`, `dashboard-charts.ts`, `detail.ts`, `drag.ts`, `new-task.ts`,
+`opencode.ts`, `project-settings.ts`, `relations.ts`, `sse.ts`, `task-edit.ts` —
+and `ui/` holds the seven extracted primitives (`button`, `card`, `dialog`,
+`empty`, `menu`, `toast`, `tokens`). Carry-overs settled in Phase 5: **F3**
+landed (board-scope persistence — `readStoredTaskScope`/`readStoredMyProjects`
++ localStorage keys + the `TaskScope` type — now lives in `filters.ts`, with
+`app.ts` importing and re-exporting, same pattern as the Phase 2
+`formatEventDetail` move); **F6** landed (unit suite runs on Node's native TS
+type stripping via `web/test/register-ts.mjs`, giving exact coverage line
+mapping — see `docs/TESTING.md` §2 "Coverage mechanism"); **F5** landed (the
+leaked 30s SSE disconnect timers are captured test-side, restoring the ≤15s
+unit budget). **F4** is satisfied by measurement (`modules/menus.ts` at
+96.35% lines; its only residual is the empty-panel `open()` early return). The
+one remaining candidate extraction — **F2 "next extraction"** — is the deep-link
+task fetch in `onPopState` (`api.getTask` IIFE, `app.ts` ~line 2307): it stays
+in the root because it is entangled with ~10 `this.` navigation state fields,
+and Phase 4 just reworked that routing surface; revisit after routing settles.
+
 **Target layout:**
 
 ```
@@ -758,7 +779,7 @@ being raised. **The cap is never raised.**
 allowed to exceed the cap. Today it contains exactly one entry:
 
 ```
-app.ts  — 3,606 lines (measured 2026-11-17)
+app.ts  — 3,626 lines (main `1901f53`, measured 2026-11-17)
 ```
 
 Rules that keep the allowlist honest and monotonically shrinking:
