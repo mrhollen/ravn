@@ -110,6 +110,7 @@ a fresh measurement, descending by line %.
 | src/api.ts | 98.01% | 96.72% | 89.83% |
 | src/modules/drag.ts | 98.00% | 91.94% | 87.10% |
 | src/filters.ts \* | 97.95% | 96.00% | 100.00% |
+| src/modules/artifacts.ts | 97.92% | 84.68% | 95.00% |
 | src/modules/board-view.ts | 97.84% | 85.71% | 88.89% |
 | src/sort.ts | 97.65% | 97.14% | 100.00% |
 | src/modules/project-settings.ts | 96.79% | 75.91% | 100.00% |
