@@ -27,7 +27,7 @@ import {
 } from "../src/app.ts";
 import { MENU_PANEL_CLASS } from "../src/ui/menu";
 import { CARD_SELECTED_CLASS } from "../src/ui/tokens";
-import { localYmd, withFetch, withWindow } from "./test-helpers.ts";
+import { FakeEl, keydownEv, localYmd, makeDoc, withFetch, withGlobals, withWindow } from "./test-helpers.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -4229,6 +4229,118 @@ test("DashboardNav: board <-> dashboard <-> /tasks/<id> popstate and keyboard sh
     api.getBoard = origGetBoard;
     api.getTask = origGetTask;
   }
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 dialog adoption (ticket 01M7P22NW890FZND6BTX0B4EN4): the root's
+// openDialog/closeDialog route every focus session through ui/dialog.ts'
+// DialogController — ONE per dialog id, so stacked surfaces keep independent
+// lifecycles. DOM is faked with the shared FakeEl/makeDoc harness (also used by
+// test/focus.test.ts). EVERY test below closes its sessions: the focus core
+// keeps module-level trap state that must not leak into later tests.
+// ---------------------------------------------------------------------------
+
+test("Root dialog controllers: openDialog opens a session via the per-id controller and returns its handle", () => {
+  const root = new FakeEl(); // visible, zero focusables — nothing to move focus to
+  const doc = makeDoc({ "cb-uia-test": root });
+  const trigger = new FakeEl(); trigger.doc = doc; doc.activeElement = trigger;
+
+  withGlobals({ document: doc, HTMLElement: FakeEl }, () => {
+    const app = ravnApp() as any;
+    const f = app.openDialog("cb-uia-test");
+    assert.ok(f && typeof f.close === "function", "a DialogFocus handle is returned for a mounted surface");
+    assert.equal(typeof doc.listeners.keydown, "function", "the trap bound the document keydown handler");
+
+    assert.equal(app.closeDialog(null), undefined, "null handles stay a no-op (unchanged)");
+    app.closeDialog(f);
+    assert.equal(trigger.focusCount, 1, "close restored the trigger exactly once");
+    app.closeDialog(f); // stale double-close — modules null their vars; stay defensive
+    assert.equal(trigger.focusCount, 1, "a second close never double-restores");
+  });
+});
+
+test("Root dialog controllers: re-opening an OPEN surface returns the same session (one trap only)", () => {
+  const root = new FakeEl();
+  const doc = makeDoc({ "cb-uia-again": root });
+  const trigger = new FakeEl(); trigger.doc = doc; doc.activeElement = trigger;
+
+  withGlobals({ document: doc, HTMLElement: FakeEl }, () => {
+    const app = ravnApp() as any;
+    const f1 = app.openDialog("cb-uia-again");
+    const f2 = app.openDialog("cb-uia-again");
+    assert.equal(f1, f2, "same session object — the per-root dedupe holds through the controller");
+
+    app.closeDialog(f1);
+    assert.deepEqual(doc.removedListeners, ["keydown"], "one close unbound the single handler (no stacked trap)");
+  });
+});
+
+test("Root dialog controllers: autoFocus=false defers initial focus (drawer policy unchanged)", () => {
+  const doc = makeDoc();
+  const root = new FakeEl(); // visible by default
+  const b = new FakeEl(); b.parent = root; b.doc = doc;
+  root.focusables = [b];
+  doc.getElementById = () => root;
+
+  withGlobals({ document: doc, HTMLElement: FakeEl }, () => {
+    const app = ravnApp() as any;
+    const f = app.openDialog("cb-uia-drawer", undefined, false);
+    assert.ok(f, "a handle is returned for a mounted surface");
+    assert.equal(b.focusCount, 0, "autoFocus=false never focuses eagerly");
+    f.focusInitial(); // the drawer does this itself once content has loaded
+    assert.equal(b.focusCount, 1, "the explicit focusInitial still moves focus in");
+    app.closeDialog(f);
+  });
+});
+
+test("Root dialog controllers: distinct ids get independent sessions — closing the top layer leaves the one below live", () => {
+  const lower = new FakeEl();
+  const l1 = new FakeEl(); l1.parent = lower;
+  const l2 = new FakeEl(); l2.parent = lower;
+  lower.focusables = [l1, l2];
+  const upper = new FakeEl();
+  const u1 = new FakeEl(); u1.parent = upper;
+  const u2 = new FakeEl(); u2.parent = upper;
+  upper.focusables = [u1, u2];
+
+  const doc = makeDoc({ "cb-uia-lower": lower, "cb-uia-upper": upper });
+  for (const el of [l1, l2, u1, u2]) el.doc = doc; // focus() moves the fake activeElement
+  const trigger = new FakeEl(); trigger.doc = doc; doc.activeElement = trigger;
+
+  withGlobals({ document: doc, HTMLElement: FakeEl }, () => {
+    const app = ravnApp() as any;
+    const fl = app.openDialog("cb-uia-lower"); // e.g. the detail drawer
+    const fu = app.openDialog("cb-uia-upper"); // …with its unsaved-notes confirm on top
+    assert.notEqual(fl, fu, "per-id controllers start distinct sessions");
+
+    // The NEWEST trap (upper) owns Tab while both are open…
+    doc.activeElement = u1;
+    doc.listeners.keydown(keydownEv("Tab", u1));
+    assert.equal(doc.activeElement, u2, "the topmost session handles Tab while both are open");
+
+    // …and closing ONLY the top layer (unsaved-notes over drawer) leaves the
+    // lower session live — a single shared controller would have clobbered it.
+    app.closeDialog(fu);
+    assert.deepEqual(doc.removedListeners, [], "the document handler stays bound while a trap remains");
+    doc.activeElement = l1;
+    doc.listeners.keydown(keydownEv("Tab", l1));
+    assert.equal(doc.activeElement, l2, "the lower session's trap still handles Tab after the top closed");
+
+    app.closeDialog(fl);
+    assert.deepEqual(doc.removedListeners, ["keydown"], "the last close unbinds the handler");
+  });
+});
+
+test("Root dialog controllers: missing element and SSR keep the old guard behavior (null handle, nothing bound)", () => {
+  const doc = makeDoc(); // no elements registered
+  withGlobals({ document: doc, HTMLElement: FakeEl }, () => {
+    const app = ravnApp() as any;
+    assert.equal(app.openDialog("cb-ghost"), null, "no element → null handle (guard unchanged)");
+    assert.equal(doc.listeners.keydown, undefined, "nothing was bound to the document");
+  });
+
+  const bare = ravnApp() as any; // plain Node: typeof document === "undefined"
+  assert.equal(bare.openDialog("cb-anything"), null, "SSR guard unchanged");
 });
 
 

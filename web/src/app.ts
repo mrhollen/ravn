@@ -68,6 +68,7 @@ import { MEMBER_ROLES } from "./members";
 import { btnClass } from "./ui/button";
 import { boardCardClasses, cardDensityClass as uiCardDensityClass, type CardDensityPart } from "./ui/card";
 import { EMPTY_STATE } from "./ui/empty";
+import { createDialogController, type DialogController } from "./ui/dialog";
 import { MENU_PANEL_CLASS, menuItemClass } from "./ui/menu";
 import { TOAST_BASE_CLASS, toastClassList, toastErrorPrefix } from "./ui/toast";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
@@ -196,6 +197,51 @@ import type { Toast } from "./ui/toast";
 export type { Toast };
 
 export function ravnApp() {
+  // Phase 3 dialog adoption (ticket 01M7P22NW890FZND6BTX0B4EN4): every dialog
+  // focus session is owned by a ui/dialog.ts DialogController — ONE per dialog
+  // id, created lazily and kept in THIS CLOSURE scope, outside the returned
+  // (Alpine-reactive) object: none of it is template-bound and it must never
+  // become reactive state. A single shared controller would clobber stacked
+  // sessions (the detail drawer + unsaved-notes confirm open at once), so each
+  // surface id gets its own lifecycle; the focus.ts core still stacks the live
+  // traps across ids. onOpen/onClose are deliberately NOT wired — no logging,
+  // no side effects, and close semantics (Esc/backdrop/dirty-discard guards)
+  // stay caller-owned by design.
+  const dialogControllers = new Map<string, DialogController>();
+  /** The live focus-session handle per dialog id — what openDialog() returns
+   *  and modules hold until they pass it back to closeDialog(). */
+  const dialogSessionById = new Map<string, DialogFocus | null>();
+  /** Session → owning controller: closeDialog ends every session through the
+   *  controller that opened it, so the controller lifecycle is the single
+   *  source of truth for session termination. */
+  const dialogControllerBySession = new WeakMap<DialogFocus, DialogController>();
+
+  function getDialogController(id: string): DialogController {
+    let ctrl = dialogControllers.get(id);
+    if (ctrl) return ctrl;
+    // The deps close over `id`/`ctrl`: the callbacks only ever run from a later
+    // open()/close() — by then `ctrl` is assigned (the `!` asserts exactly that
+    // runtime ordering to the type checker, which cannot see it).
+    ctrl = createDialogController({
+      // Mirror the root's SSR guard exactly.
+      getElementById: (i) =>
+        typeof document === "undefined" ? null : document.getElementById(i),
+      startSession: (root, sel) => {
+        const s = openDialogFocus(root, { initialSelector: sel });
+        dialogSessionById.set(id, s);
+        dialogControllerBySession.set(s, ctrl!);
+        return s;
+      },
+      endSession: (s) => {
+        if (dialogSessionById.get(id) === s) dialogSessionById.delete(id);
+        if (s && dialogControllerBySession.get(s) === ctrl!) dialogControllerBySession.delete(s);
+        s?.close(); // idempotent in focus.ts
+      },
+    });
+    dialogControllers.set(id, ctrl);
+    return ctrl;
+  }
+
   return {
     // ------------------------------------------------------------------ actor
     /** Display name stored in localStorage; sent as `actor.name` on every mutation. */
@@ -518,22 +564,40 @@ export function ravnApp() {
 
     // -------------------------------------------------------------- focus session
     /** Start a focus session for a dialog surface by root element id (WCAG 2.4.3).
-     *  Initial focus moves in as soon as the surface is actually rendered
-     *  (focusWhenReady polls frames: x-show flushes on Alpine's own schedule,
-     *  which can post-date even a setTimeout(0)). `autoFocus: false` for
-     *  surfaces that focus explicitly once their content has loaded (drawer). */
+     *  The session itself is owned by the surface's ui/dialog.ts DialogController
+     *  (one per id — see getDialogController above): open() starts or re-uses it,
+     *  and endSession ends it, so the controller lifecycle stays the single source
+     *  of truth for who opens/closes what. This method keeps the SSR + missing-
+     *  element guard (unchanged) and the autoFocus policy: initial focus moves in
+     *  as soon as the surface is actually rendered (focusWhenReady polls frames:
+     *  x-show flushes on Alpine's own schedule, which can post-date even a
+     *  setTimeout(0)). `autoFocus: false` for surfaces that focus explicitly once
+     *  their content has loaded (drawer). Re-opening while open returns the SAME
+     *  session handle — focus.ts dedupes per root element — and callers always
+     *  close before re-opening. */
     openDialog(id: string, initialSelector?: string, autoFocus = true): DialogFocus | null {
       if (typeof document === "undefined") return null;
       const root = document.getElementById(id);
       if (!root) return null;
-      const f = openDialogFocus(root, { initialSelector });
-      if (autoFocus) focusWhenReady(f, root);
+      getDialogController(id).open(id, initialSelector);
+      // The controller stashed the session it started in its startSession wiring;
+      // on a re-open while open this is the identical object (no second trap).
+      const f = dialogSessionById.get(id) ?? null;
+      if (autoFocus && f) focusWhenReady(f, root);
       return f;
     },
 
-    /** Close a focus session (restores trigger focus); idempotent on null. */
+    /** Close a focus session (restores trigger focus); idempotent on null. The
+     *  handle ends through the controller that opened it (session → owner map),
+     *  keeping the DialogController lifecycle as the single source of truth for
+     *  session termination. A handle with no known owner degrades to a plain
+     *  close() — focus.ts sessions are idempotent, so behavior is identical to
+     *  the pre-controller `f?.close()`. */
     closeDialog(f: DialogFocus | null): void {
-      f?.close();
+      if (!f) return;
+      const owner = dialogControllerBySession.get(f);
+      if (owner) owner.close();
+      else f.close();
     },
 
     // ---------------------------------------------------------------- projects
