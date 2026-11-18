@@ -5,7 +5,10 @@ Audited 2026-10-30; re-measured post test-quality epic
 epic (T1–T9) on 2026-11-09, then twice on 2026-11-11: a web-unit baseline
 refresh for frontend-modularization Phase 0, and again post Phase 1 completion
 (main `ab1644d`); corrected once more on 2026-11-12 after the Phase 1 web table
-failed an independent re-measurement. This document is the source of
+failed an independent re-measurement. Re-measured in full on 2026-11-17 after
+frontend-modularization Phases 2–5 (main `1901f53`), including the web-unit
+runner's switch from jiti to Node's native TypeScript type stripping (§2,
+"coverage mechanism"). This document is the source of
 truth for how ravn is tested, the measured baselines, and the conventions new
 tests must follow.
 Improvements are tracked as tasks on the Ravn board (see
@@ -15,9 +18,9 @@ Improvements are tracked as tasks on the Ravn board (see
 
 | Suite | What it covers | Runner | Size (2026-10-31, post-epic) | Wall time (local, 12-core) | Coverage |
 |---|---|---|---|---|---|
-| Go unit + integration (`internal/`, `cmd/`) | domain rules, application use-cases, SQLite repos, HTTP handlers, MCP tools | `go test` (+ `-race` in CI) | 137 files, **50,546** LOC (re-measured post-multiuser epic, 2026-11-09; was 91 / 38,080 on 2026-10-31) | **~7.1s** total; `-race` **24.2s**; slowest package `internal/interface/http` ~3.3s wall (re-measured 2026-11-09) | **84.5%** statements total |
-| Web unit (`web/test/`) | pure logic of `web/src/*.ts` (theme, sort, routes, filters, columns, keyboard, ac-math, dates, markdown, drafts, API client, board state/scope, identity, members, moves, refresh, realtime) + the file-size guardrail (§3) | `node:test` via `jiti` (`npm run test:unit`; coverage: `npm run test:unit:coverage`) | 20 test files (19 per-module + the file-size guardrail) + `test-helpers.ts`, **7,798** LOC, **333** tests (re-measured post Phase 1 on 2026-11-11) | **~9.5s** (suite 9.46s; re-measured post Phase 1 on 2026-11-11) | **72.11%** lines / 79.08% branches / 70.44% functions (re-measured 2026-11-12 on main `e0cfe9f`, Node v26.13.0) |
-| Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 41 spec files + shared `fixtures.ts`/`helpers.ts`, **14,149** LOC, **189** tests (re-measured 2026-11-09) | **~47s** wall (default workers); one shared `ravn-server` per worker (+ a few isolated spins); prereqs built once per run by the dedicated `e2e/global-setup.ts` globalSetup — mtime-staleness check, and the server binary is staged via temp copy + atomic rename so a worker can never start a mid-write binary (no ETXTBSY race) | not measured (E2E is the integration proof) |
+| Go unit + integration (`internal/`, `cmd/`) | domain rules, application use-cases, SQLite repos, HTTP handlers, MCP tools | `go test` (+ `-race` in CI) | 137 files, **50,546** LOC (re-measured post-multiuser epic, 2026-11-09; was 91 / 38,080 on 2026-10-31) | **~5.8s** total (no race); `-race` **24.0s**; slowest package `internal/interface/http` ~3.4s wall no-race (re-measured 2026-11-17, main `1901f53`) | **84.7%** statements total (re-measured 2026-11-17) |
+| Web unit (`web/test/`) | pure logic of `web/src/*.ts` (theme, sort, routes, filters, columns, keyboard, ac-math, dates, markdown, drafts, API client, board state/scope, identity, members, moves, refresh, realtime + the Phase 2–5 module set: acs, archive, artifacts, auth, batch, board-view, bootstrap, claims, comments, dashboard, detail, drag, menus, new-task, opencode, project-settings, projects, relations, sse, task-edit) + the file-size guardrail (§3) | `node:test` on Node's native TS type stripping (`--experimental-strip-types` + `web/test/register-ts.mjs`; `npm run test:unit`; coverage: `npm run test:unit:coverage`) | **47** test files (46 per-module + the file-size guardrail) + shared `test-helpers.ts`/`board-harness.ts`, ~**19.9k** LOC total for `web/test/*.ts`, **947** tests (re-measured 2026-11-17, post Phases 2–5) | **~8.2s** wall (suite duration 8.06s; re-measured 2026-11-17 — was ~31s pre-P5 F5, when a leaked 30s SSE disconnect timer floored the run) | **95.80%** lines / 91.34% branches / 75.81% functions (native type stripping, re-measured 2026-11-17 on main `1901f53`, Node v26.13.1) |
+| Playwright E2E (`web/e2e/`) | full UI against a real `ravn-server` + prebuilt `web/dist` | `playwright test` (`npm run test:e2e`) | 44 spec files + shared `fixtures.ts`/`helpers.ts`/`global-setup.ts`/`flake-reporter.ts`, **15,302** LOC total for `web/e2e/*.ts`, **205** tests (re-measured 2026-11-17) | **~49.6s** wall (default workers); one shared `ravn-server` per worker (+ a few isolated spins); prereqs built once per run by the dedicated `e2e/global-setup.ts` globalSetup — mtime-staleness check, and the server binary is staged via temp copy + atomic rename so a worker can never start a mid-write binary (no ETXTBSY race) | not measured (E2E is the integration proof) |
 
 All three run in CI on every push/PR (`.github/workflows/ci.yml`,
 `.forgejo/workflows/ci.yml`): `go test -race ./... -coverprofile=c.out -cover`
@@ -43,7 +46,7 @@ cd web && npm run build && cd ..   # E2E serves web/dist
 cd web && npx playwright test      # or: make e2e (builds as needed)
 ```
 
-## 2. Coverage baselines (re-measured post-multiuser epic, 2026-11-09; previous pass 2026-10-31; web table re-measured again post frontend-modularization Phase 1 on 2026-11-11; corrected by independent re-measurement on 2026-11-12, main `e0cfe9f`)
+## 2. Coverage baselines (re-measured post Phases 2–5 on 2026-11-17, main `1901f53`; previous passes: post-multiuser epic 2026-11-09, 2026-10-31, Phase 1 re-measurement 2026-11-11 corrected by independent re-measurement on 2026-11-12, main `e0cfe9f`)
 
 ### Go — per package, statements (`go test ./... -cover`)
 
@@ -53,14 +56,14 @@ cd web && npx playwright test      # or: make e2e (builds as needed)
 | internal/domain | 91.8% | state machine + invariants + visibility/authorization policy well covered |
 | cmd/ravn-exec | 90.8% | flag/env parse + spawn covered via `parseCLIArgs` seam (C2, f430f84) |
 | cmd/ravn-server | 90.9% | wiring/flags/shutdown + multiuser boot-validation matrix on the `run()` seam (`main_multiuser_test.go`, eca9c1f) |
-| internal/infrastructure/pubsub | 92.7% | |
-| internal/application | 85.9% | batch rollups covered (C1, e5bc919); multiuser identity/tokens/memberships use cases added in the epic |
+| internal/infrastructure/pubsub | 91.1% | |
+| internal/application | 86.3% | batch rollups covered (C1, e5bc919); multiuser identity/tokens/memberships use cases added in the epic |
 | internal/infrastructure/apiclient | 85.2% | auth + membership client paths now covered |
-| internal/interface/http | 82.2% | handlers + security middleware + tiered auth chain & scoping (T3–T9) |
+| internal/interface/http | 82.4% | handlers + security middleware + tiered auth chain & scoping (T3–T9) |
 | internal/mcp | 82.9% | tools/resources/prompts |
 | cmd/ravn-mcp | 80.8% | per-agent credential forwarding + strict identity mode (T6) |
 | internal/infrastructure/pwhash | 82.7% | new package (epic T3): Argon2id PHC-format hash emit/verify + parameter parsing |
-| internal/infrastructure/sqlite | 84.0% | migration 0011 + adversarial identity/member tests lifted it from 77.5% (T1/T9) |
+| internal/infrastructure/sqlite | 83.9% | migration 0011 + adversarial identity/member tests lifted it from 77.5% (T1/T9) |
 
 The previously-known **0%-covered production functions** (all confirmed in use,
 not dead code) are all at ≥80% now — measured post-epic: `ListWithCounts` 92.6%,
@@ -70,81 +73,112 @@ not dead code) are all at ≥80% now — measured post-epic: `ListWithCounts` 92
 
 ### Web unit — per file (`npm run test:unit:coverage`)
 
-Re-measured **2026-11-12** by an independent re-measurement of the Phase 1
-table (recorded 2026-11-11 at main `ab1644d`; this pass ran on main
-`e0cfe9f`, unchanged sources; 20 test files, 333 tests) with Node's built-in
-plain coverage reporter on Node 26 (v26.13.0) — zero extra deps. The Phase 1
-table disagreed with an honest re-measurement on several rows (`util.ts`,
-`api.ts`, `md.ts`, `identity.ts`, `moves.ts`, total and small branch/function
-deltas elsewhere); every row below is a fresh measurement, descending by line
-%.
+Re-measured **2026-11-17** on main `1901f53` (47 test files, 947 tests) with
+Node's built-in plain coverage reporter on Node v26.13.1 — zero extra deps, and
+now under **native TypeScript type stripping** instead of jiti (§2 "coverage
+mechanism" below explains why that switch changed every number). Every row is
+a fresh measurement, descending by line %.
 
 | File | Lines | Branches | Functions |
 |---|---|---|---|
 | src/ac-math.ts | 100.00% | 100.00% | 100.00% |
 | src/board-scope.ts | 100.00% | 100.00% | 100.00% |
+| src/columns.ts | 100.00% | 100.00% | 100.00% |
 | src/drafts.ts | 100.00% | 100.00% | 100.00% |
-| src/sort.ts | 100.00% | 97.14% | 100.00% |
-| src/theme.ts | 100.00% | 93.75% | 100.00% |
-| src/moves.ts | 99.44% | 97.67% | 93.75% |
-| src/routes.ts | 98.77% | 100.00% | 100.00% |
-| src/members.ts | 95.83% | 95.16% | 100.00% |
-| src/refresh.ts | 94.34% | 100.00% | 89.47% |
-| src/identity.ts | 94.05% | 91.67% | 100.00% |
-| src/focus.ts | 93.85% | 90.91% | 100.00% |
-| src/filters.ts \* | 93.08% | 98.55% | 100.00% |
-| src/api.ts | 85.89% | 95.71% | 89.66% |
-| src/util.ts | 85.79% | 84.21% | 72.22% |
-| src/columns.ts \* | 82.56% | 100.00% | 100.00% |
-| src/realtime.ts | 79.38% | 95.45% | 100.00% |
-| src/keyboard.ts \* | 71.43% | 100.00% | 100.00% |
-| src/md.ts \*\* | 68.63% | 87.50% | 100.00% |
-| src/app.ts | 66.59% | 65.09% | 57.32% |
-| src/types.ts | 40.12% | 100.00% | 100.00% |
-| **All files (total)** | **72.11%** | **79.08%** | **70.44%** |
+| src/keyboard.ts | 100.00% | 100.00% | 100.00% |
+| src/members.ts | 100.00% | 96.72% | 100.00% |
+| src/refresh.ts | 100.00% | 100.00% | 100.00% |
+| src/routes.ts | 100.00% | 100.00% | 100.00% |
+| src/types.ts | 100.00% | 100.00% | 100.00% |
+| src/modules/auth.ts | 100.00% | 95.74% | 100.00% |
+| src/modules/batch.ts | 100.00% | 89.08% | 97.67% |
+| src/modules/claims.ts | 100.00% | 96.67% | 100.00% |
+| src/modules/comments.ts | 100.00% | 97.83% | 100.00% |
+| src/modules/dashboard-charts.ts | 100.00% | 96.55% | 100.00% |
+| src/modules/new-task.ts | 100.00% | 100.00% | 100.00% |
+| src/modules/opencode.ts | 100.00% | 95.35% | 100.00% |
+| src/modules/projects.ts | 100.00% | 97.22% | 100.00% |
+| src/ui/\* (button, card, dialog, empty, menu, toast, tokens) | 100.00% | 100.00% | 100.00% |
+| src/modules/detail.ts | 99.86% | 92.52% | 93.33% |
+| src/modules/dashboard.ts | 99.74% | 86.86% | 100.00% |
+| src/modules/relations.ts | 99.71% | 97.01% | 100.00% |
+| src/modules/acs.ts | 99.67% | 96.04% | 100.00% |
+| src/modules/archive.ts | 99.19% | 88.19% | 78.57% |
+| src/modules/task-edit.ts | 98.77% | 89.78% | 94.44% |
+| src/realtime.ts | 98.61% | 92.92% | 100.00% |
+| src/moves.ts | 98.33% | 97.67% | 93.33% |
+| src/api.ts | 98.01% | 96.72% | 89.83% |
+| src/modules/drag.ts | 98.00% | 91.94% | 87.10% |
+| src/filters.ts \* | 97.95% | 96.00% | 100.00% |
+| src/modules/board-view.ts | 97.84% | 85.71% | 88.89% |
+| src/sort.ts | 97.65% | 97.14% | 100.00% |
+| src/modules/project-settings.ts | 96.79% | 75.91% | 100.00% |
+| src/modules/menus.ts \* | 96.35% | 88.89% | 100.00% |
+| src/modules/bootstrap.ts | 96.18% | 93.62% | 52.94% |
+| src/theme.ts | 95.83% | 93.33% | 100.00% |
+| src/modules/board.ts | 95.78% | 79.46% | 91.43% |
+| src/modules/sse.ts | 95.42% | 85.71% | 80.65% |
+| src/identity.ts | 92.86% | 91.67% | 100.00% |
+| src/focus.ts | 92.76% | 88.61% | 89.47% |
+| src/app.ts | 89.35% | 90.28% | 60.57% |
+| src/util.ts | 85.47% | 82.73% | 78.38% |
+| src/md.ts \*\* | 69.28% | 86.96% | 100.00% |
+| **All files (total)** | **95.80%** | **91.34%** | **75.81%** |
 
-\* `columns.ts`, `filters.ts` and `keyboard.ts` are hit by the Node-26
-`--experimental-test-coverage` + jiti line-mapping artifact: jiti's transform
-shifts the instrumented byte offsets, so the reporter zeroes a tail window in
-each type-heavy file (the listed "uncovered" ranges). Their **branch** and
-**function** columns — plus raw `NODE_V8_COVERAGE` hit data and the direct
-unit tests of every branch — show each listed line actually executes; V8-truth
-coverage is 100% for all three. The P1 ≥90%-at-birth rule is judged on
-V8-truth for such files (see `docs/FRONTEND_ARCHITECTURE.md` §5 step 7); the
-binding repo gate remains the total below.
+\* Residual ranges are small and explained: `filters.ts` 34–35 / 43–44 are the
+defensive `catch` blocks of `readStoredTaskScope`/`readStoredMyProjects` —
+unreachable because `safeStorage` swallows storage errors itself (the moved-in
+board-scope readers, P5 F3). `menus.ts` 108–112 is the `open()` early return
+for a panel with zero rendered items (no unit test fakes an empty item list;
+real menus always render items) — measured ≥90%, so no follow-up required.
 
-\*\* `md.ts` is a genuine, not artifact, gap: its uncovered range is the
-`DOMParser`-based sanitize pipeline (`sanitizeHtml`, `web/src/md.ts:87–134`),
-which cannot execute under node:test without a DOM library (the unit suite is
-dependency-light by design) — that path degrades safely to escaped text in
-tests and runs only in a real browser, so it is E2E-covered instead. The
-previous table's 100.00% for this file was the Phase 1 pass's error, not this
-pass's measurement.
+\*\* `md.ts` is a genuine, not artifact, gap: its uncovered ranges are the
+`DOMParser`-based sanitize pipeline body (`sanitizeHtml`, `web/src/md.ts:90–134`)
+and the `marked.parse` exception fallback (`:144–145`). The sanitizer cannot
+execute under node:test without a DOM library (the unit suite is
+dependency-light by design) — `renderMarkdown` degrades safely to escaped text
+there, and the sanitized path runs only in a real browser, so it is E2E-covered
+instead.
 
-The new `web/test/file-size.test.ts` guardrail test adds no covered production
-code (it reads the file system only), so it is invisible to this table.
+**Coverage mechanism (why every number changed on 2026-11-17).** The suite ran
+on `node --import jiti/register` until Phase 5 F6: jiti's Babel transform
+shortens type-heavy source, so V8's instrumented byte-offset ranges no longer
+line up with the on-disk file and the plain reporter zeroed a tail window in
+each such file (`columns.ts`, `filters.ts`, `keyboard.ts` read 71–93% line even
+though V8-truth was 100%). Node's native type stripping
+(`--experimental-strip-types`, since 22.6) erases types **length-preserving**,
+so coverage maps to exact on-disk lines; the suite now runs on it through a
+tiny resolver hook, `web/test/register-ts.mjs` (maps extensionless relative
+imports to `.ts`; throws a clear error if `module.registerHooks` is missing,
+i.e. Node < 22.15 — CI's pinned Node 22 satisfies both), and jiti was removed
+as a devDependency. Side effects of honest mapping: type-only files like
+`types.ts` report 100% (erased declarations are no longer counted as uncovered
+runtime lines) and the old artifact rows now measure their true values. The
+total rose 72.11% → 95.80% — not because 24 points of tests were added, but
+because the measurement stopped lying downward; the new focused tests landed
+in Phases 2–5 did add real coverage on top (e.g. `api.ts` 85.89% → 98.01%).
 
-Phase 1's pure cores land covered by construction — `theme.ts`, `sort.ts`,
-`routes.ts` (98.77%), `filters.ts`, `columns.ts`, `ac-math.ts`, `keyboard.ts`
-and the extended `moves.ts` are all ≥90% in V8-truth terms (the `*` rows above
-report lower line % due to the mapping artifact, not missing tests). The total
-rose 70.55% → 72.11%: extracted logic is directly unit-tested, while `app.ts`
-dipped 67.54% → 66.59% as its E2E-covered DOM sections become a larger share of
-a thinner file (6,448 → 6,154 lines). The CI gate's web floor stays at 65% for
-now; ratcheting it to the new 72.11% measurement is a candidate follow-up (see
-"How to ratchet the floors"). Pre-Phase 1 deltas of note from the 2026-11-09
-pass: `api.ts` had dipped 88.21% → 85.89% as the multiuser client surface grew;
-`focus.ts` sat at 93.85%.
+The `web/test/file-size.test.ts` guardrail test adds no covered production
+code (it reads the file system only), so it is invisible to this table. The
+`src/ui/*` row groups the seven extracted UI primitives, all measured at
+100/100/100.
 
-The total line coverage is the ratcheting baseline: it must stay ≥ 65% (the web
-unit floor) and the Go total must stay ≥ 80% (the Go statement floor). Both are
-enforced in CI by `scripts/ci/coverage-gate.sh` — see "How to ratchet the
-floors" below.
+The Phase 2–5 extractions landed covered by construction — every new module is
+≥95% line except `sse.ts` (95.42%; its residual ranges are reconnection-timer
+teardown and the `new EventSource()` construction-failure branch, which need
+teardown orderings only reproducible with real socket objects). `app.ts` read 89.35% line (was 66.59% under jiti):
+honest mapping plus a thinner file (6,154 → 3,626 lines across Phases 2–5) —
+its low function % is the remaining composition-root surface E2E covers. The
+ratcheting baseline is now: web unit total line coverage must stay ≥ **95%**
+(ratcheted up from 65% on 2026-11-17 with this measurement; `WEB_FLOOR` in
+`scripts/ci/coverage-gate.sh`) and the Go total must stay ≥ **80%** statements.
+Both are enforced in CI by `scripts/ci/coverage-gate.sh` — see "How to ratchet
+the floors" below.
 
 Notes:
 
-- `web/src/app.ts` is a **6,154-line** composition root (was a 6,448-line
-  monolith at the Phase 0 audit; re-measured post Phase 1 on 2026-11-11)
+- `web/src/app.ts` is a **3,626-line** composition root (was a 6,448-line
+  monolith at the Phase 0 audit; re-measured post Phase 5 on 2026-11-17)
   holding most UI state; its low *unit* coverage is partly structural — large DOM/init
   sections are only reachable through E2E. Extracting pure logic from app.ts
   (as was done for moves/refresh/realtime/drafts) is the lever that keeps
@@ -154,17 +188,19 @@ Notes:
   [`docs/FRONTEND_ARCHITECTURE.md`](./FRONTEND_ARCHITECTURE.md).
 - `src/types.ts` is the wire-contract module: mostly `interface`/type
   declarations plus a handful of const tables (`STATUSES`, `COMMENT_KINDS`, …).
-  Every runtime line it has executes (100% functions); the uncovered lines are
-  type-declaration residue, so its low line % is expected and not a target.
+  Under native type stripping it measures **100%** — erased type declarations
+  are no longer counted as uncovered runtime lines (under jiti they read as
+  residue, which is why the old table showed 40.12%). Every runtime line
+  executes; nothing to do here.
 
 #### Extracting the total for CI gates
 
 The plain reporter writes the table to **stdout** with a stable total line
 (exactly as printed, including spacing):
 
-    ℹ all files    |  70.58 |    75.97 |   67.81 |
+    ℹ all files    |  95.80 |    91.34 |   75.81 |
 
-Pipe-friendly one-liner (POSIX awk; prints `69.35` = total line %; the suite's
+Pipe-friendly one-liner (POSIX awk; prints `95.80` = total line %; the suite's
 own pass/fail exit code is preserved by piping only after the command). The
 match is on row *content*, not the prefix, because the prefix differs between
 Node versions:
@@ -179,13 +215,16 @@ Parse the plain table instead; revisit if a future Node release fixes it.
 
 Caveat (measured 2026-10-31, Node v22 vs v26): the CI runners pin **Node v22**
 (`setup-node` in both `ci.yml` files), whose plain reporter prefixes report
-rows with `#` instead of `ℹ` and — more importantly — **includes the test files
-themselves** (`web/test/*.test.ts`, `test-helpers.ts`) in the table. So the CI
-total reads higher than a modern local Node (v26, which reports `src/` only):
-post-multiuser the v26 total is 70.58% (re-measure on your runner's Node if you
-need its exact number). Both comfortably clear the 65% floor; the gate matches the total
-row by content so it works on both. If you bump the runner's Node major, re-check
-which file set is reported before ratcheting (see below).
+rows with `#` instead of `ℹ` and — as measured pre-P5 (with jiti) — **includes
+the test files themselves** (`web/test/*.test.ts`, `test-helpers.ts`) in the
+table, so the CI total read higher than a modern local Node (v26 reports
+`src/` only). After P5's switch to native type stripping (2026-11-17) the v22
+reporter's file set should be re-verified on the first post-P5 CI run — if it
+still includes `web/test/*`, the CI total reads ≥ the local one (the test files
+are near-fully covered, so including them only raises the number); either way
+the 95% floor clears with headroom. The gate matches the total row by content,
+so it works on both Node majors and both prefixes. If you bump the runner's
+Node major, re-check which file set is reported before ratcheting (see below).
 
 ### How to ratchet the floors
 
@@ -198,8 +237,10 @@ cannot drift:
 - `GO_FLOOR=80` — total Go statement coverage, parsed from
   `go tool cover -func=c.out | tail -1` (profile written by
   `go test -race ./... -coverprofile=c.out -cover`).
-- `WEB_FLOOR=65` — web unit total line coverage, parsed from the "all files"
-  row of `npm run test:unit:coverage` (captured to `web-unit-coverage.log`).
+ - `WEB_FLOOR=95` — web unit total line coverage, parsed from the "all files"
+   row of `npm run test:unit:coverage` (captured to `web-unit-coverage.log`;
+   native type stripping since 2026-11-17 — ratcheted up from 65 with P5 F6's
+   honest measurement).
 
 Ratchet procedure (only once actual coverage has gone up *and stayed up*):
 
@@ -217,13 +258,15 @@ never re-lost. To verify the gate itself locally without touching real
 coverage, override the env floors (e.g. `GO_FLOOR=99 WEB_FLOOR=99 scripts/ci/
 coverage-gate.sh c.out web-unit-coverage.log` must FAIL; defaults must PASS).
 
-Measured totals as of 2026-11-09 (post multi-user epic): Go **84.5%**
-statements (`go tool cover -func` total line); web unit total lines **70.58%**
-on Node 26 (`npm run test:unit:coverage` all-files row) — both floors have
-headroom. Previous pass (2026-10-31, post test-quality epic): Go 83.9% / web
-69.35% lines on Node 26. Latest re-measurement (2026-11-11, modularization
-Phase 0): web unit total lines **70.55%** on Node v26.13.0 — a −0.03 drift as
-`app.ts` grew past the audited size; floors untouched, headroom intact.
+Measured totals as of 2026-11-17 (post Phases 2–5, main `1901f53`): Go
+**84.7%** statements (`go tool cover -func` total line); web unit total lines
+**95.80%** on Node v26.13.1 under native type stripping (`npm run
+test:unit:coverage` all-files row). `WEB_FLOOR` was ratcheted up 65 → **95** in
+the same change (P5 F6 made the measurement honest, so the old floor no longer
+reflected what the pipeline actually sees); `GO_FLOOR` stays at 80 — both
+floors now have headroom. Previous pass (2026-11-09, post multi-user epic): Go
+84.5% / web 70.58% lines on Node 26. Earlier: 2026-10-31 Go 83.9% / web
+69.35%; 2026-11-11 Phase 0 drift to 70.55%.
 
 ### How to measure
 
@@ -233,8 +276,8 @@ go test ./... -count=1 -cover
 # Go: detailed profile
 go test ./... -count=1 -coverprofile=/tmp/c.out && go tool cover -func=/tmp/c.out | tail -1
 
-# Web unit (Node >= 23; repo CI uses Node 26) — no extra deps
-cd web && node --import jiti/register --test --experimental-test-coverage test/*.test.ts
+# Web unit (Node >= 22.15 for registerHooks; strip-types since 22.6 — CI pins Node 22) — no extra deps
+cd web && node --experimental-strip-types --import ./test/register-ts.mjs --test --experimental-test-coverage test/*.test.ts
 # ...or the identical invocation via npm script:
 cd web && npm run test:unit:coverage
 ```
@@ -263,9 +306,20 @@ cd web && npm run test:unit:coverage
 
 ### Web unit tests
 
-- `node:test` + `assert/strict`, run via jiti for TS support; no other test
-  framework or DOM library. Keep it that way: the suite is dependency-light by
-  design (only `alpinejs` and `marked` are runtime deps).
+- `node:test` + `assert/strict`, run natively on Node's TypeScript type
+  stripping (`--experimental-strip-types`) with the `web/test/register-ts.mjs`
+  resolver hook (maps extensionless relative imports to `.ts`; hard-fails with a
+  clear error if the running Node lacks `module.registerHooks`, i.e. < 22.15);
+  no other test framework, DOM library, or transpiler. Keep it that way: the
+  suite is dependency-light by design (only `alpinejs` and `marked` are runtime
+  deps) — and never reintroduce a transform step for coverage's sake (P5 F6:
+  jiti's transform mis-mapped coverage lines; see §2 "Coverage mechanism").
+- Tests that exercise code paths scheduling a REAL global timer (the SSE
+  disconnect toast in `modules/sse.ts`, toast auto-dismiss) must capture the
+  bare `setTimeout` through the test's save/restore helper (see
+  `withCapturedGlobalSetTimeout` in `sse-module.test.ts`) — otherwise the
+  node:test child stays alive for the timer's full delay. P5 F5: four leaked
+  30-second SSE timers floored the whole suite at ~31s wall.
 - Test titles carry a module prefix (`"MultiSelect: ..."`, `"Notes: ..."`)
   because the files historically were one blob; keep prefixes when adding tests.
 - Browser globals (`window`, `localStorage`) are faked manually per test with
@@ -275,7 +329,7 @@ cd web && npm run test:unit:coverage
   realtime, drafts) over reaching into app.ts DOM code; E2E covers the DOM.
 - File-size guardrail: `web/test/file-size.test.ts` caps every `.ts` under
   `web/src/` at **800 lines**, with an explicit allowlist that currently holds
-  only `app.ts` (6,448 lines) and can only shrink — a second test fails on
+  only `app.ts` (3,626 lines, re-measured 2026-11-17) and can only shrink — a second test fails on
   stale or phantom entries. It runs inside the normal `npm run test:unit`
   glob, so both CI pipelines catch violations automatically. Design and
   rules: [`docs/FRONTEND_ARCHITECTURE.md`](./FRONTEND_ARCHITECTURE.md) §6.
@@ -338,14 +392,15 @@ cd web && npm run test:unit:coverage
 ## 4. Performance budgets
 
 Measured on a 12-core / 64GB Linux box, 2026-10-30; "Current" actuals
-re-measured fresh post multi-user epic (2026-11-09). CI targets 2 workers for E2E.
+re-measured fresh post multi-user epic (2026-11-09) and again post Phases 2–5
+(2026-11-17). CI targets 2 workers for E2E.
 
-| Budget | Current (measured 2026-11-09) | Target |
+| Budget | Current (measured 2026-11-17) | Target |
 |---|---|---|
-| Go full suite (no race) | **~7.1s**; slowest package `internal/interface/http` ~3.3s wall | ≤ 30s; `internal/interface/http` ≤ 4s — met via the §3 SSE deadline seam (A1, 41a6479) |
-| Go full suite (`-race`, CI) | **24.2s** | ≤ 60s |
-| Web unit | **~8.0s** (263 tests) | ≤ 15s |
-| E2E (local, default workers) | **~47s** (189 passed) | ≤ 60s; one shared `ravn-server` per worker (+ a few isolated spins) — realized by the §3 fixture; prereqs built once in the globalSetup hook (§1) |
+| Go full suite (no race) | **~5.8s**; slowest package `internal/interface/http` ~3.4s wall | ≤ 30s; `internal/interface/http` ≤ 4s — met via the §3 SSE deadline seam (A1, 41a6479) |
+| Go full suite (`-race`, CI) | **24.0s** | ≤ 60s |
+| Web unit | **~8.2s** (947 tests; wall floored at ~31s pre-P5 F5 by leaked 30s SSE disconnect timers, now captured test-side) | ≤ 15s |
+| E2E (local, default workers) | **~49.6s** (205 passed) | ≤ 60s; one shared `ravn-server` per worker (+ a few isolated spins) — realized by the §3 fixture; prereqs built once in the globalSetup hook (§1) |
 | E2E memory | ~6GB peak chromium; `ravn-server` count bounded by worker count, not spec count (fixture) | keep total < 8GB on a 16GB runner box |
 
 Rules for keeping the budgets:
@@ -381,7 +436,8 @@ All ten audit findings are **resolved** as of the post-epic verification (2026-1
 Not actioned (deliberate, documented): per-test screenshots on passing tests
 (QA evidence workflow, AGENTS.md); `fullyParallel: false` with file-level
 parallelism (current wall time is fine); absence of a vitest/jest framework
-(node:test + jiti is intentionally dependency-light).
+(node:test on native type stripping is intentionally dependency-light — no
+transpiler, no DOM library).
 
 ## Post-epic state (2026-10-30)
 
