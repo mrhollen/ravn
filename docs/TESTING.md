@@ -73,7 +73,8 @@ not dead code) are all at ≥80% now — measured post-epic: `ListWithCounts` 92
 
 ### Web unit — per file (`npm run test:unit:coverage`)
 
-Re-measured **2026-11-17** on main `1901f53` (47 test files, 947 tests) with
+Re-measured **2026-11-18** on main after the Phase 5 F2 popstate-restore
+extraction (47 test files, 959 tests) with
 Node's built-in plain coverage reporter on Node v26.13.1 — zero extra deps, and
 now under **native TypeScript type stripping** instead of jiti (§2 "coverage
 mechanism" below explains why that switch changed every number). Every row is
@@ -99,7 +100,7 @@ a fresh measurement, descending by line %.
 | src/modules/opencode.ts | 100.00% | 95.35% | 100.00% |
 | src/modules/projects.ts | 100.00% | 97.22% | 100.00% |
 | src/ui/\* (button, card, dialog, empty, menu, toast, tokens) | 100.00% | 100.00% | 100.00% |
-| src/modules/detail.ts | 99.86% | 92.52% | 93.33% |
+| src/modules/detail.ts | 99.87% | 92.92% | 93.55% |
 | src/modules/dashboard.ts | 99.74% | 86.86% | 100.00% |
 | src/modules/relations.ts | 99.71% | 97.01% | 100.00% |
 | src/modules/acs.ts | 99.67% | 96.04% | 100.00% |
@@ -120,11 +121,11 @@ a fresh measurement, descending by line %.
 | src/modules/board.ts | 95.78% | 79.46% | 91.43% |
 | src/modules/sse.ts | 95.42% | 85.71% | 80.65% |
 | src/identity.ts | 92.86% | 91.67% | 100.00% |
-| src/focus.ts | 92.76% | 88.61% | 89.47% |
-| src/app.ts | 89.35% | 90.28% | 60.57% |
+| src/focus.ts | 92.76% | 91.76% | 89.47% |
+| src/app.ts | 90.05% | 91.07% | 60.81% |
 | src/util.ts | 85.47% | 82.73% | 78.38% |
 | src/md.ts \*\* | 69.28% | 86.96% | 100.00% |
-| **All files (total)** | **95.80%** | **91.34%** | **75.81%** |
+| **All files (total)** | **95.96%** | **91.56%** | **75.90%** |
 
 \* Residual ranges are small and explained: `filters.ts` 34–35 / 43–44 are the
 defensive `catch` blocks of `readStoredTaskScope`/`readStoredMyProjects` —
@@ -170,6 +171,9 @@ teardown and the `new EventSource()` construction-failure branch, which need
 teardown orderings only reproducible with real socket objects). `app.ts` read 89.35% line (was 66.59% under jiti):
 honest mapping plus a thinner file (6,154 → 3,626 lines across Phases 2–5) —
 its low function % is the remaining composition-root surface E2E covers. The
+Phase 5 F2 popstate-restore extraction (this table's re-measurement) lands
+`modules/detail.ts` at 99.87% lines and `app.ts` at 90.05% — total 95.96%,
+still above the ratcheted floor. The
 ratcheting baseline is now: web unit total line coverage must stay ≥ **95%**
 (ratcheted up from 65% on 2026-11-17 with this measurement; `WEB_FLOOR` in
 `scripts/ci/coverage-gate.sh`) and the Go total must stay ≥ **80%** statements.

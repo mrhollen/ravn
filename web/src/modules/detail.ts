@@ -8,7 +8,9 @@
 //   - the full-page view (/tasks/<id>) + deep-link adoption: openFullPage's
 //     push-vs-adopt decision and closeDetail's two-shape history sync
 //     (pushed entry → back(), deep link → replaceState(boardUrl) — NEVER
-//     back() from a deep link, which would navigate out of the app);
+//     back() from a deep link, which would navigate out of the app); first-load
+//     adoption is openDeepLinkedTask, POPSTATE restoration (back/forward onto
+//     a task route) is restorePopStateTask — distinct semantics, kept apart;
 //   - applyDetail / refreshDetail patching with its ownership guard
 //     (canApplyDetail) and drawer error state;
 //   - the operational bar (status menu / owner popover toggles, moveStatus);
@@ -140,6 +142,11 @@ export interface DetailDeps {
   connectSse: () => void;
   openAuthModal: () => void;
   closeDashboard: () => void;
+  // Popstate restore closes an open dashboard WITHOUT its history sync — the
+  // browser's back/forward already moved the URL.
+  closeDashboardNav: () => void;
+  // Drop the board blocked-cache when a different project is adopted.
+  resetBlockedCache: (projectId: string) => void;
   fetchOpenCodeOptions: (projectId: string) => Promise<OpenCodeOptionsResponse | null>;
 }
 
@@ -370,6 +377,51 @@ export function createDetailModule(deps: DetailDeps) {
     deps.setFullPageOpen(true);
     deps.setFullPagePushed(false);
     await openTask(id);
+  }
+
+  /** Popstate restoration of /tasks/<id>: the browser has already navigated
+   *  to a task route via back/forward, so the adoption writes NO history —
+   *  the entry is in the session and a later close must replaceState to the
+   *  board URL instead of back() (which would step out of the app). Called
+   *  fire-and-forget from the root's onPopState, which has already parsed the
+   *  route id and guarded for window.
+   *
+   *  Deliberately distinct from openDeepLinkedTask (FIRST load): there we
+   *  always reload the board + connect SSE and offer a new-project fallback on
+   *  failure; here we only reload the board — and reset the blocked cache —
+   *  when the adopted project CHANGED, connect SSE only if the detail was not
+   *  already open, and a failed fetch just resets the URL to the board. */
+  async function restorePopStateTask(id: string): Promise<void> {
+    if (deps.dashboardOpen()) {
+      deps.closeDashboardNav();
+    }
+    if (!deps.detailOpen() || deps.detailId() !== id) {
+      try {
+        const t = await api.getTask(id, { commentLimit: 50 });
+        if (deps.selectedProjectId() !== t.project_id) {
+          deps.setSelectedProjectId(t.project_id);
+          try {
+            safeStorage.setItem(LS_PROJECT, t.project_id);
+          } catch { /* private mode */ }
+          deps.resetBlockedCache(t.project_id);
+          await deps.loadBoard();
+        }
+        // The entry is already in history — a close must replaceState, not back().
+        deps.setFullPagePushed(false);
+        if (!deps.detailOpen()) deps.connectSse();
+        deps.setFullPageOpen(true);
+        await openTask(id);
+      } catch (e) {
+        if (ApiError.isUnauthorized(e)) deps.openAuthModal();
+        else deps.toast(errMsg(e), "error");
+        window.history.replaceState(null, "", deps.boardUrl());
+      }
+    } else {
+      // Forward navigation onto the already-open task: just re-arm page mode.
+      deps.setFullPageOpen(true);
+      deps.setFullPagePushed(false);
+      deps.updateDocumentTitle();
+    }
   }
 
   // ---------------------------------------------------------------- opencode
@@ -714,6 +766,7 @@ export function createDetailModule(deps: DetailDeps) {
     closeDetail,
     openFullPage,
     openDeepLinkedTask,
+    restorePopStateTask,
     initTaskOpenCodeConfig,
     toggleOpenCodeConfig,
     taskOpenCodeDirty,

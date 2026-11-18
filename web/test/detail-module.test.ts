@@ -6,7 +6,10 @@
 // cascade + the two-shape history sync (pushed → back(), deep link →
 // replaceState(boardUrl), never back() from a deep link); openFullPage
 // push-vs-adopt; openDeepLinkedTask fetch-fail/unauthorized/project-adoption;
-// the opencode start panel (init precedence, toggle + options re-fetch, dirty
+// restorePopStateTask (popstate back/forward restoration — distinct from the
+// first-load deep link: conditional board reload + blocked-cache reset, SSE
+// only when detail closed, no new-project recovery); the opencode start panel
+// (init precedence, toggle + options re-fetch, dirty
 // tracking, activeSession parsing, start lifecycle); copyTaskId;
 // refreshDetail/retryDetailLoad ownership guard + drawer error state + 404
 // wording; applyDetail comment merge/sort, assignee seed, learnBlockedFromDetail
@@ -152,6 +155,8 @@ interface Ctx {
     connectSse: number;
     openAuthModal: number;
     closeDashboard: number;
+    closeDashboardNav: number;
+    resetBlockedCache: string[];
     restoreCommentDraft: string[];
     initComments: string[];
     moveTaskStatus: Array<[string, Status, number | undefined]>;
@@ -216,6 +221,8 @@ function makeCtx(): Ctx {
     connectSse: 0,
     openAuthModal: 0,
     closeDashboard: 0,
+    closeDashboardNav: 0,
+    resetBlockedCache: [] as string[],
     restoreCommentDraft: [],
     initComments: [],
     moveTaskStatus: [],
@@ -318,6 +325,8 @@ function makeCtx(): Ctx {
     connectSse: () => { calls.connectSse++; },
     openAuthModal: () => { calls.openAuthModal++; },
     closeDashboard: () => { calls.closeDashboard++; },
+    closeDashboardNav: () => { calls.closeDashboardNav++; },
+    resetBlockedCache: (pid) => { calls.resetBlockedCache.push(pid); },
     fetchOpenCodeOptions: async (pid) => { calls.fetchOpenCodeOptions.push(pid); return s.optionsResult ?? null; },
   };
 
@@ -668,6 +677,130 @@ describe("openDeepLinkedTask", () => {
     assert.deepEqual(c.calls.loadBoard, [undefined]);
     assert.equal(c.calls.connectSse, 1);
     assert.equal(c.s.showNewProject, false);
+  });
+});
+
+// ----------------------------------------------------------------------- popstate restore
+describe("restorePopStateTask (popstate back/forward onto /tasks/<id>)", () => {
+  test("success adopts the task's project: blocked-cache reset + board reload, full page unpushed", async () => {
+    const c = makeCtx();
+    c.s.selectedProjectId = "P0";
+    const { win, hist } = fakeWindow("/tasks/T2");
+    await withGlobals({ window: win }, async () => {
+      await withApi("getTask", async (id: string) => makeTask(id, { project_id: "PX" }), async () => {
+        await c.mod.restorePopStateTask("T2");
+      });
+    });
+    assert.equal(c.s.selectedProjectId, "PX", "project adopted so SSE/poll/relations target it");
+    assert.deepEqual(c.calls.resetBlockedCache, ["PX"]);
+    assert.deepEqual(c.calls.loadBoard, [undefined]);
+    // The entry is already in history — a close must replaceState, not back().
+    assert.equal(c.s.fullPagePushed, false);
+    assert.equal(c.s.fullPageOpen, true);
+    assert.equal(c.s.detail?.id, "T2", "opened as full page via openTask");
+    assert.equal(c.calls.connectSse, 1, "detail was not open → SSE connected once");
+    assert.deepEqual(hist.pushes, [], "popstate restore never pushes history");
+    assert.equal(hist.backs, 0);
+  });
+
+  test("same project → NO board reload / cache reset; SSE still connected (detail closed)", async () => {
+    const c = makeCtx(); // selectedProjectId P1 == makeTask's default project
+    const { win, hist } = fakeWindow("/tasks/T2");
+    await withGlobals({ window: win }, async () => {
+      await withApi("getTask", async (id: string) => makeTask(id), async () => {
+        await c.mod.restorePopStateTask("T2");
+      });
+    });
+    assert.equal(c.s.selectedProjectId, "P1", "no adoption for the already-selected project");
+    assert.deepEqual(c.calls.resetBlockedCache, []);
+    assert.deepEqual(c.calls.loadBoard, []);
+    assert.equal(c.calls.connectSse, 1);
+    assert.equal(c.s.fullPageOpen, true);
+    assert.equal(c.s.fullPagePushed, false);
+    assert.deepEqual(hist.pushes, []);
+  });
+
+  test("detail already open (different task) → no board reload and NO extra SSE connect", async () => {
+    const c = makeCtx();
+    c.s.detailOpen = true;
+    c.s.detailId = "T1";
+    const { win, hist } = fakeWindow("/tasks/T2");
+    await withGlobals({ window: win }, async () => {
+      await withApi("getTask", async (id: string) => makeTask(id), async () => {
+        await c.mod.restorePopStateTask("T2");
+      });
+    });
+    assert.equal(c.s.detailId, "T2", "switched to the restored task");
+    assert.deepEqual(c.calls.resetBlockedCache, []);
+    assert.deepEqual(c.calls.loadBoard, []);
+    assert.equal(c.calls.connectSse, 0, "detail was already open — SSE left alone");
+    assert.deepEqual(hist.pushes, []);
+  });
+
+  test("an open dashboard is closed via the nav hook before restoration (and not when closed)", async () => {
+    const c = makeCtx();
+    c.s.dashboardOpen = true;
+    const { win } = fakeWindow("/tasks/T2");
+    await withGlobals({ window: win }, async () => {
+      await withApi("getTask", async (id: string) => makeTask(id), async () => {
+        await c.mod.restorePopStateTask("T2");
+      });
+    });
+    assert.equal(c.calls.closeDashboardNav, 1);
+
+    const c2 = makeCtx(); // dashboard already closed → nothing to close
+    await withApi("getTask", async (id: string) => makeTask(id), async () => {
+      await c2.mod.restorePopStateTask("T2");
+    });
+    assert.equal(c2.calls.closeDashboardNav, 0);
+  });
+
+  test("401 → auth modal + URL reset to boardUrl; nothing is opened", async () => {
+    const c = makeCtx();
+    const { win, hist } = fakeWindow("/tasks/T2");
+    await withGlobals({ window: win }, async () => {
+      await withApi("getTask", async () => { throw new ApiError(401, { error: "unauthorized" }); }, async () => {
+        await c.mod.restorePopStateTask("T2");
+      });
+    });
+    assert.equal(c.calls.openAuthModal, 1);
+    assert.deepEqual(c.calls.toasts, []);
+    assert.deepEqual(hist.replaces, ["/board?x=1"], "a dead route can't strand the history state");
+    assert.equal(c.s.detailOpen, false);
+    assert.equal(c.s.fullPageOpen, false);
+    assert.deepEqual(c.calls.loadBoard, []);
+  });
+
+  test("other fetch error → toast + URL reset to boardUrl (no new-project recovery)", async () => {
+    const c = makeCtx();
+    const { win, hist } = fakeWindow("/tasks/T2");
+    await withGlobals({ window: win }, async () => {
+      await withApi("getTask", async () => { throw new ApiError(500, { error: "boom", message: "kaput" }); }, async () => {
+        await c.mod.restorePopStateTask("T2");
+      });
+    });
+    assert.equal(c.calls.openAuthModal, 0);
+    assert.deepEqual(c.calls.toasts.map((t) => t.msg), ["kaput"]);
+    assert.deepEqual(hist.replaces, ["/board?x=1"]);
+    assert.equal(c.s.fullPageOpen, false);
+    assert.equal(c.s.showNewProject, false, "popstate restore has no first-load fallback");
+  });
+
+  test("forward nav onto the already-open task just re-arms page mode (no fetch)", async () => {
+    const c = makeCtx();
+    c.s.detailOpen = true;
+    c.s.detailId = "T2";
+    c.s.fullPagePushed = true; // stepping forward onto an entry we had pushed
+    let fetched = false;
+    await withApi("getTask", async () => { fetched = true; return makeTask("T2"); }, async () => {
+      await c.mod.restorePopStateTask("T2");
+    });
+    assert.equal(fetched, false, "forward re-arm never refetches");
+    assert.equal(c.s.fullPageOpen, true);
+    assert.equal(c.s.fullPagePushed, false, "the entry is the browser's — a close must replaceState");
+    assert.equal(c.calls.updateDocumentTitle, 1);
+    assert.equal(c.calls.connectSse, 0);
+    assert.deepEqual(c.calls.loadBoard, []);
   });
 });
 

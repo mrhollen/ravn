@@ -6,7 +6,7 @@
 // move status, save notes, toggle ACs, comment, attach artifacts. Claims are
 // READ-ONLY here (agents manage leases via MCP).
 
-import { ApiError, api, errMsg, LS_TOKEN, setApiTimeoutMsForTests } from "./api";
+import { api, errMsg, LS_TOKEN, setApiTimeoutMsForTests } from "./api";
 import { loadStoredSession } from "./identity";
 import { createAuthModule, type AuthModule } from "./modules/auth";
 import { createProjectsModule, LS_PROJECT, type ProjectsModule } from "./modules/projects";
@@ -2240,6 +2240,11 @@ export function ravnApp() {
         connectSse: () => this.connectSse(),
         openAuthModal: () => this.openAuthModal(),
         closeDashboard: () => this._dashboardModule().closeDashboard(),
+        // Popstate restore closes the dashboard WITHOUT history sync — the
+        // browser's own back/forward already moved the URL (onPopState calls
+        // _closeDashboardNav(false)).
+        closeDashboardNav: () => this._closeDashboardNav(false),
+        resetBlockedCache: (pid) => this.resetBlockedCache(pid),
         fetchOpenCodeOptions: (pid) => this.fetchOpenCodeOptions(pid),
       });
       return this._detail;
@@ -2351,38 +2356,11 @@ export function ravnApp() {
       const id = taskRouteIdFromPath(window.location.pathname);
       const dashProjectId = dashboardRouteProjectIdFromPath(window.location.pathname);
       if (id) {
-        if (this.dashboardOpen) {
-          this._closeDashboardNav(false);
-        }
-        if (!this.detailOpen || this.detailId !== id) {
-          void (async (): Promise<void> => {
-            try {
-              const t = await api.getTask(id, { commentLimit: 50 });
-              if (this.selectedProjectId !== t.project_id) {
-                this.selectedProjectId = t.project_id;
-                try {
-                  safeStorage.setItem(LS_PROJECT, t.project_id);
-                } catch { /* private mode */ }
-                this.resetBlockedCache(t.project_id);
-                await this.loadBoard();
-              }
-              // The entry is already in history — a close must replaceState, not back().
-              this.fullPagePushed = false;
-              if (!this.detailOpen) this.connectSse();
-              this.fullPageOpen = true;
-              await this.openTask(id);
-            } catch (e) {
-              if (ApiError.isUnauthorized(e)) this.openAuthModal();
-              else this.toast(errMsg(e), "error");
-              window.history.replaceState(null, "", this.boardUrl());
-            }
-          })();
-        } else {
-          // Forward navigation onto the already-open task: just re-arm page mode.
-          this.fullPageOpen = true;
-          this.fullPagePushed = false;
-          this.updateDocumentTitle();
-        }
+        // Task-route restoration is owned by modules/detail.ts (Phase 5, F2):
+        // the URL already moved, so the module writes no history. Fire-and-
+        // forget — the browser's own navigation must not be blocked by the
+        // adoption fetch.
+        void this._detailModule().restorePopStateTask(id);
       } else if (dashProjectId) {
         if (this.detailOpen) {
           this.closeDetail(false);
