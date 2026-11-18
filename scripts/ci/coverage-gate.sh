@@ -18,7 +18,10 @@
 # "How to ratchet the floors"):
 #
 #     GO_FLOOR   total Go statement coverage % across all packages  default 80
-#     WEB_FLOOR  web unit total line coverage %                     default 65
+#     WEB_FLOOR  web unit total line coverage %                     default 95
+#                (ratcheted up from 65 on 2026-11-17 when P5 F6 switched the
+#                 suite to native type stripping and honest measurement read
+#                 95.80% — docs/TESTING.md §2 "Coverage mechanism")
 #
 # Both are overridable via environment for verifying the gate itself without
 # touching real coverage, e.g.:
@@ -44,9 +47,10 @@ WEB_LOG="$2"
 
 # Ratcheting floors — the single source of truth for CI coverage minimums.
 # Bump here (and document in docs/TESTING.md §2) only after raising actual
-# coverage; see "How to ratchet the floors" there.
+# coverage; see "How to ratchet the floors" there. WEB_FLOOR was raised 65 → 95
+# on 2026-11-17 with P5 F6's honest native-strip measurement (95.80%).
 GO_FLOOR="${GO_FLOOR:-80}"
-WEB_FLOOR="${WEB_FLOOR:-65}"
+WEB_FLOOR="${WEB_FLOOR:-95}"
 
 [ -f "$GO_PROFILE" ] || { echo "COVERAGE GATE FAIL: Go profile '$GO_PROFILE' not found (did the Go test step run?)" >&2; exit 1; }
 [ -f "$WEB_LOG" ] || { echo "COVERAGE GATE FAIL: web coverage log '$WEB_LOG' not found (did the web unit step run?)" >&2; exit 1; }
@@ -58,8 +62,8 @@ GO_TOTAL="$(go tool cover -func "$GO_PROFILE" | tail -n 1 | awk '{ gsub(/%/, "",
 # --- Parse web unit total line coverage ----------------------------------
 # The plain reporter's "all files" row, tolerant of the '#' / 'ℹ' prefix and
 # column padding that differ between Node versions:
-#     # all files         |  82.35 |    84.44 |   81.80 |   (Node v22)
-#     ℹ all files    |  69.35 |    79.03 |   67.07 |   (Node v26)
+#     # all files         |  82.35 |    ... |   ... |   (Node v22 — pre-P5 value; re-verify after the P5 runner switch)
+#     ℹ all files    |  95.80 |    91.34 |   75.81 |   (Node v26, measured 2026-11-17)
 WEB_TOTAL="$(awk -F'|' '$1 ~ /all files/ { gsub(/[[:space:]]/, "", $2); print $2 }' "$WEB_LOG" | tail -n 1)"
 
 # --- Guard: both values must be numbers ----------------------------------
