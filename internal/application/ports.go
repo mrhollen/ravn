@@ -203,6 +203,19 @@ type TaskCountRow struct {
 	Count     int64
 }
 
+// ProjectTaskRollup holds per-project non-archived task counts plus lease and
+// stalled aggregates produced in one grouped scan by
+// TaskRepository.ProjectTaskRollups.
+type ProjectTaskRollup struct {
+	Todo                int64
+	Doing               int64
+	Done                int64
+	ActiveClaims        int64
+	ExpiredClaims       int64
+	Stalled             int64
+	LatestTaskUpdatedAt *time.Time
+}
+
 // TaskTitle is one (id, title) pair produced by TaskRepository.OpenTitles. It
 // is a port-level result shape, not a domain entity: the duplicate-advisory
 // scan needs titles only — materializing full rows for every open task of a
@@ -285,6 +298,15 @@ type TaskRepository interface {
 	// GROUP BY project_id, status. Pairs with zero open tasks simply don't
 	// appear; callers fill zero counts for the remaining canonical statuses.
 	OpenTaskCounts(ctx context.Context) ([]TaskCountRow, error)
+
+	// ProjectTaskRollups returns per-project non-archived task counts and
+	// claim/stalled aggregates computed in ONE grouped query over task
+	// (archived = 0). ActiveClaims counts doing tasks with non-null
+	// claim_expires_at > now; ExpiredClaims counts doing tasks with non-null
+	// claim_expires_at <= now; Stalled counts doing tasks that are either
+	// claim-expired (<= now) or idle beyond stalledCutoff (updated_at < stalledCutoff).
+	// Projects with zero non-archived tasks are omitted from the map.
+	ProjectTaskRollups(ctx context.Context, now, stalledCutoff time.Time) (map[domain.ID]ProjectTaskRollup, error)
 
 	// BlockersOf returns taskID's OPEN blockers: the targets of its outgoing
 	// blocked-by edges whose target is not done and not archived (the exact
@@ -417,6 +439,13 @@ type CommentRepository interface {
 	// returns an empty map without querying. This is the batch read behind the
 	// board snapshot's per-card comment-count and latest-comment badges.
 	CommentStatsByTasks(ctx context.Context, taskIDs []domain.ID) (map[domain.ID]TaskCommentStats, error)
+
+	// NeedsAttentionByProject returns the per-project count of open
+	// (todo/doing), non-archived tasks whose newest comment (created_at DESC,
+	// insertion order DESC tie-break) has kind IN ('question', 'handoff'),
+	// computed in ONE grouped query. Projects with zero matching tasks are
+	// omitted from the map.
+	NeedsAttentionByProject(ctx context.Context) (map[domain.ID]int64, error)
 }
 
 // ArtifactRepository appends and reads a task's evidence attachments

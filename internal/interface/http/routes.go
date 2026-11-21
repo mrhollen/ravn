@@ -10,6 +10,7 @@ const apiPrefix = "/api/v1"
 // whole API:
 //
 //	GET   /api/v1/projects              list projects + per-status open task counts
+//	GET   /api/v1/projects/overview     cross-project progress overview + health rollups (?archived=, ?mine=created, ?stalled_minutes=)
 //	POST  /api/v1/projects              create project → 201
 //	GET   /api/v1/projects/{id}         get project (404 when unknown)
 //	PUT   /api/v1/projects/{id}         update name/description
@@ -44,6 +45,7 @@ const apiPrefix = "/api/v1"
 //	DELETE /api/v1/tasks/{id}/relations/{other_id}/{kind}   remove edge → 204; 404 missing edge
 func RegisterRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("GET "+apiPrefix+"/projects", app.handleListProjects)
+	mux.HandleFunc("GET "+apiPrefix+"/projects/overview", app.handleProjectsOverview)
 	mux.HandleFunc("POST "+apiPrefix+"/projects", app.handleCreateProject)
 	mux.HandleFunc("GET "+apiPrefix+"/projects/{id}", app.handleGetProject)
 	mux.HandleFunc("PUT "+apiPrefix+"/projects/{id}", app.handleUpdateProject)

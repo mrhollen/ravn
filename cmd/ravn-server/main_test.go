@@ -199,7 +199,7 @@ func TestStaticRealAssetServedByteForByte(t *testing.T) {
 func TestStaticSPAFallbackServesIndexForDeepLinks(t *testing.T) {
 	srv := startStaticTestServer(t)
 
-	for _, p := range []string{"/some/spa/route", "/projects/whatever/board"} {
+	for _, p := range []string{"/some/spa/route", "/projects/whatever/board", "/projects", "/projects/"} {
 		code, body := get(t, srv.URL+p)
 		if code != http.StatusOK {
 			t.Fatalf("GET %s status = %d, want 200 (body %s)", p, code, body)
@@ -348,6 +348,18 @@ func TestStaticServingDoesNotShadowAPIAndHealthz(t *testing.T) {
 	}
 	if len(list.Projects) != 0 || list.Total != 0 {
 		t.Errorf("project list = %d rows (total %d), want empty", len(list.Projects), list.Total)
+	}
+
+	// /api/v1/projects/overview → the API overview handler (JSON envelope), not index.html.
+	code, body = get(t, srv.URL+"/api/v1/projects/overview")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/v1/projects/overview status = %d, want 200 (body %s)", code, body)
+	}
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatalf("GET /api/v1/projects/overview body is not the JSON envelope (SPA swallowed it?): %v — %q", err, body)
+	}
+	if len(list.Projects) != 0 || list.Total != 0 {
+		t.Errorf("project overview = %d rows (total %d), want empty", len(list.Projects), list.Total)
 	}
 
 	// /healthz → the exact §8 JSON contract, not index.html.

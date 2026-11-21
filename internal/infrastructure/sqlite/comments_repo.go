@@ -145,6 +145,42 @@ func (r *commentRepo) CommentStatsByTasks(ctx context.Context, taskIDs []domain.
 	return out, rows.Err()
 }
 
+// NeedsAttentionByProject counts open (todo/doing), non-archived tasks per
+// project whose newest comment (created_at DESC, rowid DESC tie-break) has
+// kind IN ('question', 'handoff') in ONE grouped query — zero N+1.
+func (r *commentRepo) NeedsAttentionByProject(ctx context.Context) (map[domain.ID]int64, error) {
+	rows, err := r.q.QueryContext(ctx, `
+		WITH latest_comments AS (
+			SELECT t.project_id AS project_id,
+			       c.kind AS kind,
+			       ROW_NUMBER() OVER (PARTITION BY c.task_id ORDER BY c.created_at DESC, c.rowid DESC) AS rn
+			FROM comment c
+			JOIN task t ON t.id = c.task_id
+			WHERE t.archived = 0 AND t.status IN ('todo', 'doing')
+		)
+		SELECT project_id, COUNT(*)
+		FROM latest_comments
+		WHERE rn = 1 AND kind IN ('question', 'handoff')
+		GROUP BY project_id`)
+	if err != nil {
+		return nil, fmt.Errorf("count needs-attention tasks by project: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[domain.ID]int64)
+	for rows.Next() {
+		var (
+			pid   string
+			count int64
+		)
+		if err := rows.Scan(&pid, &count); err != nil {
+			return nil, fmt.Errorf("scan needs-attention count: %w", err)
+		}
+		out[domain.ID(pid)] = count
+	}
+	return out, rows.Err()
+}
+
 // scanComment maps one row (in commentColumns order) to a domain.Comment.
 func scanComment(s scanner) (domain.Comment, error) {
 	var (

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -8,6 +9,28 @@ import (
 	"github.com/mrhollen/ravn/internal/application"
 	"github.com/mrhollen/ravn/internal/domain"
 )
+
+func (a *App) parseProjectListFilter(ctx context.Context, r *http.Request) (application.ProjectFilter, error) {
+	q := r.URL.Query()
+	flt := application.ProjectFilter{Archived: parseBoolFlag(q, "archived")}
+	mine, err := parseMine(q)
+	if err != nil {
+		return flt, err
+	}
+	if mine != "" { // projects support only ?mine=created (tasks support assigned/activity too)
+		if mine != "created" {
+			return flt, fmt.Errorf("%w: ?mine for projects supports only \"created\"", domain.ErrInvalid)
+		}
+		actorIn, _ := extractActor(r, actorInput{})
+		creator, cerr := a.creatorFilterID(ctx, actorIn.Name)
+		if cerr != nil {
+			return flt, cerr
+		}
+		flt.Creator = creator
+	}
+	flt.Visibility = a.listScope(ctx, declaredName(r)) // nil in default mode → unchanged query
+	return flt, nil
+}
 
 // handleListProjects → GET /api/v1/projects. Rows carry per-status open task
 // counts (ARCHITECTURE §5: "rows + per-status task counts"), computed by the
@@ -21,29 +44,11 @@ import (
 // (one lookup, no N+1) and omitted everywhere attribution is absent.
 func (a *App) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	q := r.URL.Query()
-	archived := parseBoolFlag(q, "archived")
-
-	flt := application.ProjectFilter{Archived: archived}
-	mine, err := parseMine(q)
+	flt, err := a.parseProjectListFilter(ctx, r)
 	if err != nil {
 		writeAppError(w, err, "project", "")
 		return
 	}
-	if mine != "" { // projects support only ?mine=created (tasks support assigned/activity too)
-		if mine != "created" {
-			writeAppError(w, fmt.Errorf("%w: ?mine for projects supports only \"created\"", domain.ErrInvalid), "project", "")
-			return
-		}
-		actorIn, _ := extractActor(r, actorInput{})
-		creator, cerr := a.creatorFilterID(ctx, actorIn.Name)
-		if cerr != nil {
-			writeAppError(w, cerr, "project", "")
-			return
-		}
-		flt.Creator = creator
-	}
-	flt.Visibility = a.listScope(ctx, declaredName(r)) // nil in default mode → unchanged query
 
 	rows, err := a.Projects.ListWithCounts(ctx, flt)
 	if err != nil {
@@ -55,6 +60,53 @@ func (a *App) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		out = append(out, projectRowDTO{
 			projectDTO: toProject(row.Project),
 			TaskCounts: toCounts(row.OpenTasks),
+		})
+	}
+	if err := a.fillOwners(ctx, func(i int) string { return out[i].CreatedBy }, func(i int, o *actorDTO) { out[i].Owner = o }, len(out)); err != nil {
+		writeAppError(w, err, "project", "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": out, "total": len(out)})
+}
+
+// handleProjectsOverview → GET /api/v1/projects/overview. Single-request,
+// zero-N+1 cross-project progress and health rollup (task counts, active/expired
+// claims, stalled doing tasks, needs_attention count, last_activity_at).
+// Supports the same ?archived= and ?mine=created filters plus ?stalled_minutes=
+// (default 60), and enforces membership visibility scoping server-side.
+func (a *App) handleProjectsOverview(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	flt, err := a.parseProjectListFilter(ctx, r)
+	if err != nil {
+		writeAppError(w, err, "project", "")
+		return
+	}
+	stalledMinutes, err := parseTailLimit(r.URL.Query().Get("stalled_minutes"), "stalled_minutes")
+	if err != nil {
+		writeAppError(w, err, "project", "")
+		return
+	}
+
+	rows, err := a.Projects.Overview(ctx, application.OverviewOptions{
+		Filter:         flt,
+		StalledMinutes: stalledMinutes,
+	})
+	if err != nil {
+		writeAppError(w, err, "project", "")
+		return
+	}
+	out := make([]projectOverviewRowDTO, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, projectOverviewRowDTO{
+			projectDTO: toProject(row.Project),
+			TaskCounts: toCounts(row.OpenTasks),
+			Health: projectHealthDTO{
+				ActiveClaims:   row.Health.ActiveClaims,
+				ExpiredClaims:  row.Health.ExpiredClaims,
+				Stalled:        row.Health.Stalled,
+				NeedsAttention: row.Health.NeedsAttention,
+				LastActivityAt: rfc3339(row.Health.LastActivityAt),
+			},
 		})
 	}
 	if err := a.fillOwners(ctx, func(i int) string { return out[i].CreatedBy }, func(i int, o *actorDTO) { out[i].Owner = o }, len(out)); err != nil {

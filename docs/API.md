@@ -385,6 +385,7 @@ extras (the web frontend uses them directly).
 | `GET  /metrics`                       | in-memory metrics, Prometheus text or JSON (outside `/api/v1`; bearer-gated like the API when a token is set unless `RAVN_PUBLIC_METRICS=true`) | — (ops) |
 | `GET  /api/v1/metrics`                | same metrics under the API prefix (auth-gated when a token is set; always gated, unaffected by `RAVN_PUBLIC_METRICS`)          | — (ops) |
 | `GET  /projects`                      | projects + per-status open task counts                  | `list_projects` |
+| `GET  /projects/overview`             | cross-project progress + health rollups (UI)            | — |
 | `POST /projects`                      | create project → 201                                     | `create_project` |
 | `GET  /projects/{id}`                 | project detail (UI)                                      | — |
 | `PUT  /projects/{id}`                 | rename/description/opencode-config edit (UI)             | — |
@@ -668,6 +669,47 @@ fail-closed (structurally empty list). The shared operator always sees all.
 `description` and the three `opencode_*` fields are **omitted** when unset. The
 `opencode_*` fields configure autonomous session dispatch for this project
 (see `POST /tasks/{id}/opencode/start`).
+
+### GET /projects/overview (UI)
+
+Single-request cross-project progress and health overview (zero N+1 queries).
+Supports the same filtering and `RAVN_SCOPING=membership` visibility rules as
+`GET /projects`, plus `?stalled_minutes=` (non-negative integer, default `60`).
+
+Query params (all optional):
+- `archived`: `true` lists archived projects only; default `false` = open only.
+- `mine=created`: restrict to projects the acting identity created (any other value → `400`).
+- `stalled_minutes`: non-negative integer idle window in minutes (default `60` when omitted or `0`; negative or non-numeric → `400`).
+
+Each row extends the `GET /projects` row with a `health` object:
+- `active_claims`: `doing` non-archived tasks with a non-null `claim_expires_at > now`
+- `expired_claims`: `doing` non-archived tasks with a non-null `claim_expires_at <= now`
+- `stalled`: `doing` non-archived tasks that are either claim-expired (`claim_expires_at <= now`) or idle beyond `stalled_minutes` (`updated_at < now - stalled_minutes`)
+- `needs_attention`: open (`todo`/`doing`) non-archived tasks whose newest comment has `kind` in `question` or `handoff`
+- `last_activity_at`: RFC3339 UTC max of the project's `updated_at` and latest non-archived task's `updated_at` (falls back to project `updated_at` when empty)
+
+```json
+{
+  "projects": [
+    {
+      "id": "01J3YV2NMB4D9C6K8F0H3L5P7Q",
+      "name": "Website Redesign",
+      "archived": false,
+      "created_at": "2026-09-20T09:00:00Z",
+      "updated_at": "2026-09-20T09:00:00Z",
+      "task_counts": { "todo": 3, "doing": 1, "done": 5 },
+      "health": {
+        "active_claims": 1,
+        "expired_claims": 0,
+        "stalled": 0,
+        "needs_attention": 1,
+        "last_activity_at": "2026-09-26T15:48:03Z"
+      }
+    }
+  ],
+  "total": 1
+}
+```
 
 ### POST /projects → `create_project`
 

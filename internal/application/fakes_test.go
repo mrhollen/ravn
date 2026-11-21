@@ -285,6 +285,44 @@ func (f *fakeTasks) OpenTaskCounts(_ context.Context) ([]TaskCountRow, error) {
 	return out, nil
 }
 
+// ProjectTaskRollups mirrors sqlite's grouped project rollup in memory over
+// non-archived tasks.
+func (f *fakeTasks) ProjectTaskRollups(_ context.Context, now, stalledCutoff time.Time) (map[domain.ID]ProjectTaskRollup, error) {
+	out := make(map[domain.ID]ProjectTaskRollup)
+	for _, t := range f.byID {
+		if t.Archived {
+			continue
+		}
+		r := out[t.ProjectID]
+		switch t.Status {
+		case domain.StatusTodo:
+			r.Todo++
+		case domain.StatusDoing:
+			r.Doing++
+			expired := false
+			if t.Claim.Present() {
+				if t.Claim.Expiry().After(now) {
+					r.ActiveClaims++
+				} else {
+					r.ExpiredClaims++
+					expired = true
+				}
+			}
+			if expired || t.UpdatedAt.Before(stalledCutoff) {
+				r.Stalled++
+			}
+		case domain.StatusDone:
+			r.Done++
+		}
+		if r.LatestTaskUpdatedAt == nil || t.UpdatedAt.After(*r.LatestTaskUpdatedAt) {
+			u := t.UpdatedAt
+			r.LatestTaskUpdatedAt = &u
+		}
+		out[t.ProjectID] = r
+	}
+	return out, nil
+}
+
 // Update is the optimistic guard in memory: stored Version must equal t.Version,
 // then the row is stored with Version+1; a stale writer gets ConflictError with
 // the current row (the use case's conflict-path unit tests rely on this).
@@ -690,6 +728,7 @@ func (f *fakeACs) Reorder(_ context.Context, taskID domain.ID, seqs []int) ([]do
 // fakeComments is an in-memory CommentRepository (append + newest-first tail).
 type fakeComments struct {
 	byTask map[domain.ID][]domain.Comment
+	tasks  *fakeTasks
 }
 
 func newFakeComments() *fakeComments {
@@ -727,6 +766,37 @@ func (f *fakeComments) CommentStatsByTasks(_ context.Context, taskIDs []domain.I
 			}
 		}
 		out[id] = TaskCommentStats{Count: int64(len(cs)), LastKind: last.Kind, LastActor: last.Actor}
+	}
+	return out, nil
+}
+
+// NeedsAttentionByProject mirrors sqlite's grouped query over open
+// (todo/doing) non-archived tasks whose newest comment is question or handoff.
+func (f *fakeComments) NeedsAttentionByProject(_ context.Context) (map[domain.ID]int64, error) {
+	out := make(map[domain.ID]int64)
+	if f.tasks == nil {
+		return out, nil
+	}
+	for tid, cs := range f.byTask {
+		if len(cs) == 0 {
+			continue
+		}
+		t, ok := f.tasks.byID[tid]
+		if !ok || t.Archived {
+			continue
+		}
+		if t.Status != domain.StatusTodo && t.Status != domain.StatusDoing {
+			continue
+		}
+		last := cs[0]
+		for i := 1; i < len(cs); i++ {
+			if !cs[i].CreatedAt.Before(last.CreatedAt) { // ties: later insertion wins
+				last = cs[i]
+			}
+		}
+		if last.Kind == domain.CommentQuestion || last.Kind == domain.CommentHandoff {
+			out[t.ProjectID]++
+		}
 	}
 	return out, nil
 }
@@ -990,6 +1060,7 @@ func newFakeUoW(projects *fakeProjects, events *fakeEvents) *fakeUoW {
 		events:    events,
 	}
 	u.tasks.rel = u.relations // relation-aware List (UnblockedOnly) + BlockersOf (slice 2D2b)
+	u.comments.tasks = u.tasks
 	u.relations.tasks = u.tasks
 	return u
 }

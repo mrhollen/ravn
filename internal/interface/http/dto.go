@@ -401,6 +401,25 @@ type projectRowDTO struct {
 	TaskCounts statusCountDTO `json:"task_counts"`
 }
 
+// projectHealthDTO carries per-project operational health metrics for
+// GET /api/v1/projects/overview. Every field is always present (zeros never
+// omitted).
+type projectHealthDTO struct {
+	ActiveClaims   int    `json:"active_claims"`
+	ExpiredClaims  int    `json:"expired_claims"`
+	Stalled        int    `json:"stalled"`
+	NeedsAttention int    `json:"needs_attention"`
+	LastActivityAt string `json:"last_activity_at"`
+}
+
+// projectOverviewRowDTO is one GET /api/v1/projects/overview row: the project
+// fields plus per-status open task counts and health rollup signals.
+type projectOverviewRowDTO struct {
+	projectDTO
+	TaskCounts statusCountDTO   `json:"task_counts"`
+	Health     projectHealthDTO `json:"health"`
+}
+
 // --- responses -------------------------------------------------------------------
 
 // createTaskResponse is the 201 body of POST /tasks: the fresh task (summary

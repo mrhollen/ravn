@@ -570,6 +570,61 @@ func (r *taskRepo) OpenTaskCounts(ctx context.Context) ([]application.TaskCountR
 	return out, rows.Err()
 }
 
+// ProjectTaskRollups computes per-project non-archived task counts and
+// active/expired claim + stalled counts plus latest task updated_at in ONE
+// grouped scan over task (archived = 0) — zero N+1.
+func (r *taskRepo) ProjectTaskRollups(ctx context.Context, now, stalledCutoff time.Time) (map[domain.ID]application.ProjectTaskRollup, error) {
+	nowTS := formatTS(now)
+	cutoffTS := formatTS(stalledCutoff)
+	rows, err := r.q.QueryContext(ctx, `
+		SELECT project_id,
+		       SUM(CASE WHEN status = 'todo' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN status = 'doing' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN status = 'doing' AND claim_expires_at IS NOT NULL AND claim_expires_at > ? THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN status = 'doing' AND claim_expires_at IS NOT NULL AND claim_expires_at <= ? THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN status = 'doing' AND ((claim_expires_at IS NOT NULL AND claim_expires_at <= ?) OR updated_at < ?) THEN 1 ELSE 0 END),
+		       MAX(updated_at)
+		FROM task
+		WHERE archived = 0
+		GROUP BY project_id`,
+		nowTS, nowTS, nowTS, cutoffTS)
+	if err != nil {
+		return nil, fmt.Errorf("project task rollups: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[domain.ID]application.ProjectTaskRollup)
+	for rows.Next() {
+		var (
+			pid      string
+			rollup   application.ProjectTaskRollup
+			latestTS sql.NullString
+		)
+		if err := rows.Scan(
+			&pid,
+			&rollup.Todo,
+			&rollup.Doing,
+			&rollup.Done,
+			&rollup.ActiveClaims,
+			&rollup.ExpiredClaims,
+			&rollup.Stalled,
+			&latestTS,
+		); err != nil {
+			return nil, fmt.Errorf("scan project task rollup: %w", err)
+		}
+		if latestTS.Valid && latestTS.String != "" {
+			ts, err := parseTS(latestTS.String)
+			if err != nil {
+				return nil, fmt.Errorf("project %s latest task updated_at %q: %w", pid, latestTS.String, err)
+			}
+			rollup.LatestTaskUpdatedAt = &ts
+		}
+		out[domain.ID(pid)] = rollup
+	}
+	return out, rows.Err()
+}
+
 // --- query building + scanning ----------------------------------------------------
 
 // escapeLikePattern escapes the LIKE metacharacters so a user-supplied search

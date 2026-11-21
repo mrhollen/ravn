@@ -658,3 +658,262 @@ func TestEventStoreMaxAtByTasks(t *testing.T) {
 		}
 	})
 }
+
+// --- ProjectTaskRollups (taskRepo) -----------------------------------------------------
+
+func TestTaskRepoProjectTaskRollups(t *testing.T) {
+	t.Parallel()
+
+	now := mustRollupTime(t, "2026-10-09T12:00:00Z")
+	cutoff := now.Add(-60 * time.Minute)
+	actorA := domain.Actor{Type: domain.ActorAgent, Name: "agent-a"}
+
+	makeDoing := func(id, pid string, updated time.Time, claim domain.Claim, archived bool) domain.Task {
+		tk := rollupTask(domain.ID(id), domain.ID(pid), id, domain.StatusDoing, archived)
+		tk.UpdatedAt = updated
+		tk.Claim = claim
+		return tk
+	}
+
+	tests := []struct {
+		name string
+		seed func(t *testing.T, r *application.Repos)
+		want map[domain.ID]application.ProjectTaskRollup
+	}{
+		{
+			name: "empty database returns empty map",
+			seed: func(_ *testing.T, _ *application.Repos) {},
+			want: map[domain.ID]application.ProjectTaskRollup{},
+		},
+		{
+			name: "counts statuses, excludes archived tasks, and ignores archived updated_at",
+			seed: func(t *testing.T, r *application.Repos) {
+				ctx := context.Background()
+				mustCreate(t, r.Projects.Create(ctx, rollupProject("p1", "P1")))
+				mustCreate(t, r.Projects.Create(ctx, rollupProject("p-empty", "Empty")))
+				t1 := rollupTask("t1", "p1", "todo", domain.StatusTodo, false)
+				t1.UpdatedAt = now.Add(-10 * time.Minute)
+				t2 := rollupTask("t2", "p1", "done", domain.StatusDone, false)
+				t2.UpdatedAt = now.Add(-5 * time.Minute)
+				tArch := rollupTask("t-arch", "p1", "archived", domain.StatusDoing, true)
+				tArch.UpdatedAt = now.Add(time.Hour) // newer, but archived → excluded
+				tArch.Claim = domain.NewClaim(actorA, now, 3600)
+				for _, tk := range []domain.Task{t1, t2, tArch} {
+					mustCreate(t, r.Tasks.Create(ctx, tk))
+				}
+			},
+			want: map[domain.ID]application.ProjectTaskRollup{
+				"p1": {
+					Todo: 1, Doing: 0, Done: 1,
+					LatestTaskUpdatedAt: ptrRollupTime(now.Add(-5 * time.Minute)),
+				},
+			},
+		},
+		{
+			name: "claim expiry and idle boundary semantics on doing tasks",
+			seed: func(t *testing.T, r *application.Repos) {
+				ctx := context.Background()
+				mustCreate(t, r.Projects.Create(ctx, rollupProject("p1", "P1")))
+				// 1. Active claim (> now) and fresh updated_at → active=1, expired=0, stalled=0
+				cActive := domain.NewClaim(actorA, now.Add(-10*time.Minute), 1200) // expires now+10m
+				mustCreate(t, r.Tasks.Create(ctx, makeDoing("d-active", "p1", now.Add(-10*time.Minute), cActive, false)))
+				// 2. Claim expires at exact now (<= now) and fresh updated_at → active=0, expired=1, stalled=1
+				cExact := domain.NewClaim(actorA, now.Add(-60*time.Second), 60) // expires == now
+				mustCreate(t, r.Tasks.Create(ctx, makeDoing("d-exact-exp", "p1", now.Add(-1*time.Minute), cExact, false)))
+				// 3. Expired claim AND idle beyond cutoff → counted ONCE in stalled, expired=1
+				cOld := domain.NewClaim(actorA, now.Add(-3*time.Hour), 60)
+				mustCreate(t, r.Tasks.Create(ctx, makeDoing("d-both", "p1", now.Add(-2*time.Hour), cOld, false)))
+				// 4. Active claim (heartbeat kept alive) BUT updated_at < cutoff → active=1 AND stalled=1
+				cBeat := domain.NewClaim(actorA, now.Add(-2*time.Hour), 10800) // expires now+1h
+				mustCreate(t, r.Tasks.Create(ctx, makeDoing("d-beat-stale", "p1", now.Add(-90*time.Minute), cBeat, false)))
+				// 5. Unclaimed doing updated_at == cutoff → NOT stalled (strict <)
+				mustCreate(t, r.Tasks.Create(ctx, makeDoing("d-at-cutoff", "p1", cutoff, domain.Claim{}, false)))
+				// 6. Unclaimed doing updated_at 1ns before cutoff → stalled
+				mustCreate(t, r.Tasks.Create(ctx, makeDoing("d-past-cutoff", "p1", cutoff.Add(-time.Nanosecond), domain.Claim{}, false)))
+				// 7. Todo task idle beyond cutoff with lingering claim → NOT counted in claims/stalled
+				todoWithClaim := rollupTask("t-todo-old", "p1", "todo", domain.StatusTodo, false)
+				todoWithClaim.UpdatedAt = now.Add(-4 * time.Hour)
+				todoWithClaim.Claim = domain.NewClaim(actorA, now, 3600)
+				mustCreate(t, r.Tasks.Create(ctx, todoWithClaim))
+			},
+			want: map[domain.ID]application.ProjectTaskRollup{
+				"p1": {
+					Todo:                1,
+					Doing:               6,
+					Done:                0,
+					ActiveClaims:        2, // d-active, d-beat-stale
+					ExpiredClaims:       2, // d-exact-exp, d-both
+					Stalled:             4, // d-exact-exp, d-both, d-beat-stale, d-past-cutoff
+					LatestTaskUpdatedAt: ptrRollupTime(now.Add(-1 * time.Minute)),
+				},
+			},
+		},
+		{
+			name: "multi-project fan-out keeps aggregates isolated per project",
+			seed: func(t *testing.T, r *application.Repos) {
+				ctx := context.Background()
+				mustCreate(t, r.Projects.Create(ctx, rollupProject("p1", "P1")))
+				mustCreate(t, r.Projects.Create(ctx, rollupProject("p2", "P2")))
+				mustCreate(t, r.Tasks.Create(ctx, makeDoing("p1-d", "p1", now.Add(-20*time.Minute), domain.NewClaim(actorA, now, 600), false)))
+				mustCreate(t, r.Tasks.Create(ctx, makeDoing("p2-d", "p2", now.Add(-120*time.Minute), domain.Claim{}, false)))
+				p2Done := rollupTask("p2-done", "p2", "done", domain.StatusDone, false)
+				p2Done.UpdatedAt = now.Add(-2 * time.Minute)
+				mustCreate(t, r.Tasks.Create(ctx, p2Done))
+			},
+			want: map[domain.ID]application.ProjectTaskRollup{
+				"p1": {
+					Doing: 1, ActiveClaims: 1,
+					LatestTaskUpdatedAt: ptrRollupTime(now.Add(-20 * time.Minute)),
+				},
+				"p2": {
+					Doing: 1, Done: 1, Stalled: 1,
+					LatestTaskUpdatedAt: ptrRollupTime(now.Add(-2 * time.Minute)),
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			db := openTestDB(t)
+			withRollupSeed(t, db, func(r *application.Repos) {
+				tc.seed(t, r)
+			})
+			got, err := newTaskRepo(db).ProjectTaskRollups(context.Background(), now, cutoff)
+			if err != nil {
+				t.Fatalf("ProjectTaskRollups: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("len(ProjectTaskRollups) = %d (%+v), want %d (%+v)", len(got), got, len(tc.want), tc.want)
+			}
+			for pid, w := range tc.want {
+				g, ok := got[pid]
+				if !ok {
+					t.Errorf("missing project %s in rollups", pid)
+					continue
+				}
+				if g.Todo != w.Todo || g.Doing != w.Doing || g.Done != w.Done ||
+					g.ActiveClaims != w.ActiveClaims || g.ExpiredClaims != w.ExpiredClaims || g.Stalled != w.Stalled {
+					t.Errorf("rollup[%s] = %+v, want %+v", pid, g, w)
+				}
+				if (g.LatestTaskUpdatedAt == nil) != (w.LatestTaskUpdatedAt == nil) ||
+					(g.LatestTaskUpdatedAt != nil && !g.LatestTaskUpdatedAt.Equal(*w.LatestTaskUpdatedAt)) {
+					t.Errorf("rollup[%s].LatestTaskUpdatedAt = %v, want %v", pid, g.LatestTaskUpdatedAt, w.LatestTaskUpdatedAt)
+				}
+			}
+		})
+	}
+
+	t.Run("query error on closed db surfaces wrapped", func(t *testing.T) {
+		db := openTestDB(t)
+		if err := db.Close(); err != nil && !errors.Is(err, sql.ErrConnDone) {
+			t.Fatalf("close db: %v", err)
+		}
+		if _, err := newTaskRepo(db).ProjectTaskRollups(context.Background(), now, cutoff); err == nil || !strings.Contains(err.Error(), "project task rollups") {
+			t.Fatalf("ProjectTaskRollups on closed db = %v, want wrapped error", err)
+		}
+	})
+}
+
+func ptrRollupTime(ts time.Time) *time.Time { return &ts }
+
+// --- NeedsAttentionByProject (commentRepo) ---------------------------------------------
+
+func TestCommentRepoNeedsAttentionByProject(t *testing.T) {
+	t.Parallel()
+
+	seedComment := func(t *testing.T, r *application.Repos, id, taskID string, kind domain.CommentKind, at time.Time) {
+		t.Helper()
+		mustAddComment(t, r.Comments.Add(context.Background(), domain.Comment{
+			ID:        domain.ID(id),
+			TaskID:    domain.ID(taskID),
+			Kind:      kind,
+			Body:      "body " + id,
+			Actor:     domain.Actor{Type: domain.ActorAgent, Name: "bot"},
+			CreatedAt: at,
+		}))
+	}
+
+	tests := []struct {
+		name string
+		seed func(t *testing.T, r *application.Repos)
+		want map[domain.ID]int64
+	}{
+		{
+			name: "empty database returns empty map",
+			seed: func(_ *testing.T, _ *application.Repos) {},
+			want: map[domain.ID]int64{},
+		},
+		{
+			name: "latest comment drives attention and excludes done and archived tasks",
+			seed: func(t *testing.T, r *application.Repos) {
+				ctx := context.Background()
+				mustCreate(t, r.Projects.Create(ctx, rollupProject("p1", "P1")))
+				mustCreate(t, r.Projects.Create(ctx, rollupProject("p2", "P2")))
+
+				for _, tk := range []domain.Task{
+					rollupTask("t-q", "p1", "open question", domain.StatusTodo, false),
+					rollupTask("t-h", "p1", "open handoff", domain.StatusDoing, false),
+					rollupTask("t-resolved", "p1", "resolved question", domain.StatusDoing, false),
+					rollupTask("t-done", "p1", "done question", domain.StatusDone, false),
+					rollupTask("t-arch", "p1", "archived handoff", domain.StatusTodo, true),
+					rollupTask("t-tie-win", "p2", "tie wins", domain.StatusTodo, false),
+					rollupTask("t-tie-lose", "p2", "tie loses", domain.StatusTodo, false),
+					rollupTask("t-none", "p2", "no comments", domain.StatusTodo, false),
+				} {
+					mustCreate(t, r.Tasks.Create(ctx, tk))
+				}
+
+				// p1: t-q (progress then question -> YES), t-h (handoff -> YES)
+				seedComment(t, r, "c1", "t-q", domain.CommentProgress, rollupBase)
+				seedComment(t, r, "c2", "t-q", domain.CommentQuestion, rollupBase.Add(time.Minute))
+				seedComment(t, r, "c3", "t-h", domain.CommentHandoff, rollupBase)
+				// p1: t-resolved (question then progress -> NO)
+				seedComment(t, r, "c4", "t-resolved", domain.CommentQuestion, rollupBase)
+				seedComment(t, r, "c5", "t-resolved", domain.CommentProgress, rollupBase.Add(time.Minute))
+				// p1: done & archived -> NO
+				seedComment(t, r, "c6", "t-done", domain.CommentQuestion, rollupBase)
+				seedComment(t, r, "c7", "t-arch", domain.CommentHandoff, rollupBase)
+
+				// p2: same-timestamp ties break by rowid DESC (last inserted wins)
+				tie := rollupBase.Add(5 * time.Minute)
+				seedComment(t, r, "c8", "t-tie-win", domain.CommentNote, tie)
+				seedComment(t, r, "c9", "t-tie-win", domain.CommentQuestion, tie) // wins → YES
+				seedComment(t, r, "c10", "t-tie-lose", domain.CommentHandoff, tie)
+				seedComment(t, r, "c11", "t-tie-lose", domain.CommentDecision, tie) // wins → NO
+			},
+			want: map[domain.ID]int64{
+				"p1": 2,
+				"p2": 1,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			db := openTestDB(t)
+			withRollupSeed(t, db, func(r *application.Repos) {
+				tc.seed(t, r)
+			})
+			got, err := newCommentRepo(db).NeedsAttentionByProject(context.Background())
+			if err != nil {
+				t.Fatalf("NeedsAttentionByProject: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("NeedsAttentionByProject = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("query error on closed db surfaces wrapped", func(t *testing.T) {
+		db := openTestDB(t)
+		if err := db.Close(); err != nil && !errors.Is(err, sql.ErrConnDone) {
+			t.Fatalf("close db: %v", err)
+		}
+		if _, err := newCommentRepo(db).NeedsAttentionByProject(context.Background()); err == nil || !strings.Contains(err.Error(), "count needs-attention tasks by project") {
+			t.Fatalf("NeedsAttentionByProject on closed db = %v, want wrapped error", err)
+		}
+	})
+}

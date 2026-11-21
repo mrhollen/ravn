@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mrhollen/ravn/internal/domain"
 )
@@ -169,16 +170,113 @@ func (s *Projects) ListWithCounts(ctx context.Context, f ...ProjectFilter) ([]Pr
 
 	out := make([]ProjectRow, 0, len(projects))
 	for _, p := range projects {
-		counts := make(map[domain.Status]int64, len(domain.CanonicalStatuses()))
-		for _, st := range domain.CanonicalStatuses() {
-			counts[st] = 0 // always present, zero when empty (wire shape is fixed)
-		}
+		counts := zeroCanonicalCounts()
 		for st, n := range byProject[p.ID] {
 			counts[st] = n
 		}
 		out = append(out, ProjectRow{Project: p, OpenTasks: counts})
 	}
 	return out, nil
+}
+
+// maxOverviewStalledMinutes caps the stalled window so time.Duration
+// multiplication cannot overflow int64 on hostile huge query values.
+const maxOverviewStalledMinutes = 100 * 365 * 24 * 60
+
+// OverviewOptions tunes Projects.Overview. Zero values select the defaults
+// (Filter: open projects, StalledMinutes <= 0 → DefaultStalledMinutes).
+type OverviewOptions struct {
+	Filter         ProjectFilter
+	StalledMinutes int
+}
+
+// ProjectHealth summarizes operational health metrics for one project row in
+// Projects.Overview.
+type ProjectHealth struct {
+	ActiveClaims   int
+	ExpiredClaims  int
+	Stalled        int
+	NeedsAttention int
+	LastActivityAt time.Time
+}
+
+// ProjectOverviewRow pairs a project with its non-archived per-status task
+// counts and its operational health summary.
+type ProjectOverviewRow struct {
+	Project   domain.Project
+	OpenTasks map[domain.Status]int64
+	Health    ProjectHealth
+}
+
+// Overview returns every project matching o.Filter (created_at ASC) paired
+// with its non-archived task counts and operational health signals, gathered in
+// ONE unit of work with grouped queries (zero N+1 per project).
+func (s *Projects) Overview(ctx context.Context, o OverviewOptions) ([]ProjectOverviewRow, error) {
+	stalledMinutes := o.StalledMinutes
+	if stalledMinutes <= 0 {
+		stalledMinutes = DefaultStalledMinutes
+	}
+	if stalledMinutes > maxOverviewStalledMinutes {
+		stalledMinutes = maxOverviewStalledMinutes
+	}
+	now := s.clock.Now().UTC()
+	stalledCutoff := now.Add(-time.Duration(stalledMinutes) * time.Minute)
+
+	var (
+		projects        []domain.Project
+		taskRollups     map[domain.ID]ProjectTaskRollup
+		attentionCounts map[domain.ID]int64
+		r               Repos
+	)
+	err := s.uow.Run(ctx, &r, func() error {
+		var err error
+		if projects, err = r.Projects.List(ctx, o.Filter); err != nil {
+			return err
+		}
+		if len(projects) == 0 {
+			return nil
+		}
+		if taskRollups, err = r.Tasks.ProjectTaskRollups(ctx, now, stalledCutoff); err != nil {
+			return err
+		}
+		attentionCounts, err = r.Comments.NeedsAttentionByProject(ctx)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]ProjectOverviewRow, 0, len(projects))
+	for _, p := range projects {
+		counts := zeroCanonicalCounts()
+		health := ProjectHealth{LastActivityAt: p.UpdatedAt.UTC()}
+		if tr, ok := taskRollups[p.ID]; ok {
+			counts[domain.StatusTodo] = tr.Todo
+			counts[domain.StatusDoing] = tr.Doing
+			counts[domain.StatusDone] = tr.Done
+			health.ActiveClaims = int(tr.ActiveClaims)
+			health.ExpiredClaims = int(tr.ExpiredClaims)
+			health.Stalled = int(tr.Stalled)
+			if tr.LatestTaskUpdatedAt != nil && tr.LatestTaskUpdatedAt.After(health.LastActivityAt) {
+				health.LastActivityAt = tr.LatestTaskUpdatedAt.UTC()
+			}
+		}
+		health.NeedsAttention = int(attentionCounts[p.ID])
+		out = append(out, ProjectOverviewRow{
+			Project:   p,
+			OpenTasks: counts,
+			Health:    health,
+		})
+	}
+	return out, nil
+}
+
+func zeroCanonicalCounts() map[domain.Status]int64 {
+	counts := make(map[domain.Status]int64, len(domain.CanonicalStatuses()))
+	for _, st := range domain.CanonicalStatuses() {
+		counts[st] = 0 // always present, zero when empty (wire shape is fixed)
+	}
+	return counts
 }
 
 // Update applies a partial field change to an existing project and appends an
