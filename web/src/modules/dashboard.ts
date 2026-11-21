@@ -15,15 +15,24 @@ import {
   cumulativeAriaLabel,
   DEFAULT_HISTORY_BUCKET,
   DEFAULT_HISTORY_DAYS,
+  HISTORY_DAY_OPTIONS,
   isHistoryEmpty,
   renderCumulativeSvgInner,
   renderThroughputSvgInner,
   throughputAriaLabel,
   type CumulativeSummary,
+  type ReportHistoryDays,
   type ThroughputSummary,
 } from "./dashboard-charts";
 
-export { DEFAULT_HISTORY_BUCKET, DEFAULT_HISTORY_DAYS, type CumulativeSummary, type ThroughputSummary };
+export {
+  DEFAULT_HISTORY_BUCKET,
+  DEFAULT_HISTORY_DAYS,
+  HISTORY_DAY_OPTIONS,
+  type CumulativeSummary,
+  type ReportHistoryDays,
+  type ThroughputSummary,
+};
 
 /** Default idle threshold (minutes) for stalled task reporting. */
 export const DEFAULT_STALLED_MINUTES = 60;
@@ -171,12 +180,64 @@ export function workloadEntries(report: ProjectReport | null | undefined): Workl
     });
 }
 
+export interface KpiSummary {
+  completionPct: number;
+  doneCount: number;
+  totalCount: number;
+  activeClaimsCount: number;
+  blockedCount: number;
+  stalledCount: number;
+}
+
+/** Compute compact top-level KPI summary metrics from a ProjectReport. */
+export function kpiSummary(report: ProjectReport | null | undefined): KpiSummary {
+  if (!report) {
+    return {
+      completionPct: 0,
+      doneCount: 0,
+      totalCount: 0,
+      activeClaimsCount: 0,
+      blockedCount: 0,
+      stalledCount: 0,
+    };
+  }
+  const totalCount = totalReportTasks(report);
+  const doneCount = report.counts?.by_status?.done ?? 0;
+  const completionPct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
+  const activeClaimsCount = report.active_claims?.length ?? 0;
+
+  const blockedIds = new Set<string>();
+  for (const grp of report.open_blocked_by ?? []) {
+    for (const t of grp.blocked ?? []) {
+      if (t?.id) blockedIds.add(t.id);
+    }
+  }
+
+  const stalledIds = new Set<string>();
+  for (const st of report.stalled_tasks ?? []) {
+    if (st?.id) stalledIds.add(st.id);
+  }
+  for (const exp of report.expired_claims ?? []) {
+    if (exp?.id) stalledIds.add(exp.id);
+  }
+
+  return {
+    completionPct,
+    doneCount,
+    totalCount,
+    activeClaimsCount,
+    blockedCount: blockedIds.size,
+    stalledCount: stalledIds.size,
+  };
+}
+
 export interface DashboardDeps {
   selectedProjectId(): string;
   dashboardOpen(): boolean;
   dashboardReport(): ProjectReport | null;
   dashboardHistory(): ProjectReportHistory | null;
   historyBucket(): ReportHistoryBucket;
+  historyDays(): ReportHistoryDays;
   stalledMinutes(): number;
   nowTick(): number;
   setDashboardOpen(open: boolean): void;
@@ -187,6 +248,7 @@ export interface DashboardDeps {
   setDashboardHistoryLoading(loading: boolean): void;
   setDashboardHistoryError(err: string): void;
   setHistoryBucket(bucket: ReportHistoryBucket): void;
+  setHistoryDays(days: ReportHistoryDays): void;
   setProjectForbidden(forbidden: boolean): void;
   openAuthModal(): void;
   updateDocumentTitle(): void;
@@ -222,14 +284,15 @@ export function createDashboardModule(deps: DashboardDeps) {
     }
 
     const bucket = deps.historyBucket();
+    const days = deps.historyDays();
     try {
       const history = await api.getProjectReportHistory(projectId, {
-        days: DEFAULT_HISTORY_DAYS,
+        days,
         bucket,
       });
       if (!historySeq.isFresh(token) || deps.selectedProjectId() !== projectId) return;
       if (history.project_id && history.project_id !== projectId) return;
-      if (deps.historyBucket() !== bucket) return;
+      if (deps.historyBucket() !== bucket || deps.historyDays() !== days) return;
       deps.setDashboardHistory(history);
       deps.setDashboardHistoryError("");
     } catch (e) {
@@ -318,6 +381,14 @@ export function createDashboardModule(deps: DashboardDeps) {
     await loadHistory(false);
   }
 
+  async function setHistoryDays(days: ReportHistoryDays): Promise<void> {
+    if (deps.historyDays() === days && deps.dashboardHistory()) return;
+    deps.setHistoryDays(days);
+    deps.setDashboardHistory(null);
+    deps.setDashboardHistoryError("");
+    await loadHistory(false);
+  }
+
   function refreshDashboard(): void {
     if (!deps.dashboardOpen() || !deps.selectedProjectId()) return;
     refreshDebounce.schedule();
@@ -352,6 +423,7 @@ export function createDashboardModule(deps: DashboardDeps) {
     loadReport,
     loadHistory,
     setHistoryBucket,
+    setHistoryDays,
     refreshDashboard,
     openDashboard,
     closeDashboard,
@@ -359,6 +431,7 @@ export function createDashboardModule(deps: DashboardDeps) {
     invalidatePendingLoads,
     totalTasks: () => totalReportTasks(deps.dashboardReport()),
     isEmpty: () => isReportEmpty(deps.dashboardReport()),
+    kpiSummary: () => kpiSummary(deps.dashboardReport()),
     statusEntries: () => statusSummaryEntries(deps.dashboardReport()),
     priorityEntries: () => priorityBreakdownEntries(deps.dashboardReport()),
     workloadEntries: () => workloadEntries(deps.dashboardReport()),

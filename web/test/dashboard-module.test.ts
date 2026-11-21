@@ -5,16 +5,20 @@ import { api, ApiError } from "../src/api.ts";
 import {
   createDashboardModule,
   DEFAULT_HISTORY_BUCKET,
+  DEFAULT_HISTORY_DAYS,
   DEFAULT_STALLED_MINUTES,
   effectiveRemainingSec,
   formatIdleMinutes,
   formatRemainingSeconds,
+  HISTORY_DAY_OPTIONS,
   isReportEmpty,
+  kpiSummary,
   priorityBreakdownEntries,
   statusSummaryEntries,
   totalReportTasks,
   workloadEntries,
   type DashboardDeps,
+  type ReportHistoryDays,
 } from "../src/modules/dashboard.ts";
 import type { ProjectReport, ProjectReportHistory, ReportHistoryBucket } from "../src/types.ts";
 import { withFetch } from "./test-helpers.ts";
@@ -191,6 +195,47 @@ test("Dashboard: workloadEntries maps '' to Unassigned and sorts count desc with
   assert.deepEqual(workloadEntries(null), []);
 });
 
+test("Dashboard: kpiSummary computes completion, active claims, and deduplicated blocked/stalled counts", () => {
+  assert.deepEqual(kpiSummary(null), {
+    completionPct: 0,
+    doneCount: 0,
+    totalCount: 0,
+    activeClaimsCount: 0,
+    blockedCount: 0,
+    stalledCount: 0,
+  });
+  assert.deepEqual(kpiSummary(emptyReport()), {
+    completionPct: 0,
+    doneCount: 0,
+    totalCount: 0,
+    activeClaimsCount: 0,
+    blockedCount: 0,
+    stalledCount: 0,
+  });
+  assert.deepEqual(kpiSummary(sampleReport()), {
+    completionPct: 50,
+    doneCount: 5,
+    totalCount: 10,
+    activeClaimsCount: 1,
+    blockedCount: 2,
+    stalledCount: 2,
+  });
+
+  // Deduplicates task IDs appearing across multiple blockers or both stalled_tasks & expired_claims
+  const overlap = sampleReport({
+    open_blocked_by: [
+      { blocker: { id: "b1", title: "B1" }, blocked: [{ id: "x1", title: "X1" }, { id: "x2", title: "X2" }] },
+      { blocker: { id: "b2", title: "B2" }, blocked: [{ id: "x1", title: "X1" }] },
+    ],
+    stalled_tasks: [{ id: "s1", title: "S1", last_activity_at: "2026-11-16T10:00:00Z", idle_minutes: 90 }],
+    expired_claims: [{ id: "s1", title: "S1" }, { id: "e1", title: "E1" }],
+  });
+  const s = kpiSummary(overlap);
+  assert.equal(s.blockedCount, 2);
+  assert.equal(s.stalledCount, 2);
+  assert.deepEqual([...HISTORY_DAY_OPTIONS], [7, 14, 30, 90]);
+});
+
 // ------------------------------------------------------------------ api client
 
 test("Dashboard API: getProjectReport & getProjectReportHistory build URLs and query params", async () => {
@@ -230,6 +275,7 @@ function makeModuleFixture(overrides: Partial<{
   stalledMinutes: number;
   nowTick: number;
   bucket: ReportHistoryBucket;
+  days: ReportHistoryDays;
 }> = {}) {
   const state = {
     projectId: overrides.projectId ?? "proj-1",
@@ -241,6 +287,7 @@ function makeModuleFixture(overrides: Partial<{
     historyLoading: false,
     historyError: "",
     bucket: overrides.bucket ?? DEFAULT_HISTORY_BUCKET,
+    days: overrides.days ?? DEFAULT_HISTORY_DAYS,
     forbidden: false,
     stalledMinutes: overrides.stalledMinutes ?? DEFAULT_STALLED_MINUTES,
     nowTick: overrides.nowTick ?? Date.parse("2026-11-16T12:10:00Z"),
@@ -255,6 +302,7 @@ function makeModuleFixture(overrides: Partial<{
     dashboardReport: () => state.report,
     dashboardHistory: () => state.history,
     historyBucket: () => state.bucket,
+    historyDays: () => state.days,
     stalledMinutes: () => state.stalledMinutes,
     nowTick: () => state.nowTick,
     setDashboardOpen: (v) => { state.open = v; },
@@ -265,6 +313,7 @@ function makeModuleFixture(overrides: Partial<{
     setDashboardHistoryLoading: (v) => { state.historyLoading = v; },
     setDashboardHistoryError: (e) => { state.historyError = e; },
     setHistoryBucket: (b) => { state.bucket = b; },
+    setHistoryDays: (d) => { state.days = d; },
     setProjectForbidden: (v) => { state.forbidden = v; },
     openAuthModal: () => { state.authOpened++; },
     updateDocumentTitle: () => { state.titleUpdates++; },
@@ -305,6 +354,7 @@ test("Dashboard module: openDashboard / closeDashboard / toggleDashboard manage 
     assert.equal(state.historyLoading, false);
     assert.equal(mod.totalTasks(), 10);
     assert.equal(mod.isEmpty(), false);
+    assert.equal(mod.kpiSummary().completionPct, 50);
     assert.equal(mod.isHistoryEmpty(), false);
     assert.equal(mod.throughputModel().summary.totalCompleted, 3);
     assert.equal(mod.cumulativeModel().summary.latestTotal, 6);
@@ -324,6 +374,59 @@ test("Dashboard module: openDashboard / closeDashboard / toggleDashboard manage 
     mod.toggleDashboard();
     assert.equal(state.open, true);
     await new Promise((r) => setTimeout(r, 0));
+  });
+});
+
+test("Dashboard module: setHistoryDays switches 7/14/30/90, skips redundant fetches, and drops stale range responses", async () => {
+  const { state, mod } = makeModuleFixture({ open: true });
+  const urls: string[] = [];
+  let resolve90!: (r: Response) => void;
+
+  await withFetch((url: string | URL) => {
+    const u = String(url);
+    urls.push(u);
+    if (u.includes("days=90")) {
+      return new Promise<Response>((res) => { resolve90 = res; });
+    }
+    const m = /days=(\d+)/.exec(u);
+    const days = m ? Number(m[1]) : 30;
+    return Promise.resolve(
+      new Response(JSON.stringify(sampleHistory({ days })), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  }, async () => {
+    await mod.loadHistory(false);
+    assert.equal(state.history?.days, 30);
+    assert.equal(urls.length, 1);
+
+    // Clicking active range when history is already loaded does not refetch.
+    await mod.setHistoryDays(30);
+    assert.equal(urls.length, 1);
+
+    // Switch to 14d works cleanly.
+    await mod.setHistoryDays(14);
+    assert.equal(state.days, 14);
+    assert.equal(state.history?.days, 14);
+    assert.match(urls[1], /days=14/);
+
+    // Switch to 90d, then rapidly switch to 7d before 90d resolves.
+    const req90 = mod.setHistoryDays(90);
+    assert.equal(state.days, 90);
+    assert.equal(state.history, null);
+    await mod.setHistoryDays(7);
+    assert.equal(state.days, 7);
+    assert.equal(state.history?.days, 7);
+
+    resolve90(
+      new Response(JSON.stringify(sampleHistory({ days: 90 })), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await req90;
+    assert.equal(state.history?.days, 7, "stale 90d response must not overwrite 7d");
   });
 });
 

@@ -29,10 +29,13 @@ interface Fixture {
     bootRetrying: boolean;
     polling: boolean;
     theme: ThemeMode;
+    filterUnblocked: boolean;
+    filterBlocked: boolean;
   };
   /** One entry per hook invocation, in call order — for sequencing asserts. */
   calls: string[];
   watchProps: string[];
+  watchCallbacks: Map<string, () => void>;
   tickerId: { v: ReturnType<typeof setInterval> | null };
   debounce: { v: ReturnType<typeof createDebounce> | null };
   out: Record<string, boolean>;
@@ -41,6 +44,7 @@ interface Fixture {
 interface DepsOverrides {
   /** Run right when loadProjects() resolves — flip state before boot continues. */
   afterLoadProjects?: (state: Fixture["state"]) => void;
+  isRestoringUrlState?: () => boolean;
 }
 
 /** Build a recording deps object. Every hook appends to calls[] so tests can
@@ -56,9 +60,12 @@ function makeFixture(overrides: DepsOverrides = {}): Fixture {
     bootRetrying: false,
     polling: true,
     theme: "system",
+    filterUnblocked: false,
+    filterBlocked: false,
   };
   const calls: string[] = [];
   const watchProps: string[] = [];
+  const watchCallbacks = new Map<string, () => void>();
   const tickerId: Fixture["tickerId"] = { v: null };
   const debounce: Fixture["debounce"] = { v: null };
   const out: Record<string, boolean> = {};
@@ -73,6 +80,8 @@ function makeFixture(overrides: DepsOverrides = {}): Fixture {
     polling: () => state.polling,
     themeMq: () => null,
     theme: () => state.theme,
+    filterUnblocked: () => state.filterUnblocked,
+    filterBlocked: () => state.filterBlocked,
     // state-out
     setAppBooted: (v) => { calls.push("setAppBooted"); out.appBooted = v; },
     setBootError: (v) => { calls.push("setBootError"); state.bootError = v; out.bootError = v; },
@@ -83,6 +92,8 @@ function makeFixture(overrides: DepsOverrides = {}): Fixture {
     setNowTick: () => { calls.push("setNowTick"); },
     setTickerId: (id) => { calls.push("setTickerId"); tickerId.v = id; },
     setSseReloadDebounce: (d) => { calls.push("setSseReloadDebounce"); debounce.v = d; },
+    setFilterUnblocked: (b) => { state.filterUnblocked = b; },
+    setFilterBlocked: (b) => { state.filterBlocked = b; },
     // hooks
     loadProjects: async (force) => {
       calls.push("loadProjects" + (force === true ? "(true)" : ""));
@@ -103,12 +114,12 @@ function makeFixture(overrides: DepsOverrides = {}): Fixture {
     setDocumentTitle: () => { calls.push("setDocumentTitle"); },
     scheduleFullTextSearch: () => { calls.push("scheduleFullTextSearch"); },
     syncUrlState: (immediate) => { calls.push("syncUrlState" + (immediate === true ? "(true)" : "")); },
-    isRestoringUrlState: () => false,
+    isRestoringUrlState: () => overrides.isRestoringUrlState?.() ?? false,
     focusWhenVisible: (el) => { calls.push("focusWhenVisible:" + (el === null ? "null" : "el")); },
-    watch: (prop) => { calls.push("watch"); watchProps.push(prop); },
+    watch: (prop, cb) => { calls.push("watch"); watchProps.push(prop); watchCallbacks.set(prop, cb); },
   };
 
-  return { deps, state, calls, watchProps, tickerId, debounce, out };
+  return { deps, state, calls, watchProps, watchCallbacks, tickerId, debounce, out };
 }
 
 /** Clear the real (unref'd) ticker mirrored onto fixture.tickerId. */
@@ -129,8 +140,8 @@ test("bootstrap: success path boots in order and falls back to the first project
   const expectedCalls = [
     "setTickerId",
     "setSseReloadDebounce",
-    // 12 watch registrations: the ten URL-sync props + the two full-text-search watchers
-    ...Array.from({ length: 12 }, () => "watch"),
+    // 14 watch registrations: the twelve URL-sync props + the two full-text-search watchers
+    ...Array.from({ length: 14 }, () => "watch"),
     "applyTheme",
     "loadProjects",
     "refreshSessionIdentity",
@@ -147,12 +158,41 @@ test("bootstrap: success path boots in order and falls back to the first project
   assert.ok(f.tickerId.v !== null, "the ticker interval id is mirrored to the root field");
   assert.equal(typeof f.debounce.v?.schedule, "function",
     "the SSE-reload debounce is created and mirrored before any network work");
-  // The URL-sync watchers: ten props, filterSearch + selectedProjectId watched twice.
+  // The URL-sync watchers: twelve props, filterSearch + selectedProjectId watched twice.
   assert.deepEqual(watchPropsSorted(f.watchProps), [
-    "filterAssignee", "filterDue", "filterNeedsAttention", "filterPriority", "filterSearch",
-    "filterSearch", "filterStalled", "filterUnblocked", "selectedProjectId", "selectedProjectId",
+    "filterAssignee", "filterBlocked", "filterDue", "filterNeedsAttention", "filterPriority", "filterSearch",
+    "filterSearch", "filterStalled", "filterStatus", "filterUnblocked", "selectedProjectId", "selectedProjectId",
     "sortDir", "sortKey",
   ]);
+});
+
+test("bootstrap: filterUnblocked and filterBlocked watchers enforce mutual exclusion unless restoring URL", async () => {
+  let restoring = false;
+  const f = makeFixture({ isRestoringUrlState: () => restoring });
+  const m = createBootstrapModule(f.deps);
+  await m.init();
+  clearTicker(f);
+
+  // Enabling filterUnblocked clears filterBlocked
+  f.state.filterBlocked = true;
+  f.state.filterUnblocked = true;
+  f.watchCallbacks.get("filterUnblocked")?.();
+  assert.equal(f.state.filterBlocked, false);
+
+  // Enabling filterBlocked clears filterUnblocked
+  f.state.filterBlocked = true;
+  f.state.filterUnblocked = true;
+  f.watchCallbacks.get("filterBlocked")?.();
+  assert.equal(f.state.filterUnblocked, false);
+
+  // No-op during URL restoration
+  restoring = true;
+  f.state.filterBlocked = true;
+  f.state.filterUnblocked = true;
+  const callsBefore = f.calls.length;
+  f.watchCallbacks.get("filterUnblocked")?.();
+  assert.equal(f.state.filterBlocked, true);
+  assert.equal(f.calls.length, callsBefore);
 });
 
 function watchPropsSorted(xs: string[]): string[] { return [...xs].sort(); }

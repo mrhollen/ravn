@@ -4231,6 +4231,118 @@ test("DashboardNav: board <-> dashboard <-> /tasks/<id> popstate and keyboard sh
   }
 });
 
+test("DashboardUpgrade: drillDownToBoard, clearFilterStatus/Blocked, setDashboardHistoryDays, and dashboardKpiSummary", async () => {
+  const origGetReport = api.getProjectReport;
+  const origGetHistory = api.getProjectReportHistory;
+  const win: any = {
+    innerWidth: 1280,
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    location: { pathname: "/", search: "?project=proj-a", hash: "" },
+    history: {
+      pushState(_s: unknown, _t: string, url: string) {
+        const q = url.indexOf("?");
+        win.location.pathname = q === -1 ? url : (url.slice(0, q) || "/");
+        win.location.search = q === -1 ? "" : url.slice(q);
+      },
+      replaceState(_s: unknown, _t: string, url: string) {
+        const q = url.indexOf("?");
+        win.location.pathname = q === -1 ? url : (url.slice(0, q) || "/");
+        win.location.search = q === -1 ? "" : url.slice(q);
+      },
+      back() {
+        throw new Error("drillDownToBoard must not call history.back()");
+      },
+    },
+  };
+
+  try {
+    (api as any).getProjectReport = async (pid: string) => ({
+      project_id: pid,
+      counts: { by_status: { todo: 1, doing: 2, done: 1 }, by_priority: { "0": 1, "1": 2, "2": 1 } },
+      active_claims: [{ id: "t1", title: "Claimed", claim_expires_at: "2026-11-16T12:15:00Z", remaining_sec: 300 }],
+      expired_claims: [],
+      stalled_tasks: [{ id: "t2", title: "Stalled", last_activity_at: "2026-11-16T10:00:00Z", idle_minutes: 90 }],
+      bottlenecks: [],
+      open_blocked_by: [{ blocker: { id: "b1", title: "Blocker" }, blocked: [{ id: "t3", title: "Blocked" }] }],
+      recently_completed: [],
+      workload: {},
+    });
+    (api as any).getProjectReportHistory = async (pid: string, opts?: { days?: number; bucket?: string }) => ({
+      project_id: pid,
+      days: opts?.days ?? 30,
+      bucket: opts?.bucket ?? "day",
+      series: [],
+    });
+
+    await withWindow(win, async () => {
+      const app = ravnApp() as any;
+      app.projects = [{ id: "proj-a", name: "Alpha" }];
+      app.selectedProjectId = "proj-a";
+      app.appBooted = true;
+      app.openDashboard();
+      await new Promise((r) => setTimeout(r, 0));
+
+      assert.deepEqual(app.HISTORY_DAY_OPTIONS, [7, 14, 30, 90]);
+      assert.deepEqual(app.dashboardKpiSummary(), {
+        completionPct: 25,
+        doneCount: 1,
+        totalCount: 4,
+        activeClaimsCount: 1,
+        blockedCount: 1,
+        stalledCount: 1,
+      });
+
+      await app.setDashboardHistoryDays(7);
+      assert.equal(app.dashboardHistoryDays, 7);
+      assert.equal(app.dashboardHistory?.days, 7);
+
+      // Drill down to status=doing clears prior filters, closes dashboard, and replaces URL cleanly
+      app.filterPriority = "4";
+      app.filterUnblocked = true;
+      app.showArchived = true;
+      app.drillDownToBoard({ status: "doing" });
+      assert.equal(app.dashboardOpen, false);
+      assert.equal(app.showArchived, false);
+      assert.equal(app.filterPriority, "");
+      assert.equal(app.filterUnblocked, false);
+      assert.equal(app.filterStatus, "doing");
+      assert.equal(win.location.pathname, "/");
+      assert.equal(win.location.search, "?project=proj-a&status=doing");
+
+      app.clearFilterStatus();
+      assert.equal(app.filterStatus, "");
+      assert.equal(win.location.search, "?project=proj-a");
+
+      // Drill down to blocked=true + priority/assignee/stalled variants
+      app.openDashboard();
+      app.drillDownToBoard({ blocked: true });
+      assert.equal(app.filterBlocked, true);
+      assert.equal(win.location.search, "?project=proj-a&blocked=1");
+      app.clearFilterBlocked();
+      assert.equal(app.filterBlocked, false);
+      assert.equal(win.location.search, "?project=proj-a");
+
+      app.openDashboard();
+      app.drillDownToBoard({ priority: 0 });
+      assert.equal(app.filterPriority, "0");
+      assert.equal(win.location.search, "?project=proj-a&priority=0");
+
+      app.openDashboard();
+      app.drillDownToBoard({ assignee: "ada" });
+      assert.equal(app.filterAssignee, "ada");
+      assert.equal(win.location.search, "?project=proj-a&owner=ada");
+
+      app.openDashboard();
+      app.drillDownToBoard({ stalled: true });
+      assert.equal(app.filterStalled, true);
+      assert.equal(win.location.search, "?project=proj-a&stalled=1");
+    });
+  } finally {
+    api.getProjectReport = origGetReport;
+    api.getProjectReportHistory = origGetHistory;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Phase 3 dialog adoption (ticket 01M7P22NW890FZND6BTX0B4EN4): the root's
 // openDialog/closeDialog route every focus session through ui/dialog.ts'

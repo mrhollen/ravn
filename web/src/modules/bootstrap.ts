@@ -25,6 +25,8 @@ export interface BootstrapDeps {
   polling: () => boolean;
   themeMq: () => MediaQueryList | null;
   theme: () => ThemeMode;
+  filterUnblocked: () => boolean;
+  filterBlocked: () => boolean;
 
   // state-out — flat root fields the boot sequence writes
   setAppBooted(v: boolean): void;
@@ -36,6 +38,8 @@ export interface BootstrapDeps {
   setNowTick(ts: number): void;
   setTickerId(id: ReturnType<typeof setInterval> | null): void;
   setSseReloadDebounce(d: ReturnType<typeof createDebounce> | null): void;
+  setFilterUnblocked(b: boolean): void;
+  setFilterBlocked(b: boolean): void;
 
   // hooks — root-owned orchestration kept outside the module
   loadProjects: (force?: boolean) => Promise<void>;
@@ -128,10 +132,12 @@ export function createBootstrapModule(deps: BootstrapDeps) {
       deps.initFromUrl();
     }
     const watchProps = [
+      "filterStatus",
       "filterPriority",
       "filterAssignee",
       "filterDue",
       "filterUnblocked",
+      "filterBlocked",
       "filterStalled",
       "filterNeedsAttention",
       "filterSearch",
@@ -142,6 +148,11 @@ export function createBootstrapModule(deps: BootstrapDeps) {
     for (const prop of watchProps) {
       deps.watch(prop, () => {
         if (!deps.isRestoringUrlState()) {
+          if (prop === "filterUnblocked" && deps.filterUnblocked() && deps.filterBlocked()) {
+            deps.setFilterBlocked(false);
+          } else if (prop === "filterBlocked" && deps.filterBlocked() && deps.filterUnblocked()) {
+            deps.setFilterUnblocked(false);
+          }
           deps.syncUrlState(prop !== "filterSearch");
         }
       });

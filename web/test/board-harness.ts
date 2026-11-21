@@ -4,7 +4,7 @@
 // no DOM. Used by board-module.test.ts (core) and board-view-module.test.ts
 // (view); root-level wiring regressions live in app.test.ts.
 
-import type { Board, TaskSummary } from "../src/types.ts";
+import type { Board, Status, TaskSummary } from "../src/types.ts";
 import type { SortDir, SortKey } from "../src/sort.ts";
 import type { BoardDeps } from "../src/modules/board.ts";
 import type { BoardViewDeps } from "../src/modules/board-view.ts";
@@ -42,9 +42,11 @@ export interface FakeState {
   sortDir: SortDir;
   cardDensity: "comfortable" | "compact";
   blockerPopoverTaskId: string | null;
+  filterStatus: "" | Status;
   filterPriority: string;
   filterAssignee: string;
   filterUnblocked: boolean;
+  filterBlocked: boolean;
   filterStalled: boolean;
   filterNeedsAttention: boolean;
   filterDue: string;
@@ -66,9 +68,11 @@ export function makeState(over: Partial<FakeState> = {}): FakeState {
     sortDir: "desc",
     cardDensity: "comfortable",
     blockerPopoverTaskId: null,
+    filterStatus: "",
     filterPriority: "",
     filterAssignee: "",
     filterUnblocked: false,
+    filterBlocked: false,
     filterStalled: false,
     filterNeedsAttention: false,
     filterDue: "",
@@ -96,9 +100,11 @@ export function makeBoardDeps(state: FakeState, hooks: Hooks = {}): BoardDeps {
     hoistParents: () => state.hoistParents,
     cardDensity: () => state.cardDensity,
     blockerPopoverTaskId: () => state.blockerPopoverTaskId,
+    filterStatus: () => state.filterStatus,
     filterPriority: () => state.filterPriority,
     filterAssignee: () => state.filterAssignee,
     filterUnblocked: () => state.filterUnblocked,
+    filterBlocked: () => state.filterBlocked,
     filterStalled: () => state.filterStalled,
     filterNeedsAttention: () => state.filterNeedsAttention,
     filterDue: () => state.filterDue,
@@ -108,9 +114,11 @@ export function makeBoardDeps(state: FakeState, hooks: Hooks = {}): BoardDeps {
     setHoistParents: (b) => { state.hoistParents = b; },
     setCardDensity: (v) => { state.cardDensity = v; },
     setBlockerPopoverTaskId: (v) => { state.blockerPopoverTaskId = v; },
+    setFilterStatus: (v) => { state.filterStatus = v; },
     setFilterPriority: (v) => { state.filterPriority = v; },
     setFilterAssignee: (v) => { state.filterAssignee = v; },
     setFilterUnblocked: (b) => { state.filterUnblocked = b; },
+    setFilterBlocked: (b) => { state.filterBlocked = b; },
     setFilterStalled: (b) => { state.filterStalled = b; },
     setFilterNeedsAttention: (b) => { state.filterNeedsAttention = b; },
     setFilterDue: (v) => { state.filterDue = v; },
@@ -130,9 +138,11 @@ export function makeBoardViewDeps(state: FakeState, hooks: Hooks = {}): BoardVie
     hoistParents: () => state.hoistParents,
     sortKey: () => state.sortKey,
     sortDir: () => state.sortDir,
+    filterStatus: () => state.filterStatus,
     filterPriority: () => state.filterPriority,
     filterAssignee: () => state.filterAssignee,
     filterUnblocked: () => state.filterUnblocked,
+    filterBlocked: () => state.filterBlocked,
     filterStalled: () => state.filterStalled,
     filterNeedsAttention: () => state.filterNeedsAttention,
     filterDue: () => state.filterDue,
@@ -143,9 +153,11 @@ export function makeBoardViewDeps(state: FakeState, hooks: Hooks = {}): BoardVie
     setSelectedProjectId: (v) => { state.selectedProjectId = v; },
     setSortKey: (k) => { state.sortKey = k; },
     setSortDir: (d) => { state.sortDir = d; },
+    setFilterStatus: (v) => { state.filterStatus = v; },
     setFilterPriority: (v) => { state.filterPriority = v; },
     setFilterAssignee: (v) => { state.filterAssignee = v; },
     setFilterUnblocked: (b) => { state.filterUnblocked = b; },
+    setFilterBlocked: (b) => { state.filterBlocked = b; },
     setFilterStalled: (b) => { state.filterStalled = b; },
     setFilterNeedsAttention: (b) => { state.filterNeedsAttention = b; },
     setFilterDue: (v) => { state.filterDue = v; },

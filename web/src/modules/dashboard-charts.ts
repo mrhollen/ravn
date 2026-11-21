@@ -17,7 +17,10 @@ import {
   THROUGHPUT_BAR_FILL,
 } from "../ui/tokens";
 
-export const DEFAULT_HISTORY_DAYS = 30;
+export const HISTORY_DAY_OPTIONS = [7, 14, 30, 90] as const;
+export type ReportHistoryDays = (typeof HISTORY_DAY_OPTIONS)[number];
+
+export const DEFAULT_HISTORY_DAYS: ReportHistoryDays = 30;
 export const DEFAULT_HISTORY_BUCKET: ReportHistoryBucket = "day";
 
 export interface ChartGeometry {

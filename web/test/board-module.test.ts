@@ -189,9 +189,11 @@ test("board core: card density toggles through the root field and persists", () 
 test("board core: hasActiveFilters is false only when every dimension is off (search ignores blanks)", () => {
   const mk = (over: Partial<FakeState>) => createBoardModule(makeBoardDeps(makeState(over)));
   assert.equal(mk({}).hasActiveFilters(), false);
+  assert.equal(mk({ filterStatus: "doing" }).hasActiveFilters(), true);
   assert.equal(mk({ filterPriority: "3" }).hasActiveFilters(), true);
   assert.equal(mk({ filterAssignee: "Ada" }).hasActiveFilters(), true);
   assert.equal(mk({ filterUnblocked: true }).hasActiveFilters(), true);
+  assert.equal(mk({ filterBlocked: true }).hasActiveFilters(), true);
   assert.equal(mk({ filterStalled: true }).hasActiveFilters(), true);
   assert.equal(mk({ filterNeedsAttention: true }).hasActiveFilters(), true);
   assert.equal(mk({ filterDue: "week" }).hasActiveFilters(), true);
@@ -199,12 +201,14 @@ test("board core: hasActiveFilters is false only when every dimension is off (se
   assert.equal(mk({ filterSearch: "   " }).hasActiveFilters(), false, "whitespace-only search is not active");
 });
 
-test("board core: clearFilters resets all seven filters and syncs the URL immediately", () => {
+test("board core: clearFilters resets all nine filters and syncs the URL immediately", () => {
   let synced: boolean[] = [];
   const state = makeState({
+    filterStatus: "doing",
     filterPriority: "2",
     filterAssignee: "Ada",
     filterUnblocked: true,
+    filterBlocked: true,
     filterStalled: true,
     filterNeedsAttention: true,
     filterDue: "overdue",
@@ -214,9 +218,11 @@ test("board core: clearFilters resets all seven filters and syncs the URL immedi
 
   mod.clearFilters();
 
+  assert.equal(state.filterStatus, "");
   assert.equal(state.filterPriority, "");
   assert.equal(state.filterAssignee, "");
   assert.equal(state.filterUnblocked, false);
+  assert.equal(state.filterBlocked, false);
   assert.equal(state.filterStalled, false);
   assert.equal(state.filterNeedsAttention, false);
   assert.equal(state.filterDue, "");
