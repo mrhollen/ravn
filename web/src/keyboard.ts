@@ -42,6 +42,8 @@ export interface EscapeContext {
   hasSelection?: boolean;
   /** Project dashboard view (returns to board when no overlay is open). */
   dashboardOpen?: boolean;
+  /** Projects overview view (returns to board when a project is selected and no overlay is open). */
+  projectsOverviewOpen?: boolean;
 }
 
 /** What Escape should do, in strict top-most-first priority order. Null = no
@@ -71,7 +73,8 @@ export type EscapeAction =
   | "close-card-menu"
   | "close-mobile-menu"
   | "clear-selection"
-  | "close-dashboard";
+  | "close-dashboard"
+  | "close-projects-overview";
 
 export function escapeAction(ctx: EscapeContext): EscapeAction | null {
   if (ctx.showShortcutHelp) return "close-help";
@@ -101,6 +104,7 @@ export function escapeAction(ctx: EscapeContext): EscapeAction | null {
   if (ctx.showMobileMenu) return "close-mobile-menu";
   if (ctx.hasSelection) return "clear-selection"; // AC4: last resort
   if (ctx.dashboardOpen) return "close-dashboard";
+  if (ctx.projectsOverviewOpen) return "close-projects-overview";
   return null;
 }
 

@@ -7,10 +7,12 @@ import assert from "node:assert/strict";
 
 import {
   MOBILE_DETAIL_MAX_WIDTH,
+  PROJECTS_OVERVIEW_PATH,
   buildBoardQueryString,
   dashboardRoutePath,
   dashboardRouteProjectIdFromPath,
   isMobileDetailViewport,
+  isProjectsOverviewPath,
   parseBoardQueryParams,
   taskRouteIdFromPath,
   taskRoutePath,
@@ -67,6 +69,18 @@ test("routes: dashboardRoutePath encodes the projectId and round-trips", () => {
     dashboardRouteProjectIdFromPath(dashboardRoutePath("01M75VJ7GWS2M6TZ2K5MVPQ4P6")),
     "01M75VJ7GWS2M6TZ2K5MVPQ4P6",
   );
+});
+
+test("routes: PROJECTS_OVERVIEW_PATH and isProjectsOverviewPath match /projects and /projects/ only", () => {
+  assert.equal(PROJECTS_OVERVIEW_PATH, "/projects");
+  assert.equal(isProjectsOverviewPath("/projects"), true);
+  assert.equal(isProjectsOverviewPath("/projects/"), true);
+  assert.equal(isProjectsOverviewPath(""), false);
+  assert.equal(isProjectsOverviewPath("/"), false);
+  assert.equal(isProjectsOverviewPath("/project"), false);
+  assert.equal(isProjectsOverviewPath("/projects/p1"), false);
+  assert.equal(isProjectsOverviewPath("/projects/p1/dashboard"), false);
+  assert.equal(isProjectsOverviewPath("/projects/extra/"), false);
 });
 
 test("routes: parseBoardQueryParams — full valid payload round-trips", () => {

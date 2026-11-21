@@ -94,6 +94,7 @@ function makeFixture(overrides: DepsOverrides = {}): Fixture {
     openDeepLinkedDashboard: async (pid, fromBootError) => {
       calls.push("openDeepLinkedDashboard:" + pid + (fromBootError ? "(bootError)" : ""));
     },
+    openDeepLinkedProjectsOverview: async () => { calls.push("openDeepLinkedProjectsOverview"); },
     connectSse: () => { calls.push("connectSse"); },
     startPolling: () => { calls.push("startPolling"); },
     disconnectSse: (resetBackoff) => { calls.push("disconnectSse" + (resetBackoff === true ? "(true)" : "")); },
@@ -366,4 +367,48 @@ test("bootstrap: continueBoot() prefers the deep-linked task over the dashboard 
   await m.continueBoot("t-1", "proj-x");
   assert.ok(f.calls.includes("openDeepLinkedTask:t-1"), "task deep link wins");
   assert.ok(!f.calls.some((c) => c.startsWith("openDeepLinkedDashboard")), "dashboard branch skipped when a task route exists");
+});
+
+test("bootstrap: deep-linked /projects and /projects/ open projects overview cleanly", async () => {
+  for (const path of ["/projects", "/projects/"]) {
+    const w = installFakeWindow(path);
+    const f = makeFixture();
+    try {
+      const m = createBootstrapModule(f.deps);
+      await m.init();
+      assert.ok(
+        f.calls.includes("openDeepLinkedProjectsOverview"),
+        `deep link ${path} invokes openDeepLinkedProjectsOverview`,
+      );
+      assert.ok(!f.calls.includes("loadBoard"), "board load deferred to openDeepLinkedProjectsOverview hook");
+      assert.equal(f.out.appBooted, true);
+    } finally {
+      clearTicker(f);
+      w.remove();
+    }
+  }
+});
+
+test("bootstrap: failed projects fetch on /projects shows boot-error and retryBoot recovers into projects overview", async () => {
+  const w = installFakeWindow("/projects");
+  let attempts = 0;
+  const f = makeFixture();
+  f.deps.loadProjects = async (force) => {
+    f.calls.push("loadProjects" + (force === true ? "(true)" : ""));
+    attempts++;
+    f.state.loadError = attempts === 1 ? "down" : "";
+  };
+  try {
+    const m = createBootstrapModule(f.deps);
+    await m.init();
+    assert.equal(f.out.bootError, true);
+    assert.ok(!f.calls.includes("openDeepLinkedProjectsOverview"));
+
+    await m.retryBoot();
+    assert.equal(f.out.bootError, false);
+    assert.ok(f.calls.includes("openDeepLinkedProjectsOverview"));
+  } finally {
+    clearTicker(f);
+    w.remove();
+  }
 });

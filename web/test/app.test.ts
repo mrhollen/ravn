@@ -4343,6 +4343,248 @@ test("Root dialog controllers: missing element and SSR keep the old guard behavi
   assert.equal(bare.openDialog("cb-anything"), null, "SSR guard unchanged");
 });
 
+test("NavUnify: unified Projects | Board | Dashboard state, activeNavView, routes, keyboard & popstate", async () => {
+  const origGetReport = api.getProjectReport;
+  const origGetBoard = api.getBoard;
+  const origGetTask = api.getTask;
+  const historyStack: string[] = ["/?project=proj-a"];
+  let idx = 0;
+
+  const syncLoc = (win: any, url: string) => {
+    const q = url.indexOf("?");
+    win.location.pathname = q === -1 ? url : (url.slice(0, q) || "/");
+    win.location.search = q === -1 ? "" : url.slice(q);
+  };
+
+  const win: any = {
+    innerWidth: 1280,
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    location: { pathname: "/", search: "?project=proj-a", hash: "" },
+    history: {
+      pushState(_s: unknown, _t: string, url: string) {
+        historyStack.splice(idx + 1);
+        historyStack.push(url);
+        idx = historyStack.length - 1;
+        syncLoc(win, url);
+      },
+      replaceState(_s: unknown, _t: string, url: string) {
+        historyStack[idx] = url;
+        syncLoc(win, url);
+      },
+      back() {
+        if (idx > 0) {
+          idx--;
+          syncLoc(win, historyStack[idx]);
+        }
+      },
+      forward() {
+        if (idx < historyStack.length - 1) {
+          idx++;
+          syncLoc(win, historyStack[idx]);
+        }
+      },
+    },
+  };
+
+  const doc = { title: "Rävn", getElementById: () => null };
+
+  try {
+    (api as any).getProjectReport = async (pid: string) => ({
+      project_id: pid,
+      counts: { by_status: { todo: 0, doing: 0, done: 0 }, by_priority: {} },
+      active_claims: [],
+      expired_claims: [],
+      stalled_tasks: [],
+      bottlenecks: [],
+      open_blocked_by: [],
+      recently_completed: [],
+      workload: {},
+    });
+    (api as any).getBoard = async (pid: string) => ({
+      project_id: pid,
+      tasks: { todo: [], doing: [], done: [] },
+    });
+    (api as any).getTask = async (id: string) => ({
+      id,
+      project_id: "proj-a",
+      title: "Detail Task",
+      status: "todo",
+      priority: 1,
+      comments: [],
+      acceptance_criteria: [],
+      artifacts: [],
+      relations: [],
+      events: [],
+    });
+
+    await withGlobals({ window: win, document: doc }, async () => {
+      const app = ravnApp() as any;
+      app.projects = [
+        { id: "proj-a", name: "Alpha" },
+        { id: "proj-b", name: "Beta" },
+      ];
+      app.selectedProjectId = "proj-a";
+      app.appBooted = true;
+      app.board = { project_id: "proj-a", tasks: { todo: [], doing: [], done: [] } };
+
+      assert.equal(app.projectsOverviewOpen, false);
+      assert.equal(app.activeNavView(), "board");
+
+      // 1. Open Projects Overview
+      app.showMobileMenu = true;
+      app.openProjectsOverview();
+      assert.equal(app.projectsOverviewOpen, true);
+      assert.equal(app.dashboardOpen, false);
+      assert.equal(app.fullPageOpen, false);
+      assert.equal(app.showMobileMenu, false);
+      assert.equal(app.activeNavView(), "projects");
+      assert.equal(win.location.pathname, "/projects");
+      assert.equal(doc.title, "Projects – Rävn");
+
+      // syncUrlState is a no-op on /projects
+      app.syncUrlState(true);
+      assert.equal(win.location.pathname, "/projects");
+
+      // Switching project via dropdown while on /projects keeps /projects URL
+      app.selectedProjectId = "proj-b";
+      app.selectProject();
+      assert.equal(win.location.pathname, "/projects");
+      assert.equal(app.projectsOverviewOpen, true);
+
+      // 2. "d" shortcut from Projects Overview opens Dashboard for selectedProjectId
+      let prevented = false;
+      app.handleGlobalKeydown({
+        key: "d",
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        target: null,
+        preventDefault() { prevented = true; },
+      } as any);
+      assert.equal(prevented, true);
+      assert.equal(app.projectsOverviewOpen, false);
+      assert.equal(app.dashboardOpen, true);
+      assert.equal(app.activeNavView(), "dashboard");
+      assert.equal(win.location.pathname, "/projects/proj-b/dashboard");
+
+      // 3. openBoardView(projectId) switches project, closes dashboard, restores board URL & title
+      app.openBoardView("proj-a");
+      assert.equal(app.projectsOverviewOpen, false);
+      assert.equal(app.dashboardOpen, false);
+      assert.equal(app.fullPageOpen, false);
+      assert.equal(app.selectedProjectId, "proj-a");
+      assert.equal(app.activeNavView(), "board");
+      assert.equal(win.location.pathname, "/");
+      assert.equal(win.location.search, "?project=proj-a");
+      assert.equal(doc.title, "Alpha – Rävn");
+
+      // 4. Esc on /projects returns to Board when selectedProjectId is set
+      app.openProjectsOverview();
+      assert.equal(app.projectsOverviewOpen, true);
+      app.dismissTop();
+      assert.equal(app.projectsOverviewOpen, false);
+      assert.equal(win.location.pathname, "/");
+      assert.equal(doc.title, "Alpha – Rävn");
+
+      // Esc on /projects with NO selectedProjectId stays on /projects
+      app.openProjectsOverview();
+      app.selectedProjectId = "";
+      app.dismissTop();
+      assert.equal(app.projectsOverviewOpen, true);
+      app.selectedProjectId = "proj-a";
+
+      // 5. openProjectsOverview({ replace: true }) uses replaceState (for /projects/ normalization)
+      syncLoc(win, "/projects/");
+      const stackLenBefore = historyStack.length;
+      app.openProjectsOverview({ replace: true });
+      assert.equal(historyStack.length, stackLenBefore);
+      assert.equal(win.location.pathname, "/projects");
+
+      // 6. popstate across /, /projects, /projects/:id/dashboard, /tasks/:id
+      win.location.pathname = "/";
+      win.location.search = "?project=proj-a";
+      app.onPopState();
+      assert.equal(app.projectsOverviewOpen, false);
+      assert.equal(app.dashboardOpen, false);
+      assert.equal(doc.title, "Alpha – Rävn");
+
+      win.location.pathname = "/projects";
+      win.location.search = "";
+      app.onPopState();
+      assert.equal(app.projectsOverviewOpen, true);
+      assert.equal(doc.title, "Projects – Rävn");
+
+      win.location.pathname = "/projects/proj-b/dashboard";
+      app.onPopState();
+      assert.equal(app.projectsOverviewOpen, false);
+      assert.equal(app.dashboardOpen, true);
+      assert.equal(app.selectedProjectId, "proj-b");
+
+      win.location.pathname = "/projects";
+      app.onPopState();
+      assert.equal(app.dashboardOpen, false);
+      assert.equal(app.projectsOverviewOpen, true);
+
+      win.location.pathname = "/tasks/t-1";
+      app.onPopState();
+      await new Promise((r) => setTimeout(r, 15));
+      assert.equal(app.projectsOverviewOpen, false);
+      assert.equal(app.fullPageOpen, true);
+
+      // 7. Dirty-notes guard blocks navigation from open task detail
+      app.notesDirty = true;
+      app.openProjectsOverview();
+      assert.ok(app.unsavedNotesAction !== null, "unsaved notes prompt shown");
+      assert.equal(app.projectsOverviewOpen, false);
+      app.unsavedNotesAction = null;
+      app.notesDirty = false;
+      app.openProjectsOverview();
+      assert.equal(app.projectsOverviewOpen, true);
+      assert.equal(app.detailOpen, false);
+      assert.equal(app.fullPageOpen, false);
+
+      // 8. continueBoot with deepLinkedProjectsOverview = true
+      syncLoc(win, "/projects/");
+      const app2 = ravnApp() as any;
+      app2.projects = [{ id: "proj-a", name: "Alpha" }];
+      app2.selectedProjectId = "proj-a";
+      await app2.continueBoot(null, null, true);
+      assert.equal(app2.projectsOverviewOpen, true);
+      assert.equal(win.location.pathname, "/projects");
+      assert.equal(doc.title, "Projects – Rävn");
+    });
+  } finally {
+    api.getProjectReport = origGetReport;
+    api.getBoard = origGetBoard;
+    api.getTask = origGetTask;
+  }
+});
+
+test("NavUnify: index.html has unified primary-nav, mobile nav group, board-toolbar visibility, and zero legacy nav buttons", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+
+  assert.match(html, /data-testid="brand-logo-btn"/);
+  assert.match(html, /data-testid="primary-nav"/);
+  assert.match(html, /data-testid="nav-projects-btn"/);
+  assert.match(html, /data-testid="nav-board-btn"/);
+  assert.match(html, /data-testid="nav-dashboard-btn"/);
+  assert.match(html, /data-testid="board-toolbar"/);
+  assert.match(html, /data-testid="mobile-nav-projects-btn"/);
+  assert.match(html, /data-testid="mobile-nav-board-btn"/);
+  assert.match(html, /data-testid="mobile-nav-dashboard-btn"/);
+  assert.match(html, /data-testid="projects-overview-view"/);
+  assert.match(html, /id="projects-overview-heading"/);
+
+  for (const legacyId of [
+    "dashboard-nav-btn",
+    "docked-board-nav-btn",
+    "docked-dashboard-nav-btn",
+    "mobile-dashboard-nav-btn",
+  ]) {
+    assert.ok(!html.includes(`data-testid="${legacyId}"`), `legacy control ${legacyId} must be removed`);
+  }
+});
+
 
 
 
