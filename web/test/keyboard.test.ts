@@ -31,6 +31,7 @@ const CHAIN: { set: (c: EscapeContext) => void; token: EscapeAction }[] = [
   { set: (c) => { c.showNewTask = true; }, token: "request-close-new-task" },
   { set: (c) => { c.projectMenuOpen = true; }, token: "close-project-menu" },
   { set: (c) => { c.headerMenuOpen = true; }, token: "close-header-menu" },
+  { set: (c) => { c.displayMenuOpen = true; }, token: "close-display-menu" },
   { set: (c) => { c.showNewProject = true; }, token: "close-new-project" },
   { set: (c) => { c.cardMenuOpen = true; }, token: "close-card-menu" },
   { set: (c) => { c.showMobileMenu = true; }, token: "close-mobile-menu" },

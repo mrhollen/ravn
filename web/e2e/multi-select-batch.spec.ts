@@ -292,6 +292,7 @@ test.describe('Multi-select batch actions (01M5XTB04A8ZX1TX8ARYFG5D9F)', () => {
     await expect(page.getByTestId('batch-action-bar')).toBeHidden(); // cleared on success
 
     // Both cards are in the archive and visible via the archived board view.
+    await page.getByTestId('display-popover-btn').click();
     await page.getByTestId('show-archived-toggle').click();
     await expect(boardCards(page).filter({ hasText: 'MSB Charlie' })).toBeVisible();
     await expect(boardCards(page).filter({ hasText: 'MSB Omega' })).toBeVisible();

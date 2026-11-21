@@ -67,6 +67,8 @@ export interface MenuConfig {
   activeKind: "button" | "element";
   /** Which item receives initial focus on open, per keyboard target. */
   pickInitial(items: HTMLElement[], target: MenuFocusTarget): number;
+  /** Optional predicate to exclude hidden/inapplicable items from navigation. */
+  filterItem?: (el: HTMLElement) => boolean;
 }
 
 export interface MenuController {
@@ -90,7 +92,9 @@ export function createMenuController(deps: MenuDeps, config: MenuConfig): MenuCo
 
   function panelItems(): HTMLElement[] {
     const root = deps.panel();
-    return root ? Array.from(root.querySelectorAll<HTMLElement>(config.itemSelector)) : [];
+    if (!root) return [];
+    const items = Array.from(root.querySelectorAll<HTMLElement>(config.itemSelector));
+    return config.filterItem ? items.filter(config.filterItem) : items;
   }
 
   function open(target: MenuFocusTarget = "first"): void {

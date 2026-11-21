@@ -501,11 +501,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              the full-page task view isn't owning the region. -->
         <template x-if="!isMobile">
         <div data-testid="board-toolbar"
-             class="-mx-4 -mb-2 w-[calc(100%+2rem)] flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-zinc-200/80 bg-zinc-50/70 px-4 py-1.5 text-xs dark:border-zinc-800 dark:bg-zinc-950"
+             class="-mx-4 -mb-2 w-[calc(100%+2rem)] flex-wrap items-center justify-between gap-x-1.5 gap-y-1.5 border-t border-zinc-200/80 bg-zinc-50 px-4 py-1.5 text-xs dark:border-zinc-800 dark:bg-zinc-950"
              x-cloak
              :class="board && !dashboardOpen && !projectsOverviewOpen && !fullPageOpen ? 'flex' : 'hidden'">
-          <div class="flex min-w-0 flex-wrap items-center gap-2.5">
-            <div class="flex min-w-0 flex-wrap items-center gap-2.5" x-show="!dashboardOpen" x-cloak>
+          <div class="flex min-w-0 flex-wrap items-center gap-1.5">
             <!-- Compact search input (magnifier icon; same x-model as before).
                  The visible "Search" label is deliberate: theme.spec.ts samples
                  its secondary-text contrast (WCAG 1.4.3) on board, so the
@@ -517,16 +516,17 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
                 </svg>
                 <input type="text" x-model="filterSearch" @input="syncUrlState()" data-testid="board-search-input" placeholder="Filter title or ID…" aria-label="Filter cards by title or ID"
-                       class="field w-40 py-1 pl-7 pr-2 text-xs sm:w-52 md:w-60" />
+                       class="field h-7 w-28 py-1 pl-7 pr-2 text-xs xl:w-32 2xl:w-44" />
               </span>
             </label>
 
-            <!-- Joined Filter split-capsule: Priority | Owner | Due | Unblocked only (+ conditional Reset) -->
-            <div class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
-              <label class="flex items-center gap-1.5 px-2.5 py-0.5 text-zinc-700 dark:text-zinc-200" title="Filter cards by priority">
+            <!-- Joined Filter split-capsule: Priority | Owner | Due | Unblocked | Stalled | Needs attention (+ conditional Reset) -->
+            <div data-testid="board-filter-capsule"
+                 class="inline-flex min-h-7 flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+              <label class="flex items-center gap-1 px-1.5 py-0.5 text-zinc-700 dark:text-zinc-200" title="Filter cards by priority">
                 <span class="text-zinc-600 dark:text-zinc-400">Priority</span>
                 <select x-model="filterPriority" @change="syncUrlState(true)" aria-label="Filter by priority"
-                        class="max-w-[7rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold focus-ring">
+                        class="w-[3.75rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold focus-ring">
                   <option value="">All</option>
                   <template x-for="p in [0, 1, 2, 3, 4, 5]" :key="p">
                     <option :value="p" x-text="'P' + p + ' — ' + priorityName(p)"></option>
@@ -534,10 +534,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </select>
               </label>
 
-              <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by assignee">
+              <label class="flex items-center gap-1 border-l border-zinc-200 px-1.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by assignee">
                 <span class="text-zinc-600 dark:text-zinc-400">Owner</span>
                 <select x-model="filterAssignee" @change="syncUrlState(true)" aria-label="Filter by assignee"
-                        class="max-w-[8rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold focus-ring">
+                        class="w-[4.25rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold focus-ring">
                   <option value="">All</option>
                   <option value="unassigned">Unassigned</option>
                   <template x-for="name in availableAssignees()" :key="name">
@@ -546,10 +546,10 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </select>
               </label>
 
-              <label class="flex items-center gap-1.5 border-l border-zinc-200 px-2.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by due date">
+              <label class="flex items-center gap-1 border-l border-zinc-200 px-1.5 py-0.5 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200" title="Filter cards by due date">
                 <span class="text-zinc-600 dark:text-zinc-400">Due</span>
                 <select x-model="filterDue" @change="syncUrlState(true)" aria-label="Filter by due date"
-                        class="max-w-[7rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold focus-ring">
+                        class="w-[3.75rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold focus-ring">
                   <option value="">All</option>
                   <option value="overdue">Overdue</option>
                   <option value="today">Due today</option>
@@ -557,7 +557,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                 </select>
               </label>
 
-              <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+              <label class="tap-target flex cursor-pointer items-center gap-1 border-l border-zinc-200 px-1.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
                 <input type="checkbox" x-model="filterUnblocked" @change="syncUrlState(true)" data-testid="filter-unblocked"
                        class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
                 <span>Unblocked only</span>
@@ -566,120 +566,170 @@ DOM-placed after the collapsible strip: on md+ it renders flush
               <!-- Expired/stalled toggle (epic 01M5XSNR8VWZTP66GT7ABNSJC1): same
                    markup idiom as Unblocked — native checkbox + label, so the
                    accessible name and keyboard support come for free. -->
-               <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                      title="Show only doing tasks with an expired claim lease or no update for over 60 minutes">
-                 <input type="checkbox" x-model="filterStalled" @change="syncUrlState(true)" data-testid="filter-stalled"
-                        class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
-                 <span>Expired / stalled</span>
-               </label>
+              <label class="tap-target flex cursor-pointer items-center gap-1 border-l border-zinc-200 px-1.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                     title="Show only doing tasks with an expired claim lease or no update for over 60 minutes">
+                <input type="checkbox" x-model="filterStalled" @change="syncUrlState(true)" data-testid="filter-stalled"
+                       class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
+                <span>Expired / stalled</span>
+              </label>
 
-               <!-- Needs attention toggle (epic child 01M5XTAYKJGP878ZEZB7TJW4ZB):
-                    same markup idiom as Unblocked/Expired — native checkbox +
-                    label, so the accessible name and keyboard support come for
-                    free. Restricts the board to OPEN tasks whose newest comment
-                    is a question or handoff; done tasks are never kept. -->
-               <label class="tap-target flex cursor-pointer items-center gap-1.5 border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                      title="Show only open tasks whose latest comment is a question or handoff">
-                 <input type="checkbox" x-model="filterNeedsAttention" @change="syncUrlState(true)" data-testid="filter-needs-attention"
-                        class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
-                 <span>Needs attention</span>
-               </label>
+              <!-- Needs attention toggle (epic child 01M5XTAYKJGP878ZEZB7TJW4ZB):
+                   same markup idiom as Unblocked/Expired — native checkbox +
+                   label, so the accessible name and keyboard support come for
+                   free. Restricts the board to OPEN tasks whose newest comment
+                   is a question or handoff; done tasks are never kept. -->
+              <label class="tap-target flex cursor-pointer items-center gap-1 border-l border-zinc-200 px-1.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                     title="Show only open tasks whose latest comment is a question or handoff">
+                <input type="checkbox" x-model="filterNeedsAttention" @change="syncUrlState(true)" data-testid="filter-needs-attention"
+                       class="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-600 dark:accent-zinc-200" />
+                <span>Needs attention</span>
+              </label>
 
-               <!-- Conditional Reset — same text/behavior as before -->
+              <!-- Conditional Reset — same text/behavior as before -->
               <button type="button" @click="clearFilters()" x-show="hasActiveFilters()" x-cloak
-                      class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
+                      class="flex items-center border-l border-zinc-200 px-1.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
                 Reset filters
               </button>
             </div>
 
+            <!-- Per-actor board scope (epic T7): standalone aligned select matching
+                 adjacent Tier-2 filter capsule height, border, and dark-mode contrast. -->
+            <select x-model="taskScope" @change="onScopeChange()" data-testid="board-scope-select"
+                    aria-label="Scope the board to your tasks" title="Show only your tasks (by assignment, authorship, or activity)"
+                    class="focus-ring h-7 shrink-0 cursor-pointer rounded-md border border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800">
+              <option value="all">All tasks</option>
+              <option value="assigned">Assigned to me</option>
+              <option value="created">Created by me</option>
+              <option value="activity">My activity</option>
+            </select>
+
             <!-- Abandoned/stalled alert pill (epic 01M5XSNR8VWZTP66GT7ABNSJC1):
                  amber count badge for doing tasks with a lapsed claim lease or
-                 no update in > 60 min. Hidden at zero. A BUTTON on the same state
-                 as the "Expired / stalled" checkbox above — click (or Enter/Space)
-                 toggles that filter; aria-pressed mirrors it, so both controls
-                 always agree. -->
+                 no update in > 60 min. Hidden at zero. -->
             <button type="button" x-show="stalledExpiredCount() > 0" x-cloak
                     @click="toggleStalledFilter()" :aria-pressed="filterStalled"
                     :title="stalledAlertLabel()" :aria-label="stalledAlertLabel()"
                     data-testid="stalled-alert-pill"
-                    class="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 shadow-sm hover:bg-amber-200 focus-ring dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900">
+                    class="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800 shadow-sm hover:bg-amber-200 focus-ring dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900">
               <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.334-2.694-1.334-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
               <span x-text="stalledExpiredCount()"></span>
               <span>stalled</span>
             </button>
-            </div>
           </div>
 
-          <!-- Joined Sort split-capsule: Sort by | direction (+ conditional Clear) -->
-          <div x-show="!dashboardOpen" x-cloak
-               class="inline-flex flex-wrap items-stretch rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
-            <label class="flex items-center gap-1.5 px-2.5 py-0.5 text-zinc-700 dark:text-zinc-200" title="Sort cards">
-              <span class="text-zinc-600 dark:text-zinc-400">Sort by</span>
-              <select x-model="sortKey" @change="setSort()"
-                      data-testid="sort-key" aria-label="Sort cards by"
-                      class="max-w-[8rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold focus-ring">
-                <template x-for="o in SORT_OPTIONS" :key="o.value">
-                  <option :value="o.value" x-text="o.label"></option>
-                </template>
-              </select>
-            </label>
-
-            <button type="button" @click="toggleSortDir()" :disabled="sortKey === ''"
-                    data-testid="sort-dir"
-                    class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                    :title="'Toggle direction (' + (sortDir === 'asc' ? 'ascending → descending' : 'descending → ascending') + ')'">
-              <span x-text="sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'"></span>
+          <!-- Display popover (Sort by, Direction, Clear sort, Hoist parents, Card density, Show archived) -->
+          <div class="relative ml-auto shrink-0" data-testid="display-popover-anchor">
+            <button type="button"
+                    data-testid="display-popover-btn"
+                    aria-haspopup="true"
+                    :aria-expanded="displayMenuOpen ? 'true' : 'false'"
+                    aria-controls="display-popover-panel"
+                    @click="toggleDisplayMenu()"
+                    @keydown.down.prevent="openDisplayMenu('first')"
+                    @keydown.up.prevent="openDisplayMenu('last')"
+                    class="focus-ring inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium shadow-sm transition-colors"
+                    :class="displayMenuOpen
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:border-indigo-400 dark:bg-indigo-950 dark:text-indigo-200'
+                      : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800'">
+              <svg class="h-3.5 w-3.5 shrink-0 text-zinc-500 dark:text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+              </svg>
+              <span>Display</span>
+              <span x-show="activeDisplayOptionCount() > 0" x-cloak
+                    data-testid="display-active-indicator"
+                    class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-bold leading-none text-white">
+                <span x-text="activeDisplayOptionCount()"></span>
+                <span class="sr-only" x-text="' active display ' + (activeDisplayOptionCount() === 1 ? 'option' : 'options')"></span>
+              </span>
+              <span class="select-none text-zinc-400 dark:text-zinc-500" aria-hidden="true">&#9662;</span>
             </button>
 
-            <button type="button" @click="clearSort()" x-show="sortKey !== ''" x-cloak
-                    data-testid="sort-clear"
-                    class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
-               Clear sort
-             </button>
+            <div id="display-popover-panel"
+                 data-testid="display-popover"
+                 role="dialog"
+                 aria-label="Display options"
+                 x-show="displayMenuOpen" x-cloak
+                 @keydown.down="if ($event.target.tagName !== 'SELECT') { $event.preventDefault(); moveDisplayFocus(1); }"
+                 @keydown.up="if ($event.target.tagName !== 'SELECT') { $event.preventDefault(); moveDisplayFocus(-1); }"
+                 @keydown.home="if ($event.target.tagName !== 'SELECT') { $event.preventDefault(); moveDisplayFocus('home'); }"
+                 @keydown.end="if ($event.target.tagName !== 'SELECT') { $event.preventDefault(); moveDisplayFocus('end'); }"
+                 @keydown.escape.stop="closeDisplayMenu(true)"
+                 class="absolute right-0 top-full z-40 mt-1.5 w-72 rounded-lg border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-950">
+              <div>
+                <h3 class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">Sort</h3>
+                <label class="flex flex-col gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300" title="Sort cards">
+                  <span>Sort by</span>
+                  <select x-model="sortKey" @change="setSort()"
+                          data-testid="sort-key" aria-label="Sort cards by"
+                          class="field w-full cursor-pointer py-1.5 text-xs font-semibold">
+                    <template x-for="o in SORT_OPTIONS" :key="o.value">
+                      <option :value="o.value" x-text="o.label"></option>
+                    </template>
+                  </select>
+                </label>
 
-             <!-- No aria-label on these three toggles: the visible state text
-                  ("Hoist parents (on)", "Density: Comfortable", "Archived (off)")
-                  IS the accessible name, with :aria-pressed carrying the state —
-                  a redundant label that doesn't contain the rendered text would
-                  violate WCAG 4.1.2 (axe label-content-name-mismatch). The
-                  tooltips carry the longer phrasing. Mobile twins follow suit. -->
-              <button type="button" @click="toggleHoistParents()" :aria-pressed="hoistParents"
-                      data-testid="sort-hoist-parents"
-                      class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                      title="Keep parent tickets at the top of each column">
-                <span x-text="'Hoist parents ' + (hoistParents ? '(on)' : '(off)')"></span>
-              </button>
+                <div class="mt-2 flex items-center gap-2">
+                  <button type="button" @click="toggleSortDir()" :disabled="sortKey === ''"
+                          data-testid="sort-dir"
+                          class="focus-ring flex flex-1 items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                          :title="'Toggle direction (' + (sortDir === 'asc' ? 'ascending → descending' : 'descending → ascending') + ')'">
+                    <span x-text="sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'"></span>
+                  </button>
 
-              <button type="button" @click="toggleCardDensity()" :aria-pressed="cardDensity === 'compact'"
-                      data-testid="card-density-toggle"
-                      class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                      :title="'Switch to ' + (cardDensity === 'comfortable' ? 'compact' : 'comfortable') + ' card density'">
-                <span x-text="'Density: ' + (cardDensity === 'compact' ? 'Compact' : 'Comfortable')"></span>
-              </button>
+                  <button type="button" @click="clearSort()" x-show="sortKey !== ''" :disabled="sortKey === ''" x-cloak
+                          data-testid="sort-clear"
+                          class="focus-ring flex items-center justify-center rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950 dark:text-red-300 dark:hover:bg-red-900">
+                    Clear sort
+                  </button>
+                </div>
+              </div>
 
-              <!-- "Show archived" board view (AC3): swaps the columns' data source to the
-                   separately-fetched archived set; OFF restores the untouched live board. -->
-              <button type="button" @click="toggleShowArchived()" :aria-pressed="showArchived"
-                      data-testid="show-archived-toggle"
-                      class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                      :title="showArchived ? 'Hide archived tasks' : 'Show archived tasks'">
-                <span x-text="'Archived ' + (showArchived ? '(on)' : '(off)')"></span>
-              </button>
+              <div class="my-2.5 border-t border-zinc-200 dark:border-zinc-800"></div>
 
-              <!-- Per-actor board scope (epic T7): scopes the board to this session's
-                   assigned/created/activity rows (server-side mine=). "All" restores the
-                   full live board. Placed last so it doesn't shift earlier tab targets; the
-                   mobile twin shares this testid and is mutually exclusive by x-if. -->
-              <select x-model="taskScope" @change="onScopeChange()" data-testid="board-scope-select"
-                      aria-label="Scope the board to your tasks" title="Show only your tasks (by assignment, authorship, or activity)"
-                      class="h-full rounded-r border-l border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-700 focus:outline-none dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
-                <option value="all">All tasks</option>
-                <option value="assigned">Assigned to me</option>
-                <option value="created">Created by me</option>
-                <option value="activity">My activity</option>
-              </select>
+              <div>
+                <h3 class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">Layout &amp; view</h3>
+                <div class="flex flex-col gap-1.5">
+                  <!-- No aria-label on these three toggles: the visible state text
+                       ("Hoist parents (on)", "Density: Comfortable", "Archived (off)")
+                       IS the accessible name, with :aria-pressed carrying the state —
+                       a redundant label that doesn't contain the rendered text would
+                       violate WCAG 4.1.2 (axe label-content-name-mismatch). -->
+                  <button type="button" @click="toggleHoistParents()" :aria-pressed="hoistParents"
+                          data-testid="sort-hoist-parents"
+                          class="focus-ring flex w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors"
+                          :class="hoistParents
+                            ? 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-200 dark:hover:bg-indigo-900'
+                            : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800'"
+                          title="Keep parent tickets at the top of each column">
+                    <span x-text="'Hoist parents ' + (hoistParents ? '(on)' : '(off)')"></span>
+                  </button>
+
+                  <button type="button" @click="toggleCardDensity()" :aria-pressed="cardDensity === 'compact'"
+                          data-testid="card-density-toggle"
+                          class="focus-ring flex w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors"
+                          :class="cardDensity === 'compact'
+                            ? 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-200 dark:hover:bg-indigo-900'
+                            : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800'"
+                          :title="'Switch to ' + (cardDensity === 'comfortable' ? 'compact' : 'comfortable') + ' card density'">
+                    <span x-text="'Density: ' + (cardDensity === 'compact' ? 'Compact' : 'Comfortable')"></span>
+                  </button>
+
+                  <!-- "Show archived" board view (AC3): swaps the columns' data source to the
+                       separately-fetched archived set; OFF restores the untouched live board. -->
+                  <button type="button" @click="toggleShowArchived()" :aria-pressed="showArchived"
+                          data-testid="show-archived-toggle"
+                          class="focus-ring flex w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors"
+                          :class="showArchived
+                            ? 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-200 dark:hover:bg-indigo-900'
+                            : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800'"
+                          :title="showArchived ? 'Hide archived tasks' : 'Show archived tasks'">
+                    <span x-text="'Archived ' + (showArchived ? '(on)' : '(off)')"></span>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
         </template>
@@ -1002,7 +1052,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     <span class="text-zinc-600 dark:text-zinc-400">Sort by</span>
                     <select x-model="sortKey" @change="setSort()"
                             data-testid="sort-key" aria-label="Sort cards by"
-                            class="max-w-[8rem] cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold focus-ring">
+                            class="cursor-pointer rounded bg-transparent py-0.5 text-xs font-semibold focus-ring">
                       <template x-for="o in SORT_OPTIONS" :key="o.value">
                         <option :value="o.value" x-text="o.label"></option>
                       </template>
@@ -1016,7 +1066,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                     <span x-text="sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'"></span>
                   </button>
 
-                  <button type="button" @click="clearSort()" x-show="sortKey !== ''" x-cloak
+                  <button type="button" @click="clearSort()" x-show="sortKey !== ''" :disabled="sortKey === ''" x-cloak
                           data-testid="sort-clear"
                           class="flex items-center border-l border-zinc-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 dark:border-zinc-700 dark:text-red-400 dark:hover:bg-zinc-800">
                     Clear sort
@@ -1049,7 +1099,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                        shares its testid and is mutually exclusive per viewport (x-if). -->
                   <select x-model="taskScope" @change="onScopeChange()" data-testid="board-scope-select"
                           aria-label="Scope the board to your tasks" title="Show only your tasks"
-                          class="h-full rounded-r border-l border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-700 focus:outline-none dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
+                          class="focus-ring rounded-r border-l border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
                     <option value="all">All tasks</option>
                     <option value="assigned">Assigned to me</option>
                     <option value="created">Created by me</option>

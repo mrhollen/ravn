@@ -181,6 +181,7 @@ test.describe('Done column pagination and card density', () => {
     await expect(card).toBeVisible();
 
     // Initial state: comfortable
+    await page.getByTestId('display-popover-btn').click();
     const densityToggle = page.getByTestId('card-density-toggle');
     await expect(densityToggle).toBeVisible();
     await expect(densityToggle).toContainText('Density: Comfortable');
@@ -189,7 +190,7 @@ test.describe('Done column pagination and card density', () => {
     const comfortableBox = (await card.boundingBox())!;
     expect(comfortableBox.height).toBeGreaterThan(0);
 
-    // Switch to Compact density via toolbar button
+    // Switch to Compact density via Display popover button
     await densityToggle.click();
     await expect(densityToggle).toContainText('Density: Compact');
     await expect(card).toHaveAttribute('data-card-density', 'compact');
@@ -203,13 +204,14 @@ test.describe('Done column pagination and card density', () => {
 
     // Verify persistence across page reload
     await page.reload();
+    await page.getByTestId('display-popover-btn').click();
     await expect(densityToggle).toContainText('Density: Compact');
     const reloadedCard = page.locator('article', { hasText: 'Spacious Task with Detailed Title' });
     await expect(reloadedCard).toHaveAttribute('data-card-density', 'compact');
     const reloadedBox = (await reloadedCard.boundingBox())!;
     expect(reloadedBox.height).toBeLessThan(comfortableBox.height);
 
-    // Switch back to Comfortable via toolbar toggle button
+    // Switch back to Comfortable via Display popover toggle button
     await densityToggle.click();
     await expect(densityToggle).toContainText('Density: Comfortable');
     await expect(card).toHaveAttribute('data-card-density', 'comfortable');
@@ -218,6 +220,7 @@ test.describe('Done column pagination and card density', () => {
 
     // Verify comfortable persistence across page reload
     await page.reload();
+    await page.getByTestId('display-popover-btn').click();
     await expect(densityToggle).toContainText('Density: Comfortable');
     const restoredCard = page.locator('article', { hasText: 'Spacious Task with Detailed Title' });
     await expect(restoredCard).toHaveAttribute('data-card-density', 'comfortable');
