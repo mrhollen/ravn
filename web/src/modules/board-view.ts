@@ -48,9 +48,11 @@ export interface BoardViewDeps {
   hoistParents(): boolean;
   sortKey(): SortKey;
   sortDir(): SortDir;
+  filterStatus(): "" | Status;
   filterPriority(): string;
   filterAssignee(): string;
   filterUnblocked(): boolean;
+  filterBlocked(): boolean;
   filterStalled(): boolean;
   filterNeedsAttention(): boolean;
   filterDue(): string;
@@ -63,9 +65,11 @@ export interface BoardViewDeps {
   setSelectedProjectId(v: string): void;
   setSortKey(k: SortKey): void;
   setSortDir(d: SortDir): void;
+  setFilterStatus(v: "" | Status): void;
   setFilterPriority(v: string): void;
   setFilterAssignee(v: string): void;
   setFilterUnblocked(b: boolean): void;
+  setFilterBlocked(b: boolean): void;
   setFilterStalled(b: boolean): void;
   setFilterNeedsAttention(b: boolean): void;
   setFilterDue(v: string): void;
@@ -168,10 +172,12 @@ export function createBoardViewModule(deps: BoardViewDeps): BoardViewModule {
   function buildBoardQueryString(): string {
     return buildQueryFor({
       project: deps.selectedProjectId(),
+      status: deps.filterStatus() || undefined,
       priority: deps.filterPriority(),
       owner: deps.filterAssignee(),
       due: deps.filterDue(),
       unblocked: deps.filterUnblocked(),
+      blocked: deps.filterBlocked(),
       stalled: deps.filterStalled(),
       attention: deps.filterNeedsAttention(),
       q: deps.filterSearch(),
@@ -229,6 +235,9 @@ export function createBoardViewModule(deps: BoardViewDeps): BoardViewModule {
       if (params.project) {
         deps.setSelectedProjectId(params.project);
       }
+      if (params.status !== undefined || isPopState) {
+        deps.setFilterStatus(params.status ?? "");
+      }
       if (params.priority !== undefined || isPopState) {
         deps.setFilterPriority(params.priority ?? "");
       }
@@ -240,6 +249,14 @@ export function createBoardViewModule(deps: BoardViewDeps): BoardViewModule {
       }
       if (params.unblocked !== undefined || isPopState) {
         deps.setFilterUnblocked(params.unblocked ?? false);
+      }
+      if (params.blocked !== undefined || isPopState) {
+        deps.setFilterBlocked(params.blocked ?? false);
+      }
+      if (params.blocked) {
+        deps.setFilterUnblocked(false);
+      } else if (params.unblocked) {
+        deps.setFilterBlocked(false);
       }
       if (params.stalled !== undefined || isPopState) {
         deps.setFilterStalled(params.stalled ?? false);
@@ -280,6 +297,7 @@ export function createBoardViewModule(deps: BoardViewDeps): BoardViewModule {
   // --------------------------------------------------------------------- query
   function listTasksParams(): ListTasksParams {
     const p: ListTasksParams = { project_id: deps.selectedProjectId() };
+    if (deps.filterStatus()) p.status = deps.filterStatus() as Status;
     if (deps.filterPriority() !== "") p.priority = Number(deps.filterPriority());
     if (deps.filterAssignee() && deps.filterAssignee() !== "unassigned") {
       p.assignee_name = deps.filterAssignee();
@@ -377,9 +395,11 @@ export function createBoardViewModule(deps: BoardViewDeps): BoardViewModule {
     return visibleColumns(
       (s) => (archived ? archived[s] : b ? b.tasks[s] ?? [] : []),
       {
+        status: deps.filterStatus(),
         priority: deps.filterPriority(),
         assignee: deps.filterAssignee(),
         unblockedOnly: deps.filterUnblocked(),
+        blockedOnly: deps.filterBlocked(),
         stalled: deps.filterStalled(),
         needsAttention: deps.filterNeedsAttention(),
         due: deps.filterDue(),

@@ -223,4 +223,29 @@ test.describe('Board filters, sort, and project URL query sync (01M5XTAXGDEHFNKF
     await expect.poll(() => page.url()).toContain(`priority=4`);
     expect(new URL(page.url()).pathname).toBe('/');
   });
+
+  test('direct URL load with status=doing and blocked=1 renders active drill-down bar and Unblocked clears blocked', async ({ page }) => {
+    await page.goto(`${serverUrl}/?project=${projA.id}&status=todo&blocked=1`);
+    await expectProjectSelected(page, 'URL Sync Alpha');
+
+    const drillBar = page.getByTestId('active-drilldown-bar');
+    await expect(drillBar).toBeVisible();
+    await expect(drillBar).toContainText('Status: To Do');
+    await expect(drillBar).toContainText('Blocked only');
+    await expect(page.locator('article', { hasText: 'Alpha Blocked P4' })).toBeVisible();
+    await expect(page.locator('article', { hasText: 'Alpha Needle P4' })).toBeHidden();
+
+    // Checking Unblocked only clears blocked=1 cleanly
+    await page.getByTestId('filter-unblocked').check();
+    await expect.poll(() => new URL(page.url()).searchParams.get('unblocked')).toBe('1');
+    await expect.poll(() => new URL(page.url()).searchParams.has('blocked')).toBe(false);
+    await expect(page.getByTestId('drilldown-chip-blocked')).toBeHidden();
+    await expect(page.locator('article', { hasText: 'Alpha Needle P4' })).toBeVisible();
+    await expect(page.locator('article', { hasText: 'Alpha Blocked P4' })).toBeHidden();
+
+    // Dismiss remaining status chip
+    await page.getByTestId('drilldown-chip-status').click();
+    await expect(drillBar).toBeHidden();
+    await expect.poll(() => page.url()).not.toContain('status=');
+  });
 });

@@ -5,7 +5,7 @@
 // Done cap) lives in src/columns.ts. No DOM, no Alpine — the composition root
 // owns every `filter*` field, the debounce/sequence machinery, and URL sync.
 
-import type { MineScope, TaskSummary } from "./types";
+import type { MineScope, Status, TaskSummary } from "./types";
 import { dueCalendarDate, isOverdue, isStalledExpired, localCalendarToday, needsAttention, safeStorage } from "./util";
 
 // ---------------------------------------------------------------------
@@ -47,11 +47,14 @@ export function readStoredMyProjects(): boolean {
 /** Active board filter state (state-in). Mirrors the root's `filter*` fields
  *  plus the live ticker; the root builds one snapshot per render. */
 export interface BoardFilterState {
+  /** "" = off, else "todo" | "doing" | "done". */
+  status?: "" | Status;
   /** "" = off, else the raw select value "0".."5". */
   priority: string;
   /** "" = off; "unassigned" special value; else exact name (case-insensitive). */
   assignee: string;
   unblockedOnly: boolean;
+  blockedOnly?: boolean;
   stalled: boolean;
   needsAttention: boolean;
   /** "" | "today" | "overdue" | "week". */
@@ -69,12 +72,15 @@ export interface BoardFilterState {
 /** True when any filter dimension is active — drives the "Clear" affordance
  *  and URL sync. Search counts only when non-blank. */
 export function hasAnyFilter(
-  f: Pick<BoardFilterState, "priority" | "assignee" | "unblockedOnly" | "stalled" | "needsAttention" | "due" | "search">,
+  f: Pick<BoardFilterState, "priority" | "assignee" | "unblockedOnly" | "stalled" | "needsAttention" | "due" | "search"> &
+    Partial<Pick<BoardFilterState, "status" | "blockedOnly">>,
 ): boolean {
   return (
+    (f.status ?? "") !== "" ||
     f.priority !== "" ||
     f.assignee !== "" ||
     f.unblockedOnly ||
+    Boolean(f.blockedOnly) ||
     f.stalled ||
     f.needsAttention ||
     f.due !== "" ||
@@ -101,9 +107,19 @@ export function matchesAssignee(t: TaskSummary, assignee: string): boolean {
   return t.assignee?.name.toLowerCase() === name;
 }
 
+/** Status dimension: exact match on canonical status ("todo" | "doing" | "done"). */
+export function matchesStatus(t: TaskSummary, status: Status): boolean {
+  return t.status === status;
+}
+
 /** Unblocked dimension: the task has no unresolved open blockers. */
 export function matchesUnblocked(t: TaskSummary, isBlocked: (id: string) => boolean): boolean {
   return !isBlocked(t.id);
+}
+
+/** Blocked dimension: the task has at least one unresolved open blocker. */
+export function matchesBlocked(t: TaskSummary, isBlocked: (id: string) => boolean): boolean {
+  return isBlocked(t.id);
 }
 
 /** Expired/stalled (epic 01M5XSNR8VWZTP66GT7ABNSJC1): doing tasks with a lapsed
@@ -177,14 +193,16 @@ export function attentionBadgeKind(task: TaskSummary): "question" | "handoff" | 
   return task.last_comment_kind === "question" ? "question" : "handoff";
 }
 
-/** AND-compose every active dimension in template order (priority → assignee
- *  → unblocked → stalled → needs-attention → due window → search union).
- *  Inactive dimensions leave the array reference untouched. */
+/** AND-compose every active dimension in template order (status → priority
+ *  → assignee → unblocked → blocked → stalled → needs-attention → due window
+ *  → search union). Inactive dimensions leave the array reference untouched. */
 export function applyFilters(tasks: TaskSummary[], f: BoardFilterState): TaskSummary[] {
   let out = tasks;
+  if (f.status) out = out.filter((t) => matchesStatus(t, f.status as Status));
   if (f.priority !== "") out = out.filter((t) => matchesPriority(t, Number(f.priority)));
   if (f.assignee !== "") out = out.filter((t) => matchesAssignee(t, f.assignee));
   if (f.unblockedOnly) out = out.filter((t) => matchesUnblocked(t, f.isBlocked));
+  if (f.blockedOnly) out = out.filter((t) => matchesBlocked(t, f.isBlocked));
   if (f.stalled) out = out.filter((t) => matchesStalled(t, f.nowTick));
   if (f.needsAttention) out = out.filter((t) => matchesNeedsAttention(t));
   if (f.due === "overdue" || f.due === "today" || f.due === "week") {

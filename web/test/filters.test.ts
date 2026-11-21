@@ -10,11 +10,13 @@ import {
   LS_MY_PROJECTS,
   LS_TASK_SCOPE,
   matchesAssignee,
+  matchesBlocked,
   matchesDueWindow,
   matchesNeedsAttention,
   matchesPriority,
   matchesSearch,
   matchesStalled,
+  matchesStatus,
   matchesUnblocked,
   normalizedSearch,
   readStoredMyProjects,
@@ -74,10 +76,12 @@ test("hasAnyFilter: all-off is false, whitespace-only search counts as off", () 
   assert.equal(hasAnyFilter(off), false);
   assert.equal(hasAnyFilter(state({ search: "   " })), false);
   for (const over of [
+    { status: "doing" as const },
     { priority: "0" },
     { assignee: "grace" },
     { assignee: "unassigned" },
     { unblockedOnly: true },
+    { blockedOnly: true },
     { stalled: true },
     { needsAttention: true },
     { due: "today" },
@@ -85,6 +89,15 @@ test("hasAnyFilter: all-off is false, whitespace-only search counts as off", () 
     assert.equal(hasAnyFilter(state(over)), true, JSON.stringify(over));
   }
   assert.equal(hasAnyFilter(state({ search: " x" })), true);
+});
+
+test("matchesStatus & matchesBlocked evaluate status and blocked accessor cleanly", () => {
+  const todo = task("a", { status: "todo" });
+  const doing = task("b", { status: "doing" });
+  assert.equal(matchesStatus(todo, "todo"), true);
+  assert.equal(matchesStatus(doing, "todo"), false);
+  assert.equal(matchesBlocked(todo, (id) => id === "a"), true);
+  assert.equal(matchesBlocked(doing, (id) => id === "a"), false);
 });
 
 test("matchesPriority is exact numeric equality on the parsed value", () => {
@@ -189,6 +202,10 @@ test("applyFilters: no active filter returns the SAME array reference", () => {
 });
 
 test("applyFilters narrows per active dimension", () => {
+  const todo = task("a0", { status: "todo" });
+  const doing = task("a1", { status: "doing" });
+  assert.deepEqual(applyFilters([todo, doing], state({ status: "doing" })).map((t) => t.id), ["a1"]);
+
   const high = task("a", { priority: 3 });
   const low = task("b", { priority: 1 });
   assert.deepEqual(applyFilters([high, low], state({ priority: "3" })).map((t) => t.id), ["a"]);
@@ -203,6 +220,10 @@ test("applyFilters narrows per active dimension", () => {
   assert.deepEqual(
     applyFilters([blocked, open], state({ unblockedOnly: true, isBlocked: (id) => id === "e" })).map((t) => t.id),
     ["f"],
+  );
+  assert.deepEqual(
+    applyFilters([blocked, open], state({ blockedOnly: true, isBlocked: (id) => id === "e" })).map((t) => t.id),
+    ["e"],
   );
 
   const lapsed = task("g", { status: "doing", claimed_by: "agent-1", claim_expires_at: "2026-11-11T11:00:00Z" });

@@ -30,7 +30,7 @@ import {
 import type { SortDir, SortKey } from "../sort";
 import { hasAnyFilter, isDescriptionNotesMatch as descNotesMatchFor } from "../filters";
 import { STATUSES } from "../types";
-import type { BlockerRef, Board, TaskSummary } from "../types";
+import type { BlockerRef, Board, Status, TaskSummary } from "../types";
 
 // ---------------------------------------------------------------------------
 // Moved constants (Phase 2 batch B) — the composition root re-exports these so
@@ -79,9 +79,11 @@ export interface BoardDeps {
   hoistParents(): boolean;
   cardDensity(): CardDensity;
   blockerPopoverTaskId(): string | null;
+  filterStatus(): "" | Status;
   filterPriority(): string;
   filterAssignee(): string;
   filterUnblocked(): boolean;
+  filterBlocked(): boolean;
   filterStalled(): boolean;
   filterNeedsAttention(): boolean;
   filterDue(): string;
@@ -93,9 +95,11 @@ export interface BoardDeps {
   setHoistParents(b: boolean): void;
   setCardDensity(v: CardDensity): void;
   setBlockerPopoverTaskId(v: string | null): void;
+  setFilterStatus(v: "" | Status): void;
   setFilterPriority(v: string): void;
   setFilterAssignee(v: string): void;
   setFilterUnblocked(b: boolean): void;
+  setFilterBlocked(b: boolean): void;
   setFilterStalled(b: boolean): void;
   setFilterNeedsAttention(b: boolean): void;
   setFilterDue(v: string): void;
@@ -438,9 +442,11 @@ export function createBoardModule(deps: BoardDeps): BoardModule {
 
   function hasActiveFilters(): boolean {
     return hasAnyFilter({
+      status: deps.filterStatus(),
       priority: deps.filterPriority(),
       assignee: deps.filterAssignee(),
       unblockedOnly: deps.filterUnblocked(),
+      blockedOnly: deps.filterBlocked(),
       stalled: deps.filterStalled(),
       needsAttention: deps.filterNeedsAttention(),
       due: deps.filterDue(),
@@ -449,9 +455,11 @@ export function createBoardModule(deps: BoardDeps): BoardModule {
   }
 
   function clearFilters(): void {
+    deps.setFilterStatus("");
     deps.setFilterPriority("");
     deps.setFilterAssignee("");
     deps.setFilterUnblocked(false);
+    deps.setFilterBlocked(false);
     deps.setFilterStalled(false);
     deps.setFilterNeedsAttention(false);
     deps.setFilterDue("");

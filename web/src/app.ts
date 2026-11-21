@@ -20,11 +20,15 @@ import type { BoardViewModule } from "./modules/board-view";
 import {
   createDashboardModule,
   DEFAULT_HISTORY_BUCKET,
+  DEFAULT_HISTORY_DAYS,
   DEFAULT_STALLED_MINUTES,
   formatIdleMinutes,
+  HISTORY_DAY_OPTIONS,
   type CumulativeSummary,
   type DashboardModule,
+  type KpiSummary,
   type PriorityBreakdownEntry,
+  type ReportHistoryDays,
   type StatusSummaryEntry,
   type ThroughputSummary,
   type WorkloadEntry,
@@ -1150,9 +1154,11 @@ export function ravnApp() {
         hoistParents: () => this.hoistParents,
         cardDensity: () => this.cardDensity,
         blockerPopoverTaskId: () => this.blockerPopoverTaskId,
+        filterStatus: () => this.filterStatus,
         filterPriority: () => this.filterPriority,
         filterAssignee: () => this.filterAssignee,
         filterUnblocked: () => this.filterUnblocked,
+        filterBlocked: () => this.filterBlocked,
         filterStalled: () => this.filterStalled,
         filterNeedsAttention: () => this.filterNeedsAttention,
         filterDue: () => this.filterDue,
@@ -1173,6 +1179,9 @@ export function ravnApp() {
         setBlockerPopoverTaskId: (v) => {
           this.blockerPopoverTaskId = v;
         },
+        setFilterStatus: (v) => {
+          this.filterStatus = v;
+        },
         setFilterPriority: (v) => {
           this.filterPriority = v;
         },
@@ -1181,6 +1190,9 @@ export function ravnApp() {
         },
         setFilterUnblocked: (b) => {
           this.filterUnblocked = b;
+        },
+        setFilterBlocked: (b) => {
+          this.filterBlocked = b;
         },
         setFilterStalled: (b) => {
           this.filterStalled = b;
@@ -1220,9 +1232,11 @@ export function ravnApp() {
         hoistParents: () => this.hoistParents,
         sortKey: () => this.sortKey,
         sortDir: () => this.sortDir,
+        filterStatus: () => this.filterStatus,
         filterPriority: () => this.filterPriority,
         filterAssignee: () => this.filterAssignee,
         filterUnblocked: () => this.filterUnblocked,
+        filterBlocked: () => this.filterBlocked,
         filterStalled: () => this.filterStalled,
         filterNeedsAttention: () => this.filterNeedsAttention,
         filterDue: () => this.filterDue,
@@ -1246,6 +1260,9 @@ export function ravnApp() {
         setSortDir: (v) => {
           this.sortDir = v;
         },
+        setFilterStatus: (v) => {
+          this.filterStatus = v;
+        },
         setFilterPriority: (v) => {
           this.filterPriority = v;
         },
@@ -1254,6 +1271,9 @@ export function ravnApp() {
         },
         setFilterUnblocked: (b) => {
           this.filterUnblocked = b;
+        },
+        setFilterBlocked: (b) => {
+          this.filterBlocked = b;
         },
         setFilterStalled: (b) => {
           this.filterStalled = b;
@@ -1597,9 +1617,11 @@ export function ravnApp() {
     },
 
     // ------------------------------------------------------------------ filters
+    filterStatus: "" as "" | Status,
     filterPriority: "" as string,
     filterAssignee: "" as string,
     filterUnblocked: false,
+    filterBlocked: false,
     /** True while the "Expired / stalled" filter is active: restricts the board
      *  to doing tasks whose claim lease has lapsed or that have been idle for
      *  more than 60 minutes (isStalledExpired). Purely client-side — the server
@@ -1643,6 +1665,47 @@ export function ravnApp() {
 
     clearFilters(): void {
       this._boardModule().clearFilters();
+    },
+
+    clearFilterStatus(): void {
+      this.filterStatus = "";
+      this.syncUrlState(true);
+    },
+
+    clearFilterBlocked(): void {
+      this.filterBlocked = false;
+      this.syncUrlState(true);
+    },
+
+    drillDownToBoard(filter: {
+      status?: Status;
+      priority?: number;
+      assignee?: string;
+      stalled?: boolean;
+      blocked?: boolean;
+    }): void {
+      this.clearFilters();
+      if (this.showArchived) this.showArchived = false;
+      if (filter.status !== undefined) this.filterStatus = filter.status;
+      if (filter.priority !== undefined) this.filterPriority = String(filter.priority);
+      if (filter.assignee !== undefined) this.filterAssignee = filter.assignee;
+      if (filter.stalled !== undefined) this.filterStalled = Boolean(filter.stalled);
+      if (filter.blocked !== undefined) {
+        this.filterBlocked = Boolean(filter.blocked);
+        if (this.filterBlocked) this.filterUnblocked = false;
+      }
+      // Replace the dashboard URL with the filtered board URL directly instead of
+      // calling history.back() (async popstate in browsers would restore the old URL).
+      this.dashboardPushed = false;
+      this.closeDashboard();
+      this.syncUrlState(true);
+      if (typeof window !== "undefined") {
+        if (typeof window.scrollTo === "function") window.scrollTo(0, 0);
+        if (typeof document !== "undefined") {
+          const mainEl = document.querySelector("main") as { scrollTop?: number } | null;
+          if (mainEl && typeof mainEl.scrollTop === "number") mainEl.scrollTop = 0;
+        }
+      }
     },
 
     // -- stalled alert + attention badge — owned by modules/board-view.ts ----
@@ -1889,6 +1952,7 @@ export function ravnApp() {
     dashboardHistoryLoading: false,
     dashboardHistoryError: "",
     dashboardHistoryBucket: DEFAULT_HISTORY_BUCKET as ReportHistoryBucket,
+    dashboardHistoryDays: DEFAULT_HISTORY_DAYS as ReportHistoryDays,
     dashboardStalledMinutes: DEFAULT_STALLED_MINUTES,
     _dashboard: null as DashboardModule | null,
 
@@ -1900,6 +1964,7 @@ export function ravnApp() {
         dashboardReport: () => this.dashboardReport,
         dashboardHistory: () => this.dashboardHistory,
         historyBucket: () => this.dashboardHistoryBucket,
+        historyDays: () => this.dashboardHistoryDays,
         stalledMinutes: () => this.dashboardStalledMinutes,
         nowTick: () => this.nowTick,
         setDashboardOpen: (open) => { this.dashboardOpen = open; },
@@ -1910,6 +1975,7 @@ export function ravnApp() {
         setDashboardHistoryLoading: (loading) => { this.dashboardHistoryLoading = loading; },
         setDashboardHistoryError: (err) => { this.dashboardHistoryError = err; },
         setHistoryBucket: (bucket) => { this.dashboardHistoryBucket = bucket; },
+        setHistoryDays: (days) => { this.dashboardHistoryDays = days; },
         setProjectForbidden: (v) => { this.projectForbidden = v; },
         openAuthModal: () => this.openAuthModal(),
         updateDocumentTitle: () => this.updateDocumentTitle(),
@@ -2021,6 +2087,14 @@ export function ravnApp() {
 
     async setDashboardHistoryBucket(bucket: ReportHistoryBucket): Promise<void> {
       await this._dashboardModule().setHistoryBucket(bucket);
+    },
+
+    async setDashboardHistoryDays(days: ReportHistoryDays): Promise<void> {
+      await this._dashboardModule().setHistoryDays(days);
+    },
+
+    dashboardKpiSummary(): KpiSummary {
+      return this._dashboardModule().kpiSummary();
     },
 
     isDashboardHistoryEmpty(): boolean {
@@ -3656,6 +3730,7 @@ export function ravnApp() {
     // ------------------------------------------------------------- template glue
     STATUSES,
     STATUS_LABEL,
+    HISTORY_DAY_OPTIONS,
     MEMBER_ROLES,
     SORT_OPTIONS,
     canMove,
@@ -3743,6 +3818,8 @@ export function ravnApp() {
         polling: () => this.polling,
         themeMq: () => this._themeMq,
         theme: () => this.theme,
+        filterUnblocked: () => this.filterUnblocked,
+        filterBlocked: () => this.filterBlocked,
         // state-out
         setAppBooted: (v) => { this.appBooted = v; },
         setBootError: (v) => { this.bootError = v; },
@@ -3753,6 +3830,8 @@ export function ravnApp() {
         setNowTick: (ts) => { this.nowTick = ts; },
         setTickerId: (id) => { this._tickerId = id; },
         setSseReloadDebounce: (d) => { this.sseReloadDebounce = d; },
+        setFilterUnblocked: (b) => { this.filterUnblocked = b; },
+        setFilterBlocked: (b) => { this.filterBlocked = b; },
         // hooks — root-owned orchestration kept outside the module
         loadProjects: (force) => this.loadProjects(force),
         loadBoard: (force) => this.loadBoard(force),

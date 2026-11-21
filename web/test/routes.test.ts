@@ -152,6 +152,45 @@ test("routes: parse(build(x)) round-trips a canonical param set", () => {
   assert.deepEqual(parseBoardQueryParams(buildBoardQueryString(full)), { ...full });
 });
 
+test("routes: status and blocked drill-down params parse, serialize, and handle blocked/unblocked cleanly", () => {
+  assert.deepEqual(parseBoardQueryParams("?status=DOING&blocked=1"), {
+    status: "doing",
+    blocked: true,
+  });
+  assert.deepEqual(parseBoardQueryParams("?status=done&blocked=true"), {
+    status: "done",
+    blocked: true,
+  });
+  assert.deepEqual(parseBoardQueryParams("?status=bogus&blocked=0"), {});
+
+  // Last-wins when both blocked and unblocked appear in the URL
+  assert.deepEqual(parseBoardQueryParams("?unblocked=1&blocked=1"), { blocked: true });
+  assert.deepEqual(parseBoardQueryParams("?blocked=1&unblocked=1"), { unblocked: true });
+
+  assert.equal(
+    buildBoardQueryString({ project: "p1", status: "doing" }),
+    "?project=p1&status=doing",
+  );
+  assert.equal(
+    buildBoardQueryString({ project: "p1", blocked: true }),
+    "?project=p1&blocked=1",
+  );
+  // buildBoardQueryString never emits both blocked and unblocked together
+  assert.equal(
+    buildBoardQueryString({ project: "p1", blocked: true, unblocked: true }),
+    "?project=p1&blocked=1",
+  );
+  // Invalid status is ignored when serializing
+  assert.equal(
+    buildBoardQueryString({ status: "bogus" as unknown as "todo" }),
+    "",
+  );
+  assert.deepEqual(
+    parseBoardQueryParams(buildBoardQueryString({ project: "p1", status: "todo", blocked: true })),
+    { project: "p1", status: "todo", blocked: true },
+  );
+});
+
 test("routes: mobile breakpoint — pinned at md (768px), exclusive below, desktop-safe default", () => {
   assert.equal(MOBILE_DETAIL_MAX_WIDTH, 768);
   assert.equal(isMobileDetailViewport(375), true); // phone

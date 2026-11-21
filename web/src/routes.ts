@@ -6,6 +6,7 @@
 // composition root.
 
 import { isSortKey, type SortDir, type SortKey } from "./sort";
+import { STATUSES, type Status } from "./types";
 
 function decodeRouteSegment(raw: string): string | null {
   try {
@@ -58,10 +59,12 @@ export function isProjectsOverviewPath(pathname: string): boolean {
 // ---------------------------------------------------------------- URL query sync
 export interface BoardQueryParams {
   project?: string;
+  status?: Status;
   priority?: string;
   owner?: string;
   due?: string;
   unblocked?: boolean;
+  blocked?: boolean;
   /** Expired/stalled filter active (client-side predicate, see isStalledExpired). */
   stalled?: boolean;
   /** "Needs attention" filter active (client-side predicate, see needsAttention). */
@@ -84,6 +87,14 @@ export function parseBoardQueryParams(search: string): BoardQueryParams {
     result.project = project.trim();
   }
 
+  const status = params.get("status");
+  if (status) {
+    const norm = status.trim().toLowerCase();
+    if ((STATUSES as readonly string[]).includes(norm)) {
+      result.status = norm as Status;
+    }
+  }
+
   const priority = params.get("priority");
   if (priority !== null && priority !== "" && priority.toLowerCase() !== "all") {
     const num = Number(priority);
@@ -103,7 +114,20 @@ export function parseBoardQueryParams(search: string): BoardQueryParams {
   }
 
   const unblocked = params.get("unblocked");
-  if (unblocked === "1" || unblocked === "true") {
+  const blocked = params.get("blocked");
+  const hasUnblocked = unblocked === "1" || unblocked === "true";
+  const hasBlocked = blocked === "1" || blocked === "true";
+  if (hasBlocked && hasUnblocked) {
+    let last: "blocked" | "unblocked" = "blocked";
+    for (const [k, v] of params.entries()) {
+      if (k === "blocked" && (v === "1" || v === "true")) last = "blocked";
+      else if (k === "unblocked" && (v === "1" || v === "true")) last = "unblocked";
+    }
+    if (last === "blocked") result.blocked = true;
+    else result.unblocked = true;
+  } else if (hasBlocked) {
+    result.blocked = true;
+  } else if (hasUnblocked) {
     result.unblocked = true;
   }
 
@@ -141,6 +165,12 @@ export function buildBoardQueryString(params: BoardQueryParams): string {
   if (params.project && params.project.trim() !== "") {
     q.set("project", params.project.trim());
   }
+  if (params.status) {
+    const norm = params.status.trim().toLowerCase();
+    if ((STATUSES as readonly string[]).includes(norm)) {
+      q.set("status", norm);
+    }
+  }
   if (params.priority !== undefined && params.priority !== "" && params.priority !== "all") {
     q.set("priority", params.priority);
   }
@@ -150,7 +180,9 @@ export function buildBoardQueryString(params: BoardQueryParams): string {
   if (params.due && ["today", "overdue", "week"].includes(params.due.trim().toLowerCase())) {
     q.set("due", params.due.trim().toLowerCase());
   }
-  if (params.unblocked) {
+  if (params.blocked) {
+    q.set("blocked", "1");
+  } else if (params.unblocked) {
     q.set("unblocked", "1");
   }
   if (params.stalled) {

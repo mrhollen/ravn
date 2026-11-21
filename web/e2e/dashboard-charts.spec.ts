@@ -132,6 +132,44 @@ test.describe('Dashboard charts (/report/history)', () => {
     await expect(dayBtn).toHaveAttribute('aria-pressed', 'true');
     await expect(chartsSec).toContainText('UTC daily buckets');
 
+    // Time-range selector (AC3): 30d active by default, switch through 7d / 14d / 90d alongside Week bucket.
+    const range30 = page.getByTestId('dashboard-range-30');
+    const range7 = page.getByTestId('dashboard-range-7');
+    const range14 = page.getByTestId('dashboard-range-14');
+    const range90 = page.getByTestId('dashboard-range-90');
+    await expect(page.getByTestId('dashboard-range-toggle')).toBeVisible();
+    await expect(range30).toHaveAttribute('aria-pressed', 'true');
+    await expect(chartsSec).toContainText('Last 30 days · UTC daily buckets');
+
+    const res7 = page.waitForResponse(
+      (r) => r.url().includes(`/api/v1/projects/${proj.id}/report/history`) && r.url().includes('days=7') && r.url().includes('bucket=day'),
+    );
+    await range7.click();
+    expect((await res7).status()).toBe(200);
+    await expect(range7).toHaveAttribute('aria-pressed', 'true');
+    await expect(range30).toHaveAttribute('aria-pressed', 'false');
+    await expect(chartsSec).toContainText('Last 7 days · UTC daily buckets');
+    await expect(cumulativeSvg).toHaveAttribute('aria-label', /in the last 7 days/);
+
+    const res90Week = page.waitForResponse(
+      (r) => r.url().includes(`/api/v1/projects/${proj.id}/report/history`) && r.url().includes('days=90') && r.url().includes('bucket=week'),
+    );
+    await weekBtn.click();
+    await range90.click();
+    expect((await res90Week).status()).toBe(200);
+    await expect(range90).toHaveAttribute('aria-pressed', 'true');
+    await expect(weekBtn).toHaveAttribute('aria-pressed', 'true');
+    await expect(chartsSec).toContainText('Last 90 days · UTC weekly buckets');
+    await expect(cumulativeSvg).toHaveAttribute('aria-label', /in the last 90 days/);
+
+    const res14 = page.waitForResponse(
+      (r) => r.url().includes(`/api/v1/projects/${proj.id}/report/history`) && r.url().includes('days=14') && r.url().includes('bucket=week'),
+    );
+    await range14.click();
+    expect((await res14).status()).toBe(200);
+    await expect(range14).toHaveAttribute('aria-pressed', 'true');
+    await expect(chartsSec).toContainText('Last 14 days · UTC weekly buckets');
+
     // Toggle dark mode and confirm charts remain visible and crisp.
     await page.getByTestId('header-menu-trigger').click();
     await page.getByTestId('theme-dark').click();
@@ -251,7 +289,14 @@ test.describe('Dashboard charts (/report/history)', () => {
     await expect(page.getByTestId('dashboard-throughput-svg')).toBeVisible();
     await expect(page.getByTestId('dashboard-cumulative-svg')).toBeVisible();
 
-    for (const id of ['dashboard-bucket-day', 'dashboard-bucket-week']) {
+    for (const id of [
+      'dashboard-bucket-day',
+      'dashboard-bucket-week',
+      'dashboard-range-7',
+      'dashboard-range-14',
+      'dashboard-range-30',
+      'dashboard-range-90',
+    ]) {
       const box = await page.getByTestId(id).boundingBox();
       expect(box).not.toBeNull();
       expect(box!.width, `${id} width >= 44px`).toBeGreaterThanOrEqual(44);

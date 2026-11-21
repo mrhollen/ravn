@@ -69,16 +69,18 @@ test("board view: buildBoardQueryString/boardUrl serialize active state; no filt
   assert.equal(mod.buildBoardQueryString(), "?project=P");
   assert.equal(mod.boardUrl(), "/?project=P");
 
+  state.filterStatus = "doing";
   state.filterPriority = "3";
+  state.filterBlocked = true;
   state.filterStalled = true;
   state.filterSearch = "term";
   state.sortKey = "title";
   state.sortDir = "asc";
   assert.equal(
     mod.buildBoardQueryString(),
-    "?project=P&priority=3&stalled=1&q=term&sort=title&dir=asc",
+    "?project=P&status=doing&priority=3&blocked=1&stalled=1&q=term&sort=title&dir=asc",
   );
-  assert.equal(mod.boardUrl(), "/?project=P&priority=3&stalled=1&q=term&sort=title&dir=asc");
+  assert.equal(mod.boardUrl(), "/?project=P&status=doing&priority=3&blocked=1&stalled=1&q=term&sort=title&dir=asc");
 });
 
 test("board view: applyQueryParams on popstate restores EVERY field (missing ones reset to defaults)", () => {
@@ -86,10 +88,12 @@ test("board view: applyQueryParams on popstate restores EVERY field (missing one
   try {
     const state = makeState({
       selectedProjectId: "OLD",
+      filterStatus: "doing",
       filterPriority: "5",
       filterAssignee: "Old",
       filterDue: "week",
       filterUnblocked: true,
+      filterBlocked: true,
       filterStalled: true,
       filterNeedsAttention: true,
       filterSearch: "old",
@@ -102,10 +106,12 @@ test("board view: applyQueryParams on popstate restores EVERY field (missing one
 
     assert.equal(state.selectedProjectId, "Q");
     assert.equal(state.filterSearch, "fresh");
+    assert.equal(state.filterStatus, "", "absent status reset on popstate");
     assert.equal(state.filterPriority, "", "absent priority reset on popstate");
     assert.equal(state.filterAssignee, "");
     assert.equal(state.filterDue, "");
     assert.equal(state.filterUnblocked, false);
+    assert.equal(state.filterBlocked, false);
     assert.equal(state.filterStalled, false);
     assert.equal(state.filterNeedsAttention, false);
 
@@ -229,11 +235,40 @@ test("board view: listTasksParams maps the filter state onto the server query (p
 
   assert.deepEqual(mk({}).listTasksParams(), { project_id: "P" }, "no filters → bare project query");
 
-  const p = mk({ filterPriority: "3", filterAssignee: "Ada", filterUnblocked: true, filterSearch: "  x  " }).listTasksParams();
+  const p = mk({ filterStatus: "doing", filterPriority: "3", filterAssignee: "Ada", filterUnblocked: true, filterSearch: "  x  " }).listTasksParams();
+  assert.equal(p.status, "doing");
   assert.equal(p.priority, 3, "select value parsed to a number");
   assert.equal(p.assignee_name, "Ada");
   assert.equal(p.unblocked, true);
   assert.equal(p.search, "x", "search trimmed");
+
+  // applyQueryParams enforces blocked vs unblocked mutual exclusion
+  const conflictState = makeState({ filterUnblocked: true });
+  const conflictMod = createBoardViewModule(makeBoardViewDeps(conflictState));
+  conflictMod.applyQueryParams({ blocked: true, unblocked: true }, false);
+  assert.equal(conflictState.filterBlocked, true);
+  assert.equal(conflictState.filterUnblocked, false);
+  conflictMod.applyQueryParams({ unblocked: true }, false);
+  assert.equal(conflictState.filterUnblocked, true);
+  assert.equal(conflictState.filterBlocked, false);
+
+  // columns filter by filterStatus and filterBlocked
+  const colMod = createBoardViewModule(
+    makeBoardViewDeps(
+      makeState({
+        filterStatus: "todo",
+        filterBlocked: true,
+        board: board("P", {
+          todo: [task("b1"), task("u1")],
+          doing: [task("b2", { status: "doing" })],
+        }),
+      }),
+      { isBlocked: (id) => id === "b1" || id === "b2" },
+    ),
+  );
+  const cols = colMod.columns();
+  assert.deepEqual(cols.find((c) => c.status === "todo")!.tasks.map((t) => t.id), ["b1"]);
+  assert.deepEqual(cols.find((c) => c.status === "doing")!.tasks, []);
 
   const un = mk({ filterAssignee: "unassigned" }).listTasksParams();
   assert.equal(un.assignee_name, undefined, '"unassigned" is a client-side dimension — never sent');
