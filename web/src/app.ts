@@ -11,6 +11,14 @@ import { loadStoredSession } from "./identity";
 import { createAuthModule, type AuthModule } from "./modules/auth";
 import { createProjectsModule, LS_PROJECT, type ProjectsModule } from "./modules/projects";
 export { LS_PROJECT } from "./modules/projects"; // moved constant — public export unchanged
+import {
+  createProjectsOverviewModule,
+  OVERVIEW_SORT_OPTIONS,
+  projectCompletionStats,
+  type ProjectCompletionStats,
+  type ProjectsOverviewModule,
+  type ProjectsOverviewSort,
+} from "./modules/projects-overview";
 import { FOCUSABLE_SELECTOR, focusElementOnceVisible, focusWhenReady, openDialogFocus, type DialogFocus } from "./focus";
 import { createMenuController, menuFirstLastIndex, type MenuController } from "./modules/menus";
 import { createBoardModule, readStoredCardDensity } from "./modules/board";
@@ -107,6 +115,7 @@ import type {
   OpenCodeAgentOption,
   OpenCodeModelOption,
   OpenCodeOptionsResponse,
+  ProjectOverviewRow,
   ProjectReport,
   ProjectReportHistory,
   ProjectWithCounts,
@@ -489,7 +498,10 @@ export function ravnApp() {
           this.projectForbidden = false;
         },
         loadProjects: (silent) => this.loadProjects(silent),
-        continueBoot: (id) => this.continueBoot(id),
+        continueBoot: (id, dashPid, overview) => this.continueBoot(id, dashPid, overview),
+        onIdentityChanged: () => {
+          if (this.projectsOverviewOpen) void this.loadProjectsOverview(true);
+        },
         connectSse: () => this.connectSse(),
         disconnectSse: (resetBackoff) => this.disconnectSse(resetBackoff),
         loadBoard: () => this.loadBoard(),
@@ -707,7 +719,11 @@ export function ravnApp() {
      *  parallel open+archived fetch with the sequence guard and in-flight
      *  coalescing cores (src/refresh.ts); ?mine=created scoping on the OPEN list. */
     loadProjects(silent = false): Promise<void> {
-      return this._projectsModule().loadProjects(silent);
+      const p = this._projectsModule().loadProjects(silent);
+      if (this.projectsOverviewOpen) {
+        void this.loadProjectsOverview(silent);
+      }
+      return p;
     },
 
     /** Menu option label with live task counts — owned by modules/projects.ts. */
@@ -1944,6 +1960,56 @@ export function ravnApp() {
 
     // -------------------------------------------------------------- dashboard & navigation
     projectsOverviewOpen: false,
+    overviewProjects: [] as ProjectOverviewRow[],
+    overviewLoading: false,
+    overviewError: "",
+    overviewArchived: false,
+    overviewSearch: "",
+    overviewSort: "recent" as ProjectsOverviewSort,
+    _projectsOverview: null as ProjectsOverviewModule | null,
+
+    _projectsOverviewModule(): ProjectsOverviewModule {
+      if (this._projectsOverview) return this._projectsOverview;
+      this._projectsOverview = createProjectsOverviewModule({
+        overviewProjects: () => this.overviewProjects,
+        overviewLoading: () => this.overviewLoading,
+        overviewError: () => this.overviewError,
+        overviewArchived: () => this.overviewArchived,
+        overviewSearch: () => this.overviewSearch,
+        overviewSort: () => this.overviewSort,
+        myProjectsOnly: () => this.myProjectsOnly,
+        identity: () => this.identity,
+        setOverviewProjects: (rows) => { this.overviewProjects = rows; },
+        setOverviewLoading: (loading) => { this.overviewLoading = loading; },
+        setOverviewError: (err) => { this.overviewError = err; },
+        setOverviewArchived: (archived) => { this.overviewArchived = archived; },
+        setOverviewSearch: (search) => { this.overviewSearch = search; },
+        setOverviewSort: (sort) => { this.overviewSort = sort; },
+        openAuthModal: () => this.openAuthModal(),
+      });
+      return this._projectsOverview;
+    },
+
+    loadProjectsOverview(silent = false): Promise<void> {
+      return this._projectsOverviewModule().loadOverview(silent);
+    },
+
+    setOverviewArchived(archived: boolean): Promise<void> {
+      return this._projectsOverviewModule().setArchived(archived);
+    },
+
+    toggleOverviewArchived(): Promise<void> {
+      return this._projectsOverviewModule().toggleArchived();
+    },
+
+    filteredOverviewProjects(): ProjectOverviewRow[] {
+      return this._projectsOverviewModule().filteredProjects();
+    },
+
+    overviewCompletionStats(row: ProjectOverviewRow): ProjectCompletionStats {
+      return projectCompletionStats(row);
+    },
+
     dashboardOpen: false,
     dashboardReport: null as ProjectReport | null,
     dashboardLoading: false,
@@ -2019,6 +2085,7 @@ export function ravnApp() {
         }
       }
       this.updateDocumentTitle();
+      void this.loadProjectsOverview();
     },
 
     openBoardView(projectId?: string): void {
@@ -2062,6 +2129,61 @@ export function ravnApp() {
         }
       }
       this.updateDocumentTitle();
+    },
+
+    openProjectDashboard(projectId: string): void {
+      const targetId = projectId?.trim();
+      if (!targetId) return;
+      if (this.detailOpen) {
+        if (this.notesDirty) {
+          this.promptUnsavedNotes({ kind: "close" });
+          return;
+        }
+        if (!this.discardEditDraftIfConfirmed()) return;
+        this.closeDetail(false);
+      }
+      this.projectsOverviewOpen = false;
+      this.fullPageOpen = false;
+      this.fullPagePushed = false;
+      this.showMobileMenu = false;
+      if (this.selectedProjectId !== targetId) {
+        this.selectedProjectId = targetId;
+        try {
+          safeStorage.setItem(LS_PROJECT, targetId);
+        } catch { /* ignore */ }
+        this.board = null;
+        this.doneLimit = DEFAULT_DONE_LIMIT;
+        this.clearSelection();
+        this._archiveModule().resetForProjectSwitch();
+        this.openCodeOptions = null;
+        this.openCodeOptionsProjectId = "";
+        this.resetBlockedCache(targetId);
+        this.sseReloadDebounce?.cancel();
+        this._boardViewModule().invalidatePendingLoads();
+        this._boardModule().cancelFullTextSearch();
+        this.dashboardReport = null;
+        this.dashboardError = "";
+        this._dashboardModule().invalidatePendingLoads();
+        this.connectSse();
+        void this.loadBoard();
+        this.scheduleFullTextSearch();
+      } else if (!this.board) {
+        void this.loadBoard();
+        this.connectSse();
+      }
+      if (!this.dashboardOpen) {
+        this._dashboardModule().openDashboard();
+      } else {
+        void this._dashboardModule().loadReport(false);
+        this.updateDocumentTitle();
+      }
+      if (typeof window !== "undefined" && window.history?.pushState) {
+        const target = dashboardRoutePath(targetId);
+        if (dashboardRouteProjectIdFromPath(window.location.pathname) !== targetId) {
+          window.history.pushState(null, "", target);
+          this.dashboardPushed = true;
+        }
+      }
     },
 
     openDashboard(): void {
@@ -2126,7 +2248,12 @@ export function ravnApp() {
     },
 
     dashboardProjectName(): string {
-      return this.projects.find((p) => p.id === this.selectedProjectId)?.name ?? "";
+      return (
+        this.projects.find((p) => p.id === this.selectedProjectId)?.name ??
+        this.archivedProjects.find((p) => p.id === this.selectedProjectId)?.name ??
+        this.overviewProjects.find((p) => p.id === this.selectedProjectId)?.name ??
+        ""
+      );
     },
 
     dashboardTotalTasks(): number {
@@ -2552,6 +2679,7 @@ export function ravnApp() {
         this.showMobileMenu = false;
         this.projectsOverviewOpen = true;
         this.updateDocumentTitle();
+        void this.loadProjectsOverview();
       } else {
         if (this.detailOpen) {
           this.closeDetail(false);
@@ -3731,6 +3859,7 @@ export function ravnApp() {
     STATUSES,
     STATUS_LABEL,
     HISTORY_DAY_OPTIONS,
+    OVERVIEW_SORT_OPTIONS,
     MEMBER_ROLES,
     SORT_OPTIONS,
     canMove,

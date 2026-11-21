@@ -159,6 +159,25 @@ export interface ListProjectsResponse {
   total: number;
 }
 
+/** GET /projects/overview per-project operational health summary. */
+export interface ProjectHealthSummary {
+  active_claims: number;
+  expired_claims: number;
+  stalled: number;
+  needs_attention: number;
+  last_activity_at: string;
+}
+
+/** GET /projects/overview row: project + open task counts + health summary. */
+export interface ProjectOverviewRow extends ProjectWithCounts {
+  health: ProjectHealthSummary;
+}
+
+export interface ProjectsOverviewResponse {
+  projects: ProjectOverviewRow[];
+  total: number;
+}
+
 /** Compact task row returned by every list/board/create/update response. */
 export interface TaskSummary {
   id: string;

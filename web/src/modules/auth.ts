@@ -19,7 +19,7 @@
 import { ApiError, api, errMsg } from "../api";
 import { clearStoredSession, normalizeIdentity, storeSession } from "../identity";
 import type { DialogFocus } from "../focus";
-import { taskRouteIdFromPath } from "../routes";
+import { dashboardRouteProjectIdFromPath, isProjectsOverviewPath, taskRouteIdFromPath } from "../routes";
 import type { SessionIdentity } from "../types";
 
 /** Typed dependency surface for the auth module (state-in / methods-out, per
@@ -59,7 +59,13 @@ export interface AuthDeps {
   /** Full reload of both project lists. */
   loadProjects(silent?: boolean): Promise<void>;
   /** Boot continuation: keep/auto-select project, board + SSE. */
-  continueBoot(deepLinkedTaskId: string | null): Promise<void>;
+  continueBoot(
+    deepLinkedTaskId: string | null,
+    deepLinkedDashboardProjectId?: string | null,
+    deepLinkedProjectsOverview?: boolean,
+  ): Promise<void>;
+  /** Called when refreshSessionIdentity observes a changed session identity. */
+  onIdentityChanged?: () => void;
   connectSse(): void;
   disconnectSse(resetBackoff: boolean): void;
   loadBoard(): Promise<void>;
@@ -159,10 +165,14 @@ export function createAuthModule(deps: AuthDeps): AuthModule {
       if (deps.loadError()) return;
       const deepLinkedTaskId =
         typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
+      const deepLinkedDashboardProjectId =
+        typeof window !== "undefined" ? dashboardRouteProjectIdFromPath(window.location.pathname) : null;
+      const deepLinkedProjectsOverview =
+        typeof window !== "undefined" ? isProjectsOverviewPath(window.location.pathname) : false;
       // Mirror saveAuthToken()'s post-auth continuation: clear boot error, keep a
       // valid manual selection else auto-select, load board + SSE.
       deps.clearBootError();
-      void deps.continueBoot(deepLinkedTaskId);
+      void deps.continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId, deepLinkedProjectsOverview);
     } catch (e) {
       if (ApiError.isUnauthorized(e)) deps.setLoginError("Invalid username or password.");
       else deps.setLoginError(errMsg(e));
@@ -203,18 +213,25 @@ export function createAuthModule(deps: AuthDeps): AuthModule {
    *  so we just clear any stale cached identity in that case without touching the token. */
   const refreshSessionIdentity = async (): Promise<void> => {
     if (!api.getAuthToken()) return; // nothing to inspect
+    const prevId = deps.identity()?.id ?? null;
     try {
       const res = await api.getSession();
       const id = normalizeIdentity(res.identity);
       deps.setIdentity(id);
       if (id) storeSession(id);
       else clearStoredSession();
+      if ((id?.id ?? null) !== prevId) {
+        deps.onIdentityChanged?.();
+      }
     } catch {
       // No live session for this bearer — drop the cached identity so the header
       // doesn't keep showing a name whose session is gone. Token is left alone: it
       // may still be a valid shared/operator/off credential.
       deps.setIdentity(null);
       clearStoredSession();
+      if (prevId !== null) {
+        deps.onIdentityChanged?.();
+      }
     }
   };
 
@@ -233,10 +250,14 @@ export function createAuthModule(deps: AuthDeps): AuthModule {
       deps.clearBootError();
       const deepLinkedTaskId =
         typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
+      const deepLinkedDashboardProjectId =
+        typeof window !== "undefined" ? dashboardRouteProjectIdFromPath(window.location.pathname) : null;
+      const deepLinkedProjectsOverview =
+        typeof window !== "undefined" ? isProjectsOverviewPath(window.location.pathname) : false;
       // Reuse the boot continuation: keeps a valid manual selection, else
       // auto-selects the first project (canonical server order), persists it,
       // loads its board + SSE; with zero projects shows the empty state.
-      void deps.continueBoot(deepLinkedTaskId);
+      void deps.continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId, deepLinkedProjectsOverview);
     });
   };
 

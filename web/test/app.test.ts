@@ -2895,6 +2895,43 @@ test("ArchiveMgmt: confirmArchiveAllDone archives EVERY done task (incl. hidden 
       }
       return { id, version: 2 };
     };
+    (api as any).getProjectsOverview = async () => ({
+      projects: [
+        {
+          id: "proj-a",
+          name: "Alpha",
+          description: "Alpha project",
+          archived: false,
+          created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-10T00:00:00Z",
+          task_counts: { todo: 1, doing: 0, done: 1 },
+          health: {
+            active_claims: 0,
+            expired_claims: 0,
+            stalled: 0,
+            needs_attention: 0,
+            last_activity_at: "2026-11-10T00:00:00Z",
+          },
+        },
+        {
+          id: "proj-b",
+          name: "Beta",
+          description: "Beta project",
+          archived: false,
+          created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-12T00:00:00Z",
+          task_counts: { todo: 2, doing: 1, done: 0 },
+          health: {
+            active_claims: 1,
+            expired_claims: 0,
+            stalled: 0,
+            needs_attention: 1,
+            last_activity_at: "2026-11-12T00:00:00Z",
+          },
+        },
+      ],
+      total: 2,
+    });
     (api as any).getTask = async (id: string) => ({ id, status: "done", archived: false, version: 2 });
 
     app.archiveAllDoneConfirmOpen = true;
@@ -3165,6 +3202,43 @@ test("MultiSelect: batch engine retries a 409 version conflict exactly once per 
       }
       return { ...app.board.tasks.todo.find((t: any) => t.id === id), priority: 2, version: req.version + 1 };
     };
+    (api as any).getProjectsOverview = async () => ({
+      projects: [
+        {
+          id: "proj-a",
+          name: "Alpha",
+          description: "Alpha project",
+          archived: false,
+          created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-10T00:00:00Z",
+          task_counts: { todo: 1, doing: 0, done: 1 },
+          health: {
+            active_claims: 0,
+            expired_claims: 0,
+            stalled: 0,
+            needs_attention: 0,
+            last_activity_at: "2026-11-10T00:00:00Z",
+          },
+        },
+        {
+          id: "proj-b",
+          name: "Beta",
+          description: "Beta project",
+          archived: false,
+          created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-12T00:00:00Z",
+          task_counts: { todo: 2, doing: 1, done: 0 },
+          health: {
+            active_claims: 1,
+            expired_claims: 0,
+            stalled: 0,
+            needs_attention: 1,
+            last_activity_at: "2026-11-12T00:00:00Z",
+          },
+        },
+      ],
+      total: 2,
+    });
     (api as any).getTask = async (id: string) => ({ id, status: "todo", version: 5 });
 
     await app.batchSetPriority(2);
@@ -4122,6 +4196,7 @@ test("DashboardNav: board <-> dashboard <-> /tasks/<id> popstate and keyboard sh
   const origGetReport = api.getProjectReport;
   const origGetBoard = api.getBoard;
   const origGetTask = api.getTask;
+  const origGetOverview = api.getProjectsOverview;
 
   const win: any = {
     innerWidth: 1280,
@@ -4156,6 +4231,43 @@ test("DashboardNav: board <-> dashboard <-> /tasks/<id> popstate and keyboard sh
     (api as any).getBoard = async (pid: string) => ({
       project_id: pid,
       columns: { todo: [], doing: [], done: [] },
+    });
+    (api as any).getProjectsOverview = async () => ({
+      projects: [
+        {
+          id: "proj-a",
+          name: "Alpha",
+          description: "Alpha project",
+          archived: false,
+          created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-10T00:00:00Z",
+          task_counts: { todo: 1, doing: 0, done: 1 },
+          health: {
+            active_claims: 0,
+            expired_claims: 0,
+            stalled: 0,
+            needs_attention: 0,
+            last_activity_at: "2026-11-10T00:00:00Z",
+          },
+        },
+        {
+          id: "proj-b",
+          name: "Beta",
+          description: "Beta project",
+          archived: false,
+          created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-12T00:00:00Z",
+          task_counts: { todo: 2, doing: 1, done: 0 },
+          health: {
+            active_claims: 1,
+            expired_claims: 0,
+            stalled: 0,
+            needs_attention: 1,
+            last_activity_at: "2026-11-12T00:00:00Z",
+          },
+        },
+      ],
+      total: 2,
     });
     (api as any).getTask = async (id: string) => ({
       id,
@@ -4459,6 +4571,7 @@ test("NavUnify: unified Projects | Board | Dashboard state, activeNavView, route
   const origGetReport = api.getProjectReport;
   const origGetBoard = api.getBoard;
   const origGetTask = api.getTask;
+  const origGetOverview = api.getProjectsOverview;
   const historyStack: string[] = ["/?project=proj-a"];
   let idx = 0;
 
@@ -4515,6 +4628,43 @@ test("NavUnify: unified Projects | Board | Dashboard state, activeNavView, route
     (api as any).getBoard = async (pid: string) => ({
       project_id: pid,
       tasks: { todo: [], doing: [], done: [] },
+    });
+    (api as any).getProjectsOverview = async () => ({
+      projects: [
+        {
+          id: "proj-a",
+          name: "Alpha",
+          description: "Alpha project",
+          archived: false,
+          created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-10T00:00:00Z",
+          task_counts: { todo: 1, doing: 0, done: 1 },
+          health: {
+            active_claims: 0,
+            expired_claims: 0,
+            stalled: 0,
+            needs_attention: 0,
+            last_activity_at: "2026-11-10T00:00:00Z",
+          },
+        },
+        {
+          id: "proj-b",
+          name: "Beta",
+          description: "Beta project",
+          archived: false,
+          created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-12T00:00:00Z",
+          task_counts: { todo: 2, doing: 1, done: 0 },
+          health: {
+            active_claims: 1,
+            expired_claims: 0,
+            stalled: 0,
+            needs_attention: 1,
+            last_activity_at: "2026-11-12T00:00:00Z",
+          },
+        },
+      ],
+      total: 2,
     });
     (api as any).getTask = async (id: string) => ({
       id,
@@ -4664,11 +4814,25 @@ test("NavUnify: unified Projects | Board | Dashboard state, activeNavView, route
       assert.equal(app2.projectsOverviewOpen, true);
       assert.equal(win.location.pathname, "/projects");
       assert.equal(doc.title, "Projects – Rävn");
+
+      // 9. openProjectDashboard(projectId) switches project, closes overview, opens dashboard & pushes URL
+      app.openProjectsOverview();
+      await new Promise((r) => setTimeout(r, 15));
+      assert.equal(app.overviewProjects.length, 2);
+      assert.equal(app.filteredOverviewProjects().length, 2);
+      assert.equal(app.overviewCompletionStats(app.overviewProjects[0]).pct, 50);
+      app.openProjectDashboard("proj-b");
+      assert.equal(app.projectsOverviewOpen, false);
+      assert.equal(app.dashboardOpen, true);
+      assert.equal(app.selectedProjectId, "proj-b");
+      assert.equal(win.location.pathname, "/projects/proj-b/dashboard");
+      assert.equal(doc.title, "Dashboard – Beta – Rävn");
     });
   } finally {
     api.getProjectReport = origGetReport;
     api.getBoard = origGetBoard;
     api.getTask = origGetTask;
+    api.getProjectsOverview = origGetOverview;
   }
 });
 

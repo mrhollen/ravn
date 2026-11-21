@@ -29,6 +29,7 @@ import type {
   Project,
   ProjectReport,
   ProjectReportHistory,
+  ProjectsOverviewResponse,
   RelationRow,
   ReportHistoryBucket,
   StartOpenCodeInput,
@@ -331,6 +332,26 @@ export const api = {
     if (mine) qs.set("mine", mine);
     const s = qs.toString();
     return request<ListProjectsResponse>(`/projects${s ? `?${s}` : ""}`);
+  },
+
+  /** Cross-project overview with open task counts and operational health metrics. */
+  getProjectsOverview(opts?: {
+    archived?: boolean;
+    mine?: "created";
+    stalledMinutes?: number;
+  }): Promise<ProjectsOverviewResponse> {
+    const qs = new URLSearchParams();
+    if (opts?.archived) qs.set("archived", "true");
+    if (opts?.mine) qs.set("mine", opts.mine);
+    if (
+      opts?.stalledMinutes !== undefined &&
+      Number.isFinite(opts.stalledMinutes) &&
+      opts.stalledMinutes >= 0
+    ) {
+      qs.set("stalled_minutes", String(Math.trunc(opts.stalledMinutes)));
+    }
+    const s = qs.toString();
+    return request<ProjectsOverviewResponse>(`/projects/overview${s ? `?${s}` : ""}`);
   },
 
   createProject(req: CreateProjectReq): Promise<Project> {

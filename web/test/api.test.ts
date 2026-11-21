@@ -612,3 +612,26 @@ test("API: ApiError.isForbidden distinguishes 403 (membership deny) from 401 (un
     assert.equal(ApiError.isUnauthorized(e), false, "403 is NOT unauthenticated");
   });
 });
+
+test("API: getProjectsOverview builds query params for archived, mine, and stalledMinutes", async () => {
+  const calls: Array<{ url: string; init?: any }> = [];
+  const sample = { projects: [], total: 0 };
+  await withFetch(
+    captureFetch(calls, () => jsonResp(200, sample)),
+    async () => {
+      assert.deepEqual(await api.getProjectsOverview(), sample);
+      await api.getProjectsOverview({ archived: true, mine: "created", stalledMinutes: 45.9 });
+      await api.getProjectsOverview({ stalledMinutes: 0 });
+      await api.getProjectsOverview({ archived: false, stalledMinutes: -5 });
+    },
+  );
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    [
+      "/api/v1/projects/overview",
+      "/api/v1/projects/overview?archived=true&mine=created&stalled_minutes=45",
+      "/api/v1/projects/overview?stalled_minutes=0",
+      "/api/v1/projects/overview",
+    ],
+  );
+});
