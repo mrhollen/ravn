@@ -391,7 +391,9 @@ test.describe('Mobile slide-down menu panel (360px)', () => {
     await expect(page.getByRole('button', { name: 'Board menu' })).toBeHidden();
     await expect(page.getByTestId('mobile-menu-panel')).toHaveCount(0);
 
-    // The same filter/sort controls live in the desktop tier-2 strip instead.
+    // The filter/scope controls and Display popover trigger live in the desktop tier-2 strip instead.
+    await expect(page.getByTestId('board-scope-select')).toBeVisible();
+    await page.getByTestId('display-popover-btn').click();
     await expect(page.getByTestId('sort-key')).toBeVisible();
     await expect(page.getByTestId('sort-hoist-parents')).toBeVisible();
 

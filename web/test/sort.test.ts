@@ -11,6 +11,7 @@ import {
   LS_SORT,
   SORT_OPTIONS,
   DEFAULT_SORT_DIR,
+  activeDisplayOptionCount,
   compareTasks,
   isParentTask,
   isSortKey,
@@ -216,4 +217,27 @@ test("sort: sortColumnTasks — no-op path returns the SAME array reference", ()
   const input = [task("a"), task("b")];
   const out = sortColumnTasks(input, "todo", "", "asc", false);
   assert.equal(out, input); // identity preserved (columns() pass-through contract)
+});
+
+test("sort: activeDisplayOptionCount counts non-default display preferences", () => {
+  const defaults = {
+    sortKey: "" as SortKey,
+    hoistParents: true,
+    cardDensity: "comfortable" as const,
+    showArchived: false,
+  };
+  assert.equal(activeDisplayOptionCount(defaults), 0);
+  assert.equal(activeDisplayOptionCount({ ...defaults, sortKey: "priority" }), 1);
+  assert.equal(activeDisplayOptionCount({ ...defaults, hoistParents: false }), 1);
+  assert.equal(activeDisplayOptionCount({ ...defaults, cardDensity: "compact" }), 1);
+  assert.equal(activeDisplayOptionCount({ ...defaults, showArchived: true }), 1);
+  assert.equal(
+    activeDisplayOptionCount({
+      sortKey: "updated_at",
+      hoistParents: false,
+      cardDensity: "compact",
+      showArchived: true,
+    }),
+    4,
+  );
 });

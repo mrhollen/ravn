@@ -1744,7 +1744,9 @@ test.describe('Web E2E test suite', () => {
     // Canonical server order: priority DESC → Gamma(4), Alpha(2), Beta(0)
     await expect.poll(cardTitles, { timeout: 10000 }).toEqual(['Gamma', 'Alpha', 'Beta']);
 
-    // Default state: no sort active
+    // Default state: no sort active (open Display popover to inspect/use sort controls)
+    await page.getByTestId('display-popover-btn').click();
+    await expect(page.getByTestId('display-popover')).toBeVisible();
     const sortKeySelect = page.locator('[data-testid="sort-key"]');
     const sortDirBtn = page.locator('[data-testid="sort-dir"]');
     const sortClearBtn = page.locator('[data-testid="sort-clear"]');
@@ -1803,6 +1805,7 @@ test.describe('Web E2E test suite', () => {
     await expect(page).toHaveTitle('Rävn');
     // Project selection persists across reload (localStorage), shown on the trigger.
     await expect(page.getByTestId('project-select')).toContainText('Sorting Test Project');
+    await page.getByTestId('display-popover-btn').click();
     await expect(sortKeySelect).toHaveValue('created_at');
     await expect(sortDirBtn).toContainText('↓ Descending');
     await expect.poll(cardTitles).toEqual(['Gamma', 'Beta', 'Alpha']);
@@ -1825,7 +1828,8 @@ test.describe('Web E2E test suite', () => {
     await expect(todoCol).toBeVisible();
     const cardTitles = async () => (await todoCol.locator('h3').allTextContents()).map((t) => t.trim());
 
-    // Default state: no sort selected, and the hoist toggle is visible in the bar…
+    // Default state: no sort selected, and the hoist toggle is in the Display popover…
+    await page.getByTestId('display-popover-btn').click();
     await expect(page.locator('[data-testid="sort-key"]')).toHaveValue('');
     const hoistToggle = page.locator('[data-testid="sort-hoist-parents"]');
     await expect(hoistToggle).toBeVisible();
@@ -1852,6 +1856,7 @@ test.describe('Web E2E test suite', () => {
 
     // Priority ascending is the sort that would bury Parent A last — without
     // hoisting the column reads [Parent B (P1), Standalone C (P2), Parent A (P3)].
+    await page.getByTestId('display-popover-btn').click();
     await page.locator('[data-testid="sort-key"]').selectOption('priority');
     await expect(page.locator('[data-testid="sort-dir"]')).toContainText('↑ Ascending');
 
@@ -1872,6 +1877,7 @@ test.describe('Web E2E test suite', () => {
     await expect(todoCol).toBeVisible();
     const cardTitles = async () => (await todoCol.locator('h3').allTextContents()).map((t) => t.trim());
 
+    await page.getByTestId('display-popover-btn').click();
     const hoistToggle = page.locator('[data-testid="sort-hoist-parents"]');
     await page.locator('[data-testid="sort-key"]').selectOption('priority');
     await expect(hoistToggle).toHaveAttribute('aria-pressed', 'true'); // default ON before the flip
@@ -1885,6 +1891,7 @@ test.describe('Web E2E test suite', () => {
     // The preference (alongside the sort choice) survives a full page reload.
     await page.reload();
     await expect(page).toHaveTitle('Rävn');
+    await page.getByTestId('display-popover-btn').click();
     await expect(page.locator('[data-testid="sort-key"]')).toHaveValue('priority');
     await expect(hoistToggle).toHaveAttribute('aria-pressed', 'false');
     await expect.poll(cardTitles).toEqual(['Parent B', 'Standalone C', 'Parent A']);

@@ -250,3 +250,40 @@ test("move: a non-HTMLElement activeElement is ignored (activeKind element)", ()
     assert.equal(items[0].focused, 1);
   });
 });
+
+test("filterItem excludes hidden/filtered elements from roving navigation", () => {
+  const visible1 = new FakeEl({ "data-vis": "1" });
+  const hidden = new FakeEl({ "data-vis": "0" });
+  const visible2 = new FakeEl({ "data-vis": "1" });
+  const items = [visible1, hidden, visible2];
+  const doc = fakeDocument(visible1);
+  for (const it of items) {
+    const orig = it.focus.bind(it);
+    it.focus = () => {
+      orig();
+      doc.activeElement = it;
+    };
+  }
+  const s = { open: false };
+  const ctrl = createMenuController(
+    {
+      isOpen: () => s.open,
+      setOpen: (b) => { s.open = b; },
+      panel: () => ({ querySelectorAll: () => items }) as unknown as HTMLElement | null,
+      trigger: () => null,
+      insideControl: () => true,
+    },
+    {
+      itemSelector: "button",
+      activeKind: "element",
+      pickInitial: menuFirstLastIndex,
+      filterItem: (el) => el.getAttribute("data-vis") === "1",
+    },
+  );
+  withGlobals({ document: doc, HTMLElement: FakeEl }, () => {
+    ctrl.open("first");
+    ctrl.move(1);
+    assert.equal(hidden.focused, 0);
+    assert.equal(visible2.focused, 1);
+  });
+});

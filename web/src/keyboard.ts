@@ -35,6 +35,7 @@ export interface EscapeContext {
   confirmNewTaskDiscard?: boolean;
   projectMenuOpen?: boolean;
   headerMenuOpen?: boolean;
+  displayMenuOpen?: boolean;
   showNewProject?: boolean;
   cardMenuOpen?: boolean;
   showMobileMenu?: boolean;
@@ -69,6 +70,7 @@ export type EscapeAction =
   | "request-close-new-task"
   | "close-project-menu"
   | "close-header-menu"
+  | "close-display-menu"
   | "close-new-project"
   | "close-card-menu"
   | "close-mobile-menu"
@@ -99,6 +101,7 @@ export function escapeAction(ctx: EscapeContext): EscapeAction | null {
   }
   if (ctx.projectMenuOpen) return "close-project-menu"; // header dropdowns are topmost
   if (ctx.headerMenuOpen) return "close-header-menu";
+  if (ctx.displayMenuOpen) return "close-display-menu";
   if (ctx.showNewProject) return "close-new-project";
   if (ctx.cardMenuOpen) return "close-card-menu";
   if (ctx.showMobileMenu) return "close-mobile-menu";

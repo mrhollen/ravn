@@ -168,3 +168,22 @@ export function sortColumnTasks(
   }
   return tasks;
 }
+
+/** Board display options whose non-default states are counted on the Display popover trigger. */
+export interface DisplayOptionState {
+  sortKey: SortKey;
+  hoistParents: boolean;
+  cardDensity: "comfortable" | "compact";
+  showArchived: boolean;
+}
+
+/** Count how many board display preferences differ from their defaults:
+ *  active sort key, hoist-parents disabled, compact card density, or archived view enabled. */
+export function activeDisplayOptionCount(opts: DisplayOptionState): number {
+  let count = 0;
+  if (opts.sortKey !== "") count++;
+  if (!opts.hoistParents) count++;
+  if (opts.cardDensity !== "comfortable") count++;
+  if (opts.showArchived) count++;
+  return count;
+}

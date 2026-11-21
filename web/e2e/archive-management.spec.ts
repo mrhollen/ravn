@@ -207,6 +207,7 @@ test.describe('Task archive management (01M5XSNN2KA876TR0QGE79YFPT)', () => {
     await expectProjectSelected(page, 'Archive Suite');
 
     // Live board right now: Other Todo + Moving Gamma (Solo Card & both Bulk rows archived).
+    await page.getByTestId('display-popover-btn').click();
     const toggle = page.getByTestId('show-archived-toggle');
     await expect(toggle).toBeVisible();
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
@@ -244,6 +245,7 @@ test.describe('Task archive management (01M5XSNN2KA876TR0QGE79YFPT)', () => {
 
     // OFF is an exact restore of the live board: the unarchived Solo Card is back
     // on the todo column; the two archived Bulk rows stay out.
+    await page.getByTestId('display-popover-btn').click();
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await expect(cardByTitle(page, 'Solo Card')).toBeVisible();

@@ -4861,6 +4861,60 @@ test("NavUnify: index.html has unified primary-nav, mobile nav group, board-tool
   }
 });
 
+test("DisplayPopover: toggle, Escape cascade, mutual exclusion, activeDisplayOptionCount, and index.html wiring", () => {
+  const app = ravnApp() as any;
+
+  assert.equal(app.displayMenuOpen, false);
+  app.toggleDisplayMenu();
+  assert.equal(app.displayMenuOpen, true);
+  app.toggleDisplayMenu();
+  assert.equal(app.displayMenuOpen, false);
+
+  // Escape closes displayMenuOpen before new-project / mobile strip
+  app.displayMenuOpen = true;
+  app.showNewProject = true;
+  app.dismissTop();
+  assert.equal(app.displayMenuOpen, false);
+  assert.equal(app.showNewProject, true);
+
+  // Mutual exclusion with project and header menus
+  app.projectMenuOpen = true;
+  app.openDisplayMenu("first");
+  assert.equal(app.displayMenuOpen, true);
+  assert.equal(app.projectMenuOpen, false);
+  app.openHeaderMenu("first");
+  assert.equal(app.headerMenuOpen, true);
+  assert.equal(app.displayMenuOpen, false);
+  app.openDisplayMenu("last");
+  assert.equal(app.displayMenuOpen, true);
+  assert.equal(app.headerMenuOpen, false);
+  app.openProjectMenu("first");
+  assert.equal(app.projectMenuOpen, true);
+  assert.equal(app.displayMenuOpen, false);
+
+  // activeDisplayOptionCount tracks sortKey, hoistParents, cardDensity, showArchived
+  app.sortKey = "";
+  app.hoistParents = true;
+  app.cardDensity = "comfortable";
+  app.showArchived = false;
+  assert.equal(app.activeDisplayOptionCount(), 0);
+  app.sortKey = "priority";
+  assert.equal(app.activeDisplayOptionCount(), 1);
+  app.hoistParents = false;
+  assert.equal(app.activeDisplayOptionCount(), 2);
+  app.cardDensity = "compact";
+  assert.equal(app.activeDisplayOptionCount(), 3);
+  app.showArchived = true;
+  assert.equal(app.activeDisplayOptionCount(), 4);
+
+  const html = fs.readFileSync(path.resolve(__dirname, "../index.html"), "utf-8");
+  assert.match(html, /data-testid="display-popover-anchor"/);
+  assert.match(html, /data-testid="display-popover-btn"/);
+  assert.match(html, /data-testid="display-popover"/);
+  assert.match(html, /data-testid="display-active-indicator"/);
+  assert.ok(!/max-w-\[8rem\][^>]*data-testid="sort-key"|data-testid="sort-key"[^>]*max-w-\[8rem\]/.test(html));
+});
+
 
 
 

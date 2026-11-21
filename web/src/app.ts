@@ -86,6 +86,7 @@ import { TOAST_BASE_CLASS, toastClassList, toastErrorPrefix } from "./ui/toast";
 import { persistTheme, readStoredTheme, resolveDark, type ThemeMode } from "./theme";
 import {
   SORT_OPTIONS,
+  activeDisplayOptionCount as computeActiveDisplayOptionCount,
   readStoredHoistParents,
   readStoredSort,
 } from "./sort";
@@ -156,7 +157,7 @@ import {
 // main.ts) intact until P2 switches consumers to direct module imports.
 export { LS_THEME } from "./theme";
 export type { ThemeMode } from "./theme";
-export { LS_HOIST_PARENTS, LS_SORT, SORT_OPTIONS, isSortKey } from "./sort";
+export { LS_HOIST_PARENTS, LS_SORT, SORT_OPTIONS, activeDisplayOptionCount, isSortKey } from "./sort";
 export type { SortDir, SortKey } from "./sort";
 export {
   MOBILE_DETAIL_MAX_WIDTH,
@@ -802,6 +803,7 @@ export function ravnApp() {
      *  first one when nothing is selected), "first"/"last" for ArrowDown/Up on
      *  a closed trigger. Shared controller — modules/menus.ts (Phase 2 batch A). */
     openProjectMenu(focusTarget: "selected" | "first" | "last" = "selected"): void {
+      if (this.displayMenuOpen) this.closeDisplayMenu();
       this._projectMenuController().open(focusTarget);
     },
 
@@ -908,6 +910,7 @@ export function ravnApp() {
     openHeaderMenu(focusTarget: "first" | "last" = "first"): void {
       if (this.headerMenuOpen) return;
       if (this.projectMenuOpen) this.closeProjectMenu();
+      if (this.displayMenuOpen) this.closeDisplayMenu();
       this._headerMenuController().open(focusTarget);
     },
 
@@ -932,6 +935,72 @@ export function ravnApp() {
     openTokenFromMenu(): void {
       this.closeHeaderMenu();
       this.openAuthModal();
+    },
+
+    // -------------------------------------------------- board display popover
+    displayMenuOpen: false,
+    _displayMenu: null as MenuController | null,
+
+    /** Number of non-default board display preferences (sort, hoist, density, archived). */
+    activeDisplayOptionCount(): number {
+      return computeActiveDisplayOptionCount({
+        sortKey: this.sortKey,
+        hoistParents: this.hoistParents,
+        cardDensity: this.cardDensity,
+        showArchived: this.showArchived,
+      });
+    },
+
+    toggleDisplayMenu(): void {
+      if (this.displayMenuOpen) this.closeDisplayMenu();
+      else this.openDisplayMenu("first");
+    },
+
+    _displayMenuController(): MenuController {
+      if (this._displayMenu) return this._displayMenu;
+      const m = createMenuController(
+        {
+          isOpen: () => this.displayMenuOpen,
+          setOpen: (b) => {
+            this.displayMenuOpen = b;
+          },
+          panel: () =>
+            typeof document === "undefined"
+              ? null
+              : document.querySelector<HTMLElement>('[data-testid="display-popover"]'),
+          trigger: () =>
+            typeof document === "undefined"
+              ? null
+              : document.querySelector<HTMLElement>('[data-testid="display-popover-btn"]'),
+          insideControl: (t) => {
+            if (typeof document === "undefined" || !(t instanceof Node)) return false;
+            const wrap = document.querySelector<HTMLElement>('[data-testid="display-popover-anchor"]');
+            return !!wrap && wrap.contains(t);
+          },
+        },
+        {
+          itemSelector: FOCUSABLE_SELECTOR,
+          activeKind: "element",
+          pickInitial: (items, target) => menuFirstLastIndex(items.length, target),
+        },
+      );
+      this._displayMenu = m;
+      return m;
+    },
+
+    openDisplayMenu(focusTarget: "first" | "last" = "first"): void {
+      if (this.displayMenuOpen) return;
+      if (this.projectMenuOpen) this.closeProjectMenu();
+      if (this.headerMenuOpen) this.closeHeaderMenu();
+      this._displayMenuController().open(focusTarget);
+    },
+
+    closeDisplayMenu(restoreFocus = false): void {
+      this._displayMenuController().close(restoreFocus);
+    },
+
+    moveDisplayFocus(dir: number | "home" | "end"): void {
+      this._displayMenuController().move(dir);
     },
 
     // ------------------------------------------------------------ new project
@@ -2070,6 +2139,7 @@ export function ravnApp() {
       this.fullPageOpen = false;
       this.fullPagePushed = false;
       this.showMobileMenu = false;
+      if (this.displayMenuOpen) this.closeDisplayMenu();
       this.projectsOverviewOpen = true;
       if (typeof window !== "undefined" && window.history) {
         const current =
@@ -2580,6 +2650,7 @@ export function ravnApp() {
       this.fullPageOpen = false;
       this.fullPagePushed = false;
       this.showMobileMenu = false;
+      if (this.displayMenuOpen) this.closeDisplayMenu();
       if (!this.dashboardOpen) {
         this._dashboardModule().openDashboard();
       }
@@ -3757,6 +3828,7 @@ export function ravnApp() {
         confirmNewTaskDiscard: this.confirmNewTaskDiscard,
         projectMenuOpen: this.projectMenuOpen,
         headerMenuOpen: this.headerMenuOpen,
+        displayMenuOpen: this.displayMenuOpen,
         showNewProject: this.showNewProject,
         cardMenuOpen: Boolean(this.cardMenuTaskId),
         showMobileMenu: this.showMobileMenu,
@@ -3827,6 +3899,9 @@ export function ravnApp() {
           break;
         case "close-header-menu":
           this.closeHeaderMenu(true);
+          break;
+        case "close-display-menu":
+          this.closeDisplayMenu(true);
           break;
         case "close-new-project":
           this.showNewProject = false;
