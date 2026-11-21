@@ -36,6 +36,7 @@ const CHAIN: { set: (c: EscapeContext) => void; token: EscapeAction }[] = [
   { set: (c) => { c.showMobileMenu = true; }, token: "close-mobile-menu" },
   { set: (c) => { c.hasSelection = true; }, token: "clear-selection" },
   { set: (c) => { c.dashboardOpen = true; }, token: "close-dashboard" },
+  { set: (c) => { c.projectsOverviewOpen = true; }, token: "close-projects-overview" },
 ];
 
 test("escapeAction: every level selects its own token when it is the only open surface", () => {

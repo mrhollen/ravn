@@ -16,12 +16,49 @@ async function apiJson(url: string, method: string, body?: unknown): Promise<any
   return res.status === 204 ? undefined : res.json();
 }
 
-test.describe('Dashboard navigation, deep-linking & keyboard access (01M75VJ7GWS2M6TZ2K5MVPQ4P6)', () => {
+function relativeLuminance(rgb: [number, number, number]): number {
+  const [r, g, b] = rgb.map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(fg: [number, number, number], bg: [number, number, number]): number {
+  const l1 = relativeLuminance(fg);
+  const l2 = relativeLuminance(bg);
+  const hi = Math.max(l1, l2);
+  const lo = Math.min(l1, l2);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+async function measureButtonContrast(locator: import('@playwright/test').Locator): Promise<number> {
+  const { fg, bg } = await locator.evaluate((el) => {
+    const parseColor = (cssVal: string): [number, number, number] => {
+      const c = document.createElement('canvas');
+      c.width = 1;
+      c.height = 1;
+      const ctx = c.getContext('2d')!;
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = cssVal;
+      ctx.fillRect(0, 0, 1, 1);
+      const data = ctx.getImageData(0, 0, 1, 1).data;
+      return [data[0], data[1], data[2]];
+    };
+    const cs = getComputedStyle(el as HTMLElement);
+    return {
+      fg: parseColor(cs.color),
+      bg: parseColor(cs.backgroundColor),
+    };
+  });
+  return contrastRatio(fg, bg);
+}
+
+test.describe('Unified navigation, deep-linking & keyboard access (01M7XY9RJZDASZ1771YFFZEJMF)', () => {
   let serverUrl = '';
   let projA: { id: string; name: string };
   let projB: { id: string; name: string };
   let taskA: { id: string; title: string };
-  let taskB: { id: string; title: string };
   let uncaughtConsoleErrors: string[] = [];
 
   test.beforeAll(async ({ serverUrl: sharedServerUrl }) => {
@@ -29,7 +66,7 @@ test.describe('Dashboard navigation, deep-linking & keyboard access (01M75VJ7GWS
 
     projA = await apiJson(`${serverUrl}/api/v1/projects`, 'POST', {
       name: `DashNav Alpha ${randomUUID()}`,
-      description: 'First seeded project for dashboard navigation',
+      description: 'First seeded project for unified navigation',
       actor: SEED_ACTOR,
     });
     projB = await apiJson(`${serverUrl}/api/v1/projects`, 'POST', {
@@ -48,15 +85,13 @@ test.describe('Dashboard navigation, deep-linking & keyboard access (01M75VJ7GWS
       })
     ).task;
 
-    taskB = (
-      await apiJson(`${serverUrl}/api/v1/tasks`, 'POST', {
-        project_id: projB.id,
-        title: 'Beta DeepLink Task',
-        priority: 0,
-        assignee: { name: 'grace', type: 'human' },
-        actor: SEED_ACTOR,
-      })
-    ).task;
+    await apiJson(`${serverUrl}/api/v1/tasks`, 'POST', {
+      project_id: projB.id,
+      title: 'Beta DeepLink Task',
+      priority: 0,
+      assignee: { name: 'grace', type: 'human' },
+      actor: SEED_ACTOR,
+    });
   });
 
   test.beforeEach(async ({ page }) => {
@@ -75,56 +110,82 @@ test.describe('Dashboard navigation, deep-linking & keyboard access (01M75VJ7GWS
     expect(uncaughtConsoleErrors).toEqual([]);
   });
 
-  test('round-trips board <-> dashboard across header and docked nav entries', async ({ page }) => {
+  test('AC1/AC2: unified top-bar switches Projects | Board | Dashboard, hides Tier-2 toolbar on non-board views, and removes duplicates', async ({ page }) => {
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, projA.id);
 
-    const topBtn = page.getByTestId('dashboard-nav-btn');
-    const dockedBoardBtn = page.getByTestId('docked-board-nav-btn');
-    const dockedDashBtn = page.getByTestId('docked-dashboard-nav-btn');
+    // Zero legacy duplicate controls
+    for (const oldId of ['dashboard-nav-btn', 'docked-board-nav-btn', 'docked-dashboard-nav-btn', 'mobile-dashboard-nav-btn']) {
+      await expect(page.getByTestId(oldId)).toHaveCount(0);
+    }
+    await expect(page.locator('nav[aria-label="Primary navigation"]')).toHaveCount(1);
+
+    const projectsBtn = page.getByTestId('nav-projects-btn');
+    const boardBtn = page.getByTestId('nav-board-btn');
+    const dashBtn = page.getByTestId('nav-dashboard-btn');
+    const brandBtn = page.getByTestId('brand-logo-btn');
+    const toolbar = page.getByTestId('board-toolbar');
+    const projectsView = page.getByTestId('projects-overview-view');
     const dashView = page.getByTestId('dashboard-view');
     const boardMain = page.locator('main section', { has: page.getByRole('heading', { name: 'To Do' }) });
 
-    // 1. Header nav -> dashboard -> header nav -> board
-    await expect(topBtn).toBeEnabled();
-    await expect(topBtn).toHaveAttribute('aria-pressed', 'false');
-    await topBtn.click();
+    // Initial Board state
+    await expect(boardBtn).toHaveAttribute('aria-current', 'page');
+    await expect(projectsBtn).not.toHaveAttribute('aria-current', 'page');
+    await expect(dashBtn).not.toHaveAttribute('aria-current', 'page');
+    await expect(toolbar).toBeVisible();
+    await expect(boardMain).toBeVisible();
+    await expect(projectsView).toBeHidden();
+    await expect(dashView).toBeHidden();
 
+    // 1. Board -> Projects Overview via nav-projects-btn
+    await projectsBtn.click();
+    await expect(projectsView).toBeVisible();
+    await expect(projectsView.getByRole('heading', { name: 'Projects' })).toBeVisible();
+    await expect(boardMain).toBeHidden();
+    await expect(dashView).toBeHidden();
+    await expect(toolbar).toBeHidden();
+    expect(new URL(page.url()).pathname).toBe('/projects');
+    await expect(page).toHaveTitle('Projects – Rävn');
+    await expect(projectsBtn).toHaveAttribute('aria-current', 'page');
+    await expect(boardBtn).not.toHaveAttribute('aria-current', 'page');
+    await expect(dashBtn).not.toHaveAttribute('aria-current', 'page');
+
+    // 2. Projects Overview -> Dashboard via nav-dashboard-btn
+    await dashBtn.click();
     await expect(dashView).toBeVisible();
+    await expect(projectsView).toBeHidden();
+    await expect(boardMain).toBeHidden();
+    await expect(toolbar).toBeHidden();
     await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
-    await expect(topBtn).toHaveAttribute('aria-pressed', 'true');
-    await expect(dockedDashBtn).toHaveAttribute('aria-pressed', 'true');
-    await expect(dockedBoardBtn).toHaveAttribute('aria-pressed', 'false');
+    await expect(dashBtn).toHaveAttribute('aria-current', 'page');
+    await expect(projectsBtn).not.toHaveAttribute('aria-current', 'page');
+    await expect(boardBtn).not.toHaveAttribute('aria-current', 'page');
     await expect(page.getByTestId('dashboard-total-count')).toHaveText('1 task');
 
-    await topBtn.click();
-    await expect(dashView).toBeHidden();
+    // 3. Dashboard -> Board via nav-board-btn
+    await boardBtn.click();
     await expect(boardMain).toBeVisible();
+    await expect(toolbar).toBeVisible();
+    await expect(dashView).toBeHidden();
+    await expect(projectsView).toBeHidden();
     expect(new URL(page.url()).pathname).toBe('/');
-    await expect(topBtn).toHaveAttribute('aria-pressed', 'false');
+    await expect(boardBtn).toHaveAttribute('aria-current', 'page');
 
-    // 2. Docked nav -> dashboard -> docked board/dashboard nav -> board
-    await dockedDashBtn.click();
-    await expect(dashView).toBeVisible();
-    await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
-    await expect(dockedDashBtn).toHaveAttribute('aria-pressed', 'true');
+    // 4. Brand logo button -> Projects Overview -> Board
+    await brandBtn.click();
+    await expect(projectsView).toBeVisible();
+    await expect(toolbar).toBeHidden();
+    expect(new URL(page.url()).pathname).toBe('/projects');
 
-    await dockedBoardBtn.click();
-    await expect(dashView).toBeHidden();
+    await boardBtn.click();
     await expect(boardMain).toBeVisible();
+    await expect(toolbar).toBeVisible();
     expect(new URL(page.url()).pathname).toBe('/');
-    await expect(dockedBoardBtn).toHaveAttribute('aria-pressed', 'true');
-
-    // Docked dashboard button also toggles cleanly when clicked twice
-    await dockedDashBtn.click();
-    await expect(dashView).toBeVisible();
-    await dockedDashBtn.click();
-    await expect(dashView).toBeHidden();
-    await expect(boardMain).toBeVisible();
   });
 
-  test('mobile 375px menu nav round-trips board <-> dashboard with >= 44px tap target and zero overflow', async ({ browser }) => {
+  test('AC3: mobile 375px menu nav round-trips Projects | Board | Dashboard with >= 44px tap targets, zero overflow, and dark contrast', async ({ browser }) => {
     const context = await browser.newContext({ viewport: { width: 375, height: 812 }, hasTouch: true });
     const page = await context.newPage();
     page.on('console', (msg) => {
@@ -138,55 +199,97 @@ test.describe('Dashboard navigation, deep-linking & keyboard access (01M75VJ7GWS
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, projA.id);
 
+    // Desktop nav is hidden at 375px; legacy mobile button removed
+    await expect(page.getByTestId('primary-nav')).toBeHidden();
+    await expect(page.getByTestId('mobile-dashboard-nav-btn')).toHaveCount(0);
+
     const menuToggle = page.getByTestId('menu-toggle');
     await menuToggle.click();
 
-    const mobileDashBtn = page.getByTestId('mobile-dashboard-nav-btn');
-    await expect(mobileDashBtn).toBeVisible();
-    const box = await mobileDashBtn.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.height, 'mobile-dashboard-nav-btn height >= 44px').toBeGreaterThanOrEqual(44);
-    expect(box!.width, 'mobile-dashboard-nav-btn width >= 44px').toBeGreaterThanOrEqual(44);
+    const mobileProjectsBtn = page.getByTestId('mobile-nav-projects-btn');
+    const mobileBoardBtn = page.getByTestId('mobile-nav-board-btn');
+    const mobileDashBtn = page.getByTestId('mobile-nav-dashboard-btn');
 
-    // Navigate to dashboard via mobile menu; menu auto-closes
+    for (const [label, btn] of [
+      ['mobile-nav-projects-btn', mobileProjectsBtn],
+      ['mobile-nav-board-btn', mobileBoardBtn],
+      ['mobile-nav-dashboard-btn', mobileDashBtn],
+    ] as const) {
+      await expect(btn).toBeVisible();
+      const box = await btn.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.height, `${label} height >= 44px`).toBeGreaterThanOrEqual(44);
+      expect(box!.width, `${label} width >= 44px`).toBeGreaterThanOrEqual(44);
+    }
+    await expect(mobileBoardBtn).toHaveAttribute('aria-current', 'page');
+
+    // Navigate to Projects Overview via mobile menu; menu auto-closes & filters hide
+    await mobileProjectsBtn.click();
+    await expect(page.getByTestId('mobile-menu-panel')).toBeHidden();
+    await expect(page.getByTestId('projects-overview-view')).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe('/projects');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+
+    await menuToggle.click();
+    await expect(mobileProjectsBtn).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByTestId('mobile-group-filters')).toBeHidden();
+
+    // Switch to dark mode and verify contrast >= 4.5:1 on active & inactive mobile nav buttons
+    await page.getByTestId('mobile-theme-dark').click();
+    await expect(page.locator('html')).toHaveClass(/dark/);
+    await expect
+      .poll(() => measureButtonContrast(mobileProjectsBtn), { timeout: 2000 })
+      .toBeGreaterThanOrEqual(4.5);
+    await expect
+      .poll(() => measureButtonContrast(mobileBoardBtn), { timeout: 2000 })
+      .toBeGreaterThanOrEqual(4.5);
+
+    // Navigate to Dashboard via mobile menu; menu auto-closes
     await mobileDashBtn.click();
     await expect(page.getByTestId('mobile-menu-panel')).toBeHidden();
     await expect(page.getByTestId('dashboard-view')).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 
-    const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-    expect(scrollWidth, 'zero horizontal overflow on 375px dashboard').toBeLessThanOrEqual(375);
-
-    // Navigate back to board via mobile menu
+    // Navigate back to Board via mobile menu
     await menuToggle.click();
-    await expect(mobileDashBtn).toContainText('Back to board');
-    await mobileDashBtn.click();
+    await expect(mobileDashBtn).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByTestId('mobile-group-filters')).toBeHidden();
+    await mobileBoardBtn.click();
     await expect(page.getByTestId('mobile-menu-panel')).toBeHidden();
     await expect(page.getByTestId('dashboard-view')).toBeHidden();
+    await expect(page.getByTestId('projects-overview-view')).toBeHidden();
     expect(new URL(page.url()).pathname).toBe('/');
+
+    await menuToggle.click();
+    await expect(page.getByTestId('mobile-group-filters')).toBeVisible();
 
     await context.close();
   });
 
-  test('keyboard access: Tab + Enter/Space on nav buttons, "d" shortcut toggle, and Escape return to board', async ({ page }) => {
+  test('keyboard access: Tab + Enter on nav buttons, "d" shortcut across views, and Escape return to board', async ({ page }) => {
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, projA.id);
 
-    // Tab walk reaches dashboard-nav-btn and activates with Enter
-    let hit = false;
-    for (let i = 0; i < 15 && !hit; i++) {
-      await page.keyboard.press('Tab');
-      hit = await page.evaluate(
-        () => document.activeElement?.getAttribute('data-testid') === 'dashboard-nav-btn',
-      );
+    // Tab walk reaches nav-projects-btn, nav-board-btn, nav-dashboard-btn with :focus-visible
+    for (const targetId of ['nav-projects-btn', 'nav-board-btn', 'nav-dashboard-btn']) {
+      let hit = false;
+      for (let i = 0; i < 15 && !hit; i++) {
+        await page.keyboard.press('Tab');
+        hit = await page.evaluate(
+          (id) => document.activeElement?.getAttribute('data-testid') === id,
+          targetId,
+        );
+      }
+      expect(hit, `keyboard Tab reached ${targetId}`).toBe(true);
+      expect(
+        await page.getByTestId(targetId).evaluate((el) => el.matches(':focus-visible')),
+        `${targetId} matches :focus-visible on keyboard Tab`,
+      ).toBe(true);
     }
-    expect(hit, 'keyboard Tab reached dashboard-nav-btn').toBe(true);
-    expect(
-      await page.getByTestId('dashboard-nav-btn').evaluate((el) => el.matches(':focus-visible')),
-      'dashboard-nav-btn matches :focus-visible on keyboard Tab',
-    ).toBe(true);
 
+    // Activate nav-dashboard-btn with Enter
     await page.keyboard.press('Enter');
     await expect(page.getByTestId('dashboard-view')).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
@@ -194,6 +297,13 @@ test.describe('Dashboard navigation, deep-linking & keyboard access (01M75VJ7GWS
     // Escape closes dashboard back to board when no overlay is open
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('dashboard-view')).toBeHidden();
+    expect(new URL(page.url()).pathname).toBe('/');
+
+    // Open Projects Overview and press Escape -> returns to Board
+    await page.getByTestId('nav-projects-btn').click();
+    await expect(page.getByTestId('projects-overview-view')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('projects-overview-view')).toBeHidden();
     expect(new URL(page.url()).pathname).toBe('/');
 
     // Bare "d" shortcut is suppressed while typing in an input
@@ -205,7 +315,7 @@ test.describe('Dashboard navigation, deep-linking & keyboard access (01M75VJ7GWS
     await searchInput.fill('');
     await searchInput.blur();
 
-    // Bare "d" shortcut opens dashboard when focus is not in an input, and toggles closed
+    // Bare "d" toggles Board <-> Dashboard, and from Projects Overview opens Dashboard
     await page.keyboard.press('d');
     await expect(page.getByTestId('dashboard-view')).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
@@ -213,25 +323,36 @@ test.describe('Dashboard navigation, deep-linking & keyboard access (01M75VJ7GWS
     await page.keyboard.press('d');
     await expect(page.getByTestId('dashboard-view')).toBeHidden();
     expect(new URL(page.url()).pathname).toBe('/');
+
+    await page.getByTestId('nav-projects-btn').click();
+    await expect(page.getByTestId('projects-overview-view')).toBeVisible();
+    await page.keyboard.press('d');
+    await expect(page.getByTestId('dashboard-view')).toBeVisible();
+    await expect(page.getByTestId('projects-overview-view')).toBeHidden();
+    await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
   });
 
-  test('browser Back/Forward navigates cleanly across board <-> task detail (/tasks/<id> and modal) <-> dashboard', async ({ page }) => {
+  test('browser Back/Forward navigates cleanly across / <-> /projects <-> /projects/<id>/dashboard <-> /tasks/<id>', async ({ page }) => {
     await page.goto(serverUrl);
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, projA.id);
 
+    const projectsView = page.getByTestId('projects-overview-view');
     const dashView = page.getByTestId('dashboard-view');
     const drawer = page.locator('#cb-detail-drawer');
     const boardCol = page.locator('main section', { has: page.getByRole('heading', { name: 'To Do' }) });
 
-    // 1. Board -> Dashboard
-    await page.getByTestId('dashboard-nav-btn').click();
+    // 1. Board -> Projects Overview -> Dashboard
+    await page.getByTestId('nav-projects-btn').click();
+    await expect(projectsView).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe('/projects');
+
+    await page.getByTestId('nav-dashboard-btn').click();
     await expect(dashView).toBeVisible();
+    await expect(projectsView).toBeHidden();
     await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
 
-    // 2. Dashboard -> Task Modal (via workload/task click? Let's claim taskA or open from recently/claims — wait: taskA is in todo! Let's check: or seed a claim on taskA!)
-    // Actually let's check board -> modal -> full page -> dashboard -> back/forward too, AND dashboard -> full page:
-    // Let's seed an active claim on taskA's copy or just claim taskA right here so it appears in Active Claims on dashboard!
+    // 2. Dashboard -> Task Modal -> Full-page (/tasks/<id>)
     await apiJson(`${serverUrl}/api/v1/tasks/${taskA.id}/claim`, 'POST', {
       actor: { name: 'ada', type: 'human' },
       ttl_sec: 300,
@@ -240,42 +361,47 @@ test.describe('Dashboard navigation, deep-linking & keyboard access (01M75VJ7GWS
     const claimsSec = page.getByTestId('dashboard-active-claims');
     await expect(claimsSec).toContainText('Alpha Nav Task');
 
-    // Open task modal from dashboard -> URL stays /projects/<id>/dashboard
     await claimsSec.getByRole('button', { name: 'Alpha Nav Task' }).click();
     await expect(drawer.getByRole('heading', { name: 'Alpha Nav Task' })).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
 
-    // Upgrade modal -> full-page (/tasks/<id>)
     await page.getByTestId('open-fullpage-btn').click();
     await expect(page).toHaveURL(new RegExp(`/tasks/${taskA.id}$`));
     await expect(dashView).toBeHidden();
     await expect(page.getByTestId('fullpage-back-btn')).toBeVisible();
 
-    // Back: /tasks/<id> -> /projects/<id>/dashboard
+    // Back: /tasks/<id> -> /projects/<id>/dashboard -> /projects -> /
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
     await expect(dashView).toBeVisible();
     await expect(drawer).toBeHidden();
 
-    // Back: /projects/<id>/dashboard -> / (board)
+    await page.goBack();
+    expect(new URL(page.url()).pathname).toBe('/projects');
+    await expect(projectsView).toBeVisible();
+    await expect(dashView).toBeHidden();
+
     await page.goBack();
     expect(new URL(page.url()).pathname).toBe('/');
-    await expect(dashView).toBeHidden();
+    await expect(projectsView).toBeHidden();
     await expect(boardCol).toBeVisible();
 
-    // Forward: / -> /projects/<id>/dashboard
+    // Forward: / -> /projects -> /projects/<id>/dashboard -> /tasks/<id>
+    await page.goForward();
+    expect(new URL(page.url()).pathname).toBe('/projects');
+    await expect(projectsView).toBeVisible();
+
     await page.goForward();
     await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
     await expect(dashView).toBeVisible();
 
-    // Forward: /projects/<id>/dashboard -> /tasks/<id>
     await page.goForward();
     await expect(page).toHaveURL(new RegExp(`/tasks/${taskA.id}$`));
     await expect(dashView).toBeHidden();
     await expect(drawer.getByRole('heading', { name: 'Alpha Nav Task' })).toBeVisible();
 
-    // From full-page task detail, click header dashboard-nav-btn -> navigates to dashboard
-    await page.getByTestId('dashboard-nav-btn').click();
+    // From full-page task detail, click nav-dashboard-btn -> navigates to dashboard
+    await page.getByTestId('nav-dashboard-btn').click();
     await expect(page).toHaveURL(new RegExp(`/projects/${projA.id}/dashboard$`));
     await expect(dashView).toBeVisible();
     await expect(drawer).toBeHidden();
@@ -284,23 +410,41 @@ test.describe('Dashboard navigation, deep-linking & keyboard access (01M75VJ7GWS
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`/tasks/${taskA.id}$`));
     await expect(drawer.getByRole('heading', { name: 'Alpha Nav Task' })).toBeVisible();
+
+    // From /tasks/<id>, click nav-projects-btn -> navigates to /projects
+    await page.getByTestId('nav-projects-btn').click();
+    expect(new URL(page.url()).pathname).toBe('/projects');
+    await expect(projectsView).toBeVisible();
+    await expect(drawer).toBeHidden();
+
+    // Back returns to /tasks/<id>
+    await page.goBack();
+    await expect(page).toHaveURL(new RegExp(`/tasks/${taskA.id}$`));
+    await expect(drawer.getByRole('heading', { name: 'Alpha Nav Task' })).toBeVisible();
   });
 
-  test('direct server-served fresh load of /projects/<id>/dashboard adopts project and opens dashboard', async ({ page }) => {
-    // Store projA as the previously selected project in localStorage
-    await page.goto(serverUrl);
-    await expect(page).toHaveTitle('Rävn');
+  test('direct server-served fresh loads of /projects, /projects/, and /projects/<id>/dashboard', async ({ page }) => {
+    // 1. Direct fresh load of /projects/ normalizes to /projects and renders Projects Overview
+    await page.goto(`${serverUrl}/projects/`);
+    await expect(page).toHaveURL(/\/projects$/);
+    await expect(page.getByTestId('projects-overview-view')).toBeVisible();
+    await expect(page.getByTestId('board-toolbar')).toBeHidden();
+    await expect(page).toHaveTitle('Projects – Rävn');
+    await expect(page.getByTestId('nav-projects-btn')).toHaveAttribute('aria-current', 'page');
+
+    // 2. Store projA as selected project, then deep-link to /projects/<projB.id>/dashboard
+    await page.getByTestId('nav-board-btn').click();
     await selectProjectViaDropdown(page, projA.id);
     await expectProjectSelected(page, projA.name);
 
-    // Direct fresh load of /projects/<projB.id>/dashboard via server SPA fallback
     await page.goto(`${serverUrl}/projects/${projB.id}/dashboard`);
     await expect(page).toHaveURL(new RegExp(`/projects/${projB.id}/dashboard$`));
-
-    // Verify projB was adopted (overriding stored projA) and dashboard rendered
     await expectProjectSelected(page, projB.name);
+
     const dashView = page.getByTestId('dashboard-view');
     await expect(dashView).toBeVisible();
+    await expect(page.getByTestId('board-toolbar')).toBeHidden();
+    await expect(page.getByTestId('nav-dashboard-btn')).toHaveAttribute('aria-current', 'page');
     await expect(page.getByTestId('dashboard-total-count')).toHaveText('1 task');
     await expect(page).toHaveTitle(new RegExp(`^Dashboard .* ${projB.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
 

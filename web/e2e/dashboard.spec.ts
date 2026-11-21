@@ -139,7 +139,7 @@ test.describe('Project Dashboard view (/report)', () => {
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, proj.id);
 
-    const navBtn = page.getByTestId('dashboard-nav-btn');
+    const navBtn = page.getByTestId('nav-dashboard-btn');
     await expect(navBtn).toBeEnabled();
     await navBtn.click();
 
@@ -225,7 +225,7 @@ test.describe('Project Dashboard view (/report)', () => {
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, emptyProj.id);
 
-    await page.getByTestId('dashboard-nav-btn').click();
+    await page.getByTestId('nav-dashboard-btn').click();
     await expect(page.getByTestId('dashboard-view')).toBeVisible();
     await expect(page.getByTestId('dashboard-empty')).toBeVisible();
     await expect(page.getByTestId('dashboard-total-count')).toHaveText('0 tasks');
@@ -260,7 +260,7 @@ test.describe('Project Dashboard view (/report)', () => {
       return app?.sseStatus === 'connected';
     }, { timeout: 15000 });
 
-    await page.getByTestId('dashboard-nav-btn').click();
+    await page.getByTestId('nav-dashboard-btn').click();
     await expect(page.getByTestId('dashboard-status-todo')).toContainText('1');
     await expect(page.getByTestId('dashboard-status-done')).toContainText('0');
     await expect(page.getByTestId('dashboard-recently-completed-empty')).toBeVisible();
@@ -349,7 +349,7 @@ test.describe('Project Dashboard view (/report)', () => {
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, proj.id);
 
-    await page.getByTestId('dashboard-nav-btn').click();
+    await page.getByTestId('nav-dashboard-btn').click();
     await expect(page.getByTestId('dashboard-error')).toBeVisible();
     await expect(page.getByTestId('dashboard-error')).toContainText('Simulated report failure');
     // Clear the browser's expected 500 resource-error log from the simulated failure.
@@ -392,13 +392,16 @@ test.describe('Project Dashboard view (/report)', () => {
     expect(headerBox).not.toBeNull();
     expect(headerBox!.height, '375px header stays single-row').toBeLessThanOrEqual(96);
 
-    const navBtn = page.getByTestId('dashboard-nav-btn');
+    await page.getByTestId('menu-toggle').click();
+    const navBtn = page.getByTestId('mobile-nav-dashboard-btn');
+    await expect(navBtn).toBeVisible();
     const navBox = await navBtn.boundingBox();
     expect(navBox).not.toBeNull();
     expect(navBox!.width).toBeGreaterThanOrEqual(44);
     expect(navBox!.height).toBeGreaterThanOrEqual(44);
 
     await navBtn.click();
+    await expect(page.getByTestId('mobile-menu-panel')).toBeHidden();
     await expect(page.getByTestId('dashboard-view')).toBeVisible();
     await expect(page.getByTestId('dashboard-total-count')).toHaveText('1 task');
 

@@ -23,6 +23,7 @@ import { attentionBadgeKind as badgeKindFor, countStalledExpired } from "../filt
 import {
   buildBoardQueryString as buildQueryFor,
   dashboardRouteProjectIdFromPath,
+  isProjectsOverviewPath,
   parseBoardQueryParams,
   taskRouteIdFromPath,
   type BoardQueryParams,
@@ -188,7 +189,8 @@ export function createBoardViewModule(deps: BoardViewDeps): BoardViewModule {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       taskRouteIdFromPath(window.location.pathname) !== null ||
-      dashboardRouteProjectIdFromPath(window.location.pathname) !== null
+      dashboardRouteProjectIdFromPath(window.location.pathname) !== null ||
+      isProjectsOverviewPath(window.location.pathname)
     );
   }
 

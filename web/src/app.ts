@@ -78,8 +78,10 @@ import {
   readStoredSort,
 } from "./sort";
 import {
+  PROJECTS_OVERVIEW_PATH,
   dashboardRoutePath,
   dashboardRouteProjectIdFromPath,
+  isProjectsOverviewPath,
   parseBoardQueryParams,
   taskRouteIdFromPath,
   type BoardQueryParams,
@@ -145,10 +147,12 @@ export { LS_HOIST_PARENTS, LS_SORT, SORT_OPTIONS, isSortKey } from "./sort";
 export type { SortDir, SortKey } from "./sort";
 export {
   MOBILE_DETAIL_MAX_WIDTH,
+  PROJECTS_OVERVIEW_PATH,
   buildBoardQueryString,
   dashboardRoutePath,
   dashboardRouteProjectIdFromPath,
   isMobileDetailViewport,
+  isProjectsOverviewPath,
   parseBoardQueryParams,
   taskRouteIdFromPath,
   taskRoutePath,
@@ -302,6 +306,8 @@ export function ravnApp() {
       const taskTitle = this.detailOpen ? ((this.detail?.title ?? "").trim()) : "";
       if (taskTitle && projectName) {
         document.title = `${taskTitle}${TITLE_SEPARATOR}${projectName}${TITLE_SEPARATOR}Rävn`;
+      } else if (this.projectsOverviewOpen) {
+        document.title = `Projects${TITLE_SEPARATOR}Rävn`;
       } else if (this.dashboardOpen && projectName) {
         document.title = `Dashboard${TITLE_SEPARATOR}${projectName}${TITLE_SEPARATOR}Rävn`;
       } else if (projectName) {
@@ -1677,8 +1683,10 @@ export function ravnApp() {
     syncUrlState(immediate = false): void {
       if (
         this.dashboardOpen ||
+        this.projectsOverviewOpen ||
         (typeof window !== "undefined" &&
-          dashboardRouteProjectIdFromPath(window.location.pathname) !== null)
+          (dashboardRouteProjectIdFromPath(window.location.pathname) !== null ||
+            isProjectsOverviewPath(window.location.pathname)))
       ) {
         return;
       }
@@ -1776,7 +1784,7 @@ export function ravnApp() {
         ) {
           window.history.replaceState(null, "", dashboardRoutePath(this.selectedProjectId));
         }
-      } else {
+      } else if (!this.projectsOverviewOpen) {
         // P4 project-in-URL: a user-initiated switch on the plain board route
         // is a NAVIGATION — push a history entry so browser Back/Forward step
         // across projects (popstate's board branch restores ?project= plus the
@@ -1871,7 +1879,8 @@ export function ravnApp() {
       return this._sse;
     },
 
-    // -------------------------------------------------------------- dashboard
+    // -------------------------------------------------------------- dashboard & navigation
+    projectsOverviewOpen: false,
     dashboardOpen: false,
     dashboardReport: null as ProjectReport | null,
     dashboardLoading: false,
@@ -1906,6 +1915,87 @@ export function ravnApp() {
         updateDocumentTitle: () => this.updateDocumentTitle(),
       });
       return this._dashboard;
+    },
+
+    activeNavView(): "projects" | "board" | "dashboard" {
+      if (this.projectsOverviewOpen) return "projects";
+      if (this.dashboardOpen) return "dashboard";
+      return "board";
+    },
+
+    openProjectsOverview(opts?: { replace?: boolean }): void {
+      if (this.detailOpen) {
+        if (this.notesDirty) {
+          this.promptUnsavedNotes({ kind: "close" });
+          return;
+        }
+        if (!this.discardEditDraftIfConfirmed()) return;
+        this.closeDetail(false);
+      }
+      if (this.dashboardOpen) {
+        this._closeDashboardNav(false);
+      }
+      this.fullPageOpen = false;
+      this.fullPagePushed = false;
+      this.showMobileMenu = false;
+      this.projectsOverviewOpen = true;
+      if (typeof window !== "undefined" && window.history) {
+        const current =
+          (window.location.pathname || "/") +
+          (window.location.search || "") +
+          (window.location.hash || "");
+        if (current !== PROJECTS_OVERVIEW_PATH) {
+          if (opts?.replace && typeof window.history.replaceState === "function") {
+            window.history.replaceState(null, "", PROJECTS_OVERVIEW_PATH);
+          } else if (typeof window.history.pushState === "function") {
+            window.history.pushState(null, "", PROJECTS_OVERVIEW_PATH);
+          }
+        }
+      }
+      this.updateDocumentTitle();
+    },
+
+    openBoardView(projectId?: string): void {
+      if (this.detailOpen) {
+        if (this.notesDirty) {
+          this.promptUnsavedNotes({ kind: "close" });
+          return;
+        }
+        if (!this.discardEditDraftIfConfirmed()) return;
+        this.closeDetail(false);
+      }
+      this.projectsOverviewOpen = false;
+      this.fullPageOpen = false;
+      this.fullPagePushed = false;
+      this.showMobileMenu = false;
+      if (this.dashboardOpen) {
+        this._closeDashboardNav(false);
+      }
+      const targetProjectId = projectId?.trim();
+      if (targetProjectId && targetProjectId !== this.selectedProjectId) {
+        this.selectedProjectId = targetProjectId;
+        this.selectProject();
+        return;
+      }
+      if (this.selectedProjectId && !this.board) {
+        void this.loadBoard();
+        this.connectSse();
+      }
+      if (typeof window !== "undefined") {
+        const target = this.boardUrl() + (window.location.hash || "");
+        const current =
+          (window.location.pathname || "/") +
+          (window.location.search || "") +
+          (window.location.hash || "");
+        if (target !== current) {
+          if (typeof window.history?.pushState === "function") {
+            window.history.pushState(null, "", target);
+          } else if (typeof window.history?.replaceState === "function") {
+            window.history.replaceState(null, "", target);
+          }
+        }
+      }
+      this.updateDocumentTitle();
     },
 
     openDashboard(): void {
@@ -2268,6 +2358,7 @@ export function ravnApp() {
     /** Switch the open task's detail to the FULL-PAGE view — behavior owned by
      *  modules/detail.ts (Phase 2 batch D). */
     openFullPage(id?: string): void {
+      this.projectsOverviewOpen = false;
       this._detailModule().openFullPage(id);
     },
 
@@ -2284,6 +2375,10 @@ export function ravnApp() {
         if (!this.discardEditDraftIfConfirmed()) return;
         this.closeDetail(false);
       }
+      this.projectsOverviewOpen = false;
+      this.fullPageOpen = false;
+      this.fullPagePushed = false;
+      this.showMobileMenu = false;
       if (!this.dashboardOpen) {
         this._dashboardModule().openDashboard();
       }
@@ -2292,8 +2387,6 @@ export function ravnApp() {
         if (dashboardRouteProjectIdFromPath(window.location.pathname) !== this.selectedProjectId) {
           window.history.pushState(null, "", target);
           this.dashboardPushed = true;
-        } else {
-          this.dashboardPushed = false;
         }
       }
     },
@@ -2349,13 +2442,17 @@ export function ravnApp() {
 
     /** Reconcile app state with the URL after a browser navigation (back /
      *  forward). The pathname is the source of truth across `/tasks/<id>`,
-     *  `/projects/<id>/dashboard`, and the board `/`. Never writes history for
-     *  forward/back steps — the navigation already happened. */
+     *  `/projects`, `/projects/<id>/dashboard`, and the board `/`. Never writes
+     *  history for forward/back steps — the navigation already happened. */
     onPopState(): void {
       if (typeof window === "undefined") return;
       const id = taskRouteIdFromPath(window.location.pathname);
       const dashProjectId = dashboardRouteProjectIdFromPath(window.location.pathname);
+      const projectsOverview = isProjectsOverviewPath(window.location.pathname);
       if (id) {
+        if (this.projectsOverviewOpen) {
+          this.projectsOverviewOpen = false;
+        }
         // Task-route restoration is owned by modules/detail.ts (Phase 5, F2):
         // the URL already moved, so the module writes no history. Fire-and-
         // forget — the browser's own navigation must not be blocked by the
@@ -2365,13 +2462,31 @@ export function ravnApp() {
         if (this.detailOpen) {
           this.closeDetail(false);
         }
+        if (this.projectsOverviewOpen) {
+          this.projectsOverviewOpen = false;
+        }
         this._adoptDashboardFromRoute(dashProjectId);
+      } else if (projectsOverview) {
+        if (this.detailOpen) {
+          this.closeDetail(false);
+        }
+        if (this.dashboardOpen) {
+          this._closeDashboardNav(false);
+        }
+        this.fullPageOpen = false;
+        this.fullPagePushed = false;
+        this.showMobileMenu = false;
+        this.projectsOverviewOpen = true;
+        this.updateDocumentTitle();
       } else {
         if (this.detailOpen) {
           this.closeDetail(false);
         }
         if (this.dashboardOpen) {
           this._closeDashboardNav(false);
+        }
+        if (this.projectsOverviewOpen) {
+          this.projectsOverviewOpen = false;
         }
         const oldProject = this.selectedProjectId;
         const search = window.location.search || "";
@@ -2381,7 +2496,23 @@ export function ravnApp() {
           this.resetBlockedCache(this.selectedProjectId);
           void this.loadBoard();
           this.connectSse();
+        } else if (this.selectedProjectId && !this.board) {
+          void this.loadBoard();
+          this.connectSse();
         }
+        this.updateDocumentTitle();
+      }
+    },
+
+    /** Deep link on first load: `/projects` or `/projects/` in the initial URL. */
+    async openDeepLinkedProjectsOverview(): Promise<void> {
+      this.openProjectsOverview({ replace: true });
+      if (this.selectedProjectId) {
+        try {
+          safeStorage.setItem(LS_PROJECT, this.selectedProjectId);
+        } catch { /* ignore */ }
+        this.connectSse();
+        await this.loadBoard();
       }
     },
 
@@ -3429,6 +3560,7 @@ export function ravnApp() {
         showMobileMenu: this.showMobileMenu,
         hasSelection: this.selectedTaskIds.size > 0,
         dashboardOpen: this.dashboardOpen,
+        projectsOverviewOpen: this.projectsOverviewOpen,
       });
       if (!act) return;
       switch (act) {
@@ -3510,6 +3642,9 @@ export function ravnApp() {
           break;
         case "close-dashboard":
           this.closeDashboard();
+          break;
+        case "close-projects-overview":
+          if (this.selectedProjectId) this.openBoardView();
           break;
       }
     },
@@ -3624,6 +3759,7 @@ export function ravnApp() {
         refreshSessionIdentity: () => this.refreshSessionIdentity(),
         openDeepLinkedTask: (id) => this.openDeepLinkedTask(id),
         openDeepLinkedDashboard: (pid, fromBootError) => this.openDeepLinkedDashboard(pid, fromBootError),
+        openDeepLinkedProjectsOverview: () => this.openDeepLinkedProjectsOverview(),
         connectSse: () => this.connectSse(),
         startPolling: () => this.startPolling(),
         disconnectSse: (resetBackoff) => this.disconnectSse(resetBackoff),
@@ -3655,8 +3791,13 @@ export function ravnApp() {
     continueBoot(
       deepLinkedTaskId: string | null,
       deepLinkedDashboardProjectId: string | null = null,
+      deepLinkedProjectsOverview = false,
     ): Promise<void> {
-      return this._bootstrapModule().continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId);
+      return this._bootstrapModule().continueBoot(
+        deepLinkedTaskId,
+        deepLinkedDashboardProjectId,
+        deepLinkedProjectsOverview,
+      );
     },
 
     /** Retry button on the boot-error screen — behavior owned by modules/

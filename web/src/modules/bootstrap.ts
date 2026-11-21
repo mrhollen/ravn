@@ -9,7 +9,11 @@
 // modules/detail.ts and modules/sse.ts.
 
 import { createDebounce, SSE_RELOAD_DEBOUNCE_MS } from "../refresh";
-import { dashboardRouteProjectIdFromPath, taskRouteIdFromPath } from "../routes";
+import {
+  dashboardRouteProjectIdFromPath,
+  isProjectsOverviewPath,
+  taskRouteIdFromPath,
+} from "../routes";
 import type { ThemeMode } from "../theme";
 import type { ProjectWithCounts } from "../types";
 import { safeStorage } from "../util";
@@ -43,6 +47,7 @@ export interface BootstrapDeps {
   refreshSessionIdentity: () => Promise<void>;
   openDeepLinkedTask: (id: string) => Promise<void>;
   openDeepLinkedDashboard: (projectId: string, fromBootError?: boolean) => Promise<void>;
+  openDeepLinkedProjectsOverview: () => Promise<void>;
   connectSse: () => void;
   startPolling: () => void;
   disconnectSse: (resetBackoff?: boolean) => void;
@@ -166,11 +171,13 @@ export function createBootstrapModule(deps: BootstrapDeps) {
     // non-session/off-mode token simply resolves to "no identity" without
     // disturbing boot or the token.
     void deps.refreshSessionIdentity();
-    // Deep link: the initial URL may already be a full-page task or dashboard route.
+    // Deep link: the initial URL may already be a full-page task, dashboard, or projects overview route.
     const deepLinkedTaskId =
       typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
     const deepLinkedDashboardProjectId =
       typeof window !== "undefined" ? dashboardRouteProjectIdFromPath(window.location.pathname) : null;
+    const deepLinkedProjectsOverview =
+      typeof window !== "undefined" ? isProjectsOverviewPath(window.location.pathname) : false;
     if (deps.loadError()) {
       // Boot projects fetch failed — network blip or backend still starting.
       // Do NOT validate the selection against an empty list that is the
@@ -196,7 +203,7 @@ export function createBootstrapModule(deps: BootstrapDeps) {
         deps.focusWhenVisible(retryBtn);
       }
     } else {
-      await continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId);
+      await continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId, deepLinkedProjectsOverview);
     }
     if (deps.polling()) deps.startPolling();
     // Boot finished: the Projects dropdown trigger may now be clicked
@@ -213,6 +220,7 @@ export function createBootstrapModule(deps: BootstrapDeps) {
   async function continueBoot(
     deepLinkedTaskId: string | null,
     deepLinkedDashboardProjectId: string | null = null,
+    deepLinkedProjectsOverview = false,
   ): Promise<void> {
     const projects = deps.projects();
     const known = projects.some((p) => p.id === deps.selectedProjectId());
@@ -223,6 +231,8 @@ export function createBootstrapModule(deps: BootstrapDeps) {
       await deps.openDeepLinkedTask(deepLinkedTaskId);
     } else if (deepLinkedDashboardProjectId) {
       await deps.openDeepLinkedDashboard(deepLinkedDashboardProjectId);
+    } else if (deepLinkedProjectsOverview) {
+      await deps.openDeepLinkedProjectsOverview();
     } else if (deps.selectedProjectId()) {
       try {
         safeStorage.setItem(LS_PROJECT, deps.selectedProjectId());
@@ -258,7 +268,9 @@ export function createBootstrapModule(deps: BootstrapDeps) {
         typeof window !== "undefined" ? taskRouteIdFromPath(window.location.pathname) : null;
       const deepLinkedDashboardProjectId =
         typeof window !== "undefined" ? dashboardRouteProjectIdFromPath(window.location.pathname) : null;
-      await continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId);
+      const deepLinkedProjectsOverview =
+        typeof window !== "undefined" ? isProjectsOverviewPath(window.location.pathname) : false;
+      await continueBoot(deepLinkedTaskId, deepLinkedDashboardProjectId, deepLinkedProjectsOverview);
     } finally {
       deps.setBootRetrying(false);
     }

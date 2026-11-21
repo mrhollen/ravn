@@ -46,6 +46,15 @@ export function dashboardRoutePath(projectId: string): string {
   return "/projects/" + encodeURIComponent(projectId) + "/dashboard";
 }
 
+// ---------------------------------------------------- projects overview route
+/** Canonical pathname for the cross-project overview route. */
+export const PROJECTS_OVERVIEW_PATH = "/projects";
+
+/** True when `pathname` matches the cross-project overview route (`/projects` or `/projects/`). */
+export function isProjectsOverviewPath(pathname: string): boolean {
+  return pathname === "/projects" || pathname === "/projects/";
+}
+
 // ---------------------------------------------------------------- URL query sync
 export interface BoardQueryParams {
   project?: string;

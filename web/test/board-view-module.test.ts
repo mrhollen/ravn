@@ -208,6 +208,16 @@ test("board view: syncUrlState writes the query via replaceState (immediate + de
   withWindow(dashWin, () => {
     createBoardViewModule(makeBoardViewDeps(state)).syncUrlState(true);
   });
+
+  for (const pathname of ["/projects", "/projects/"]) {
+    const projWin = {
+      location: { pathname, search: "", hash: "" },
+      history: { replaceState() { throw new Error("must not write on projects overview route"); } },
+    };
+    withWindow(projWin, () => {
+      createBoardViewModule(makeBoardViewDeps(state)).syncUrlState(true);
+    });
+  }
 });
 
 // ===========================================================================

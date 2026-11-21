@@ -77,7 +77,7 @@ test.describe('Dashboard charts (/report/history)', () => {
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, proj.id);
 
-    await page.getByTestId('dashboard-nav-btn').click();
+    await page.getByTestId('nav-dashboard-btn').click();
     await expect(page.getByTestId('dashboard-view')).toBeVisible();
 
     const chartsSec = page.getByTestId('dashboard-charts');
@@ -151,7 +151,7 @@ test.describe('Dashboard charts (/report/history)', () => {
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, emptyProj.id);
 
-    await page.getByTestId('dashboard-nav-btn').click();
+    await page.getByTestId('nav-dashboard-btn').click();
     await expect(page.getByTestId('dashboard-charts')).toBeVisible();
     await expect(page.getByTestId('dashboard-throughput-empty')).toBeVisible();
     await expect(page.getByTestId('dashboard-cumulative-empty')).toBeVisible();
@@ -194,7 +194,7 @@ test.describe('Dashboard charts (/report/history)', () => {
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, proj.id);
 
-    await page.getByTestId('dashboard-nav-btn').click();
+    await page.getByTestId('nav-dashboard-btn').click();
     await expect(page.getByTestId('dashboard-view')).toBeVisible();
 
     // While /report/history is blocked on delayedGate, loading skeleton must be visible.
@@ -246,7 +246,8 @@ test.describe('Dashboard charts (/report/history)', () => {
     await expect(page).toHaveTitle('Rävn');
     await selectProjectViaDropdown(page, proj.id);
 
-    await page.getByTestId('dashboard-nav-btn').click();
+    await page.getByTestId('menu-toggle').click();
+    await page.getByTestId('mobile-nav-dashboard-btn').click();
     await expect(page.getByTestId('dashboard-throughput-svg')).toBeVisible();
     await expect(page.getByTestId('dashboard-cumulative-svg')).toBeVisible();
 
@@ -284,7 +285,7 @@ test.describe('Dashboard charts (/report/history)', () => {
       return app?.sseStatus === 'connected';
     }, { timeout: 15000 });
 
-    await page.getByTestId('dashboard-nav-btn').click();
+    await page.getByTestId('nav-dashboard-btn').click();
     await expect(page.getByTestId('dashboard-throughput-summary')).toContainText('0 completed');
     await expect(page.getByTestId('dashboard-cumulative-summary')).toContainText('0 total');
 

@@ -264,12 +264,10 @@ test.describe('Consolidated header settings menu', () => {
     await expect(trigger).toBeFocused();
 
     // Outside click closes WITHOUT restoring focus (matches the project menu):
-    // a click on neutral header chrome dismisses the panel. The wordmark is now
-    // a mascot <img> with only an sr-only h1, so target the visible logo image
-    // (same neutral header chrome the old text wordmark occupied).
+    // a click on neutral header chrome dismisses the panel.
     await trigger.click();
     await expect(panel).toBeVisible();
-    await page.locator('header img[alt="Rävn — MCP-first kanban · visibility UI"]').click();
+    await page.locator('header').getByText('Project', { exact: true }).click();
     await expect(panel).toBeHidden();
   });
 

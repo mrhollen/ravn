@@ -108,8 +108,13 @@
              sr-only h1 to preserve the page's main heading for screen readers.
              Hidden below sm. -->
         <div class="mr-1 hidden leading-tight sm:block">
-          <img src="/logo.svg" alt="Rävn — MCP-first kanban · visibility UI"
-               class="h-8 w-auto" />
+          <button type="button" data-testid="brand-logo-btn"
+                  @click="openProjectsOverview()"
+                  aria-label="Rävn — Projects overview"
+                  title="Projects overview"
+                  class="focus-ring inline-flex items-center rounded-md">
+            <img src="/logo.svg" alt="" aria-hidden="true" class="h-8 w-auto" />
+          </button>
           <h1 class="sr-only">Rävn</h1>
         </div>
 
@@ -268,24 +273,42 @@
           </div>
         </div>
 
-        <!-- Dashboard view toggle (point-in-time /report digest). Icon-only
-             below sm so row 1 fits cleanly at 375px; avoids .btn-primary and
-             .btn-ghost so header focus-ring selectors keep targeting "+ New task"
-             and the mobile hamburger. -->
-        <button type="button" data-testid="dashboard-nav-btn"
-                :disabled="!appBooted || !selectedProjectId"
-                :aria-pressed="dashboardOpen ? 'true' : 'false'"
-                @click="toggleDashboard()"
-                title="Project dashboard (d)"
-                class="focus-ring inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm font-medium shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                :class="dashboardOpen
-                  ? 'border-indigo-400 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-indigo-300 dark:hover:bg-indigo-900/60'
-                  : 'border-zinc-200 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700'">
-          <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 13h4v8H3v-8zm7-8h4v16h-4V5zm7 4h4v12h-4V9z" />
-          </svg>
-          <span class="sr-only sm:not-sr-only">Dashboard</span>
-        </button>
+        <!-- Unified primary navigation (desktop md+): Projects | Board | Dashboard.
+             Avoids .btn-primary and .btn-ghost so focus-visible selectors keep
+             targeting "+ New task" and the mobile hamburger. -->
+        <nav aria-label="Primary navigation" data-testid="primary-nav"
+             class="hidden md:inline-flex items-stretch gap-0.5 rounded-md border border-zinc-200 bg-zinc-100 p-0.5 text-sm shadow-sm dark:border-zinc-700 dark:bg-zinc-800">
+          <button type="button" data-testid="nav-projects-btn"
+                  @click="openProjectsOverview()"
+                  :aria-current="activeNavView() === 'projects' ? 'page' : undefined"
+                  class="focus-ring relative inline-flex items-center rounded px-2.5 py-1 font-medium transition-colors focus-visible:z-10"
+                  :class="activeNavView() === 'projects'
+                    ? 'bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900'
+                    : 'text-zinc-700 hover:bg-zinc-200/80 dark:text-zinc-200 dark:hover:bg-zinc-700'">
+            Projects
+          </button>
+          <button type="button" data-testid="nav-board-btn"
+                  @click="openBoardView()"
+                  :disabled="!appBooted || !selectedProjectId"
+                  :aria-current="activeNavView() === 'board' ? 'page' : undefined"
+                  class="focus-ring relative inline-flex items-center rounded px-2.5 py-1 font-medium transition-colors focus-visible:z-10 disabled:cursor-not-allowed disabled:opacity-50"
+                  :class="activeNavView() === 'board'
+                    ? 'bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900'
+                    : 'text-zinc-700 hover:bg-zinc-200/80 dark:text-zinc-200 dark:hover:bg-zinc-700'">
+            Board
+          </button>
+          <button type="button" data-testid="nav-dashboard-btn"
+                  @click="openDashboard()"
+                  :disabled="!appBooted || !selectedProjectId"
+                  :aria-current="activeNavView() === 'dashboard' ? 'page' : undefined"
+                  title="Project dashboard (d)"
+                  class="focus-ring relative inline-flex items-center rounded px-2.5 py-1 font-medium transition-colors focus-visible:z-10 disabled:cursor-not-allowed disabled:opacity-50"
+                  :class="activeNavView() === 'dashboard'
+                    ? 'bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900'
+                    : 'text-zinc-700 hover:bg-zinc-200/80 dark:text-zinc-200 dark:hover:bg-zinc-700'">
+            Dashboard
+          </button>
+        </nav>
 
         <!-- md:ml-auto right-aligns the whole right cluster (this CTA, the live
              segment and the avatar trigger) on desktop; below md the project
@@ -477,36 +500,11 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              width (Playwright strict mode). Shown whenever a board is loaded and
              the full-page task view isn't owning the region. -->
         <template x-if="!isMobile">
-        <div class="-mx-4 -mb-2 w-[calc(100%+2rem)] flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-zinc-200/80 bg-zinc-50/70 px-4 py-1.5 text-xs dark:border-zinc-800 dark:bg-zinc-950"
+        <div data-testid="board-toolbar"
+             class="-mx-4 -mb-2 w-[calc(100%+2rem)] flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-zinc-200/80 bg-zinc-50/70 px-4 py-1.5 text-xs dark:border-zinc-800 dark:bg-zinc-950"
              x-cloak
-             :class="(board || dashboardOpen) && !fullPageOpen ? 'flex' : 'hidden'">
+             :class="board && !dashboardOpen && !projectsOverviewOpen && !fullPageOpen ? 'flex' : 'hidden'">
           <div class="flex min-w-0 flex-wrap items-center gap-2.5">
-            <!-- Docked view navigation (Board <-> Dashboard) -->
-            <nav aria-label="Workspace view"
-                 class="inline-flex items-stretch overflow-hidden rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
-              <button type="button" data-testid="docked-board-nav-btn"
-                      @click="closeDashboard()"
-                      :aria-pressed="!dashboardOpen ? 'true' : 'false'"
-                      class="focus-ring inline-flex items-center gap-1 px-2.5 py-1 font-medium transition-colors"
-                      :class="!dashboardOpen
-                        ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-                        : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
-                Board
-              </button>
-              <span class="w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden="true"></span>
-              <button type="button" data-testid="docked-dashboard-nav-btn"
-                      :disabled="!appBooted || !selectedProjectId"
-                      :aria-pressed="dashboardOpen ? 'true' : 'false'"
-                      @click="toggleDashboard()"
-                      title="Project dashboard (d)"
-                      class="focus-ring inline-flex items-center gap-1 px-2.5 py-1 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                      :class="dashboardOpen
-                        ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-                        : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'">
-                Dashboard
-              </button>
-            </nav>
-
             <div class="flex min-w-0 flex-wrap items-center gap-2.5" x-show="!dashboardOpen" x-cloak>
             <!-- Compact search input (magnifier icon; same x-model as before).
                  The visible "Search" label is deliberate: theme.spec.ts samples
@@ -703,9 +701,47 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                  x-show="showMobileMenu" x-cloak
                  class="flex flex-col border-b border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
 
+          <!-- Group 0: Navigation — unified workspace view switcher on mobile -->
+          <div data-testid="mobile-group-navigation" class="px-4 pb-3 pt-3">
+            <h3 class="section-title">Navigation</h3>
+            <nav aria-label="Mobile navigation" class="grid grid-cols-3 gap-2">
+              <button type="button" data-testid="mobile-nav-projects-btn"
+                      @click="openProjectsOverview(); showMobileMenu = false"
+                      :aria-current="activeNavView() === 'projects' ? 'page' : undefined"
+                      class="tap-target focus-ring flex items-center justify-center rounded-md border px-2 py-2 text-xs font-medium shadow-sm transition-colors"
+                      :class="activeNavView() === 'projects'
+                        ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
+                        : 'border-zinc-200 bg-zinc-100 text-zinc-800 hover:bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700'">
+                Projects
+              </button>
+              <button type="button" data-testid="mobile-nav-board-btn"
+                      @click="openBoardView(); showMobileMenu = false"
+                      :disabled="!appBooted || !selectedProjectId"
+                      :aria-current="activeNavView() === 'board' ? 'page' : undefined"
+                      class="tap-target focus-ring flex items-center justify-center rounded-md border px-2 py-2 text-xs font-medium shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                      :class="activeNavView() === 'board'
+                        ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
+                        : 'border-zinc-200 bg-zinc-100 text-zinc-800 hover:bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700'">
+                Board
+              </button>
+              <button type="button" data-testid="mobile-nav-dashboard-btn"
+                      @click="openDashboard(); showMobileMenu = false"
+                      :disabled="!appBooted || !selectedProjectId"
+                      :aria-current="activeNavView() === 'dashboard' ? 'page' : undefined"
+                      class="tap-target focus-ring flex items-center justify-center rounded-md border px-2 py-2 text-xs font-medium shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                      :class="activeNavView() === 'dashboard'
+                        ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
+                        : 'border-zinc-200 bg-zinc-100 text-zinc-800 hover:bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700'">
+                Dashboard
+              </button>
+            </nav>
+          </div>
+
+          <div class="border-t border-zinc-200 dark:border-zinc-700"></div>
+
           <!-- Group 1: Actions — project settings + new project (previously
                the gear-attached dropdown entry / standalone button). -->
-          <div data-testid="mobile-group-actions" class="px-4 pb-3 pt-3">
+          <div data-testid="mobile-group-actions" class="px-4 pb-3 pt-2">
             <h3 class="section-title">Actions</h3>
             <div class="grid grid-cols-2 gap-2">
               <button type="button" data-testid="mobile-settings-btn" @click="openProjectSettings()" :disabled="!selectedProjectId"
@@ -714,19 +750,6 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                       :aria-expanded="showNewProject ? 'true' : 'false'"
                       class="btn-secondary w-full">New project</button>
             </div>
-            <button type="button" data-testid="mobile-dashboard-nav-btn"
-                    @click="toggleDashboard(); showMobileMenu = false"
-                    :disabled="!appBooted || !selectedProjectId"
-                    :aria-pressed="dashboardOpen ? 'true' : 'false'"
-                    class="tap-target btn-secondary mt-2 flex w-full items-center justify-center gap-1.5"
-                    :class="dashboardOpen
-                      ? 'border-indigo-400 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-indigo-300 dark:hover:bg-indigo-900/60'
-                      : ''">
-              <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 13h4v8H3v-8zm7-8h4v16h-4V5zm7 4h4v12h-4V9z" />
-              </svg>
-              <span x-text="dashboardOpen ? 'Back to board' : 'Dashboard'"></span>
-            </button>
           </div>
 
           <div class="border-t border-zinc-200 dark:border-zinc-700"></div>
@@ -875,7 +898,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
                purpose, NOT a nested <template x-if>: Alpine's x-if clones only
                the template's FIRST element child, which would silently drop every
                sibling after the divider. -->
-          <div x-show="board && !fullPageOpen && !dashboardOpen" x-cloak>
+          <div x-show="board && !fullPageOpen && !dashboardOpen && !projectsOverviewOpen" x-cloak>
             <div class="border-t border-zinc-200 dark:border-zinc-700"></div>
               <div data-testid="mobile-group-filters" class="flex flex-col gap-2 px-4 pb-4 pt-2 text-xs">
                 <h3 class="section-title !mb-1">Filters &amp; sort</h3>
@@ -1062,7 +1085,7 @@ DOM-placed after the collapsible strip: on md+ it renders flush
       <!-- ============================================================= board -->
       <!-- Hidden while the full-page task view (/tasks/<id>) owns this region. -->
       <main class="flex-1 overflow-auto p-4" x-show="!fullPageOpen" x-cloak>
-        <div x-show="!dashboardOpen">
+        <div x-show="!dashboardOpen && !projectsOverviewOpen">
         <!-- duplicate advisory (non-blocking, dismissible) -->
         <div x-show="duplicates.length > 0" x-cloak
              role="alert"
@@ -1808,6 +1831,22 @@ DOM-placed after the collapsible strip: on md+ it renders flush
              </div>
            </div>
          </template>
+        </div>
+
+        <!-- =============================================== projects overview -->
+        <div data-testid="projects-overview-view" x-show="projectsOverviewOpen && !fullPageOpen" x-cloak
+             role="region" aria-labelledby="projects-overview-heading"
+             class="mx-auto flex w-full max-w-6xl flex-col gap-5 pb-8">
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 pb-4 dark:border-zinc-800">
+            <div class="min-w-0">
+              <h2 id="projects-overview-heading" class="text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+                Projects
+              </h2>
+              <p class="mt-0.5 text-xs text-zinc-600 dark:text-zinc-400">
+                Cross-project overview
+              </p>
+            </div>
+          </div>
         </div>
 
         <!-- ======================================================= dashboard -->
